@@ -360,6 +360,9 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
             mtk_iso_interface: s.dev_debug.mtk_iso_interface,
             mtk_iso_pad: s.dev_debug.mtk_iso_pad,
             mtk_command: s.dev_debug.mtk_command.clone(),
+            mtk_iso_queue: s.dev_debug.mtk_iso_queue,
+            mtk_command_before_reset: s.dev_debug.mtk_command_before_reset,
+            mtk_register: s.dev_debug.mtk_register.clone(),
             le_keys_to_windows: s.dev_debug.le_keys_to_windows,
         },
         bt_chip_pid: s.bt_chip_pid,
@@ -458,6 +461,9 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
         mtk_iso_interface: s.dev_debug.mtk_iso_interface,
         mtk_iso_pad: s.dev_debug.mtk_iso_pad.min(hci_transport::iso_intr::PAD_MAX as u16),
         mtk_command: s.dev_debug.mtk_command.trim().to_string(),
+        mtk_iso_queue: s.dev_debug.mtk_iso_queue.min(12),
+        mtk_command_before_reset: s.dev_debug.mtk_command_before_reset,
+        mtk_register: s.dev_debug.mtk_register.trim().to_string(),
         le_keys_to_windows: s.dev_debug.le_keys_to_windows,
     };
     c.bt_chip_pid = s.bt_chip_pid;

@@ -22,6 +22,7 @@
 //! ([`le_audio::sdu_queue::SduQueue::recycle`]) when the next round starts,
 //! and the silence of an underrun is copied into a spare set.
 
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use btstack_sys::consts::ERROR_CODE_SUCCESS;
@@ -38,15 +39,48 @@ pub const QUEUE_DEPTH: u8 = 2;
 /// The run loop timer of the send guard
 pub(crate) const TIMER_ISO: u32 = 4;
 
-/// SDUs BTstack queues per CIS: [`QUEUE_DEPTH`], fewer when the controller
-/// has fewer ISO buffers than that for every CIS (queue x CIS must stay
-/// within Total_Num_ISO_Data_Packets, which Number Of Completed Packets
-/// frees again); 0: not even one per CIS
+/// Developer > Debug (issue #86): SDUs queued per CIS on a MediaTek
+/// controller instead of [`QUEUE_DEPTH`]; 0: the default. Tests whether
+/// the controller completes ISO packets only once it holds more than two
+/// per CIS (a CIS with burst number 3 takes three SDUs per event).
+static DEBUG_DEPTH: AtomicU8 = AtomicU8::new(0);
+/// Whether the open controller is MediaTek's (set after HCI init)
+static DEBUG_DEPTH_APPLIES: AtomicBool = AtomicBool::new(false);
+
+/// The setting, for the next streams; 0: the default
+pub fn set_debug_depth(depth: u8) {
+    DEBUG_DEPTH.store(depth, Ordering::Relaxed);
+}
+
+/// After HCI init: whether the setting counts for this controller
+pub(crate) fn debug_depth_for_controller(mediatek: bool) {
+    DEBUG_DEPTH_APPLIES.store(mediatek, Ordering::Relaxed);
+    let depth = DEBUG_DEPTH.load(Ordering::Relaxed);
+    if mediatek && depth > 0 {
+        tracing::info!("LE Audio: Developer > Debug: up to {depth} SDUs queued per CIS");
+    }
+}
+
+fn depth_limit() -> u8 {
+    match DEBUG_DEPTH.load(Ordering::Relaxed) {
+        d if d > 0 && DEBUG_DEPTH_APPLIES.load(Ordering::Relaxed) => d,
+        _ => QUEUE_DEPTH,
+    }
+}
+
+/// SDUs BTstack queues per CIS: [`QUEUE_DEPTH`] (or the Debug setting),
+/// fewer when the controller has fewer ISO buffers than that for every
+/// CIS (queue x CIS must stay within Total_Num_ISO_Data_Packets, which
+/// Number Of Completed Packets frees again); 0: not even one per CIS
 pub(crate) fn queue_depth(iso_packets: u8, cis: usize) -> u8 {
+    queue_depth_within(iso_packets, cis, depth_limit())
+}
+
+fn queue_depth_within(iso_packets: u8, cis: usize, limit: u8) -> u8 {
     if cis == 0 {
         return 0;
     }
-    (iso_packets as usize / cis).min(QUEUE_DEPTH as usize) as u8
+    (iso_packets as usize / cis).min(limit as usize) as u8
 }
 
 /// What the sender needs of BTstack (the Stack; a fake in the tests)
@@ -578,9 +612,17 @@ mod tests {
         assert!(!s.sending());
         let st = *stats.lock().unwrap();
         assert_eq!((st.sets_sent, st.sdus_sent), (5, 8));
-        assert_eq!(queue_depth(64, 2), 2);
-        assert_eq!(queue_depth(3, 2), 1);
-        assert_eq!(queue_depth(1, 2), 0);
+        assert_eq!(queue_depth_within(64, 2, QUEUE_DEPTH), 2);
+        assert_eq!(queue_depth_within(3, 2, QUEUE_DEPTH), 1);
+        assert_eq!(queue_depth_within(1, 2, QUEUE_DEPTH), 0);
+    }
+
+    #[test]
+    fn debug_depth_stays_within_the_controller_buffers() {
+        // 24 buffers for 2 CIS: a limit of 6 is taken, 20 is cut to 12
+        assert_eq!(queue_depth_within(24, 2, 6), 6);
+        assert_eq!(queue_depth_within(24, 2, 20), 12);
+        assert_eq!(queue_depth_within(24, 0, 6), 0);
     }
 
     #[test]

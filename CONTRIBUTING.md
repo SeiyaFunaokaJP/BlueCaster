@@ -49,6 +49,9 @@ cargo build --release -p bluecaster-ui
 4. Push to the branch (`git push origin feature/my-feature`)
 5. Open a [Pull Request](https://github.com/SeiyaFunaokaJP/BlueCaster/pulls)
 
+Learning from GPL-licensed sources follows the
+[clean-room policy](docs/clean-room.md).
+
 ## License
 
 BlueCaster is dual-licensed under the [Apache License 2.0](LICENSE-APACHE) or the

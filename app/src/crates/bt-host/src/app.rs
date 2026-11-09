@@ -339,7 +339,11 @@ impl HostApp {
         let loader = mediatek::Loader::new(Box::new(move |name| {
             read_firmware_file(&dir, "mediatek", name).or_else(|| mediatek::from_windows_driver(name))
         }));
-        self.start_loader(stack, Box::new(loader));
+        // Developer > Debug: a register write and the command before reset
+        let command = crate::debug_command::get().filter(|_| crate::debug_command::before_reset());
+        let loader =
+            crate::mtk_debug_steps::DebugSteps::wrap(Box::new(loader), crate::debug_command::register(), command);
+        self.start_loader(stack, loader);
     }
 
     /// The Qualcomm rampatch and NVM download (crate::qualcomm), then HCI
@@ -1548,7 +1552,10 @@ impl HostApp {
         self.completed_by_handle.clear();
         // Developer > Debug: MediaTek controllers only
         self.debug_command_sent = None;
-        self.debug_command = crate::debug_command::get().filter(|_| self.controller_company == Some(0x0046));
+        // (set to go before reset, the MediaTek loader sent it already)
+        self.debug_command = crate::debug_command::get()
+            .filter(|_| self.controller_company == Some(0x0046) && !crate::debug_command::before_reset());
+        crate::le::iso_send::debug_depth_for_controller(self.controller_company == Some(0x0046));
         self.send_debug_command(stack);
         let le_audio_capable = stack.controller_iso() == Some(true);
         tracing::info!(

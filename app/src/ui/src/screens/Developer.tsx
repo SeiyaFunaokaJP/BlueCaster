@@ -84,6 +84,9 @@ export const NO_DEBUG: DevDebug = {
   mtk_iso_interface: false,
   mtk_iso_pad: 0,
   mtk_command: "",
+  mtk_iso_queue: 0,
+  mtk_command_before_reset: false,
+  mtk_register: "",
   le_keys_to_windows: false,
 };
 
@@ -475,6 +478,51 @@ function Debug(props: {
               value={props.value.mtk_command}
               onChange={(e) =>
                 set({ mtk_command: e.currentTarget.value.trim().toUpperCase() })
+              }
+            />
+          )}
+        </Field>
+        <Toggle
+          label={t("ui.dev.mtk_command_before_reset")}
+          checked={props.value.mtk_command_before_reset}
+          disabled={!props.value.mtk_command}
+          onChange={(v) => set({ mtk_command_before_reset: v })}
+        />
+        <Field
+          label={t("ui.dev.mtk_register")}
+          hint={t("ui.dev.mtk_register_hint")}
+        >
+          {(id, describedBy) => (
+            <input
+              id={id}
+              class="input mono"
+              type="text"
+              spellcheck={false}
+              autocomplete="off"
+              aria-describedby={describedBy}
+              value={props.value.mtk_register}
+              onChange={(e) =>
+                set({ mtk_register: e.currentTarget.value.trim().toUpperCase() })
+              }
+            />
+          )}
+        </Field>
+        <Field label={t("ui.dev.mtk_iso_queue")}>
+          {(id, describedBy) => (
+            <input
+              id={id}
+              class="input"
+              type="number"
+              min="0"
+              max="12"
+              step="1"
+              aria-describedby={describedBy}
+              value={props.value.mtk_iso_queue || ""}
+              placeholder="2"
+              onChange={(e) =>
+                set({
+                  mtk_iso_queue: clampInt(e.currentTarget.value, 0, 12, 0),
+                })
               }
             />
           )}

@@ -108,6 +108,24 @@ describe("developer screen", () => {
       expect(core.state.snap!.settings.dev_debug.mtk_command).toBe("FC00 01"),
     );
     fireEvent.click(
+      screen.getByRole("switch", {
+        name: t("ui.dev.mtk_command_before_reset"),
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        core.state.snap!.settings.dev_debug.mtk_command_before_reset,
+      ).toBe(true),
+    );
+    fireEvent.change(screen.getByLabelText(t("ui.dev.mtk_register")), {
+      target: { value: " 40 01 0000abcd 00000001 " },
+    });
+    await waitFor(() =>
+      expect(core.state.snap!.settings.dev_debug.mtk_register).toBe(
+        "40 01 0000ABCD 00000001",
+      ),
+    );
+    fireEvent.click(
       screen.getByRole("switch", { name: t("ui.dev.le_keys_to_windows") }),
     );
     await waitFor(() =>
@@ -142,6 +160,9 @@ describe("developer screen", () => {
         mtk_iso_interface: false,
         mtk_iso_pad: 0,
         mtk_command: "",
+        mtk_iso_queue: 0,
+        mtk_command_before_reset: false,
+        mtk_register: "",
         le_keys_to_windows: false,
       }),
     );

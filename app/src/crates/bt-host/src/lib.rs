@@ -24,6 +24,7 @@ pub mod link_details;
 pub mod link_keys;
 pub mod media;
 pub mod mediatek;
+mod mtk_debug_steps;
 pub mod probe;
 pub mod qualcomm;
 pub mod realtek_btnic;

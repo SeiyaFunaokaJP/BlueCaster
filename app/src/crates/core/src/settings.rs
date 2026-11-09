@@ -261,6 +261,16 @@ pub struct DevDebug {
     pub mtk_iso_pad: u16,
     /// "FD98 08 01": opcode, then parameter bytes, in hex; empty: none
     pub mtk_command: String,
+    /// LE Audio SDUs queued per CIS on a MediaTek controller (within its
+    /// ISO buffers); 0: the default
+    pub mtk_iso_queue: u8,
+    /// The command goes once the firmware loader is done, before HCI init,
+    /// instead of after it
+    pub mtk_command_before_reset: bool,
+    /// "40 02 12345678 9ABCDEF0": request type, request, register, value in
+    /// hex, written once the firmware is loaded (bt_host::debug_command::
+    /// parse_register); empty: none
+    pub mtk_register: String,
     /// Restore original driver writes BlueCaster's LE keys to Windows too
     /// (core driver.rs; only where Windows keeps LE keys of the device)
     pub le_keys_to_windows: bool,

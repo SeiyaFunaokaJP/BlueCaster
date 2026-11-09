@@ -1015,6 +1015,13 @@ fn apply_dev_overrides(settings: &Settings) {
         None
     });
     bt_host::debug_command::set(command);
+    bt_host::debug_command::set_iso_queue(debug.mtk_iso_queue);
+    bt_host::debug_command::set_before_reset(debug.mtk_command_before_reset);
+    let register = bt_host::debug_command::parse_register(&debug.mtk_register).unwrap_or_else(|e| {
+        tracing::warn!("Developer > Debug: register write not sent: {e}");
+        None
+    });
+    bt_host::debug_command::set_register(register);
 }
 
 impl Service {

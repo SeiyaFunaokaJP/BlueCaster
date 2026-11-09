@@ -27,6 +27,7 @@ pub mod process;
 pub mod quick_settings;
 pub mod single_instance;
 pub mod usb_adapters;
+pub mod usb_control;
 pub mod usb_isoch;
 pub mod webview;
 pub mod wlan;

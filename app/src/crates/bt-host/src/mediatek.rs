@@ -163,6 +163,13 @@ pub fn wmt_command(op: u8, flag: u8, data: &[u8]) -> Vec<u8> {
     hci_command(OP_WMT, &params)
 }
 
+/// Whether this command is the loader's "Bluetooth on" (WMT function
+/// control, 1); Developer > Debug steps go in before it
+/// (crate::mtk_debug_steps)
+pub fn is_func_on(command: &[u8]) -> bool {
+    command == wmt_command(WMT_FUNC_CTRL, 0, &[0x01]).as_slice()
+}
+
 /// A WMT event as read: (opcode, flag, data after the flag); None if the
 /// bytes are not one. The code is 0xE4, or 0xFF where a host rewrote it as a
 /// plain vendor event.

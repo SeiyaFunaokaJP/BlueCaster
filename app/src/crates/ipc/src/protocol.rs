@@ -774,6 +774,14 @@ pub struct DevDebug {
     pub mtk_iso_pad: u16,
     /// One HCI command after init, in hex ("FD98 08 01"); empty: none
     pub mtk_command: String,
+    /// LE Audio SDUs queued per CIS on a MediaTek controller; 0: default
+    pub mtk_iso_queue: u8,
+    /// The command goes before HCI init instead of after it
+    pub mtk_command_before_reset: bool,
+    /// Register write after the firmware download, in hex ("40 02
+    /// 12345678 9ABCDEF0": request type, request, register, value); empty:
+    /// none
+    pub mtk_register: String,
     /// Restore original driver hands Windows BlueCaster's LE keys too, for
     /// the devices Windows keeps LE keys of (issue #86)
     pub le_keys_to_windows: bool,
