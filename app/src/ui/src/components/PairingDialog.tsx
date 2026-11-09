@@ -1,6 +1,6 @@
 // A saved device's services and pairing keys (issue #86), from the
 // Services tag of its row. An LE Audio entry has its GATT services from its
-// last connection and no keys here. In developer mode the link key BlueCaster keeps
+// last connection and its LE keys only. In developer mode the link key BlueCaster keeps
 // for it and the LE keys derived from it (LE Audio on) come first, folded
 // until clicked and only then asked for, each "not available" when
 // BlueCaster has none; below them the services it lists (the last
@@ -29,7 +29,7 @@ export function PairingDialog(props: { device: Device | null; onClose: () => voi
   // The keys only in developer mode (the core refuses them otherwise), and
   // only once unfolded: secrets, not on screen with every opening
   const le = () => props.device?.le_audio === true;
-  const keysOf = () => (app.core.state.snap?.settings.developer_mode && !le() ? address() : null);
+  const keysOf = () => (app.core.state.snap?.settings.developer_mode ? address() : null);
   const [keysOpen, setKeysOpen] = createSignal(false);
   const [pairing] = createResource(() => (keysOpen() ? keysOf() : null), (a) =>
     app.core
@@ -89,12 +89,15 @@ export function PairingDialog(props: { device: Device | null; onClose: () => voi
                     </tr>
                   </thead>
                   <tbody>
-                  <KeyRow
-                    name={t("ui.pairing.link_key")}
-                    value={p().key?.key}
-                    tag={p().key ? t("ui.pairing.key_type", p().key!.key_type) : undefined}
-                    copy={copy}
-                  />
+                  {/* An LE Audio entry has no link key, only its LE keys */}
+                  <Show when={!le()}>
+                    <KeyRow
+                      name={t("ui.pairing.link_key")}
+                      value={p().key?.key}
+                      tag={p().key ? t("ui.pairing.key_type", p().key!.key_type) : undefined}
+                      copy={copy}
+                    />
+                  </Show>
                   <KeyRow
                     name={t("ui.pairing.ltk")}
                     value={p().le?.long_term_key}

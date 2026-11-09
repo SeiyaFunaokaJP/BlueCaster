@@ -2,19 +2,21 @@
 // ring, the Connect / Disconnect button, volume, codec badge, link quality
 // and the error panel with its fix.
 
-import { createMemo, createSignal, For, onCleanup, Show, type JSX } from "solid-js";
+import { createMemo, createResource, createSignal, For, onCleanup, Show, type JSX } from "solid-js";
 import { errorText, useApp, type AppContext } from "../app/context";
 import { t, tm } from "../i18n";
 import { bitrateNoteKey, codecLabelKey } from "../lib/codecs";
 import { liveBitpool } from "../lib/codecdetails";
 import { copyText, khz, kbps, maskIdentifiers, percentToVolume, volumePercent } from "../lib/format";
 import { bugReportUrl, firmwareUrl, type BugReport } from "../lib/links";
+import { headsetMode } from "../lib/profile";
 import { IpcError } from "../ipc/types";
 import type { AdapterInfo, LinkSample, Msg, Profile, Snapshot, SourceInfo, StreamInfo, StreamState, StreamStatus } from "../ipc/types";
 import { Sparkline } from "./charts";
 import { Banner, Button, Dialog } from "./controls";
 import { Icon } from "./Icon";
 import type { IconName } from "./icons";
+import { PairedDevicesNote, windowsDevices } from "./PairedDevices";
 
 /** The profile the big button connects: the one streaming, else the active one */
 export function currentProfile(snap: Snapshot): Profile | null {
@@ -292,11 +294,12 @@ let noteShown: { key: string; at: number } | null = null;
 /** The codec in two lines (issue #86): its name, then what it runs with in
  *  a badge; `aside` goes beside the badge (the flyout's link quality).
  *  `picker` takes the name's place: the codec chosen right there (Home,
- *  the flyout). */
-/** `voice` false: the headset microphone's codec is on its chip beside
- *  (Home's card, the flyout), so the line does not grow as it opens */
-export function CodecBadge(props: { compact?: boolean; aside?: JSX.Element; picker?: JSX.Element; voice?: boolean }) {
+ *  the flyout). Dimmed while a classic device's microphone is open: its
+ *  codec is paused for the call link (issue #86); the microphone has its
+ *  own line (MicBadge). */
+export function CodecBadge(props: { compact?: boolean; aside?: JSX.Element; picker?: JSX.Element }) {
   const { core } = useApp();
+  const paused = () => core.state.snap?.stream.voice?.link === "hfp";
   const info = () => core.state.snap?.stream.info ?? null;
   const name = () => {
     const i = info();
@@ -346,7 +349,7 @@ export function CodecBadge(props: { compact?: boolean; aside?: JSX.Element; pick
   return (
     <Show when={info()}>
       {(i) => (
-        <div class="codec-info">
+        <div class="codec-info" classList={{ "codec-paused": paused() }}>
           <span class="codec-name" title={fallbackHelp() || undefined}>
             <Show when={i().requested_codec}>
               <Icon name="warning" class="st-warn" title={fallbackHelp()} />
@@ -382,9 +385,6 @@ export function CodecBadge(props: { compact?: boolean; aside?: JSX.Element; pick
                 )}
               </Show>
             </span>
-            <Show when={props.voice !== false}>
-              <VoiceCodec />
-            </Show>
             {props.aside}
           </div>
         </div>
@@ -407,22 +407,47 @@ export function voiceCodecName(codec: string): string {
   }
 }
 
-/** The headset microphone's voice link beside the codec ("Voice: mSBC"):
- *  in the warning colour on a classic link, whose playback is call quality */
-export function VoiceCodec() {
-  const { core } = useApp();
-  const voice = () => core.state.snap?.stream.voice ?? null;
+/** The headset microphone of the device in use (`profile`) while its mode
+ *  is Auto or On with an output chosen, the same as its button (Home's
+ *  HeadsetChip) */
+export function micShown(snap: Snapshot, profile: Profile | null | undefined): boolean {
+  const s = snap.stream;
   return (
-    <Show when={voice()}>
-      {(v) => (
-        <span
-          class="voice-codec"
-          classList={{ "st-warn": v().link === "hfp" }}
-          title={v().link === "hfp" ? t("ui.headset_mic_quality") : undefined}
-        >
-          {t("status.voice_codec", voiceCodecName(v().codec))}
-        </span>
-      )}
+    !!profile &&
+    s.state !== "idle" &&
+    s.profile === profile.name &&
+    !!profile.mic_device_id &&
+    headsetMode(profile) !== "off"
+  );
+}
+
+/** The headset microphone's line below the codec (issue #86): "Mic: mSBC
+ *  16 kHz" with a red dot while it is open, else dimmed with its mode
+ *  (Off while disabled on its button) */
+export function MicBadge(props: { profile: Profile | null | undefined }) {
+  const { core } = useApp();
+  const snap = () => core.state.snap!;
+  const voice = () => (micShown(snap(), props.profile) ? (snap().stream.voice ?? null) : null);
+  const idle = () =>
+    props.profile?.mic_muted ? t("ui.headset_mic_off") : t(`ui.headset_mic_${headsetMode(props.profile!)}`);
+  return (
+    <Show when={micShown(snap(), props.profile)}>
+      <div
+        class="mic-badge"
+        classList={{ open: !!voice() }}
+        title={voice()?.link === "hfp" ? t("ui.headset_mic_quality") : undefined}
+      >
+        <span class="mic-dot" aria-hidden="true" />
+        <strong>{t("ui.mic_label")}</strong>
+        <Show when={voice()} fallback={<span>{idle()}</span>}>
+          {(v) => (
+            <>
+              <span>{voiceCodecName(v().codec)}</span>
+              <span class="num">{khz(v().rate)} kHz</span>
+            </>
+          )}
+        </Show>
+      </div>
     </Show>
   );
 }
@@ -816,6 +841,11 @@ export function ErrorPanel(props: { code?: string | null; message: Msg; title?: 
 export function WinusbDialog(props: { adapter: AdapterInfo | null; mode: "assign" | "restore"; onClose: (done: boolean) => void }) {
   const app = useApp();
   const [busy, setBusy] = createSignal(false);
+  // Assign: the devices Windows loses with the adapter, by name (issue #86)
+  const [paired] = createResource(
+    () => (props.mode === "assign" ? props.adapter : null),
+    (a) => windowsDevices(app, a),
+  );
   // Restore: devices paired in BlueCaster since Windows paired them need no
   // word here; the restore hands Windows the newer keys (issue #86)
   const go = async () => {
@@ -843,15 +873,24 @@ export function WinusbDialog(props: { adapter: AdapterInfo | null; mode: "assign
       setBusy(false);
     }
   };
+  // Devices Windows loses: a warning, those devices first (issue #86)
+  const losing = () => props.mode === "assign" && (paired.latest?.length ?? 0) > 0;
   return (
     <Dialog
       open={props.adapter !== null}
-      title={props.mode === "assign" ? t("ui.adapter.assign_title") : t("ui.adapter.restore_title")}
+      title={
+        losing()
+          ? t("ui.adapter.paired_title")
+          : props.mode === "assign"
+            ? t("ui.adapter.assign_title")
+            : t("ui.adapter.restore_title")
+      }
       confirm={props.mode === "assign" ? t("ui.adapter.assign_winusb") : t("ui.adapter.restore_driver")}
       confirmIcon="shield"
       cancel={t("modal.cancel")}
       busy={busy()}
-      danger={props.mode === "restore"}
+      danger={props.mode === "restore" || losing()}
+      warn={losing()}
       onConfirm={go}
       onCancel={() => props.onClose(false)}
     >
@@ -859,7 +898,12 @@ export function WinusbDialog(props: { adapter: AdapterInfo | null; mode: "assign
         <strong>{props.adapter?.display_name}</strong>
         <span class="muted"> · {props.adapter?.device_name}</span>
       </p>
-      <p>{props.mode === "assign" ? t("ui.adapter.assign_explain") : t("ui.adapter.restore_explain")}</p>
+      <Show
+        when={losing()}
+        fallback={<p>{props.mode === "assign" ? t("ui.adapter.assign_explain") : t("ui.adapter.restore_explain")}</p>}
+      >
+        <PairedDevicesNote devices={paired.latest ?? []} />
+      </Show>
       <p class="muted">{t("ui.adapter.uac_note")}</p>
     </Dialog>
   );

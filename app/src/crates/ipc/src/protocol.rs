@@ -470,6 +470,11 @@ pub struct StreamStatus {
     /// the battery shows as unknown
     #[serde(default)]
     pub battery_refused: bool,
+    /// The voice codecs the headphones listed on their hands-free
+    /// connection ("cvsd", "msbc", "lc3_swb"), for the Codecs screen's
+    /// call codecs (issue #86); empty while unknown, cleared as the battery
+    #[serde(default)]
+    pub voice_codecs: Vec<String>,
     /// The voice link (headset microphone): Some only while
     /// it carries audio, cleared on Idle / Error / Reconnecting like the
     /// battery
@@ -769,6 +774,14 @@ pub struct DevDebug {
     pub mtk_iso_pad: u16,
     /// One HCI command after init, in hex ("FD98 08 01"); empty: none
     pub mtk_command: String,
+    /// LE Audio SDUs queued per CIS on a MediaTek controller; 0: default
+    pub mtk_iso_queue: u8,
+    /// The command goes before HCI init instead of after it
+    pub mtk_command_before_reset: bool,
+    /// Register write after the firmware download, in hex ("40 02
+    /// 12345678 9ABCDEF0": request type, request, register, value); empty:
+    /// none
+    pub mtk_register: String,
     /// Restore original driver hands Windows BlueCaster's LE keys too, for
     /// the devices Windows keeps LE keys of (issue #86)
     pub le_keys_to_windows: bool,
@@ -824,6 +837,10 @@ pub struct Settings {
     /// The low-battery notification: below this level (percent), 0: never
     #[serde(default = "battery_low")]
     pub battery_low_percent: u8,
+    /// The first-run setup was finished or skipped: the window opens it by
+    /// itself only before that (a client that sends none: true)
+    #[serde(default = "yes")]
+    pub setup_done: bool,
     pub check_updates_on_startup: bool,
     pub include_prereleases: bool,
     /// Developer > alphas too, in force while developer_mode is on (an
@@ -1675,6 +1692,13 @@ pub enum Method {
     /// Back to the previous driver (UAC prompt) -> AdapterInfo[]
     #[serde(rename = "adapter.restore_driver")]
     AdapterRestoreDriver { instance_id: String },
+    /// -> WindowsPairedDevice[]: every device Windows' Bluetooth paired
+    /// through the adapter with this instance ID (classic and LE, audio or
+    /// not, each once; the ones that are not audio first): what stops
+    /// working with Windows once it is on WinUSB. Empty when none or not
+    /// readable; no administrator prompt.
+    #[serde(rename = "adapter.windows_devices")]
+    AdapterWindowsDevices { instance_id: String },
     /// Restarts the Bluetooth stack
     #[serde(rename = "adapter.restart")]
     AdapterRestart,
@@ -2191,14 +2215,18 @@ pub struct ServiceList {
     pub from_last_connection: bool,
 }
 
-/// A classic audio device Windows' Bluetooth paired through an adapter
-/// (device.windows_paired_through)
+/// A device Windows' Bluetooth paired through an adapter: a classic audio
+/// one (device.windows_paired_through) or any (adapter.windows_devices)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 
 pub struct WindowsPairedDevice {
     pub address: String,
     /// Windows' name for it (empty when it has none)
     pub name: String,
+    /// An audio device (headphones, speakers: class of device Audio/Video),
+    /// shown with their icon in the warning before WinUSB (issue #86)
+    #[serde(default)]
+    pub audio: bool,
 }
 
 /// How many devices' keys agree, for one kind of key

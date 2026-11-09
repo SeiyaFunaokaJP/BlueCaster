@@ -17,6 +17,20 @@ mtk_iso_pad: number,
  */
 mtk_command: string, 
 /**
+ * LE Audio SDUs queued per CIS on a MediaTek controller; 0: default
+ */
+mtk_iso_queue: number, 
+/**
+ * The command goes before HCI init instead of after it
+ */
+mtk_command_before_reset: boolean, 
+/**
+ * Register write after the firmware download, in hex ("40 02
+ * 12345678 9ABCDEF0": request type, request, register, value); empty:
+ * none
+ */
+mtk_register: string, 
+/**
  * Restore original driver hands Windows BlueCaster's LE keys too, for
  * the devices Windows keeps LE keys of (issue #86)
  */

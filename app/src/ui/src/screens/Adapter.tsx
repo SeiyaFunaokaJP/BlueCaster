@@ -16,7 +16,7 @@ import {
 } from "solid-js";
 import { useApp } from "../app/context";
 import { saveSettings } from "../app/settings";
-import { Banner, Button, Field, Section, Segmented, Select } from "../components/controls";
+import { Banner, Button, Field, Section, Segmented, Select, Toggle } from "../components/controls";
 import { Icon } from "../components/Icon";
 import { ErrorPanel, FirmwareDownload, openFirmwareFolder, WinusbDialog } from "../components/stream";
 import { t, tm } from "../i18n";
@@ -380,6 +380,7 @@ export function Adapter() {
       <Show when={chipCard() < 0}>
         <ChipSection files={files()} onChanged={loadFiles} />
       </Show>
+      <LeAudioToggle />
       <AfhSection />
 
       <WinusbDialog adapter={dialog()?.adapter ?? null} mode={dialog()?.mode ?? "assign"} onClose={() => setDialog(null)} />
@@ -605,6 +606,28 @@ export function parseAfhChannels(s: string): string | null {
   const nums = parts.map(Number);
   if (nums.some((n) => !Number.isInteger(n) || n < 1 || n > 14)) return null;
   return [...new Set(nums)].sort((a, b) => a - b).join(",");
+}
+
+/** LE Audio for the whole stack, as Windows has it (issue #86): only when
+ *  an adapter is known to have LE Audio's isochronous channels */
+export function leAudioToggleShown(adapter: { le_audio: boolean | null; adapters: readonly { le_audio: boolean | null }[] }): boolean {
+  return adapter.le_audio === true || adapter.adapters.some((a) => a.le_audio === true);
+}
+
+function LeAudioToggle() {
+  const app = useApp();
+  const snap = () => app.core.state.snap!;
+  return (
+    <Show when={leAudioToggleShown(snap().adapter)}>
+      <section class="card section">
+        <Toggle
+          label={t("ui.adapter.le_audio")}
+          checked={snap().settings.le_audio_experimental}
+          onChange={(v) => void saveSettings(app, { le_audio_experimental: v })}
+        />
+      </section>
+    </Show>
+  );
 }
 
 const AFH_SECTION = "adapter-afh";

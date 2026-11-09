@@ -438,6 +438,41 @@ def huawei_packet(command, params):
     return packet + struct.pack('>H', crc)
 
 
+class AvrcpKeys:
+    """Headphone buttons: once BlueCaster opens AVRCP, FAST FORWARD (no
+    Windows media key, so nothing on this PC reacts) is pressed and released
+    `count` times. Each answer must carry the state flag of its command
+    (AV/C pass through; issue #420: releases came back as presses)."""
+
+    def __init__(self, device, count):
+        from bumble import avc, avrcp
+        self.avc, self.count = avc, count
+        self.protocol = avrcp.Protocol()
+        self.protocol.listen(device)
+        device.sdp_service_records[0x00010004] = avrcp.ControllerServiceSdpRecord(0x00010004).to_service_attributes()
+        device.sdp_service_records[0x00010005] = avrcp.TargetServiceSdpRecord(0x00010005).to_service_attributes()
+        self.protocol.on('start', self.on_start)
+
+    def on_start(self):
+        print('AVRCP opened', flush=True)
+        task = asyncio.ensure_future(self.press())
+        task.add_done_callback(
+            lambda t: print(f'avrcp keys failed: {t.exception()!r}', flush=True) if t.exception() else None)
+
+    async def press(self):
+        await asyncio.sleep(1)
+        key = self.avc.PassThroughFrame.OperationId.FAST_FORWARD
+        matched = 0
+        for _ in range(self.count):
+            for pressed in (True, False):
+                sent = 'PRESSED' if pressed else 'RELEASED'
+                response = await asyncio.wait_for(self.protocol.send_key_event(key, pressed), 5)
+                print(f'avrcp key: {key.name} {sent} answered {response.response.name} '
+                      f'{response.state_flag.name} {response.operation_id.name}', flush=True)
+                matched += response.state_flag.name == sent and response.operation_id == key
+        print(f'avrcp keys: {matched} of {2 * self.count} answers carry the state flag sent', flush=True)
+
+
 class HuaweiEarbuds:
     """The control service of Huawei earbuds: LDAC is listed from the
     connection after a "sound quality first" write, also when the read
@@ -605,6 +640,8 @@ async def main(args):
     if args.hfp:
         from hfp_audio import HfSide
         HfSide(device, args.hfp)
+    if args.avrcp_keys:
+        AvrcpKeys(device, args.avrcp_keys)
     huawei = None
     if args.huawei:
         huawei = HuaweiEarbuds(device, args.huawei == 'on', args.huawei_drop, args.huawei_silent,
@@ -858,6 +895,8 @@ if __name__ == '__main__':
     parser.add_argument('--aptxad-rates', type=lambda x: int(x, 0),
                         help='aptX Adaptive rate byte to list instead (e.g. 0xD1: an EarFun Air Pro 4+, '
                              '96 kHz by its 0x80 bit only; 0x51: a Bose QC Ultra, no 96 kHz; issue #86)')
+    parser.add_argument('--avrcp-keys', type=int, default=0, metavar='N',
+                        help='press and release FAST FORWARD N times over AVRCP, checking each answer')
     parser.add_argument('--huawei', choices=['off', 'on'],
                         help='serve the control channel of Huawei earbuds, their sound quality first mode as given')
     parser.add_argument('--huawei-drop', action='store_true',

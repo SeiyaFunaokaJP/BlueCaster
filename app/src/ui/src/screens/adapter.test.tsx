@@ -54,6 +54,26 @@ describe("AFH", () => {
   });
 });
 
+describe("LE Audio switch (issue #86)", () => {
+  it("is on Adapters when an adapter supports LE Audio, and saves the setting", async () => {
+    const { calls } = start("le");
+    const toggle = (await screen.findByRole("switch", { name: t("ui.adapter.le_audio") })) as HTMLInputElement;
+    const on = toggle.checked;
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(calls.filter((c) => c.method === "settings.set").at(-1)?.params).toMatchObject({
+        settings: { le_audio_experimental: !on },
+      }),
+    );
+  });
+
+  it("is not there when no adapter supports it", async () => {
+    start("le_unsupported");
+    await screen.findByRole("heading", { level: 2, name: "Avoid Wi-Fi channels" });
+    expect(screen.queryByText(t("ui.adapter.le_audio"))).toBeNull();
+  });
+});
+
 describe("Adapter firmware", () => {
   it("shows the chip's firmware and saves another chip", async () => {
     const { calls } = start();

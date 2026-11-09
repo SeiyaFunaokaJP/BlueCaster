@@ -235,6 +235,22 @@ pub struct DecoderStats {
     /// PCM samples pushed out (and how many of them did not fit)
     pub samples: u64,
     pub overflow: u64,
+    /// The microphone's level: the largest sample (absolute) and the sum of
+    /// the squares, for its peak and RMS in dBFS ([`DecoderStats::level`])
+    pub peak: u16,
+    pub sum_squares: u64,
+}
+
+impl DecoderStats {
+    /// Peak and RMS in dBFS (None before any sample; -inf dB as -120)
+    pub fn level(&self) -> Option<(f64, f64)> {
+        if self.samples == 0 {
+            return None;
+        }
+        let db = |x: f64| if x > 0.0 { (20.0 * (x / 32768.0).log10()).max(-120.0) } else { -120.0 };
+        let rms = (self.sum_squares as f64 / self.samples as f64).sqrt();
+        Some((db(f64::from(self.peak)), db(rms)))
+    }
 }
 
 enum Decoder {
@@ -298,6 +314,10 @@ impl VoiceDecoder {
             let n = out.push(pcm);
             stats.samples += pcm.len() as u64;
             stats.overflow += (pcm.len() - n) as u64;
+            for &x in pcm {
+                stats.peak = stats.peak.max(x.unsigned_abs());
+                stats.sum_squares += (i64::from(x) * i64::from(x)) as u64;
+            }
         };
         match &mut self.decoder {
             Decoder::Cvsd { plc, odd, input, output } => {

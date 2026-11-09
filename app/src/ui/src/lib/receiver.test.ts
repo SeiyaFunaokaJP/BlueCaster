@@ -115,6 +115,7 @@ const stream = (s: StreamStatus["state"], info: StreamInfo | null = null, key = 
   volume: null,
   battery: null,
   battery_refused: false,
+  voice_codecs: [],
 });
 
 const IDLE = stream("idle");

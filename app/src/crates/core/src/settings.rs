@@ -114,6 +114,12 @@ pub struct Settings {
     /// or 5), 0: never (issue #86)
     #[serde(default = "default_battery_low")]
     pub battery_low_percent: u8,
+    /// The first-run setup was finished or skipped (issue #86): the window
+    /// opens it by itself only before that, not each time no device is
+    /// saved. A file written before this key is a folder in use already:
+    /// true; a new folder starts with false.
+    #[serde(default = "default_true")]
+    pub setup_done: bool,
 
     #[serde(default = "default_true")]
     pub check_updates_on_startup: bool,
@@ -139,6 +145,11 @@ pub struct Settings {
     /// No VB-Cable when last looked: once it is there, the profiles that
     /// capture System Loopback take it, one time (issue #86)
     pub awaiting_vb_cable: bool,
+    /// No Hi-Fi Cable when last looked: once it is there, the classic
+    /// profiles whose microphone has no working output play it there, one
+    /// time (issue #86)
+    #[serde(default)]
+    pub awaiting_hifi_cable: bool,
     /// Each device's volume (address -> AVRCP volume 0..127), set again when
     /// it connects (issue #86: one device's volume must not carry over to
     /// another)
@@ -196,8 +207,9 @@ pub struct Settings {
     pub last_profile: String,
 
     /// LE Audio (experimental): BTstack starts with LE (SM, GATT, ISO) and
-    /// LE Audio profiles can stream. On by default since 2.0.1 (schema 3):
-    /// choosing an LE Audio device is the user's call.
+    /// LE Audio profiles can stream. Adapters > "Use LE Audio when
+    /// available" (issue #86): off for new settings since 3.0.0-beta.4;
+    /// settings that have it on keep it (on since 2.0.1, schema 3).
     pub le_audio_experimental: bool,
     /// Before 2.0.1: GMAP low latency for every LE Audio profile. Now a
     /// profile option (`le_low_latency`); kept only so the file round-trips.
@@ -249,6 +261,16 @@ pub struct DevDebug {
     pub mtk_iso_pad: u16,
     /// "FD98 08 01": opcode, then parameter bytes, in hex; empty: none
     pub mtk_command: String,
+    /// LE Audio SDUs queued per CIS on a MediaTek controller (within its
+    /// ISO buffers); 0: the default
+    pub mtk_iso_queue: u8,
+    /// The command goes once the firmware loader is done, before HCI init,
+    /// instead of after it
+    pub mtk_command_before_reset: bool,
+    /// "40 02 12345678 9ABCDEF0": request type, request, register, value in
+    /// hex, written once the firmware is loaded (bt_host::debug_command::
+    /// parse_register); empty: none
+    pub mtk_register: String,
     /// Restore original driver writes BlueCaster's LE keys to Windows too
     /// (core driver.rs; only where Windows keeps LE keys of the device)
     pub le_keys_to_windows: bool,
@@ -326,6 +348,7 @@ impl Default for Settings {
             flyout_with_quick_settings: false,
             notify_connected: true,
             battery_low_percent: default_battery_low(),
+            setup_done: false,
             check_updates_on_startup: true,
             last_update_check: String::new(),
             include_prereleases: default_prereleases(),
@@ -333,6 +356,7 @@ impl Default for Settings {
             media_keys: true,
             auto_reconnect: true,
             awaiting_vb_cable: false,
+            awaiting_hifi_cable: false,
             saved_volumes: BTreeMap::new(),
             device_options: None,
             volume_sync: true,
@@ -348,7 +372,7 @@ impl Default for Settings {
             afh: default_afh(),
             remote_sink: String::new(),
             last_profile: String::new(),
-            le_audio_experimental: true,
+            le_audio_experimental: false,
             le_audio_low_latency: false,
             experimental_codecs: true,
             auto_codec: true,
@@ -597,6 +621,21 @@ mod tests {
         assert_eq!(s.update_channel(), Channel::Alpha);
         s.include_alphas = false;
         assert_eq!(s.update_channel(), Channel::Stable);
+    }
+
+    #[test]
+    fn setup_runs_by_itself_in_a_new_folder_only() {
+        // No file yet: the first run
+        assert!(!Settings::default().setup_done);
+        // A file of an earlier version: a folder in use already
+        let s: Settings = serde_json::from_str(r#"{"schema_version":8,"language":"en"}"#).unwrap();
+        assert!(s.setup_done);
+        let s = Settings { setup_done: true, ..Settings::default() };
+        let back: Settings = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+        assert!(back.setup_done);
+        // Saved before the setup ended (its last step saves settings)
+        let back: Settings = serde_json::from_value(serde_json::to_value(Settings::default()).unwrap()).unwrap();
+        assert!(!back.setup_done);
     }
 
     #[test]

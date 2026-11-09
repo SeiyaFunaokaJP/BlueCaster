@@ -21,6 +21,8 @@ import {
   entryBase,
   HEADSET_MODES,
   headsetMode,
+  hifiCable,
+  isHifiCable,
   multichannelCable,
   type HeadsetMode,
   vbCable,
@@ -46,7 +48,7 @@ export function InputSource(props: {
   device: Device;
   devices: readonly AudioDevice[];
   /** The device's output source as shown (a loop is refused) */
-  source: Pick<Profile, "capture_mode" | "audio_device_id">;
+  source: Pick<Profile, "capture_mode" | "audio_device_id"> & Partial<Pick<Profile, "auto_switch_device">>;
 }) {
   const app = useApp();
   const snap = () => app.core.state.snap!;
@@ -60,8 +62,11 @@ export function InputSource(props: {
     if (!e) return null;
     if (e.profile) return e.profile;
     const base = entryBase(e, snap().profiles);
-    const cable = vbCable(props.devices);
-    return !e.le_audio && cable && cable.id !== looped()
+    // The Hi-Fi Cable first, VB-Cable then stays free for the sound
+    const cable = [hifiCable(props.devices), vbCable(props.devices)].find(
+      (c) => c && c.id !== looped(),
+    );
+    return !e.le_audio && cable
       ? {
           ...base,
           headset_mic: "auto",
@@ -84,6 +89,15 @@ export function InputSource(props: {
       (!!d?.capture_name && d.capture_name === source.capture_name)
     );
   };
+  /** Windows plays its sound into the chosen device (issue #86: the
+   *  microphone's cable left as the default output): apps hear it mixed with
+   *  the microphone, and an Output Source that is another device gets
+   *  nothing. Not while connecting makes the Output Source the default. */
+  const playsDefault = () => {
+    const d = props.devices.find((x) => x.id === chosen());
+    const switches = props.source.capture_mode === "virtual" && props.source.auto_switch_device !== false;
+    return !!d?.is_default && !switches && !usedBySource(d.id);
+  };
   const [busy, setBusy] = createSignal(false);
   const save = async (patch: Partial<Profile>) => {
     const e = entry();
@@ -99,10 +113,11 @@ export function InputSource(props: {
     setBusy(false);
   };
   const options = (): Option<string>[] => {
-    // Cables first (the standard one before the 16-channel one), then what
-    // only plays the microphone; a group's options next to each other
+    // Cables first (the Hi-Fi Cable, the microphone's own, then the standard
+    // one before the 16-channel one), then what only plays the microphone; a
+    // group's options next to each other
     const rank = (d: AudioDevice) =>
-      (d.capture_name || d.is_virtual ? 0 : 2) + Number(multichannelCable(d));
+      (d.capture_name || d.is_virtual ? 0 : 2) + Number(multichannelCable(d)) - Number(isHifiCable(d));
     const list = props.devices
       .filter(
         (d) =>
@@ -190,7 +205,13 @@ export function InputSource(props: {
         <Show when={mode() !== "off" && usedBySource(chosen())}>
           <p class="field-warn">
             <Icon name="warning" />
-            <span>{t("error.headset_mic_loop")}</span>
+            <span>{t("capture.mic_loop_here")}</span>
+          </p>
+        </Show>
+        <Show when={mode() !== "off" && playsDefault()}>
+          <p class="field-warn">
+            <Icon name="warning" />
+            <span>{t("capture.mic_is_default_output")}</span>
           </p>
         </Show>
       </div>

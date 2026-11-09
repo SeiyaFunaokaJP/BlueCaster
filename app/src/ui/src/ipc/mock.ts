@@ -185,6 +185,7 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
     flyout_with_quick_settings: false,
     notify_connected: true,
     battery_low_percent: 20,
+    setup_done: true,
     check_updates_on_startup: true,
     include_prereleases: false,
     include_alphas: false,
@@ -219,6 +220,9 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
       mtk_iso_interface: false,
       mtk_iso_pad: 0,
       mtk_command: "",
+      mtk_iso_queue: 0,
+      mtk_command_before_reset: false,
+      mtk_register: "",
       le_keys_to_windows: false,
     },
     bt_chip_pid: 0,
@@ -469,6 +473,7 @@ export function sampleSnapshot(scenario: MockScenario = "normal"): Snapshot {
             volume: null,
             battery: null,
             battery_refused: false,
+            voice_codecs: [],
           }
         : {
             state: "idle",
@@ -478,18 +483,21 @@ export function sampleSnapshot(scenario: MockScenario = "normal"): Snapshot {
             volume: null,
             battery: null,
             battery_refused: false,
+            voice_codecs: [],
           },
     profiles,
     active_profile: fresh ? null : long ? LONG_NAME : "WH-1000XM5 (LDAC)",
-    settings: sampleSettings(
-      voice
+    settings: sampleSettings({
+      // The first run: the setup opens by itself
+      setup_done: !fresh,
+      ...(voice
         ? { le_audio_experimental: true }
         : le
           ? { le_audio_experimental: true }
           : long
             ? { language: "ja" }
-            : {},
-    ),
+            : {}),
+    }),
     update: {
       checking: false,
       available:
@@ -583,6 +591,18 @@ const CABLE: AudioDevice = {
   mix_bits: 24,
   capture_name: "CABLE Output (VB-Audio Virtual Cable)",
 };
+/** VB-Audio Hi-Fi Cable (MockCore.hifiCable) */
+const HIFI_CABLE: AudioDevice = {
+  id: "{0.0.0.00000000}.{hificable}",
+  name: "Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)",
+  is_default: false,
+  is_virtual: true,
+  mix_rate: 48000,
+  mix_channels: 2,
+  mix_bits: 24,
+  capture_name: "Hi-Fi Cable Output (VB-Audio Hi-Fi Cable)",
+};
+
 const AUDIO_DEVICES: AudioDevice[] = [
   {
     id: "{0.0.0.00000000}.{cable16}",
@@ -981,6 +1001,9 @@ export class MockCore implements Transport {
   private voiceRx = { packets: 0, bad: 0, concealed: 0 };
   /** Windows' names of those (device.windows_paired_through) */
   windowsNames: Record<string, string> = {};
+  /** Every device Windows paired through an adapter (adapter.windows_devices);
+   *  null: the request fails */
+  adapterDevices: { address: string; name: string; audio: boolean }[] | null = [];
   /** LE keys of the saved devices (device.pairing), as derived with LE Audio on */
   leKeys: DevicePairing["le_keys"] = null;
   /** Why there are none (device.pairing) */
@@ -1334,6 +1357,8 @@ export class MockCore implements Transport {
           // Always on, as the core reads it (issue #86)
           experimental_codecs: true,
           auto_codec: next.auto_codec ?? before.auto_codec,
+          // As the core's serde default for a client that sends none
+          setup_done: next.setup_done ?? true,
         };
         this.emit({ kind: "settings", value: this.snap.settings });
         let le_audio_deferred = false;
@@ -1387,6 +1412,9 @@ export class MockCore implements Transport {
           String(p.instance_id),
           method === "adapter.assign_winusb",
         );
+      case "adapter.windows_devices":
+        if (!this.adapterDevices) throw errorInfo("ipc.timeout", "ipc.error.timeout");
+        return this.adapterDevices;
       case "adapter.restart":
         this.setAdapter("initializing");
         this.later(900, () => this.setAdapter("ready"));
@@ -1428,10 +1456,12 @@ export class MockCore implements Transport {
         return this.firmwareFolder();
       case "adapter.download_firmware":
         return this.downloadFirmware(String(p.file));
-      case "audio.devices":
-        return this.noVirtual
-          ? AUDIO_DEVICES.filter((d) => !d.is_virtual)
-          : AUDIO_DEVICES;
+      case "audio.devices": {
+        const all = this.hifiCable ? [...AUDIO_DEVICES, HIFI_CABLE] : AUDIO_DEVICES;
+        const list = this.noVirtual ? all.filter((d) => !d.is_virtual) : all;
+        const def = this.defaultOutput;
+        return def === null ? list : list.map((d) => ({ ...d, is_default: d.id === def }));
+      }
       case "audio.apps":
         return AUDIO_APPS;
       case "audio.mixer":
@@ -1638,8 +1668,12 @@ export class MockCore implements Transport {
   async setTheme() {}
   /** Windows has no virtual device (tests) */
   noVirtual = false;
+  /** VB-Audio Hi-Fi Cable installed (?hificable): the microphone's second cable */
+  hifiCable = false;
   /** Now and then the capture falls behind (?capturedrops): audio dropped at capture */
   captureDrops = false;
+  /** Windows' default output (audio.devices), if not the speakers */
+  defaultOutput: string | null = null;
 
   setOtherRadio(radio: Snapshot["adapter"]["other_radio"]) {
     this.snap.adapter.other_radio = radio;
@@ -1952,6 +1986,7 @@ export class MockCore implements Transport {
           volume: null,
           battery: null,
           battery_refused: false,
+          voice_codecs: [],
         };
         this.log(
           "error",
@@ -2098,6 +2133,7 @@ export class MockCore implements Transport {
         volume: null,
         battery: null,
         battery_refused: false,
+        voice_codecs: [],
       };
       this.emit({ kind: "stream", value: this.snap.stream });
       throw e;
@@ -2111,6 +2147,7 @@ export class MockCore implements Transport {
       volume: null,
       battery: null,
       battery_refused: false,
+      voice_codecs: [],
     };
     this.emit({ kind: "stream", value: this.snap.stream });
     this.log(
@@ -2177,6 +2214,7 @@ export class MockCore implements Transport {
           volume: null,
           battery: null,
           battery_refused: false,
+          voice_codecs: [],
         };
         this.log(
           "info",
@@ -2292,6 +2330,7 @@ export class MockCore implements Transport {
               volume: 76,
               battery: 80,
               battery_refused: false,
+              voice_codecs: [],
             }
           : {
               state: "streaming",
@@ -2302,6 +2341,8 @@ export class MockCore implements Transport {
               ...(this.scenario === "battery_refused"
                 ? { battery: null, battery_refused: true }
                 : { battery: 80, battery_refused: false }),
+              // The headphones' voice codecs (AT+BAC): a classic device lists them
+              voice_codecs: this.snap.profiles.find((p) => p.name === name)?.le_audio ? [] : ["cvsd", "msbc"],
             };
       this.snap.stream.voice = this.voiceOf(name);
       this.log(
@@ -2411,6 +2452,7 @@ export class MockCore implements Transport {
       volume: null,
       battery: null,
       battery_refused: false,
+      voice_codecs: [],
     };
     if (was !== "idle")
       this.log(
@@ -2510,6 +2552,7 @@ export class MockCore implements Transport {
             volume: null,
             battery: null,
             battery_refused: false,
+            voice_codecs: [],
           };
           this.emit({ kind: "stream", value: this.snap.stream });
         }
@@ -3073,6 +3116,7 @@ export function mockFromUrl(): MockCore {
   const win = q.get("window") === "flyout" ? "flyout" : "main";
   const mock = new MockCore({ scenario, window: win });
   mock.noVirtual = q.has("novirtual");
+  mock.hifiCable = q.has("hificable");
   mock.captureDrops = q.has("capturedrops");
   // ?winpaired: headphones Windows paired through the adapter (the setup's import)
   if (q.has("winpaired")) {
@@ -3081,6 +3125,13 @@ export function mockFromUrl(): MockCore {
       "00:A2:D0:00:00:02": "EarFun Air Pro 4",
       "38:18:4C:00:00:07": "WF-1000XM5",
     };
+    // And what the adapter would take from Windows (the warning before WinUSB)
+    mock.adapterDevices = [
+      { address: "00:11:22:33:44:01", name: "Logitech K380", audio: false },
+      { address: "00:A2:D0:00:00:02", name: "EarFun Air Pro 4", audio: true },
+      { address: "00:11:22:33:44:02", name: "MX Master 3", audio: false },
+      { address: "38:18:4C:00:00:07", name: "WF-1000XM5", audio: true },
+    ];
   }
   if (q.has("otherradio")) {
     mock.setOtherRadio({

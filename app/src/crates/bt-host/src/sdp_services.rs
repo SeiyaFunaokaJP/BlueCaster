@@ -1,6 +1,8 @@
-//! The services a device lists in SDP (developer mode: the device's pairing
-//! dialog): each record's service class UUIDs and name. Asked only over a
-//! link the stack has; one query at a time.
+//! The services a device lists in SDP (its Services tag, asked by the
+//! dialog and once after each connection): each record's service class
+//! UUIDs and name. Asked only over a link the stack has; one query at a
+//! time. A query the link cut short ends in an error, never in a shorter
+//! list.
 
 use std::collections::BTreeMap;
 use std::sync::mpsc;

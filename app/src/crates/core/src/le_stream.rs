@@ -976,6 +976,7 @@ mod tests {
             sets_encoded: 490,
             sets_sent: 500,
             sdus_sent: 1000,
+            bytes_sent: 155000,
             silence_sets: 10,
             underruns: 1,
             overflows: 2,

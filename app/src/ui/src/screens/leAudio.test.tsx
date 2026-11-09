@@ -218,4 +218,19 @@ describe("diagnostics", () => {
     await waitFor(() => expect(core.state.snap!.stream.state).toBe("error"));
     expect(core.state.snap!.stream.message.key).toBe("error.le_audio_disabled");
   });
+
+  it("shows an LE Audio device's codec as a value, not a disabled list (issue #86)", async () => {
+    const { core } = start("#/", "le");
+    await waitFor(() => expect(core.state.snap).not.toBeNull());
+    await core.request("stream.start", { profile: "Buds (LE Audio)" });
+    await waitFor(() => expect(core.state.snap!.stream.state).toBe("streaming"));
+    const codec = await waitFor(() => {
+      const o = document.querySelector<HTMLOutputElement>("output.codec-picker");
+      expect(o).not.toBeNull();
+      return o!;
+    });
+    expect(codec).toHaveTextContent(t("ui.codec.lc3"));
+    expect(codec).toHaveAccessibleName(t("quality.codec"));
+    expect(document.querySelector(".codec-picker select:disabled")).toBeNull();
+  });
 });

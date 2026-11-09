@@ -48,6 +48,9 @@ const NAMES: Record<number, string> = {
   0x1854: "Hearing Access",
   0x1855: "Telephony and Media Audio",
   0x1858: "Gaming Audio",
+  // Members' 16-bit UUIDs (issue #86, as LE Audio earbuds list them)
+  0xfd92: "Qualcomm Service",
+  0xfe2c: "Google Fast Pair",
 };
 
 /** Vendors' 128-bit service UUIDs that devices list without a name (issue
@@ -64,6 +67,9 @@ const VENDOR_NAMES: Record<string, string> = {
   "0000eb07-d102-11e1-9b23-00025b00a5a5": "Qualcomm GAIA Extension",
   "0000eb10-d102-11e1-9b23-00025b00a5a5": "Qualcomm GAIA OTA/Debug Log",
   "df21fe2c-2515-4fdb-8886-f12c4d67927c": "Google Fast Pair",
+  // LE Audio earbuds' (issue #86, names as a tester reported them)
+  "2587db3c-ce70-4fc9-935f-777ab4188fd7": "Advanced Audio Recording Service",
+  "12994b7e-6d47-4215-8c9e-aae9a1095ba3": "Advanced Audio Gaming Service",
 };
 
 /** The 16-bit form of a UUID of the Bluetooth base, else null */

@@ -170,60 +170,7 @@ fn search(radio: HANDLE) -> windows::core::Result<Vec<PairedDevice>> {
 /// class of device come from the node too (not connected, not otherwise
 /// known: `connected`, `remembered` and `authenticated` are false).
 pub fn paired_through(instance_id: &str) -> Vec<PairedDevice> {
-    use crate::usb_adapters::DevInfoSet;
-    use windows::Win32::Devices::DeviceAndDriverInstallation::{
-        DIGCF_ALLCLASSES, SP_DEVINFO_DATA, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW,
-    };
-    use windows::Win32::Devices::Properties::{DEVPKEY_Device_FriendlyName, DEVPKEY_Device_Parent};
-    use windows::Win32::Foundation::DEVPROPKEY;
-    use windows::core::{GUID, w};
-    /// DEVPKEY_Bluetooth_ClassOfDevice (bthdef.h)
-    const CLASS_OF_DEVICE: DEVPROPKEY =
-        DEVPROPKEY { fmtid: GUID::from_u128(0x2BD67D8B_8BEB_48D5_87E0_6CDA3428040A), pid: 10 };
-
-    // Present or not: the adapter's own driver is WinUSB now
-    // SAFETY: no class, enumerator "BTHENUM", no window.
-    let set = match unsafe { SetupDiGetClassDevsW(None, w!("BTHENUM"), None, DIGCF_ALLCLASSES) } {
-        Ok(h) => DevInfoSet(h),
-        Err(e) => {
-            tracing::debug!("bt_paired: no BTHENUM devices: {e}");
-            return Vec::new();
-        }
-    };
-    let parent_of = |id: &str| {
-        let (set, data) = DevInfoSet::open(id).ok()?;
-        set.property_string(&data, &DEVPKEY_Device_Parent)
-    };
-    let mut found: Vec<PairedDevice> = Vec::new();
-    for index in 0.. {
-        let mut data = SP_DEVINFO_DATA { cbSize: size_of::<SP_DEVINFO_DATA>() as u32, ..Default::default() };
-        // SAFETY: valid set; out structure with its size.
-        if unsafe { SetupDiEnumDeviceInfo(set.0, index, &mut data) }.is_err() {
-            break;
-        }
-        let Some(id) = set.instance_id(&data) else { continue };
-        let Some(address) = device_node_address(&id) else { continue };
-        // DEV_ -> radio (BTH\MS_BTHBRB) -> USB device, or a composite
-        // device's function and then the device; the bound guards a loop
-        let mut parent = set.property_string(&data, &DEVPKEY_Device_Parent);
-        for _ in 0..4 {
-            let Some(p) = parent else { break };
-            if p.eq_ignore_ascii_case(instance_id) {
-                if !found.iter().any(|d| d.address == address) {
-                    found.push(PairedDevice {
-                        address,
-                        name: set.property_string(&data, &DEVPKEY_Device_FriendlyName).unwrap_or_default(),
-                        class_of_device: set.property_u32(&data, &CLASS_OF_DEVICE).unwrap_or(0),
-                        connected: false,
-                        remembered: false,
-                        authenticated: false,
-                    });
-                }
-                break;
-            }
-            parent = parent_of(&p);
-        }
-    }
+    let found: Vec<PairedDevice> = nodes_through("BTHENUM", instance_id).into_iter().map(|n| n.device).collect();
     tracing::debug!(
         "bt_paired: paired through {instance_id}: {}",
         found
@@ -241,8 +188,14 @@ pub fn paired_through(instance_id: &str) -> Vec<PairedDevice> {
 /// same container), as (LE address, classic address). No administrator
 /// rights needed.
 pub fn le_of_classic_through(instance_id: &str) -> Vec<([u8; 6], [u8; 6])> {
-    let le = containers_through("BTHLE", instance_id);
-    let classic = containers_through("BTHENUM", instance_id);
+    let containers = |enumerator| -> Vec<([u8; 6], windows::core::GUID)> {
+        nodes_through(enumerator, instance_id)
+            .into_iter()
+            .filter_map(|n| Some((n.device.address, n.container?)))
+            .collect()
+    };
+    let le = containers("BTHLE");
+    let classic = containers("BTHENUM");
     let pairs = pair_by_container(&le, &classic);
     tracing::debug!(
         "bt_paired: LE of classic through {instance_id}: {}",
@@ -259,26 +212,70 @@ fn pair_by_container<C: PartialEq>(le: &[([u8; 6], C)], classic: &[([u8; 6], C)]
     le.iter().filter_map(|(l, container)| classic.iter().find(|(_, c)| c == container).map(|(c, _)| (*l, *c))).collect()
 }
 
-/// (address, container ID) of each device node of the enumerator
-/// (`BTHENUM`, `BTHLE`) below the USB device `instance_id`
-fn containers_through(enumerator: &str, instance_id: &str) -> Vec<([u8; 6], windows::core::GUID)> {
+/// Every device Windows' Bluetooth paired through the USB device
+/// `instance_id`, classic and LE, audio or not: what stops working with
+/// Windows once the adapter is on WinUSB (the setup warns of them, issue
+/// #86). A device of both kinds (an LE node in a classic node's container)
+/// is listed once, as the classic one; the ones that are not audio
+/// devices (keyboards, mice, phones, and every LE one) first, then the
+/// audio ones, each in Windows' order. Empty when there are none or the
+/// nodes cannot be read. No administrator rights needed.
+pub fn devices_through(instance_id: &str) -> Vec<PairedDevice> {
+    let list = merge_through(nodes_through("BTHENUM", instance_id), nodes_through("BTHLE", instance_id));
+    tracing::debug!("bt_paired: {} device(s) paired through the adapter", list.len());
+    list
+}
+
+fn merge_through(classic: Vec<Node>, le: Vec<Node>) -> Vec<PairedDevice> {
+    let le_only: Vec<Node> = le
+        .into_iter()
+        .filter(|l| l.container.is_none() || !classic.iter().any(|c| c.container == l.container))
+        .collect();
+    let (audio, other): (Vec<PairedDevice>, Vec<PairedDevice>) =
+        classic.into_iter().chain(le_only).map(|n| n.device).partition(PairedDevice::is_a2dp_sink);
+    other.into_iter().chain(audio).collect()
+}
+
+/// A paired device's node below an adapter, and its container (one per
+/// physical device: an LE and a classic node of the same device share it)
+struct Node {
+    device: PairedDevice,
+    container: Option<windows::core::GUID>,
+}
+
+/// The device nodes of the enumerator (`BTHENUM`, `BTHLE`) below the USB
+/// device `instance_id`, present or not (the adapter's own driver may be
+/// WinUSB now), each address once. The name is Windows' (the node's
+/// friendly name, else its description), the class of device the classic
+/// one's (0 for LE); `connected`, `remembered` and `authenticated` are
+/// false (not known from the node).
+fn nodes_through(enumerator: &str, instance_id: &str) -> Vec<Node> {
     use crate::usb_adapters::DevInfoSet;
     use windows::Win32::Devices::DeviceAndDriverInstallation::{
         DIGCF_ALLCLASSES, SP_DEVINFO_DATA, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW,
     };
-    use windows::Win32::Devices::Properties::{DEVPKEY_Device_ContainerId, DEVPKEY_Device_Parent};
-    use windows::core::HSTRING;
+    use windows::Win32::Devices::Properties::{
+        DEVPKEY_Device_ContainerId, DEVPKEY_Device_DeviceDesc, DEVPKEY_Device_FriendlyName, DEVPKEY_Device_Parent,
+    };
+    use windows::Win32::Foundation::DEVPROPKEY;
+    use windows::core::{GUID, HSTRING};
+    /// DEVPKEY_Bluetooth_ClassOfDevice (bthdef.h)
+    const CLASS_OF_DEVICE: DEVPROPKEY =
+        DEVPROPKEY { fmtid: GUID::from_u128(0x2BD67D8B_8BEB_48D5_87E0_6CDA3428040A), pid: 10 };
 
     // SAFETY: no class, a NUL-terminated enumerator, no window.
     let set = match unsafe { SetupDiGetClassDevsW(None, &HSTRING::from(enumerator), None, DIGCF_ALLCLASSES) } {
         Ok(h) => DevInfoSet(h),
-        Err(_) => return Vec::new(),
+        Err(e) => {
+            tracing::debug!("bt_paired: no {enumerator} devices: {e}");
+            return Vec::new();
+        }
     };
     let parent_of = |id: &str| {
         let (set, data) = DevInfoSet::open(id).ok()?;
         set.property_string(&data, &DEVPKEY_Device_Parent)
     };
-    let mut found = Vec::new();
+    let mut found: Vec<Node> = Vec::new();
     for index in 0.. {
         let mut data = SP_DEVINFO_DATA { cbSize: size_of::<SP_DEVINFO_DATA>() as u32, ..Default::default() };
         // SAFETY: valid set; out structure with its size.
@@ -287,12 +284,30 @@ fn containers_through(enumerator: &str, instance_id: &str) -> Vec<([u8; 6], wind
         }
         let Some(id) = set.instance_id(&data) else { continue };
         let Some(address) = node_address(enumerator, &id) else { continue };
-        let Some(container) = set.property_guid(&data, &DEVPKEY_Device_ContainerId) else { continue };
+        // DEV_ -> radio (BTH\MS_BTHBRB, BTHLE's radio) -> USB device, or a
+        // composite device's function and then the device; the bound
+        // guards a loop
         let mut parent = set.property_string(&data, &DEVPKEY_Device_Parent);
         for _ in 0..4 {
             let Some(p) = parent else { break };
             if p.eq_ignore_ascii_case(instance_id) {
-                found.push((address, container));
+                if !found.iter().any(|n| n.device.address == address) {
+                    let name = set
+                        .property_string(&data, &DEVPKEY_Device_FriendlyName)
+                        .or_else(|| set.property_string(&data, &DEVPKEY_Device_DeviceDesc))
+                        .unwrap_or_default();
+                    found.push(Node {
+                        device: PairedDevice {
+                            address,
+                            name,
+                            class_of_device: set.property_u32(&data, &CLASS_OF_DEVICE).unwrap_or(0),
+                            connected: false,
+                            remembered: false,
+                            authenticated: false,
+                        },
+                        container: set.property_guid(&data, &DEVPKEY_Device_ContainerId),
+                    });
+                }
                 break;
             }
             parent = parent_of(&p);
@@ -303,6 +318,7 @@ fn containers_through(enumerator: &str, instance_id: &str) -> Vec<([u8; 6], wind
 
 /// The address of a paired device's own node, `BTHENUM\DEV_581862027AD7\...`
 /// (the service nodes beside it and LE devices are not matched)
+#[cfg(test)]
 fn device_node_address(instance_id: &str) -> Option<[u8; 6]> {
     node_address("BTHENUM", instance_id)
 }
@@ -422,6 +438,20 @@ mod tests {
         assert_eq!(pair_by_container(&le, &classic), vec![([0xC0, 1, 1, 1, 1, 1], [0x58, 1, 1, 1, 1, 1])]);
     }
 
+    #[test]
+    fn devices_through_lists_each_device_once_audio_last() {
+        let node = |a: u8, name: &str, cod: u32, container: Option<u128>| Node {
+            device: PairedDevice { address: [a; 6], name: name.into(), ..dev(cod) },
+            container: container.map(windows::core::GUID::from_u128),
+        };
+        let classic = vec![node(1, "Headphones", 0x240418, Some(1)), node(2, "Keyboard", 0x002540, Some(2))];
+        // The headphones' LE side, a mouse on LE only, one without a container
+        let le = vec![node(3, "Headphones", 0, Some(1)), node(4, "Mouse", 0, Some(4)), node(5, "Pen", 0, None)];
+        let names: Vec<String> = merge_through(classic, le).into_iter().map(|d| d.name).collect();
+        assert_eq!(names, ["Keyboard", "Mouse", "Pen", "Headphones"]);
+        assert!(merge_through(Vec::new(), Vec::new()).is_empty());
+    }
+
     /// This PC's devices paired through a USB device (BLUECASTER_ADAPTER=<its
     /// instance ID> cargo test -p win-sys list_paired_through -- --ignored
     /// --nocapture)
@@ -437,6 +467,10 @@ mod tests {
                 d.class_of_device,
                 d.is_a2dp_sink()
             );
+        }
+        println!("all, LE too:");
+        for d in devices_through(&id) {
+            println!("{} \u{201C}{}\u{201D}", d.address_string(), d.name);
         }
     }
 

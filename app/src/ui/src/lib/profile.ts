@@ -298,9 +298,20 @@ export function deviceKey(d: Pick<Device, "address" | "le_audio">): string {
 /** The entries to offer: LE Audio ones only with LE Audio (experimental) on, as v1 */
 /** VB-Cable's playback device among Windows' outputs */
 export function vbCable(devices: readonly AudioDevice[]): AudioDevice | null {
-  const cables = devices.filter((d) => d.is_virtual && /cable/i.test(d.name));
+  const cables = devices.filter((d) => d.is_virtual && /cable/i.test(d.name) && !isHifiCable(d));
   // The standard one before the 16-channel one
   return cables.find((d) => !multichannelCable(d)) ?? cables[0] ?? null;
+}
+
+/** VB-Audio's Hi-Fi Cable ("Hi-Fi Cable Input"): the free second cable,
+ *  for the headset microphone (issue #86; as the core's is_hifi_cable) */
+export function isHifiCable(d: Pick<AudioDevice, "name">): boolean {
+  return /hi-?fi[ -]cable/i.test(d.name);
+}
+
+/** The Hi-Fi Cable's playback device among Windows' outputs */
+export function hifiCable(devices: readonly AudioDevice[]): AudioDevice | null {
+  return devices.find(isHifiCable) ?? null;
 }
 
 /** A 16-channel cable ("CABLE In 16ch"): no use as a source or a

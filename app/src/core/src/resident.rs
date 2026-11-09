@@ -100,7 +100,12 @@ struct SampleCounters {
     /// LinkStats::acl_packets_sent
     acl_packets: u64,
     encode: bt_host::EncodeTotals,
+    /// An LE Audio stream's bytes and SDUs sent
+    le_sent: Option<(u64, u64)>,
 }
+
+/// An LE Audio stream on `cis` CIS and its sender's counters
+type LeSending = (u32, bt_host::LeStreamStats);
 
 /// The encoder's time between two samples; None when nothing was encoded
 fn encode_load(prev: &bt_host::EncodeTotals, now: &bt_host::EncodeTotals, peak_ns: u64) -> Option<Box<EncodeLoad>> {
@@ -117,18 +122,20 @@ fn encode_load(prev: &bt_host::EncodeTotals, now: &bt_host::EncodeTotals, peak_n
 }
 
 impl SampleCounters {
-    fn now(stats: &bt_host::LinkStats, at: Instant) -> SampleCounters {
+    fn now(stats: &bt_host::LinkStats, le: Option<&LeSending>, at: Instant) -> SampleCounters {
         SampleCounters {
             at,
             totals: crate::state::link_totals(stats).0,
             acl_packets: stats.acl_packets_sent.load(Ordering::Relaxed),
             encode: stats.encode.totals(),
+            le_sent: le.map(|(_, s)| (s.bytes_sent, s.sdus_sent)),
         }
     }
 }
 
-/// A link sample from the counters now and those of the last sample; `iso`:
-/// an LE Audio stream's counters (the A2DP media figures are then 0 / None);
+/// A link sample from the counters now and those of the last sample; `le`:
+/// an LE Audio stream's counters (the rates are its SDUs', drops its sets
+/// dropped and send errors, the A2DP media figures 0 / None);
 /// `voice`: A2DP suspended for a classic device's call link: the media
 /// figures are its SCO payloads, and what only an ACL stream has (airtime,
 /// the send queue, the adapter's backlog, the A2DP encoder, the device's
@@ -139,9 +146,11 @@ fn link_sample(
     last: Option<SampleCounters>,
     now: Instant,
     source_rate: u32,
-    iso: Option<IsoCounters>,
+    le: Option<LeSending>,
     voice: bool,
 ) -> (LinkSample, SampleCounters) {
+    let iso = le.as_ref().map(|(cis, s)| iso_counters(*cis, s));
+    let le_sent = le.as_ref().map(|(_, s)| (s.bytes_sent, s.sdus_sent));
     let (total, start, starts) = crate::state::link_totals(stats);
     let acl_packets = stats.acl_packets_sent.load(Ordering::Relaxed);
     let encode_totals = stats.encode.totals();
@@ -156,10 +165,24 @@ fn link_sample(
         }
         None => (0.0, 0.0, 0.0),
     };
-    let (bps, pps) = if iso.is_some() { (0.0, 0.0) } else { (bps, pps) };
     let link = stats.link();
-    let air = bluecaster_core::link::airtime_on(pps, bps, link.remote_features.as_ref()).filter(|_| !voice);
-    let since = total.since(&start);
+    // The ACL airtime only for ACL packets
+    let air =
+        bluecaster_core::link::airtime_on(pps, bps, link.remote_features.as_ref()).filter(|_| !voice && iso.is_none());
+    // LE Audio: what its sender handed the adapter (issue #86: Link
+    // Quality showed nothing while LE Audio streamed)
+    let (bps, pps) = match (le_sent, last.and_then(|p| p.le_sent.map(|s| (p.at, s)))) {
+        (Some((bytes, sdus)), Some((at, (prev_bytes, prev_sdus)))) => {
+            let dt = now.duration_since(at).as_secs_f64().max(0.001);
+            (bytes.saturating_sub(prev_bytes) as f64 / dt, sdus.saturating_sub(prev_sdus) as f64 / dt)
+        }
+        (Some(_), None) => (0.0, 0.0),
+        (None, _) => (bps, pps),
+    };
+    let mut since = total.since(&start);
+    if let Some((_, s)) = &le {
+        since.dropped = s.overflows + s.send_errors;
+    }
     let radio = stats.radio();
     // The most the controller held since the last sample: while an A2DP
     // stream sends
@@ -208,7 +231,7 @@ fn link_sample(
             concealed: stats.voice_rx_concealed.load(Ordering::Relaxed),
         }),
     };
-    (sample, SampleCounters { at: now, totals: total, acl_packets, encode: encode_totals })
+    (sample, SampleCounters { at: now, totals: total, acl_packets, encode: encode_totals, le_sent })
 }
 
 /// Link samples while a UI subscribes; every second the stream's rates (the
@@ -244,14 +267,6 @@ async fn sampler(state: Arc<CoreState>) {
             last_link = None;
             continue;
         }
-        // A new subscription: no rate without the last counters, and a 0 would
-        // show as a dip in the charts
-        if last_link.is_none() {
-            last_link = Some(SampleCounters::now(&stats, now));
-            // The backlog peak from before the subscription
-            stats.controller_backlog_peak.take();
-            continue;
-        }
         let (source_rate, le_cis, voice) = state.with_snapshot(|s| match (&s.stream.state, &s.stream.info) {
             (ipc::StreamState::Streaming, Some(i)) => {
                 let call = s.stream.voice.as_ref().filter(|v| v.link == "hfp");
@@ -261,9 +276,17 @@ async fn sampler(state: Arc<CoreState>) {
             _ => (0, None, false),
         });
         // LE Audio (experimental): the sender's counters
-        let iso = le_cis.and_then(|cis| state.service.host().map(|h| iso_counters(cis, &h.le_stream_stats())));
+        let le = le_cis.and_then(|cis| state.service.host().map(|h| (cis, h.le_stream_stats())));
+        // A new subscription: no rate without the last counters, and a 0 would
+        // show as a dip in the charts
+        if last_link.is_none() {
+            last_link = Some(SampleCounters::now(&stats, le.as_ref(), now));
+            // The backlog peak from before the subscription
+            stats.controller_backlog_peak.take();
+            continue;
+        }
         let time_ms = state.started.elapsed().as_millis() as u64;
-        let (sample, counters) = link_sample(time_ms, &stats, last_link, now, source_rate, iso, voice);
+        let (sample, counters) = link_sample(time_ms, &stats, last_link, now, source_rate, le, voice);
         last_link = Some(counters);
         state.publish(Event::Link(sample));
     }
@@ -434,7 +457,7 @@ pub fn run(args: &[String]) -> i32 {
         let state = state.clone();
         std::thread::spawn(move || {
             if let Ok(devices) = audio_capture::render_devices() {
-                state.watch_vb_cable(&devices);
+                state.watch_cables(&devices);
             }
         });
     }
@@ -649,28 +672,32 @@ mod tests {
         let stats = bt_host::LinkStats::default();
         let r = Ordering::Relaxed;
         let t0 = Instant::now();
-        let (_, total) = link_sample(0, &stats, None, t0, 48000, None, false);
-        stats.packets_sent.store(120, r);
-        stats.bytes_sent.store(120 * 1005, r);
-        stats.queue_depth.store(5, r);
         let le = bt_host::LeStreamStats {
             sets_encoded: 990,
             sets_sent: 1000,
             sdus_sent: 2000,
+            bytes_sent: 310000,
             silence_sets: 12,
             underruns: 1,
             overflows: 3,
-            send_errors: 0,
+            send_errors: 1,
             prefill: 6,
         };
-        let iso = Some(iso_counters(2, &le));
-        let (s, _) = link_sample(1000, &stats, Some(total), t0 + Duration::from_secs(1), 48000, iso, false);
+        let earlier = bt_host::LeStreamStats { sdus_sent: 1800, bytes_sent: 279000, ..le };
+        let (_, total) = link_sample(0, &stats, None, t0, 48000, Some((2, earlier)), false);
+        stats.packets_sent.store(120, r);
+        stats.bytes_sent.store(120 * 1005, r);
+        stats.queue_depth.store(5, r);
+        let (s, _) = link_sample(1000, &stats, Some(total), t0 + Duration::from_secs(1), 48000, Some((2, le)), false);
         assert_eq!(
             s.iso,
             Some(IsoCounters { cis: 2, sdu_sets: 1000, silence: 12, underruns: 1, dropped: 3, prefill: 6 })
         );
+        // The rates are the SDUs' (not the A2DP counters'), drops its own
+        assert_eq!((s.bytes_per_second, s.packets_per_second), (31000.0, 200.0));
+        assert_eq!(s.dropped, 4);
         // No A2DP media figures while LE Audio streams
-        assert_eq!((s.bytes_per_second, s.packets_per_second, s.airtime, s.queue_depth), (0.0, 0.0, 0.0, 0));
+        assert_eq!((s.airtime, s.queue_depth), (0.0, 0));
         assert!(s.acl_packet.is_none() && s.queue_capacity.is_none());
         assert!(s.controller_backlog.is_none());
         assert_eq!(s.source_rate, Some(48000));

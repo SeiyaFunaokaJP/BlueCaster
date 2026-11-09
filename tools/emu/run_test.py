@@ -1047,6 +1047,12 @@ LINK_CASES = {
         ('bluecaster.log', r'supports delay reporting.*device delay report: 187\.5 ms', True),
         ('sink.log', r'delay report sent \(187\.5 ms\)', True),
     ]),
+    # Headphone buttons: each pass-through answer carries the command's state
+    # flag, so a release is not answered as a press (issue #420)
+    'avrcp-keys': (['--avrcp-keys', '3'], ['--duration', '8'], [
+        ('sink.log', r'avrcp keys: 6 of 6 answers carry the state flag sent', True),
+        ('bluecaster.log', r'AVRCP operation 0x49 released', True),
+    ]),
     # A headset that answers OPEN with a stray REJECT of DISCOVER under the
     # OPEN's label first: BTstack waits on for the OPEN accept
     'stray-reject': (['--stray-reject'], ['--duration', '3'], [

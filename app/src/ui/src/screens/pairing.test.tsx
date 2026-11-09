@@ -46,7 +46,7 @@ describe("device pairing", () => {
     expect(calls.some((c) => c.method === "device.pairing")).toBe(false);
   });
 
-  it("lists an LE Audio entry's GATT services, without keys (issue #86)", async () => {
+  it("lists an LE Audio entry's GATT services, and its LE keys only (issue #86)", async () => {
     location.hash = "#/devices";
     const calls: { method: string; params: unknown }[] = [];
     mock = new MockCore({ speed: 0, scenario: "le", onCall: (method, params) => calls.push({ method, params }) });
@@ -65,10 +65,14 @@ describe("device pairing", () => {
     expect(within(table).getByText("Audio Stream Control")).toBeInTheDocument();
     expect(within(table).getByText("Published Audio Capabilities")).toBeInTheDocument();
     expect(within(dialog).getByText(t("ui.pairing.services_last"))).toBeInTheDocument();
-    // LE bonds are not shown as keys here
-    expect(within(dialog).queryByText(t("ui.pairing.key_title"))).toBeNull();
     const asked = calls.filter((c) => c.method === "device.services").pop()!.params;
     expect(asked).toEqual({ address: "F4:4E:FD:00:11:22", le_audio: true });
+    // Its LE keys, without a link key row
+    fireEvent.click(within(dialog).getByRole("button", { name: t("ui.pairing.key_title") }));
+    const keys = await within(dialog).findByRole("table", { name: t("ui.pairing.key_title") });
+    expect(within(keys).getByRole("rowheader", { name: t("ui.pairing.ltk") })).toBeInTheDocument();
+    expect(within(keys).getByRole("rowheader", { name: t("ui.pairing.irk") })).toBeInTheDocument();
+    expect(within(keys).queryByRole("rowheader", { name: t("ui.pairing.link_key") })).toBeNull();
   });
 
   it("lists the keys first, folded, the services as a table below them (issue #86)", async () => {

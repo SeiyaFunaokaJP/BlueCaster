@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Mutex;
 
 use crate::paths;
 use crate::stream::KnownCodecs;
@@ -161,6 +162,81 @@ pub fn save_codecs(dir: &Path, codecs: &BTreeMap<String, KnownCodecs>) -> std::i
     std::fs::write(paths::device_codecs_file(dir), text)
 }
 
+/// The services each classic device listed in SDP at its last connection,
+/// by upper-case address (device_services.json): what its Services tag
+/// shows while it is not connected (issue #86)
+type KeptServices = BTreeMap<String, Vec<ipc::DeviceService>>;
+
+/// One reader or writer of device_services.json at a time (the dialog's
+/// requests and the query after each connection run on threads of their
+/// own)
+static SERVICES_FILE: Mutex<()> = Mutex::new(());
+
+fn load_services_file(dir: &Path) -> KeptServices {
+    std::fs::read_to_string(paths::device_services_file(dir))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+/// Temp file + rename: a quit or crash while writing never leaves a cut
+/// file (one that does not parse would lose every device's list)
+fn write_services_file(dir: &Path, kept: &KeptServices) -> std::io::Result<()> {
+    let text = serde_json::to_string_pretty(kept).map_err(std::io::Error::other)?;
+    std::fs::create_dir_all(paths::devices_dir(dir))?;
+    let path = paths::device_services_file(dir);
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, &path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+/// What a device's kept list becomes with a new answer; None: it stays as
+/// it is. An empty answer never replaces a kept list (a device that listed
+/// nothing this time still has its services).
+fn merged_services(kept: Option<&[ipc::DeviceService]>, new: &[ipc::DeviceService]) -> Option<Vec<ipc::DeviceService>> {
+    match kept {
+        Some(k) if k == new => None,
+        Some(k) if new.is_empty() && !k.is_empty() => None,
+        _ => Some(new.to_vec()),
+    }
+}
+
+/// The services a classic device listed at its last connection
+pub fn last_services(dir: &Path, address: &str) -> Option<Vec<ipc::DeviceService>> {
+    let _one = SERVICES_FILE.lock().unwrap_or_else(|e| e.into_inner());
+    load_services_file(dir).remove(&address.to_uppercase())
+}
+
+/// Keeps what a classic device listed (see [`merged_services`]); true when
+/// the file changed
+pub fn keep_services(dir: &Path, address: &str, services: &[ipc::DeviceService]) -> bool {
+    let _one = SERVICES_FILE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut kept = load_services_file(dir);
+    let key = address.to_uppercase();
+    let Some(list) = merged_services(kept.get(&key).map(Vec::as_slice), services) else { return false };
+    kept.insert(key, list);
+    match write_services_file(dir, &kept) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!("cannot keep the devices' services: {e}");
+            false
+        }
+    }
+}
+
+/// A forgotten classic device's services go with it
+pub fn forget_services(dir: &Path, address: &str) {
+    let _one = SERVICES_FILE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut kept = load_services_file(dir);
+    if kept.remove(&address.to_uppercase()).is_some()
+        && let Err(e) = write_services_file(dir, &kept)
+    {
+        tracing::warn!("cannot keep the devices' services: {e}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,6 +280,42 @@ mod tests {
         // A damaged file is as none
         std::fs::write(paths::device_codecs_file(&dir), "{ not json").unwrap();
         assert!(load_codecs(&dir).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn service(uuid: &str, name: Option<&str>) -> ipc::DeviceService {
+        ipc::DeviceService { uuids: vec![uuid.into()], name: name.map(Into::into) }
+    }
+
+    #[test]
+    fn an_empty_answer_never_replaces_kept_services() {
+        let good = vec![service("0000110b-0000-1000-8000-00805f9b34fb", Some("Audio Sink"))];
+        let other = vec![service("0000111e-0000-1000-8000-00805f9b34fb", None)];
+        assert_eq!(merged_services(None, &good), Some(good.clone()));
+        assert_eq!(merged_services(Some(&good), &good), None);
+        assert_eq!(merged_services(Some(&good), &[]), None);
+        assert_eq!(merged_services(Some(&good), &other), Some(other.clone()));
+        // Nothing kept yet: an empty answer is what is known
+        assert_eq!(merged_services(None, &[]), Some(vec![]));
+        assert_eq!(merged_services(Some(&[]), &good), Some(good));
+    }
+
+    #[test]
+    fn services_survive_a_restart_and_go_with_the_device() {
+        let dir = temp_dir("services");
+        let a = vec![service("0000110b-0000-1000-8000-00805f9b34fb", Some("Audio Sink"))];
+        let b = vec![service("0000111e-0000-1000-8000-00805f9b34fb", None)];
+        assert!(keep_services(&dir, "aa:bb:cc:dd:ee:0f", &a));
+        assert!(keep_services(&dir, "AA:BB:CC:DD:EE:10", &b));
+        // The same answer again, or an empty one: nothing written
+        assert!(!keep_services(&dir, "AA:BB:CC:DD:EE:0F", &a));
+        assert!(!keep_services(&dir, "AA:BB:CC:DD:EE:0F", &[]));
+        assert_eq!(last_services(&dir, "AA:BB:CC:DD:EE:0F"), Some(a.clone()));
+        // No temp file left behind
+        assert!(!paths::device_services_file(&dir).with_extension("json.tmp").exists());
+        forget_services(&dir, "aa:bb:cc:dd:ee:0f");
+        assert_eq!(last_services(&dir, "AA:BB:CC:DD:EE:0F"), None);
+        assert_eq!(last_services(&dir, "aa:bb:cc:dd:ee:10"), Some(b));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

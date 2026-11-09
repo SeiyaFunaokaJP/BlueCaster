@@ -1116,11 +1116,16 @@ impl<'a> LeCtx<'a> {
     }
 
     /// The device's services known (discovered, or kept and unchanged):
-    /// kept for later connections when `file` is set (its Database Hash
-    /// read first, if it has one), then PACS / ASCS and the modules
+    /// kept for later connections when `file` is set, at once (issue #86:
+    /// a link lost or a stack stopped before the Database Hash came back
+    /// lost the list), and again with its Database Hash once that is read,
+    /// if it has one; then PACS / ASCS and the modules
     fn services_known(&mut self, id: LeDeviceId, con: u16, services: Vec<GattService>, file: Option<PathBuf>) {
         if let (Some(file), Some((address, address_type))) = (file, d_identity(self, id)) {
             let db = super::gatt_cache::CachedDb { address, address_type, hash: None, services: services.clone() };
+            if !super::gatt_cache::store(&file, db.clone()) && !services.iter().any(|s| s.primary) {
+                tracing::info!("LE Audio: device {}: discovery found no service, the kept ones stay", id.0);
+            }
             match super::gatt_cache::hash_handle(&services) {
                 Some(handle) => self.core.gatt.read(
                     con,
@@ -1129,19 +1134,18 @@ impl<'a> LeCtx<'a> {
                         let hash = <[u8; 16]>::try_from(value).ok().filter(|_| status == 0);
                         match hash {
                             Some(_) => {
-                                tracing::info!("LE Audio: {}: services kept with their Database Hash", db.address)
+                                tracing::info!("LE Audio: {}: services kept with their Database Hash", db.address);
+                                super::gatt_cache::store(&file, super::gatt_cache::CachedDb { hash, ..db });
                             }
                             None => tracing::info!(
                                 "LE Audio: {}: Database Hash not read (0x{status:02x}): discovered on every connection",
                                 db.address
                             ),
                         }
-                        super::gatt_cache::store(&file, super::gatt_cache::CachedDb { hash, ..db });
                     }),
                 ),
                 None => {
                     tracing::info!("LE Audio: {}: no Database Hash: discovered on every connection", db.address);
-                    super::gatt_cache::store(&file, db);
                 }
             }
         }
@@ -1877,6 +1881,13 @@ impl LeCore {
 
     pub(crate) fn initialized(&self) -> bool {
         self.initialized
+    }
+
+    /// The LE link of the running stream's first device (its RSSI for Link
+    /// Quality); None while idle
+    pub(crate) fn streaming_acl(&self) -> Option<u16> {
+        let status = self.status.as_ref().filter(|s| s.active)?;
+        status.devices.iter().find_map(|id| self.devices.iter().find(|d| d.id == *id && d.connected())).map(|d| d.acl)
     }
 
     /// Runs `f` with an LeCtx, then settles (GATT queue, callbacks,

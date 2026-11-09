@@ -55,13 +55,13 @@ const ERROR_BUSY: Win32Error = 170;
 
 /// The Win32 error code in a `windows` error (HRESULT_FROM_WIN32), or the
 /// HRESULT itself
-fn code(e: &windows::core::Error) -> Win32Error {
+pub(crate) fn code(e: &windows::core::Error) -> Win32Error {
     let h = e.code().0 as u32;
     if h & 0xFFFF_0000 == 0x8007_0000 { h & 0xFFFF } else { h }
 }
 
 /// A Win32 timeout in milliseconds, below INFINITE
-fn millis(d: Duration) -> u32 {
+pub(crate) fn millis(d: Duration) -> u32 {
     d.as_millis().min(u32::MAX as u128 - 1) as u32
 }
 
@@ -154,6 +154,11 @@ impl Event {
     fn reset(&self) {
         // SAFETY: as in set.
         let _ = unsafe { ResetEvent(self.0) };
+    }
+
+    /// The event handle, for an OVERLAPPED of another module (usb_control)
+    pub(crate) fn raw(&self) -> HANDLE {
+        self.0
     }
 
     /// For [`wait_any`]

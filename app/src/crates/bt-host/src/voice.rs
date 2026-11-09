@@ -163,6 +163,22 @@ pub fn parse_sco(packet: &[u8]) -> Option<(u16, u8, &[u8])> {
     Some((head & 0x0FFF, ((head >> 12) & 0x03) as u8, payload))
 }
 
+/// An HFP codec ID (AT+BAC, +BCS) as `VoiceStatus::codec` names it; None
+/// for one BlueCaster does not know
+pub fn codec_key(id: u8) -> Option<&'static str> {
+    match id {
+        1 => Some("cvsd"),
+        2 => Some("msbc"),
+        3 => Some("lc3_swb"),
+        _ => None,
+    }
+}
+
+/// The HFP microphone gain (+VGM, 0..15) given on every voice link: the
+/// highest, as the headphones' own default is often low and nothing else
+/// raises the level on its way to apps (issue #86)
+pub const MIC_GAIN: u8 = 15;
+
 /// The volume (AVRCP absolute volume, 0..127) as an HFP speaker gain
 /// (0..15): headphones play the voice link at their HFP gain, not at the
 /// A2DP volume
@@ -496,6 +512,13 @@ mod tests {
         assert_eq!(parse_sco(&p), Some((0x0123, 2, &[9u8, 8, 7][..])));
         assert_eq!(parse_sco(&[0x23, 0x01, 4, 1, 2]), None);
         assert_eq!(parse_sco(&[0x23]), None);
+    }
+
+    #[test]
+    fn hfp_codec_ids_name_the_voice_codecs() {
+        assert_eq!([1, 2, 3].map(codec_key), [Some("cvsd"), Some("msbc"), Some("lc3_swb")]);
+        assert_eq!(codec_key(0), None);
+        assert_eq!(codec_key(9), None);
     }
 
     #[test]

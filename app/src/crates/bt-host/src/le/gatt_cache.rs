@@ -21,6 +21,7 @@
 //! Numbers in hex. A file that does not parse is taken as empty.
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use super::gatt_client::{GattChar, GattService};
 
@@ -149,27 +150,71 @@ fn read_all(file: &Path) -> Vec<CachedDb> {
     })
 }
 
+/// Temp file + rename: a quit or crash while writing never leaves a cut
+/// file (one that does not parse would lose every device's services)
 fn write_all(file: &Path, dbs: &[CachedDb]) {
-    if let Err(e) = std::fs::write(file, format(dbs)) {
+    let tmp = file.with_extension("txt.tmp");
+    let written = std::fs::write(&tmp, format(dbs)).and_then(|()| {
+        std::fs::rename(&tmp, file).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })
+    });
+    if let Err(e) = written {
         tracing::warn!("LE Audio: cannot keep the services in {}: {e}", file.display());
     }
 }
 
+/// One reader or writer of the file at a time: the BTstack thread keeps a
+/// device's services while a request of the core reads them or forgets a
+/// device
+static FILE_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock() -> std::sync::MutexGuard<'static, ()> {
+    FILE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// The kept services of the device with this identity address
 pub fn load(file: &Path, address: &str) -> Option<CachedDb> {
+    let _one = lock();
     read_all(file).into_iter().find(|d| d.address.eq_ignore_ascii_case(address))
 }
 
-/// Keeps (or replaces) a device's services
-pub fn store(file: &Path, db: CachedDb) {
-    let mut dbs = read_all(file);
-    dbs.retain(|d| !d.address.eq_ignore_ascii_case(&db.address));
+fn has_primary(db: &CachedDb) -> bool {
+    db.services.iter().any(|s| s.primary)
+}
+
+/// `db` into the kept list; false when the list stays as it is: the same
+/// again, or a discovery that found no service at all (it never replaces
+/// a kept list, nor is it kept: the Services tag would show nothing)
+fn merge(dbs: &mut Vec<CachedDb>, db: CachedDb) -> bool {
+    if !has_primary(&db) {
+        return false;
+    }
+    if let Some(i) = dbs.iter().position(|d| d.address.eq_ignore_ascii_case(&db.address)) {
+        if dbs[i] == db {
+            return false;
+        }
+        dbs.remove(i);
+    }
     dbs.push(db);
+    true
+}
+
+/// Keeps (or replaces) a device's services (see [`merge`]); false when
+/// nothing changed
+pub fn store(file: &Path, db: CachedDb) -> bool {
+    let _one = lock();
+    let mut dbs = read_all(file);
+    if !merge(&mut dbs, db) {
+        return false;
+    }
     write_all(file, &dbs);
+    true
 }
 
 /// A forgotten device's services go with it; true if it had any
 pub fn remove(file: &Path, address: &str) -> bool {
+    let _one = lock();
     let mut dbs = read_all(file);
     let before = dbs.len();
     dbs.retain(|d| !d.address.eq_ignore_ascii_case(address));
@@ -266,6 +311,26 @@ mod tests {
     fn finds_the_hash_handle() {
         assert_eq!(hash_handle(&sample().services), Some(7));
         assert_eq!(hash_handle(&sample().services[1..]), None);
+    }
+
+    #[test]
+    fn a_discovery_without_services_never_replaces_kept_ones() {
+        let mut dbs = vec![sample()];
+        let empty = CachedDb { hash: None, services: vec![], ..sample() };
+        // Only a secondary service: no primary one either
+        let secondary = CachedDb { services: sample().services[2..].to_vec(), ..sample() };
+        assert!(!merge(&mut dbs, empty.clone()));
+        assert!(!merge(&mut dbs, secondary));
+        assert!(!merge(&mut dbs, sample()));
+        assert_eq!(dbs, vec![sample()]);
+        // Nor is it kept for a device with nothing kept
+        let other = CachedDb { address: "00:A2:D0:00:00:13".into(), ..empty };
+        assert!(!merge(&mut dbs, other));
+        assert_eq!(dbs.len(), 1);
+        // Other services do replace them
+        let changed = CachedDb { hash: Some([0xCD; 16]), services: sample().services[..1].to_vec(), ..sample() };
+        assert!(merge(&mut dbs, changed.clone()));
+        assert_eq!(dbs, vec![changed]);
     }
 
     #[test]

@@ -1580,6 +1580,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         }
     }
     inner.record_codecs(&addr, KnownCodecs::of(&remote));
+    inner.learn_services(host.clone(), req.device);
     tracing::info!("device connected, choosing the codec");
     tracing::debug!(
         "codec: device offers [{}], best {:?}, audio sinks {} ({} in use), aptX Adaptive {}",

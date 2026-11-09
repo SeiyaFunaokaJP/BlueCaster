@@ -55,7 +55,14 @@
 //! their driver. `unrecorded --records <dir>` lists those without a UAC
 //! prompt (exit code 4 when there is none), for the uninstaller to offer it
 //! (issue #86).
+//!
+//! A GUI-subsystem program, so that no console window flashes up when the
+//! core or the uninstaller starts it (issue #86: SW_HIDE alone does not
+//! hide it where Windows Terminal is the default console). Started from a
+//! shell, it attaches to that shell's console for its output; redirected
+//! output works either way.
 
+#![cfg_attr(not(test), windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
@@ -152,6 +159,8 @@ fn init_logging(log: Option<&std::path::Path>, verbose: bool) {
 }
 
 fn main() -> ExitCode {
+    // Started from a shell: the output goes to its console
+    win_sys::console::attach_parent();
     let (log, verbose, argv) = log_args(std::env::args().skip(1).collect());
     init_logging(log.as_deref(), verbose);
     tracing::info!(

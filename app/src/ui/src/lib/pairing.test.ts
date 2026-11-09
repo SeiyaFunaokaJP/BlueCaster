@@ -30,4 +30,15 @@ describe("pairing", () => {
     expect(serviceLabel({ uuids: [fastPair], name: null })).toBe("Google Fast Pair");
     expect(serviceLabel({ uuids: [fastPair], name: "Vendor" })).toBe("Vendor");
   });
+
+  it("names the services LE Audio earbuds list (issue #86)", () => {
+    expect(serviceLabel({ uuids: ["0000FE2C-0000-1000-8000-00805F9B34FB"], name: null })).toBe("Google Fast Pair");
+    expect(serviceLabel({ uuids: ["0000fd92-0000-1000-8000-00805f9b34fb"], name: null })).toBe("Qualcomm Service");
+    expect(serviceLabel({ uuids: ["2587db3c-ce70-4fc9-935f-777ab4188fd7"], name: null })).toBe(
+      "Advanced Audio Recording Service",
+    );
+    expect(serviceLabel({ uuids: ["12994B7E-6D47-4215-8C9E-AAE9A1095BA3"], name: null })).toBe(
+      "Advanced Audio Gaming Service",
+    );
+  });
 });

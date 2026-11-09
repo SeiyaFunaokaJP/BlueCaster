@@ -232,6 +232,8 @@ enum Action {
 enum Match {
     Prefix,
     Contains,
+    /// Starts with the needle and also contains this
+    PrefixWith(&'static str),
 }
 
 #[derive(Clone, Copy)]
@@ -265,10 +267,14 @@ const fn rule(
 const BT: &str = "bt_host";
 const STREAM: &str = "bluecaster_core::stream";
 const CAPTURE: &str = "audio_capture";
+const LE_STREAM: &str = "bluecaster_core::le_stream";
+const LE_ENCODER: &str = "pipeline::le";
+/// An LE Audio (experimental) stream's first line
+const LE_START: &str = "LE Audio (experimental) stream to ";
 
 use Action as A;
 use DetailFrom as D;
-use Match::{Contains, Prefix};
+use Match::{Contains, Prefix, PrefixWith};
 
 /// Milestones. Failures that only show up as an error state are caught by
 /// the "state Error" handling in feed(). First match wins.
@@ -322,6 +328,28 @@ const RULES: &[Rule] = &[
     rule(BT, Prefix, "reconnecting to ", Step::Link, A::Detail, D::Whole),
     rule(STREAM, Prefix, "reconnect attempt ", Step::Link, A::Detail, D::Whole),
     rule(STREAM, Prefix, "reconnected on attempt ", Step::Link, A::Warning, D::Whole),
+    // LE Audio (experimental, issue #86: its flow stayed empty), on the
+    // same steps: LE link and encryption, the device's services and
+    // capabilities, the CIG and CIS, the ISO SDUs
+    rule(BT, PrefixWith(" failed: "), "LE Audio: connecting to ", Step::Connect, A::Retry, D::Whole),
+    rule(BT, Prefix, "LE Audio: connecting to ", Step::Connect, A::Running, D::After),
+    rule(BT, Prefix, "LE Audio: LE link to ", Step::Connect, A::Detail, D::Whole),
+    rule(BT, PrefixWith(": pairing ("), "LE Audio: ", Step::Connect, A::Detail, D::Whole),
+    rule(BT, PrefixWith(" encryption on (0x00)"), "LE Audio: ", Step::Connect, A::Done, D::None),
+    rule(BT, PrefixWith(" characteristics"), "LE Audio: ", Step::Caps, A::Running, D::Whole),
+    rule(BT, PrefixWith(": ASCS "), "LE Audio: ", Step::Caps, A::Done, D::Whole),
+    rule(BT, Prefix, "LE Audio: starting unicast stream: ", Step::Codec, A::Done, D::After),
+    rule(LE_STREAM, Prefix, "LE Audio: capture ", Step::Capture, A::Done, D::After),
+    rule(LE_STREAM, Prefix, "LE Audio: audio capture: ", Step::Capture, A::Failed, D::Whole),
+    rule(BT, Prefix, "LE Audio: QoS: ", Step::Config, A::Running, D::After),
+    rule(BT, Prefix, "LE Audio: unicast stream failed", Step::Config, A::Failed, D::Whole),
+    rule(BT, PrefixWith(" established (ISO interval"), "LE Audio: CIS ", Step::Config, A::Done, D::Whole),
+    rule(LE_ENCODER, Prefix, "LE Audio: LC3 encoders ready: ", Step::Encoder, A::Done, D::After),
+    rule(BT, Prefix, "LE Audio: sending ISO SDUs", Step::Stream, A::Done, D::Whole),
+    rule(LE_STREAM, Prefix, "LE Audio streaming: ", Step::Audio, A::Done, D::After),
+    rule(LE_STREAM, Prefix, "LE Audio stream lost, reconnecting", Step::Link, A::Running, D::Whole),
+    rule(LE_STREAM, Prefix, "LE Audio reconnect attempt ", Step::Link, A::Detail, D::Whole),
+    rule(LE_STREAM, Prefix, "LE Audio stream restored: ", Step::Link, A::Warning, D::Whole),
 ];
 
 /// bt_host's warning for a MediaTek / Qualcomm / Atheros controller no loader
@@ -445,11 +473,16 @@ impl ConnectionFlow {
             state = Some(s);
         }
 
-        // A new attempt
-        if target_matches(target, STREAM) && message.starts_with("stream: device ") {
+        // A new attempt (classic, or LE Audio)
+        let start = if target_matches(target, STREAM) {
+            message.starts_with("stream: device ").then_some("stream: device ")
+        } else {
+            (target_matches(target, LE_STREAM) && message.starts_with(LE_START)).then_some(LE_START)
+        };
+        if let Some(needle) = start {
             let id = self.session.id + 1;
             self.session = Session { id, start_ms: time_ms, first_seq: seq, ..Session::default() };
-            let detail = after_needle(message, "stream: device ");
+            let detail = after_needle(message, needle);
             self.set_step(Step::Start, StepStatus::Done, time_ms, seq, detail);
             return;
         }
@@ -483,6 +516,7 @@ impl ConnectionFlow {
                 && match r.how {
                     Prefix => message.starts_with(r.needle),
                     Contains => message.contains(r.needle),
+                    PrefixWith(also) => message.starts_with(r.needle) && message.contains(also),
                 }
         }) else {
             return;
@@ -1750,6 +1784,49 @@ mod tests {
     }
 
     #[test]
+    fn an_le_audio_attempt_completes_every_step() {
+        // As an MT7925 with EarFun earbuds logged it (issue #86)
+        const LE: &str = "bt_host::le::core";
+        const BAP: &str = "bt_host::le::bap";
+        const API: &str = "bt_host::le::api";
+        const SEND: &str = "bt_host::le::iso_send";
+        let mut f = ConnectionFlow::new();
+        #[rustfmt::skip]
+        feed(&mut f, &[
+            (1000, LE_STREAM, Level::INFO, "LE Audio (experimental) stream to 00:A2:D0:00:00:12 (\u{201C}Buds\u{201D})"),
+            (1010, API, Level::INFO, "LE Audio: connecting to 00:A2:D0:00:00:12 (address type 0)"),
+            (1020, API, Level::WARN, "LE Audio: connecting to 00:A2:D0:00:00:12 failed: cancelled"),
+            (1100, API, Level::INFO, "LE Audio: connecting to 00:A2:D0:00:00:12 (address type 0)"),
+            (1200, LE, Level::INFO, "LE Audio: LE link to 00:A2:D0:00:00:12 up (handle 0x0200), securing it"),
+            (1300, LE, Level::INFO, "LE Audio: 00:A2:D0:00:00:12 encryption on (0x00)"),
+            (1400, LE, Level::INFO, "LE Audio: 00:A2:D0:00:00:12: 19 services, 67 characteristics"),
+            (1500, BAP, Level::INFO, "LE Audio: 00:A2:D0:00:00:12: ASCS yes, 4 sink ASE(s), 6 ASE(s) in all, control point 0x00af"),
+            (1600, BAP, Level::INFO, "LE Audio: starting unicast stream: LC3 48 kHz 10 ms 155 octets (124 kbps/ch), 2 ch over 2 CIS, 48_6_2"),
+            (1700, BAP, Level::INFO, "LE Audio: QoS: SDU interval 10000 us, unframed, max latency 100 ms, RTN 13, PHY 0x02, presentation delay 40000 us"),
+            (1800, BAP, Level::INFO, "LE Audio: CIS 0x0400 established (ISO interval 24 x 1.25 ms)"),
+            (1900, SEND, Level::INFO, "LE Audio: sending ISO SDUs on 2 CIS (queue 2)"),
+            (1910, LE_STREAM, Level::INFO, "LE Audio: capture 48000 Hz, 2 channel(s), F32 -> LC3 at 48000 Hz"),
+            (1920, LE_ENCODER, Level::INFO, "LE Audio: LC3 encoders ready: 48000 Hz, 10000 us frames (480 samples), 155 octets, 2 channel(s)"),
+            (1930, LE_STREAM, Level::INFO, "LE Audio streaming: LC3 48 kHz 10 ms 155 octets (124 kbps/ch), 2 ch over 2 CIS, 48_6_2"),
+        ]);
+        assert_eq!(f.session().id, 1);
+        for s in STEPS.iter().filter(|&&s| s != Step::Connect) {
+            assert_eq!(status(&f, *s), StepStatus::Done, "{s:?}");
+        }
+        // Connected after a failed attempt
+        assert_eq!(status(&f, Step::Connect), StepStatus::Warning);
+        assert!(f.session().step(Step::Codec).detail.starts_with("LC3 48 kHz"));
+        // A lost stream that comes back
+        #[rustfmt::skip]
+        feed(&mut f, &[
+            (5000, LE_STREAM, Level::WARN, "LE Audio stream lost, reconnecting"),
+            (6000, LE_STREAM, Level::INFO, "LE Audio stream restored: LC3 48 kHz 10 ms 155 octets (124 kbps/ch), 2 ch over 2 CIS, 48_6_2"),
+        ]);
+        assert_eq!(status(&f, Step::Link), StepStatus::Warning);
+        assert_eq!(f.session().reconnects, 1);
+    }
+
+    #[test]
     fn a_loader_that_ran_clears_the_no_loader_warning() {
         let mut f = ConnectionFlow::new();
         let warn = "no firmware loader ran for this MediaTek controller; it runs the firmware it has";
@@ -2432,6 +2509,7 @@ mod tests {
                 sets_encoded: 990,
                 sets_sent: 1000,
                 sdus_sent: 2000,
+                bytes_sent: 310000,
                 silence_sets: 12,
                 underruns: 1,
                 overflows: 3,

@@ -9,19 +9,24 @@ import { useApp } from "../app/context";
 import { saveSettings } from "../app/settings";
 import { Toggle } from "../components/controls";
 import { DevicePicker } from "../components/DevicePicker";
-import { DeviceSettings, VbCableNote } from "../components/DeviceSettings";
+import { DeviceSettings, HifiCableNote, VbCableNote } from "../components/DeviceSettings";
 import { t } from "../i18n";
-import { vbCable } from "../lib/profile";
+import { hifiCable, vbCable } from "../lib/profile";
 
 export function Devices() {
   const { core } = useApp();
   // Not installed, once Windows' list was read (installed meanwhile: gone
-  // when the window comes back)
+  // when the window comes back); the microphone's cable once VB-Cable is
+  // there (issue #86)
   const [noCable, setNoCable] = createSignal(false);
+  const [noHifi, setNoHifi] = createSignal(false);
   const load = () =>
     core
       .request("audio.devices")
-      .then((list) => setNoCable(vbCable(list) === null))
+      .then((list) => {
+        setNoCable(vbCable(list) === null);
+        setNoHifi(hifiCable(list) === null);
+      })
       .catch(() => {});
   onMount(() => {
     void load();
@@ -36,6 +41,11 @@ export function Devices() {
       <Show when={noCable()}>
         <section class="card device-note">
           <VbCableNote />
+        </section>
+      </Show>
+      <Show when={!noCable() && noHifi()}>
+        <section class="card device-note">
+          <HifiCableNote />
         </section>
       </Show>
       <AllDevices />

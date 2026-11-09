@@ -26,6 +26,12 @@ battery: number | null,
  */
 battery_refused: boolean, 
 /**
+ * The voice codecs the headphones listed on their hands-free
+ * connection ("cvsd", "msbc", "lc3_swb"), for the Codecs screen's
+ * call codecs (issue #86); empty while unknown, cleared as the battery
+ */
+voice_codecs: Array<string>, 
+/**
  * The voice link (headset microphone): Some only while
  * it carries audio, cleared on Idle / Error / Reconnecting like the
  * battery

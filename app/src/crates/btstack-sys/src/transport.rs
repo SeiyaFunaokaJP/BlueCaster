@@ -129,6 +129,9 @@ pub enum ControlRecipient {
     Interface,
     Endpoint,
     Other,
+    /// Recipient bits USB leaves reserved (4..=31), sent as they are
+    /// (Developer > Debug only; WinUSB transport, OUT only)
+    Reserved(u8),
 }
 
 /// The data stage: IN with the length to read, or OUT with the bytes
@@ -191,6 +194,7 @@ impl ControlRequest {
             ControlRecipient::Interface => 1,
             ControlRecipient::Endpoint => 2,
             ControlRecipient::Other => 3,
+            ControlRecipient::Reserved(bits) => bits & 0x1F,
         };
         let [v0, v1] = self.value.to_le_bytes();
         let [i0, i1] = self.index.to_le_bytes();
@@ -211,10 +215,11 @@ impl ControlRequest {
             ControlKind::Vendor => "vendor",
         };
         let recipient = match self.recipient {
-            ControlRecipient::Device => "device",
-            ControlRecipient::Interface => "interface",
-            ControlRecipient::Endpoint => "endpoint",
-            ControlRecipient::Other => "other",
+            ControlRecipient::Device => "device".to_owned(),
+            ControlRecipient::Interface => "interface".to_owned(),
+            ControlRecipient::Endpoint => "endpoint".to_owned(),
+            ControlRecipient::Other => "other".to_owned(),
+            ControlRecipient::Reserved(bits) => format!("reserved 0x{:02X}", bits & 0x1F),
         };
         format!(
             "{dir} {kind}/{recipient} 0x{:02X} value 0x{:04X} index 0x{:04X} length {len}",
@@ -712,6 +717,22 @@ fn deliver(packet_type: u8, buf: &mut [u8], hidden: bool) {
 mod tests {
     use super::*;
     use crate::consts::{HCI_ACL_DATA_PACKET, HCI_ISO_DATA_PACKET};
+
+    #[test]
+    fn setup_packet_keeps_reserved_recipient_bits() {
+        let r = ControlRequest {
+            kind: ControlKind::Vendor,
+            recipient: ControlRecipient::Reserved(0x1F),
+            request: 0x07,
+            value: 0x1234,
+            index: 0x5678,
+            data: ControlData::Out(vec![1, 2, 3, 4]),
+        };
+        assert_eq!(r.setup_packet(), [0x5F, 0x07, 0x34, 0x12, 0x78, 0x56, 4, 0]);
+        assert_eq!(r.describe(), "OUT vendor/reserved 0x1F 0x07 value 0x1234 index 0x5678 length 4");
+        let device = ControlRequest { recipient: ControlRecipient::Device, data: ControlData::In(4), ..r };
+        assert_eq!(device.setup_packet(), [0xC0, 0x07, 0x34, 0x12, 0x78, 0x56, 4, 0]);
+    }
 
     #[test]
     fn le_commands_are_intercepted() {

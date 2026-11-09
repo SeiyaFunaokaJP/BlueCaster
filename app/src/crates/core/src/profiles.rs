@@ -697,6 +697,39 @@ pub fn use_virtual_device(list: &mut [Profile], id: &str, name: &str) -> usize {
     changed
 }
 
+/// VB-Audio's Hi-Fi Cable ("Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)"):
+/// the free second cable, for the headset microphone (issue #86)
+pub fn is_hifi_cable(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.contains("hi-fi cable") || n.contains("hifi cable") || n.contains("hifi-cable")
+}
+
+/// VB-CABLE's playback side ("CABLE Input", "CABLE In 16ch"): a virtual
+/// device named a cable that is not the Hi-Fi Cable
+pub fn is_vb_cable(name: &str, is_virtual: bool) -> bool {
+    is_virtual && name.to_lowercase().contains("cable") && !is_hifi_cable(name)
+}
+
+/// Once the Hi-Fi Cable is installed, the classic profiles whose
+/// microphone has no output, or one that loops into what they capture
+/// (VB-CABLE as both), play the microphone into it instead. A microphone
+/// output that works is left alone: apps record from it. How many changed.
+pub fn use_mic_cable(list: &mut [Profile], id: &str, name: &str, default_output_id: &str) -> usize {
+    let mut changed = 0;
+    for p in list.iter_mut().filter(|p| !p.le_audio) {
+        let looped = mic_output_conflicts(&p.source(), &p.mic_device_id, default_output_id).is_some();
+        if (!p.mic_device_id.is_empty() && !looped)
+            || mic_output_conflicts(&p.source(), id, default_output_id).is_some()
+        {
+            continue;
+        }
+        p.mic_device_id = id.into();
+        p.mic_device_name = name.into();
+        changed += 1;
+    }
+    changed
+}
+
 pub fn load(dir: &Path) -> Vec<Profile> {
     load_counted(dir).0
 }
@@ -754,6 +787,46 @@ mod tests {
         assert_eq!(list[1].capture_mode, "app");
         // A second time changes nothing
         assert_eq!(use_virtual_device(&mut list, "{cable}", "CABLE Input"), 0);
+    }
+
+    #[test]
+    fn the_hifi_cable_is_told_apart_from_vb_cable() {
+        assert!(is_hifi_cable("Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)"));
+        assert!(!is_vb_cable("Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)", true));
+        assert!(is_vb_cable("CABLE Input (VB-Audio Virtual Cable)", true));
+        assert!(is_vb_cable("CABLE In 16ch (VB-Audio Virtual Cable)", true));
+        assert!(!is_hifi_cable("CABLE Input (VB-Audio Virtual Cable)"));
+        assert!(!is_vb_cable("CABLE Input (VB-Audio Virtual Cable)", false));
+    }
+
+    #[test]
+    fn the_hifi_cable_takes_only_microphones_without_a_working_output() {
+        let virt = |mic: &str| Profile {
+            capture_mode: "virtual".into(),
+            audio_device_id: "{cable}".into(),
+            mic_device_id: mic.into(),
+            ..Profile::default()
+        };
+        let mut list = vec![
+            virt(""),                               // no microphone output: takes it
+            virt("{cable}"),                        // loops into the source: takes it
+            virt("{voicemeeter}"),                  // works: left alone
+            Profile { le_audio: true, ..virt("") }, // LE Audio: left alone
+            // Captures the Hi-Fi Cable itself: it cannot be its microphone too
+            Profile { audio_device_id: "{hifi}".into(), ..virt("") },
+        ];
+        assert_eq!(use_mic_cable(&mut list, "{hifi}", "Hi-Fi Cable Input", ""), 2);
+        assert_eq!(list[0].mic_device_id, "{hifi}");
+        assert_eq!(list[0].mic_device_name, "Hi-Fi Cable Input");
+        assert_eq!(list[1].mic_device_id, "{hifi}");
+        assert_eq!(list[2].mic_device_id, "{voicemeeter}");
+        assert_eq!(list[3].mic_device_id, "");
+        assert_eq!(list[4].mic_device_id, "");
+        // System Loopback with the cable as the default output loops too
+        let mut lb = vec![Profile { mic_device_id: "{cable}".into(), ..Profile::default() }];
+        assert_eq!(use_mic_cable(&mut lb, "{hifi}", "Hi-Fi Cable Input", "{cable}"), 1);
+        // A second time changes nothing
+        assert_eq!(use_mic_cable(&mut list, "{hifi}", "Hi-Fi Cable Input", ""), 0);
     }
 
     #[test]

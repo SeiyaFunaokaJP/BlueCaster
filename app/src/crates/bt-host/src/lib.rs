@@ -24,6 +24,7 @@ pub mod link_details;
 pub mod link_keys;
 pub mod media;
 pub mod mediatek;
+mod mtk_debug_steps;
 pub mod probe;
 pub mod qualcomm;
 pub mod realtek_btnic;
@@ -319,6 +320,9 @@ pub enum HostEvent {
     TransportFailed,
     /// The HFP audio connection ([`BtHost::voice_start`])
     Voice(VoiceEvent),
+    /// The voice codecs the headphones listed on their HFP service level
+    /// connection ("cvsd", "msbc", "lc3_swb")
+    VoiceCodecs(Vec<&'static str>),
 }
 
 /// Settings and readings shared with the BTstack thread without locks

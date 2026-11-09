@@ -182,6 +182,48 @@ enum Step {
     Chars,
 }
 
+/// What follows a successful step of an operation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Next {
+    /// Finished, with this status
+    Done(u8),
+    /// Its next step is running
+    Running,
+    /// Its next step found gatt_client busy: started again shortly
+    Busy,
+}
+
+/// Starts discovery step `step` at `index`, moving past steps with nothing
+/// to ask (included services once every primary service was asked); its
+/// BTstack status, None when the discovery is complete
+fn discover_step(
+    b: &dyn GattBackend,
+    con: u16,
+    step: &mut Step,
+    index: &mut usize,
+    services: &[GattService],
+) -> Option<u8> {
+    let primaries = services.iter().filter(|s| s.primary).count();
+    loop {
+        match *step {
+            Step::Primary => return Some(b.discover_primary(con)),
+            Step::Included if *index >= primaries => {
+                *step = Step::Chars;
+                *index = 0;
+            }
+            Step::Included => {
+                let s = &services[*index];
+                return Some(b.find_included(con, s.start_handle, s.end_handle));
+            }
+            Step::Chars if *index >= services.len() => return None,
+            Step::Chars => {
+                let s = &services[*index];
+                return Some(b.discover_characteristics(con, s.start_handle, s.end_handle));
+            }
+        }
+    }
+}
+
 /// One queued operation
 enum Op {
     Read {
@@ -224,7 +266,12 @@ impl Op {
             }
             Op::Write { handle, value, .. } => b.write(con, *handle, value),
             Op::Subscribe { chr, config, .. } => b.write_ccc(con, chr, *config),
-            Op::Discover { .. } => b.discover_primary(con),
+            // Its first step, or the step a busy gatt_client held back
+            // (always one with a query: a step is only held back once it
+            // was found to have one)
+            Op::Discover { step, index, services, .. } => {
+                discover_step(b, con, step, index, services).unwrap_or(ERROR_CODE_SUCCESS)
+            }
             Op::Barrier { .. } => ERROR_CODE_SUCCESS,
         }
     }
@@ -288,41 +335,31 @@ impl Op {
         }
     }
 
-    /// QUERY_COMPLETE with success: true when the operation is finished,
-    /// false when it started its next step
-    fn on_complete(&mut self, b: &dyn GattBackend, con: u16) -> bool {
-        let Op::Discover { step, index, services, .. } = self else { return true };
+    /// QUERY_COMPLETE with success: what follows
+    fn on_complete(&mut self, b: &dyn GattBackend, con: u16) -> Next {
+        let Op::Discover { step, index, services, .. } = self else { return Next::Done(ERROR_CODE_SUCCESS) };
         if *step == Step::Primary {
             *step = Step::Included;
             *index = 0;
         } else {
             *index += 1;
         }
-        let primaries = services.iter().filter(|s| s.primary).count();
-        loop {
-            let status = match *step {
-                Step::Included if *index >= primaries => {
-                    *step = Step::Chars;
-                    *index = 0;
-                    continue;
-                }
-                Step::Included => {
-                    let s = &services[*index];
-                    b.find_included(con, s.start_handle, s.end_handle)
-                }
-                Step::Chars if *index >= services.len() => return true,
-                Step::Chars => {
-                    let s = &services[*index];
-                    b.discover_characteristics(con, s.start_handle, s.end_handle)
-                }
-                Step::Primary => return true,
-            };
-            if status != ERROR_CODE_SUCCESS {
-                tracing::warn!("LE Audio: GATT discovery step failed to start (0x{status:02x})");
-                return true;
+        let Some(status) = discover_step(b, con, step, index, services) else {
+            return Next::Done(ERROR_CODE_SUCCESS);
+        };
+        match status {
+            ERROR_CODE_SUCCESS => {
+                tracing::trace!("LE Audio: GATT discovery {step:?} of service {index} on 0x{con:04X}");
+                Next::Running
             }
-            tracing::trace!("LE Audio: GATT discovery {step:?} of service {index} on 0x{con:04X}");
-            return false;
+            GATT_CLIENT_BUSY | GATT_CLIENT_IN_WRONG_STATE => Next::Busy,
+            // Finished with what it found so far, it would pass for the
+            // device's services (issue #86: a partial list replaced the
+            // kept one): the discovery fails instead
+            s => {
+                tracing::warn!("LE Audio: GATT discovery step failed to start (0x{s:02x})");
+                Next::Done(s)
+            }
         }
     }
 
@@ -533,15 +570,23 @@ impl GattClient {
     fn complete_front(&mut self, b: &dyn GattBackend, con: u16, status: u8) {
         let Some(c) = self.conns.get_mut(&con) else { return };
         let Some(op) = c.queue.front_mut() else { return };
-        if status == ERROR_CODE_SUCCESS && !op.on_complete(b, con) {
-            // The next step of a multi-step operation is running
-            return;
-        }
+        let next = if status == ERROR_CODE_SUCCESS { op.on_complete(b, con) } else { Next::Done(status) };
         c.running = false;
-        if let Some(op) = c.queue.pop_front() {
-            self.ready.extend(op.finish(status));
+        match next {
+            // The next step of a multi-step operation is running
+            Next::Running => c.running = true,
+            // pump starts it again (Op::start goes on at that step)
+            Next::Busy => {
+                tracing::debug!("LE Audio: gatt_client busy on 0x{con:04X} during discovery, retrying");
+                c.retry = true;
+            }
+            Next::Done(status) => {
+                if let Some(op) = c.queue.pop_front() {
+                    self.ready.extend(op.finish(status));
+                }
+                self.pump(b, con);
+            }
         }
-        self.pump(b, con);
     }
 
     /// The listeners of a value, taken out while they run
@@ -772,5 +817,56 @@ mod tests {
             _ => panic!("expected one discovery result"),
         }
         assert_eq!(g.pending(0x40), 0);
+    }
+
+    /// One primary service found, then its included services are asked
+    fn discovery_at_its_second_step(b: &Fake, g: &mut GattClient) {
+        g.attach(0x40);
+        g.discover_all(0x40, Box::new(|_, _, _| {}));
+        g.pump_all(b);
+        assert_eq!(b.calls(), ["primary 40"]);
+        let mut p = vec![GATT_EVENT_SERVICE_QUERY_RESULT, 0, 0x40, 0, 0, 0, 0, 0, 0x10, 0, 0x1F, 0];
+        p.extend(uuid_on_air(0x184E));
+        g.on_event(b, &p);
+    }
+
+    #[test]
+    fn a_step_that_cannot_start_fails_the_discovery() {
+        // Issue #86: it ended as a success with what it had found so far,
+        // a partial list that replaced the kept services
+        let b = Fake::default();
+        let mut g = GattClient::new();
+        discovery_at_its_second_step(&b, &mut g);
+        b.status.borrow_mut().push_back(ERROR_CODE_UNKNOWN_CONNECTION_IDENTIFIER);
+        g.on_event(&b, &complete(0x40, 0));
+        assert_eq!(b.calls(), ["included 40 10-1f"]);
+        match &g.take_ready()[..] {
+            [Completion::Discovered { status, .. }] => assert_eq!(*status, ERROR_CODE_UNKNOWN_CONNECTION_IDENTIFIER),
+            _ => panic!("expected one discovery result"),
+        }
+        assert_eq!(g.pending(0x40), 0);
+    }
+
+    #[test]
+    fn a_busy_step_is_started_again() {
+        let b = Fake::default();
+        let mut g = GattClient::new();
+        discovery_at_its_second_step(&b, &mut g);
+        b.status.borrow_mut().push_back(GATT_CLIENT_BUSY);
+        g.on_event(&b, &complete(0x40, 0));
+        assert_eq!(b.calls(), ["included 40 10-1f"]);
+        assert!(g.take_ready().is_empty());
+        assert!(g.wants_retry());
+        // The retry goes on at that step, not from the start
+        g.pump_all(&b);
+        assert_eq!(b.calls(), ["included 40 10-1f"]);
+        assert!(!g.wants_retry());
+        g.on_event(&b, &complete(0x40, 0));
+        assert_eq!(b.calls(), ["chars 40 10-1f"]);
+        g.on_event(&b, &complete(0x40, 0));
+        match &g.take_ready()[..] {
+            [Completion::Discovered { status: 0, services, .. }] => assert_eq!(services.len(), 1),
+            _ => panic!("expected one discovery result"),
+        }
     }
 }

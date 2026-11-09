@@ -580,7 +580,14 @@ pub fn paired_capture_names(render_ids: &[String]) -> windows::core::Result<Vec<
 /// Whether a session on `device` records (AudioSessionStateActive), this
 /// process's own left out
 fn recording(device: &IMMDevice) -> windows::core::Result<bool> {
+    Ok(!recording_pids(device, true)?.is_empty())
+}
+
+/// The processes of the sessions on `device` that record, this process's own
+/// left out (0: a session that names none); `first`: stop at the first one
+fn recording_pids(device: &IMMDevice, first: bool) -> windows::core::Result<Vec<u32>> {
     let own = std::process::id();
+    let mut out = Vec::new();
     // SAFETY: activating a documented endpoint service on a live device.
     let manager = unsafe { device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None)? };
     // SAFETY: plain call on a live session manager.
@@ -603,10 +610,13 @@ fn recording(device: &IMMDevice) -> windows::core::Result<bool> {
             // SAFETY: plain call on a live session control.
             .and_then(|c| unsafe { c.GetProcessId() }.ok());
         if pid != Some(own) {
-            return Ok(true);
+            out.push(pid.unwrap_or(0));
+            if first {
+                break;
+            }
         }
     }
-    Ok(false)
+    Ok(out)
 }
 
 /// Whether an application records from the capture endpoints paired with
@@ -621,6 +631,39 @@ fn recording(device: &IMMDevice) -> windows::core::Result<bool> {
 /// paired with it. An error: the render endpoint or the capture endpoints
 /// cannot be read. COM must be initialised on the calling thread.
 pub fn capture_sessions_active(render_device_id: &str) -> windows::core::Result<Option<bool>> {
+    let Some(captures) = paired_captures(render_device_id)? else { return Ok(None) };
+    for (i, device) in captures.iter().enumerate() {
+        // A capture endpoint whose sessions cannot be read counts as idle
+        match recording(device) {
+            Ok(true) => return Ok(Some(true)),
+            Ok(false) => {}
+            Err(e) => tracing::trace!("audio_policy: sessions of paired capture endpoint {i}: {e}"),
+        }
+    }
+    Ok(Some(false))
+}
+
+/// Who records from the capture endpoints paired with `render_device_id`
+/// ([`capture_sessions_active`]): each recording session's process (0: a
+/// session that names none) with the capture endpoint's friendly name. COM
+/// must be initialised on the calling thread.
+pub fn capture_session_recorders(render_device_id: &str) -> windows::core::Result<Vec<(u32, String)>> {
+    let mut out = Vec::new();
+    for device in paired_captures(render_device_id)?.unwrap_or_default() {
+        let Ok(pids) = recording_pids(&device, false) else { continue };
+        // SAFETY: plain call on a live device.
+        let name = unsafe { device.OpenPropertyStore(STGM_READ) }
+            .ok()
+            .and_then(|store| string_property(&store, &PKEY_Device_FriendlyName))
+            .unwrap_or_default();
+        out.extend(pids.into_iter().map(|pid| (pid, name.clone())));
+    }
+    Ok(out)
+}
+
+/// The active capture endpoints paired with `render_device_id` (same
+/// container, else same adapter); None when none is
+fn paired_captures(render_device_id: &str) -> windows::core::Result<Option<Vec<IMMDevice>>> {
     let enumerator = enumerator()?;
     let render = pairing(&render_device(&enumerator, Some(render_device_id))?);
     // SAFETY: plain call on a live enumerator.
@@ -640,15 +683,7 @@ pub fn capture_sessions_active(render_device_id: &str) -> windows::core::Result<
         tracing::trace!("audio_policy: no capture endpoint paired with {render_device_id} ({render:?})");
         return Ok(None);
     }
-    for i in paired {
-        // A capture endpoint whose sessions cannot be read counts as idle
-        match recording(&captures[i].1) {
-            Ok(true) => return Ok(Some(true)),
-            Ok(false) => {}
-            Err(e) => tracing::trace!("audio_policy: sessions of capture endpoint {i}: {e}"),
-        }
-    }
-    Ok(Some(false))
+    Ok(Some(paired.into_iter().map(|i| captures[i].1.clone()).collect()))
 }
 
 #[cfg(test)]
@@ -714,7 +749,12 @@ mod tests {
             // SAFETY: `i` is within the collection's count.
             let device = unsafe { devices.Item(i).unwrap() };
             let id = endpoint_id(&device).unwrap();
-            println!("{id} {:?}: {:?}", pairing(&device), capture_sessions_active(&id));
+            println!(
+                "{id} {:?}: {:?} {:?}",
+                pairing(&device),
+                capture_sessions_active(&id),
+                capture_session_recorders(&id)
+            );
         }
         // SAFETY: as above.
         let captures = unsafe { enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE).unwrap() };

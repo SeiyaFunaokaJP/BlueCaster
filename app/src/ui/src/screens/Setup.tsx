@@ -1,4 +1,6 @@
-// First-run setup, shown when there is no profile or no adapter on WinUSB.
+// First-run setup, shown when there is no profile or no adapter on WinUSB,
+// until it was finished or skipped once (settings.setup_done; Settings can
+// run it again).
 // Four steps (issue #86): 1 choose the adapter, 2 driver and firmware (one
 // button switches it to WinUSB and downloads its firmware), 3 find the audio
 // devices: the scan starts by itself, and Connect on a device makes its
@@ -13,17 +15,18 @@
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { errorText, useApp, type AppContext } from "../app/context";
 import { saveSettings } from "../app/settings";
-import { Banner, Button, Toggle } from "../components/controls";
-import { VbCableNote } from "../components/DeviceSettings";
+import { Banner, Button, Dialog, Toggle } from "../components/controls";
+import { PairedDevicesNote, windowsDevices } from "../components/PairedDevices";
+import { HifiCableNote, VbCableNote } from "../components/DeviceSettings";
 import { DevicePicker, saveWithProfile } from "../components/DevicePicker";
 import { ImportPairings } from "../components/ImportPairings";
 import { Icon } from "../components/Icon";
 import { openFirmwareFolder, statusText } from "../components/stream";
 import { t } from "../i18n";
 import { IpcError } from "../ipc/types";
-import type { AdapterInfo, AudioDevice, Device, Snapshot } from "../ipc/types";
+import type { AdapterInfo, AudioDevice, Device, Snapshot, WindowsPairedDevice } from "../ipc/types";
 import { firmwareUrl, LINKS } from "../lib/links";
-import { audioEntries, deviceKey, vbCable } from "../lib/profile";
+import { audioEntries, deviceKey, hifiCable, vbCable } from "../lib/profile";
 import {
   adapterExperimental,
   adapterIds,
@@ -99,7 +102,9 @@ export function Setup() {
   onMount(() => void core.transport.setupWindow?.(true).catch(() => {}));
   onCleanup(() => void core.transport.setupWindow?.(false).catch(() => {}));
 
+  // Finished or skipped: it does not open by itself again (issue #86)
   const finish = () => {
+    if (!snap().settings.setup_done) void saveSettings(app, { setup_done: true });
     app.setSetupActive(false);
     app.navigate({ name: "home" });
   };
@@ -281,6 +286,18 @@ function StepDriver(props: { adapter: AdapterInfo | null }) {
   const [failed, setFailed] = createSignal<string | null>(null);
   // The download outlived the UI's wait; the core finishes it and publishes the adapter
   const [slow, setSlow] = createSignal(false);
+  // Devices Windows paired through the adapter: they go with it, so the
+  // setup asks first (issue #86: a built-in adapter has the keyboard)
+  const [checking, setChecking] = createSignal(false);
+  const [losing, setLosing] = createSignal<WindowsPairedDevice[] | null>(null);
+  const start = async (a: AdapterInfo) => {
+    if (a.driver === "winusb") return setUp(a);
+    setChecking(true);
+    const list = await windowsDevices(app, a);
+    setChecking(false);
+    if (list.length > 0) setLosing(list);
+    else void setUp(a);
+  };
 
   const setUp = async (a: AdapterInfo) => {
     setFailed(null);
@@ -352,11 +369,28 @@ function StepDriver(props: { adapter: AdapterInfo | null }) {
                     kind="strong"
                     icon={needsDriver() ? "shield" : "checkmark"}
                     disabled={!!core.state.snap?.v1_running || !adapterSupported(a())}
-                    onClick={() => setUp(a())}
+                    busy={checking()}
+                    onClick={() => void start(a())}
                   >
                     {t("ui.setup.auto_button")}
                   </Button>
                 </div>
+                <Dialog
+                  open={losing() !== null}
+                  title={t("ui.adapter.paired_title")}
+                  confirm={t("ui.setup.auto_button")}
+                  confirmIcon="shield"
+                  danger
+                  warn
+                  cancel={t("modal.cancel")}
+                  onConfirm={() => {
+                    setLosing(null);
+                    void setUp(a());
+                  }}
+                  onCancel={() => setLosing(null)}
+                >
+                  <PairedDevicesNote devices={losing() ?? []} />
+                </Dialog>
                 <p class="hint">{t("ui.setup.auto_advanced")}</p>
               </Match>
               <Match when={!manualFirmware()}>
@@ -425,10 +459,15 @@ function StepDevice() {
   // VB-Cable, when Windows' list was read: new devices capture it, without
   // it the step says why one is wanted (issue #86)
   const [cable, setCable] = createSignal<AudioDevice | null | undefined>(undefined);
+  // And the Hi-Fi Cable for the headphones' microphone, once VB-Cable is there
+  const [hifi, setHifi] = createSignal<AudioDevice | null | undefined>(undefined);
   const load = () =>
     app.core
       .request("audio.devices")
-      .then((list) => setCable(vbCable(list)))
+      .then((list) => {
+        setCable(vbCable(list));
+        setHifi(hifiCable(list));
+      })
       .catch(() => {});
   onMount(() => {
     void load();
@@ -512,6 +551,9 @@ function StepDevice() {
       >
         <Show when={cable() === null}>
           <VbCableNote />
+        </Show>
+        <Show when={!!cable() && hifi() === null}>
+          <HifiCableNote />
         </Show>
         <ImportPairings />
       </DevicePicker>

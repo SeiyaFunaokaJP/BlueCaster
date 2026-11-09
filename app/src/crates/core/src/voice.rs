@@ -151,9 +151,13 @@ impl AutoWatch {
         let before = self.recording;
         let after = self.seen(looked, now);
         if after != before {
+            let who = match &target {
+                Some(MicTarget::Device { id, .. }) if after => audio_capture::mic_recorders(id).join(", "),
+                _ => String::new(),
+            };
             let what = target.map_or(String::new(), |t| t.to_string());
             if after {
-                tracing::info!("voice: auto: an application records from {what}");
+                tracing::info!("voice: auto: an application records from {what}: {who}");
             } else {
                 tracing::info!("voice: auto: nobody recorded from {what} for {} s", AUTO_IDLE.as_secs());
             }
@@ -619,7 +623,7 @@ impl VoiceLink {
             codec.name(),
             now.duration_since(since).as_secs(),
             up.map(|(e, u)| (e.bytes, u.underruns)),
-            down.map(|d| (d.packets, d.bad_packets, d.concealed)),
+            down.map(|d| (d.packets, d.bad_packets, d.concealed, level_text(Some(&d)))),
             self.capture.as_ref().map_or(0, Running::frames)
         );
     }
@@ -638,7 +642,7 @@ impl VoiceLink {
             let u = tx.as_ref().map(|p| p.uplink.stats()).unwrap_or_default();
             tracing::info!(
                 "voice: {} link down after {} s: sent {} bytes (uplink {} underruns, {} dropped / {} repeated), \
-                 received {} packets ({} bad, {} concealed)",
+                 received {} packets ({} bad, {} concealed), microphone {}",
                 codec.name(),
                 since.elapsed().as_secs(),
                 e.map_or(0, |e| e.bytes),
@@ -647,7 +651,8 @@ impl VoiceLink {
                 u.duplicated,
                 d.map_or(0, |d| d.packets),
                 d.map_or(0, |d| d.bad_packets),
-                d.map_or(0, |d| d.concealed)
+                d.map_or(0, |d| d.concealed),
+                level_text(d.as_ref())
             );
         }
         drop((tx, rx));
@@ -1133,9 +1138,29 @@ impl HeadsetMode {
     }
 }
 
+/// The microphone's level for the log: "peak -12.0 dBFS, RMS -38.5 dBFS"
+fn level_text(d: Option<&voice_link::DecoderStats>) -> String {
+    match d.and_then(voice_link::DecoderStats::level) {
+        Some((peak, rms)) => format!("peak {peak:.1} dBFS, RMS {rms:.1} dBFS"),
+        None => "no samples".into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_microphone_level_reads_in_dbfs() {
+        let full =
+            voice_link::DecoderStats { samples: 4, peak: 32767, sum_squares: 4 * 32767 * 32767, ..Default::default() };
+        assert_eq!(level_text(Some(&full)), "peak -0.0 dBFS, RMS -0.0 dBFS");
+        let quiet =
+            voice_link::DecoderStats { samples: 2, peak: 328, sum_squares: 2 * 328 * 328, ..Default::default() };
+        assert_eq!(level_text(Some(&quiet)), "peak -40.0 dBFS, RMS -40.0 dBFS");
+        assert_eq!(level_text(None), "no samples");
+        assert_eq!(level_text(Some(&voice_link::DecoderStats::default())), "no samples");
+    }
 
     #[test]
     fn a_wav_path_is_written_not_rendered() {

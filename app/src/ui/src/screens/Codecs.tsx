@@ -47,7 +47,7 @@ import { saveSettings } from "../app/settings";
 import { CodecCard, CodecSettings, type CodecChoice } from "../components/CodecCards";
 import { Banner, Button, Check, Dialog, Toggle } from "../components/controls";
 import { Icon } from "../components/Icon";
-import { stateLabel } from "../components/stream";
+import { stateLabel, voiceCodecName } from "../components/stream";
 import { t } from "../i18n";
 import type { AudioDevice, Profile, Snapshot } from "../ipc/types";
 import {
@@ -81,6 +81,7 @@ import {
   withCodec,
   type AudioEntry,
 } from "../lib/profile";
+import { khz } from "../lib/format";
 import { knownSbcCaps } from "../lib/sbc";
 import { entryState } from "./Home";
 
@@ -795,6 +796,74 @@ function DeviceCodecs(props: {
           }}
         />
       </Show>
+      <VoiceCodecs entry={e()} hide={props.hide} />
     </section>
+  );
+}
+
+/** The voice codecs a classic device's microphone link uses (issue #86) */
+const VOICE_CODECS = ["cvsd", "msbc", "lc3_swb"] as const;
+const VOICE_RATES: Record<string, number> = { cvsd: 8000, msbc: 16000, lc3_swb: 32000 };
+
+/** The call codecs of the device in use (issue #86), read only: the
+ *  microphone link chooses one by itself, the best both sides support.
+ *  Classic: those the headphones listed, the one open marked; LE Audio:
+ *  LC3 at its rate while the microphone is open. */
+function VoiceCodecs(props: { entry: AudioEntry; hide: boolean }) {
+  const app = useApp();
+  const stream = () => app.core.state.snap!.stream;
+  const ours = () => stream().state !== "idle" && stream().profile === props.entry.profile?.name;
+  const open = () => (ours() ? (stream().voice ?? null) : null);
+  const listed = () => (ours() ? stream().voice_codecs : []);
+  const cards = () => {
+    if (props.entry.le_audio) {
+      const v = open();
+      return v ? [{ id: "lc3", rate: v.rate, supported: true }] : [];
+    }
+    if (listed().length === 0) return [];
+    return VOICE_CODECS.map((id) => ({ id, rate: VOICE_RATES[id], supported: listed().includes(id) })).filter(
+      (c) => c.supported || !props.hide,
+    );
+  };
+  const titleId = createUniqueId();
+  return (
+    <Show when={cards().length > 0}>
+      <h3 id={titleId} class="voice-codecs-title">
+        {t("ui.codecs.voice_title")}
+      </h3>
+      <div class="codec-grid" role="list" aria-labelledby={titleId}>
+        <For each={cards()}>
+          {(c) => (
+            <div class="codec-cell" role="listitem">
+              <div class="codec-card ro voice" classList={{ on: open()?.codec === c.id }}>
+                <span class="codec-card-name">{voiceCodecName(c.id)}</span>
+                <span class="codec-card-tags">
+                  <Show
+                    when={open()?.codec === c.id}
+                    fallback={
+                      <Show when={!props.hide || !c.supported}>
+                        <span class="tag">
+                          <Icon
+                            name={c.supported ? "checkmark" : "dismiss"}
+                            class={c.supported ? "st-good" : "st-bad"}
+                          />
+                          {c.supported ? t("ui.profile.codec_supported") : t("ui.profile.codec_not_supported")}
+                        </span>
+                      </Show>
+                    }
+                  >
+                    <span class="tag">
+                      <span class="mic-dot" aria-hidden="true" />
+                      {t("ui.codecs.voice_in_use")}
+                    </span>
+                  </Show>
+                </span>
+                <span class="muted codec-card-desc">{khz(c.rate)} kHz</span>
+              </div>
+            </div>
+          )}
+        </For>
+      </div>
+    </Show>
   );
 }

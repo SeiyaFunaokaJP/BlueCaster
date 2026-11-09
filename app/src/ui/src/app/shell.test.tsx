@@ -333,6 +333,24 @@ describe("Audio Devices without a virtual device (issue #86)", () => {
     window.dispatchEvent(new Event("focus"));
     await waitFor(() => expect(screen.queryByText(t("ui.setup.vbcable_note"))).toBeNull());
   });
+
+  it("asks for the Hi-Fi Cable once VB-Cable is there, and not once it is installed", async () => {
+    location.hash = "#/devices";
+    const m = new MockCore({ speed: 0 });
+    m.noVirtual = true;
+    mock = m;
+    render(() => <App core={createCore(m)} />);
+    // One note at a time: VB-Cable's first
+    expect(await screen.findByText(t("ui.setup.vbcable_note"))).toBeInTheDocument();
+    expect(screen.queryByText(t("ui.setup.hificable_note"))).toBeNull();
+    m.noVirtual = false;
+    window.dispatchEvent(new Event("focus"));
+    expect(await screen.findByText(t("ui.setup.hificable_note"))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("hificable.download") })).toBeInTheDocument();
+    m.hifiCable = true;
+    window.dispatchEvent(new Event("focus"));
+    await waitFor(() => expect(screen.queryByText(t("ui.setup.hificable_note"))).toBeNull());
+  });
 });
 
 describe("setup device step", () => {

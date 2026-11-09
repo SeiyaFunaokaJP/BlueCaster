@@ -16,14 +16,14 @@ import { Devices } from "../screens/Devices";
 import { Developer } from "../screens/Developer";
 import { Diagnostics } from "../screens/Diagnostics";
 import { Flyout } from "../screens/Flyout";
-import { entryState, Home } from "../screens/Home";
+import { entryState, Home, MicRow } from "../screens/Home";
 import { audioEntries, entryByKey, type AudioEntry } from "../lib/profile";
 import { Settings } from "../screens/Settings";
 import { Mixer } from "../screens/Mixer";
 import { Setup, needsSetup } from "../screens/Setup";
 import { applyTheme, followAccent } from "../theme";
 import { AppProvider, useApp, type RouteName } from "./context";
-import { mixerShown } from "./settings";
+import { mixerShown, saveSettings } from "./settings";
 import { CaptureSign, CrashNotice, UpdateNotice } from "./indicators";
 import "./shell.css";
 
@@ -114,12 +114,17 @@ function MainWindow() {
 
   // The first-run setup: decided once when the state first arrives (and
   // when asked for with #/setup); it stays until finished or skipped, even
-  // when creating the profile makes it no longer "needed"
+  // when creating the profile makes it no longer "needed". Only until it
+  // was finished or skipped once (issue #86): with every device removed
+  // later, Home adds one. A folder set up without it needs it no more.
   createEffect(
     on(
       () => core.state.snap !== null,
       (has) => {
-        if (has && needsSetup(core.state.snap!)) app.setSetupActive(true);
+        const snap = core.state.snap;
+        if (!has || !snap || snap.settings.setup_done) return;
+        if (needsSetup(snap)) app.setSetupActive(true);
+        else void saveSettings(app, { setup_done: true });
       },
     ),
   );
@@ -274,7 +279,10 @@ function StatusPill() {
 }
 
 /** One device's block (issue #86): the device and its state; battery and
- *  codec for the one streaming. Without devices: the state alone. */
+ *  codec for the one streaming, and its microphone's button and line as on
+ *  Home's card. Without devices: the state alone. The whole block opens
+ *  Home (its dot is the button, stretched over it), the microphone's button
+ *  apart. */
 function DevicePill(props: { entry: AudioEntry | null }) {
   const { core, navigate } = useApp();
   const snap = () => core.state.snap!;
@@ -295,14 +303,13 @@ function DevicePill(props: { entry: AudioEntry | null }) {
     return [device(), stateText(), i ? `${codecName(i)} ${details()}` : ""].filter((x) => x).join(", ");
   };
   return (
-    <button
-      type="button"
-      class={`status-pill st-${state()}`}
-      onClick={() => navigate({ name: "home" })}
-      aria-label={label()}
-      title={label()}
-    >
-      <span class="dot" aria-hidden="true" />
+    <div class={`status-pill st-${state()}`} title={label()}>
+      <button
+        type="button"
+        class="status-pill-open dot"
+        onClick={() => navigate({ name: "home" })}
+        aria-label={label()}
+      />
       <span class="status-pill-text">
         {/* As Home's card: the device, battery and state, the codec */}
         <Show when={device()}>
@@ -320,8 +327,9 @@ function DevicePill(props: { entry: AudioEntry | null }) {
         {/* The codec, then its details below it, as on Home and in the tray (issue #86) */}
         <Show when={info()}>
           <CodecBadge />
+          <Show when={props.entry}>{(e) => <MicRow entry={e()} />}</Show>
         </Show>
       </span>
-    </button>
+    </div>
   );
 }

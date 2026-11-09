@@ -57,6 +57,26 @@ interface Rule {
 }
 
 const RULES: Rule[] = [
+  // LE Audio, as the core maps it (diag.rs); before the classic rules,
+  // whose needles its lines contain
+  { step: "connect", needle: /^LE Audio: connecting to .* failed: /, action: "retry", detail: "whole" },
+  { step: "connect", needle: /^LE Audio: connecting to /, action: "running", detail: "after" },
+  { step: "connect", needle: /^LE Audio: LE link to /, action: "detail", detail: "whole" },
+  { step: "connect", needle: /^LE Audio: .* encryption on \(0x00\)/, action: "done", detail: "none" },
+  { step: "caps", needle: /^LE Audio: .* characteristics$/, action: "running", detail: "whole" },
+  { step: "caps", needle: /^LE Audio: .*: ASCS /, action: "done", detail: "whole" },
+  { step: "codec", needle: /^LE Audio: starting unicast stream: /, action: "done", detail: "after" },
+  { step: "capture", needle: /^LE Audio: audio capture: /, action: "failed", detail: "whole" },
+  { step: "capture", needle: /^LE Audio: capture /, action: "done", detail: "after" },
+  { step: "config", needle: /^LE Audio: QoS: /, action: "running", detail: "after" },
+  { step: "config", needle: /^LE Audio: unicast stream failed/, action: "failed", detail: "whole" },
+  { step: "config", needle: /^LE Audio: CIS .* established \(ISO interval/, action: "done", detail: "whole" },
+  { step: "encoder", needle: /^LE Audio: LC3 encoders ready: /, action: "done", detail: "after" },
+  { step: "stream", needle: /^LE Audio: sending ISO SDUs/, action: "done", detail: "whole" },
+  { step: "audio", needle: /^LE Audio streaming: /, action: "done", detail: "after" },
+  { step: "link", needle: /^LE Audio stream lost, reconnecting/, action: "running", detail: "whole" },
+  { step: "link", needle: /^LE Audio reconnect attempt /, action: "detail", detail: "whole" },
+  { step: "link", needle: /^LE Audio stream restored: /, action: "warning", detail: "whole" },
   // Before "connecting to ", which it contains
   { step: "link", needle: "reconnecting to ", action: "detail", detail: "whole" },
   { step: "btstack", needle: "state Connecting: Initializing BTstack", action: "running", detail: "none" },
@@ -97,6 +117,8 @@ const RULES: Rule[] = [
 ];
 
 const START = "stream: device ";
+/** An LE Audio stream's first line */
+const LE_START = "LE Audio (experimental) stream to ";
 const STOP = "streaming stopped";
 const ERROR_STATE = "state Error: ";
 
@@ -135,7 +157,8 @@ export class FlowTracker {
   /** Takes one log line; true if the flow changed */
   feed(line: LogLine): boolean {
     const t = line.message;
-    if (t.includes(START)) {
+    const start = t.includes(START) ? START : t.startsWith(LE_START) ? LE_START : null;
+    if (start) {
       this.session = {
         id: this.nextId++,
         start_ms: line.time_ms,
@@ -144,7 +167,7 @@ export class FlowTracker {
         reconnects: 0,
         connect_retries: 0,
       };
-      this.set("start", "done", line, afterNeedle(t, START));
+      this.set("start", "done", line, afterNeedle(t, start));
       return true;
     }
     const s = this.session;

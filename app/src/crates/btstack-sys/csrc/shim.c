@@ -464,10 +464,32 @@ uint8_t bluecaster_hfp_ag_audio_release(uint16_t acl_handle) {
     return hfp_ag_release_audio_connection(acl_handle);
 }
 
+/* The voice codecs the headphones listed (AT+BAC: 1 CVSD, 2 mSBC, 3
+ * LC3-SWB) on the service level connection of `acl_handle`, at most `max`
+ * into `out`; CVSD alone without codec negotiation, which every HF has.
+ * The number written; 0 without such a connection. */
+uint8_t bluecaster_hfp_ag_remote_codecs(uint16_t acl_handle, uint8_t *out, uint8_t max) {
+    hfp_connection_t *c = get_hfp_connection_context_for_acl_handle(acl_handle, HFP_ROLE_AG);
+    if (c == NULL || max == 0) return 0;
+    if ((c->remote_supported_features & (1u << HFP_HFSF_CODEC_NEGOTIATION)) == 0 || c->remote_codecs_nr == 0) {
+        out[0] = HFP_CODEC_CVSD;
+        return 1;
+    }
+    uint8_t n = 0;
+    for (uint16_t i = 0; i < c->remote_codecs_nr && n < max; i++) out[n++] = c->remote_codecs[i];
+    return n;
+}
+
 /* +VGS: the headphones' speaker gain (0..15) on the voice link. BTstack
  * sends it only when it differs from the last gain either side gave. */
 uint8_t bluecaster_hfp_ag_set_speaker_gain(uint16_t acl_handle, uint8_t gain) {
     return hfp_ag_set_speaker_gain(acl_handle, gain);
+}
+
+/* +VGM: the headphones' microphone gain (0..15) on the voice link; sent
+ * only when it differs from the last gain either side gave, as +VGS. */
+uint8_t bluecaster_hfp_ag_set_microphone_gain(uint16_t acl_handle, uint8_t gain) {
+    return hfp_ag_set_microphone_gain(acl_handle, gain);
 }
 
 /* ---- SCO data ---- */

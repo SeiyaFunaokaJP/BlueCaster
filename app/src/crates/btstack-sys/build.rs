@@ -173,6 +173,7 @@ fn main() {
     build.files(CLASSIC.iter().map(|f| match *f {
         "a2dp.c" => patched_a2dp(&btstack),
         "avdtp_initiator.c" => patched_avdtp_initiator(&btstack),
+        "avrcp_target.c" => patched_avrcp_target(&btstack),
         f => btstack.join("src/classic").join(f),
     }));
     build.file(btstack.join("platform/windows/btstack_run_loop_windows.c"));
@@ -330,6 +331,40 @@ fn patched_avdtp_initiator(btstack: &Path) -> PathBuf {
          \x20       return;\n\
          \x20   }\n",
     );
+    let path = PathBuf::from(env::var("OUT_DIR").unwrap()).join(FILE);
+    std::fs::write(&path, source).unwrap();
+    path
+}
+
+/// src/classic/avrcp_target.c answering PASS THROUGH with the operation byte
+/// it received, written to OUT_DIR (issue #420).
+///
+/// BTstack 1.8.1 (and its develop branch in 2026-11) clears the state flag
+/// (0x80, button released) before it builds the response, so a release is
+/// answered as a press. A WH-1000XM6 then repeats the release about 50 times
+/// a second and sends no new button presses until it reconnects. The AV/C
+/// response carries the command's state flag and operation id. The masked id
+/// still decides validity and goes to the app event.
+fn patched_avrcp_target(btstack: &Path) -> PathBuf {
+    const FILE: &str = "avrcp_target.c";
+    // LF patterns: a checkout with core.autocrlf (CI) has CRLF
+    let mut source = std::fs::read_to_string(btstack.join("src/classic").join(FILE)).unwrap().replace("\r\n", "\n");
+    let echoed = "(avrcp_operation_id_t) operation";
+    replace_n(
+        &mut source,
+        FILE,
+        "AVRCP_CTYPE_RESPONSE_REJECTED, operation_id, 0, NULL);",
+        &format!("AVRCP_CTYPE_RESPONSE_REJECTED, {echoed}, 0, NULL);"),
+        2,
+    );
+    for ctype in ["AVRCP_CTYPE_RESPONSE_ACCEPTED", "AVRCP_CTYPE_RESPONSE_NOT_IMPLEMENTED"] {
+        replace_once(
+            &mut source,
+            FILE,
+            &format!("{ctype}, operation_id, operation_data_field_length, operand);"),
+            &format!("{ctype}, {echoed}, operation_data_field_length, operand);"),
+        );
+    }
     let path = PathBuf::from(env::var("OUT_DIR").unwrap()).join(FILE);
     std::fs::write(&path, source).unwrap();
     path

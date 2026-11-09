@@ -1471,6 +1471,21 @@ impl HciBackend for UsbTransport {
             ControlRecipient::Interface => Recipient::Interface,
             ControlRecipient::Endpoint => Recipient::Endpoint,
             ControlRecipient::Other => Recipient::Other,
+            // Developer > Debug only: nusb cannot send these, WinUSB is
+            // given the SETUP packet as it is (win_sys::usb_control)
+            ControlRecipient::Reserved(_) => {
+                let ControlData::Out(data) = &request.data else {
+                    return Err("reserved recipients: OUT transfers only".into());
+                };
+                return win_sys::usb_control::control_out_raw(
+                    &o.interface,
+                    request.setup_packet(),
+                    data,
+                    COMMAND_TIMEOUT,
+                )
+                .map(|_| Vec::new())
+                .map_err(|e| format!("WinUSB error {e}"));
+            }
         };
         let result = match &request.data {
             ControlData::In(length) => o

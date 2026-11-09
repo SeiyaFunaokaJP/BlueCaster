@@ -312,3 +312,17 @@ export function VbCableNote() {
     </div>
   );
 }
+
+/** The second cable for the headset microphone (issue #86), where VB-Cable
+ *  is there and the Hi-Fi Cable is not */
+export function HifiCableNote() {
+  const { core } = useApp();
+  return (
+    <div class="setup-note">
+      <p>{t("ui.setup.hificable_note")}</p>
+      <Button icon="open" onClick={() => core.transport.openUrl(LINKS.hifiCable)}>
+        {t("hificable.download")}
+      </Button>
+    </div>
+  );
+}

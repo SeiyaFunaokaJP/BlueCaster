@@ -29,7 +29,12 @@ notify_connected: boolean,
 /**
  * The low-battery notification: below this level (percent), 0: never
  */
-battery_low_percent: number, check_updates_on_startup: boolean, include_prereleases: boolean, 
+battery_low_percent: number, 
+/**
+ * The first-run setup was finished or skipped: the window opens it by
+ * itself only before that (a client that sends none: true)
+ */
+setup_done: boolean, check_updates_on_startup: boolean, include_prereleases: boolean, 
 /**
  * Developer > alphas too, in force while developer_mode is on (an
  * older core has none: off)

@@ -153,6 +153,7 @@ interface Results {
   "adapter.list": AdapterInfo[];
   "adapter.assign_winusb": AdapterInfo[];
   "adapter.restore_driver": AdapterInfo[];
+  "adapter.windows_devices": WindowsPairedDevice[];
   "adapter.firmware_files": FirmwareFile[];
   "adapter.download_firmware": AdapterInfo[];
   "adapter.probe": ProbeResult;

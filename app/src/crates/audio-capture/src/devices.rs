@@ -130,6 +130,26 @@ pub fn mic_capture_active(id: &str) -> Result<Option<bool>, CaptureError> {
     })
 }
 
+/// Who records from the capture side paired with the render endpoint `id`
+/// ([`mic_capture_active`]), for the log: "app.exe from “CABLE Output”"
+/// (the executable's file name, not its path); empty when nobody does or
+/// it cannot be read
+pub fn mic_recorders(id: &str) -> Vec<String> {
+    let Ok(_com) = com() else { return Vec::new() };
+    let mut out: Vec<String> = audio_policy::capture_session_recorders(id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(pid, endpoint)| {
+            let exe = win_sys::process::image_path(pid)
+                .map(|p| p.rsplit(['\\', '/']).next().unwrap_or_default().to_owned())
+                .unwrap_or_else(|| format!("process {pid}"));
+            format!("{exe} from “{endpoint}”")
+        })
+        .collect();
+    out.dedup();
+    out
+}
+
 /// Shared-mode mix rate of a render device (None = the default one), for
 /// the "auto" sample rate: what a loopback capture delivers without a
 /// preferred rate. None if the device cannot be opened.

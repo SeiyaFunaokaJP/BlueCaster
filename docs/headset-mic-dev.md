@@ -99,7 +99,12 @@ mic_id, default_output_id) -> Option<&'static str>` returns
 captured virtual / output device, or the default output while System
 Loopback is captured; `Profile::mic_device_conflicts` calls it with the
 profile's source. Both sessions call it through `voice::mic_conflict` with
-the source they really capture.
+the source they really capture. The app (`state.rs` `drop_mic_note`)
+takes a microphone note (this one, `status.headset_mic_failed`,
+`status.headset_mic_output_failed`) off the stream's message once the
+voice link opens or an in-place headset change is accepted, restoring the
+message it replaced (a codec fallback reason); the session says it again
+if the new output still fails.
 
 CLI (`app/src/core/src/cli.rs`, "Headset microphone"):
 `--headset-mic [on|auto]` (headset mode once streaming, alone: on; on an
@@ -141,6 +146,11 @@ records the microphone, and full-quality A2DP otherwise.
   process's own left out; `None`: no capture endpoint pairs (logged once as
   a warning, counted as nobody recording); an error (the output is gone)
   counts as nobody too, logged once.
+- **Who records**: when Auto turns on, the log names each recording
+  session's executable (file name only) and capture endpoint
+  (`audio_capture::mic_recorders` over
+  `audio_policy::capture_session_recorders`), to tell an app from a
+  Windows meter or "Listen to this device".
 - **The poll** (`voice.rs` `AutoWatch`): on the session tick (200 ms), at
   most once a second (`AUTO_POLL`); the output is resolved once per mode or
   output change, not on every poll. A WAV `mic_output` counts as always

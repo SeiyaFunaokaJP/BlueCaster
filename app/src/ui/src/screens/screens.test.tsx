@@ -212,7 +212,7 @@ describe("Home", () => {
     const badge = wh.querySelector(".codec-line .codec-badge")!;
     expect(badge).not.toHaveTextContent("LDAC");
     expect([...badge.children].map((c) => c.textContent)).toEqual(["990 kbps", expect.stringMatching(/^[\d.]+ kHz$/), "24-bit"]);
-    expect(wh).toHaveAccessibleName(/^WH-1000XM5, Connected, LDAC 990 kbps/);
+    expect(wh.querySelector(".status-pill-open")).toHaveAccessibleName(/^WH-1000XM5, Connected, LDAC 990 kbps/);
     // The other one: idle, no codec
     expect(xb).toHaveTextContent("Disconnected");
     expect(xb.querySelector(".codec-info")).toBeNull();
@@ -410,6 +410,89 @@ describe("every screen renders", () => {
     // The Scan button still finds devices
     fireEvent.click(await screen.findByRole("button", { name: "Scan Devices" }));
     await waitFor(() => expect(calls.filter((c) => c.method === "device.scan")).toHaveLength(scans + 1));
+  });
+
+  it("opens the setup by itself only until it was finished or skipped once (issue #86)", async () => {
+    start("#/home", { scenario: "fresh" });
+    // Set up before, every device removed since: Home adds one
+    (mock as unknown as { snap: Snapshot }).snap.settings.setup_done = true;
+    expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 1, name: "Setup Wizard" })).toBeNull();
+  });
+
+  it("skipping the setup keeps it from opening by itself again (issue #86)", async () => {
+    const { core } = start("#/home", { scenario: "fresh" });
+    fireEvent.click(await screen.findByRole("button", { name: t("ui.setup.skip") }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
+    await waitFor(() => expect(core.state.snap!.settings.setup_done).toBe(true));
+  });
+
+  it("a folder set up without the setup does not get it (issue #86)", async () => {
+    const { calls, core } = start("#/home");
+    (mock as unknown as { snap: Snapshot }).snap.settings.setup_done = false;
+    expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
+    await waitFor(() => expect(core.state.snap!.settings.setup_done).toBe(true));
+    expect(calls.filter((c) => c.method === "settings.set")).toHaveLength(1);
+  });
+
+  it("the setup names the devices Windows loses with the adapter, and asks first (issue #86)", async () => {
+    const { calls } = start("#/home", { scenario: "fresh" });
+    mock!.adapterDevices = [
+      { address: "00:11:22:33:44:01", name: "Logitech K380", audio: false },
+      { address: "00:11:22:33:44:02", name: "MX Master 3", audio: false },
+      { address: "00:11:22:33:44:03", name: "", audio: true },
+      { address: "00:11:22:33:44:04", name: "WH-1000XM4", audio: true },
+      { address: "00:11:22:33:44:05", name: "Pixel 8", audio: false },
+    ];
+    fireEvent.click(await screen.findByRole("button", { name: "Next" }));
+    fireEvent.click(await screen.findByRole("button", { name: t("ui.setup.auto_button") }));
+    let dialog = await screen.findByRole("dialog", { name: t("ui.adapter.paired_title") });
+    // A warning: the first three by name, one per line (the address of one
+    // without), then how many more; the confirm button in the danger style
+    expect(dialog.querySelector(".dialog-warn")).not.toBeNull();
+    const rows = [...dialog.querySelectorAll(".paired-list li")].map((li) => li.textContent);
+    expect(rows).toEqual(["Logitech K380", "MX Master 3", "00:11:22:33:44:03", t("ui.adapter.paired_more", 2)]);
+    expect(dialog.querySelectorAll(".paired-list li .icon")).toHaveLength(3);
+    expect(dialog).toHaveTextContent(t("ui.adapter.paired_text"));
+    expect(dialog).toHaveTextContent(t("ui.adapter.paired_keep"));
+    fireEvent.click(within(dialog).getByRole("button", { name: t("modal.cancel") }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(calls.some((c) => c.method === "adapter.assign_winusb")).toBe(false);
+    // Confirmed: set up as before
+    fireEvent.click(screen.getByRole("button", { name: t("ui.setup.auto_button") }));
+    dialog = await screen.findByRole("dialog", { name: t("ui.adapter.paired_title") });
+    const confirm = within(dialog).getByRole("button", { name: t("ui.setup.auto_button") });
+    expect(shielded(confirm)).toBe(true);
+    expect(confirm).toHaveClass("btn-danger");
+    fireEvent.click(confirm);
+    await screen.findByText("The adapter is ready for BlueCaster", {}, { timeout: 5000 });
+    expect(calls.some((c) => c.method === "adapter.assign_winusb")).toBe(true);
+  });
+
+  it("the setup asks nothing when Windows' list cannot be read (issue #86)", async () => {
+    const { calls } = start("#/home", { scenario: "fresh" });
+    mock!.adapterDevices = null;
+    fireEvent.click(await screen.findByRole("button", { name: "Next" }));
+    fireEvent.click(await screen.findByRole("button", { name: t("ui.setup.auto_button") }));
+    await screen.findByText("The adapter is ready for BlueCaster", {}, { timeout: 5000 });
+    expect(calls.some((c) => c.method === "adapter.windows_devices")).toBe(true);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("the Adapters screen's driver dialog names the devices Windows loses (issue #86)", async () => {
+    start("#/adapter", { scenario: "fresh" });
+    mock!.adapterDevices = [{ address: "00:11:22:33:44:01", name: "Logitech K380", audio: false }];
+    // The fresh scenario opens the setup: leave it
+    fireEvent.click(await screen.findByRole("button", { name: t("ui.setup.skip") }));
+    location.hash = "#/adapter";
+    await screen.findByRole("heading", { level: 1, name: "Adapters" });
+    fireEvent.click((await screen.findAllByRole("button", { name: t("ui.adapter.assign_winusb") }))[0]);
+    // A warning once the list is in, the devices in place of the usual text
+    const dialog = await screen.findByRole("dialog", { name: t("ui.adapter.paired_title") });
+    expect(await within(dialog).findByText("Logitech K380")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(t("ui.adapter.paired_receiver"));
+    expect(dialog).not.toHaveTextContent(t("ui.adapter.assign_explain"));
+    expect(within(dialog).getByRole("button", { name: t("ui.adapter.assign_winusb") })).toHaveClass("btn-danger");
   });
 
   it("the flyout", async () => {

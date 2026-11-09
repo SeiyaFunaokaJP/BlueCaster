@@ -20,6 +20,8 @@ export const LINKS = {
   issues: `${REPO}/issues/new/choose`,
   sponsor: "https://github.com/sponsors/SeiyaFunaokaJP",
   vbCable: "https://vb-audio.com/Cable/",
+  // On the same page, below VB-CABLE (HiFi-Cable & ASIO-Bridge)
+  hifiCable: "https://vb-audio.com/Cable/",
 } as const;
 
 /** The third-party licences of this version (a development build has no

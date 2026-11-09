@@ -339,7 +339,11 @@ impl HostApp {
         let loader = mediatek::Loader::new(Box::new(move |name| {
             read_firmware_file(&dir, "mediatek", name).or_else(|| mediatek::from_windows_driver(name))
         }));
-        self.start_loader(stack, Box::new(loader));
+        // Developer > Debug: a register write and the command before reset
+        let command = crate::debug_command::get().filter(|_| crate::debug_command::before_reset());
+        let loader =
+            crate::mtk_debug_steps::DebugSteps::wrap(Box::new(loader), crate::debug_command::register(), command);
+        self.start_loader(stack, loader);
     }
 
     /// The Qualcomm rampatch and NVM download (crate::qualcomm), then HCI
@@ -1548,7 +1552,10 @@ impl HostApp {
         self.completed_by_handle.clear();
         // Developer > Debug: MediaTek controllers only
         self.debug_command_sent = None;
-        self.debug_command = crate::debug_command::get().filter(|_| self.controller_company == Some(0x0046));
+        // (set to go before reset, the MediaTek loader sent it already)
+        self.debug_command = crate::debug_command::get()
+            .filter(|_| self.controller_company == Some(0x0046) && !crate::debug_command::before_reset());
+        crate::le::iso_send::debug_depth_for_controller(self.controller_company == Some(0x0046));
         self.send_debug_command(stack);
         let le_audio_capable = stack.controller_iso() == Some(true);
         tracing::info!(
@@ -2071,6 +2078,14 @@ impl HostApp {
                     self.voice.on_slc_established();
                     tracing::debug!("HFP: service level connection on ACL {:04X?}", self.hfp_acl);
                     tracing::info!("HFP: service level connection established");
+                    // The voice codecs the headphones listed (AT+BAC): the
+                    // Codecs screen shows them (issue #86)
+                    if let Some(acl) = self.hfp_acl {
+                        let codecs: Vec<&'static str> =
+                            stack.hfp_ag_remote_codecs(acl).into_iter().filter_map(crate::voice::codec_key).collect();
+                        tracing::info!("HFP: the headphones' voice codecs: {}", codecs.join(", "));
+                        let _ = self.events.send(HostEvent::VoiceCodecs(codecs));
+                    }
                 } else {
                     tracing::info!("HFP: service level connection failed (0x{status:02x})");
                     // RFCOMM DM: the headphones have HFP but refuse it to us,
@@ -2094,6 +2109,18 @@ impl HostApp {
                     let _ = self.events.send(e);
                 }
                 self.sync_speaker_gain(stack, None);
+                // The microphone at full gain: the headphones otherwise keep
+                // their own default, often low (issue #86); Windows' own
+                // Bluetooth sets it too
+                if let Some(acl) = self.voice.audio_acl() {
+                    let status = stack.hfp_ag_set_microphone_gain(acl, crate::voice::MIC_GAIN);
+                    tracing::debug!("HFP: microphone gain {} (0x{status:02x})", crate::voice::MIC_GAIN);
+                }
+            }
+            Some(HFP_SUBEVENT_MICROPHONE_VOLUME) => {
+                if let Some(gain) = u8_at(p, 5) {
+                    tracing::info!("HFP: headphones' microphone gain {gain}");
+                }
             }
             Some(HFP_SUBEVENT_SPEAKER_VOLUME) => {
                 if let Some(gain) = u8_at(p, 5) {
@@ -2408,11 +2435,21 @@ impl HostApp {
         // 2. Readings of the current link: RSSI and AFH map in turn
         let handle = self.shared.lock().a2dp_con_handle;
         let Some(handle) = handle else {
+            // An LE Audio stream: the RSSI of its LE link (issue #86: Link
+            // Quality showed nothing); the AFH map is BR/EDR only
+            let le = self.le.as_ref().and_then(|le| le.streaming_acl());
             self.stats.with_radio(|r| {
-                r.rssi = None;
+                if le.is_none() {
+                    r.rssi = None;
+                }
                 r.afh_in_use = None;
                 r.afh_map = None;
             });
+            if let Some(acl) = le
+                && stack.can_send_command_now()
+            {
+                stack.cmd_read_rssi(acl);
+            }
             self.publish_link();
             return;
         };

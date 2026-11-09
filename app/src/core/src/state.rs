@@ -120,6 +120,9 @@ pub struct CoreState {
     /// The profile the last stream.start asked for: the session stopped for
     /// it reports Idle after it, which clears the snapshot's profile
     starting_profile: Mutex<Option<String>>,
+    /// The message a microphone note replaced (a codec's fallback reason),
+    /// back once the note is out of date
+    mic_note_over: Mutex<Option<Msg>>,
     /// The low-battery balloon was shown for this connection
     battery_warned: AtomicBool,
     /// A new connection started: its balloon is shown once it streams with
@@ -307,6 +310,7 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
         flyout_with_quick_settings: s.flyout_with_quick_settings,
         notify_connected: s.notify_connected,
         battery_low_percent: s.battery_low_percent,
+        setup_done: s.setup_done,
         check_updates_on_startup: s.check_updates_on_startup,
         include_prereleases: s.include_prereleases,
         include_alphas: s.include_alphas,
@@ -356,6 +360,9 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
             mtk_iso_interface: s.dev_debug.mtk_iso_interface,
             mtk_iso_pad: s.dev_debug.mtk_iso_pad,
             mtk_command: s.dev_debug.mtk_command.clone(),
+            mtk_iso_queue: s.dev_debug.mtk_iso_queue,
+            mtk_command_before_reset: s.dev_debug.mtk_command_before_reset,
+            mtk_register: s.dev_debug.mtk_register.clone(),
             le_keys_to_windows: s.dev_debug.le_keys_to_windows,
         },
         bt_chip_pid: s.bt_chip_pid,
@@ -369,9 +376,15 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
     }
 }
 
-/// VB-Cable's playback device among Windows' outputs
+/// VB-Cable's playback device among Windows' outputs (not the Hi-Fi Cable)
 fn vb_cable(devices: &[audio_capture::DeviceInfo]) -> Option<&audio_capture::DeviceInfo> {
-    devices.iter().find(|d| d.is_virtual && d.name.to_lowercase().contains("cable"))
+    devices.iter().find(|d| profiles::is_vb_cable(&d.name, d.is_virtual))
+}
+
+/// The Hi-Fi Cable's playback device ("Hi-Fi Cable Input"): the headset
+/// microphone's cable (issue #86)
+fn hifi_cable(devices: &[audio_capture::DeviceInfo]) -> Option<&audio_capture::DeviceInfo> {
+    devices.iter().find(|d| profiles::is_hifi_cable(&d.name))
 }
 
 fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
@@ -385,6 +398,7 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
     c.flyout_with_quick_settings = s.flyout_with_quick_settings;
     c.notify_connected = s.notify_connected;
     c.battery_low_percent = s.battery_low_percent;
+    c.setup_done = s.setup_done;
     c.check_updates_on_startup = s.check_updates_on_startup;
     c.include_prereleases = s.include_prereleases;
     c.include_alphas = s.include_alphas;
@@ -447,6 +461,9 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
         mtk_iso_interface: s.dev_debug.mtk_iso_interface,
         mtk_iso_pad: s.dev_debug.mtk_iso_pad.min(hci_transport::iso_intr::PAD_MAX as u16),
         mtk_command: s.dev_debug.mtk_command.trim().to_string(),
+        mtk_iso_queue: s.dev_debug.mtk_iso_queue.min(12),
+        mtk_command_before_reset: s.dev_debug.mtk_command_before_reset,
+        mtk_register: s.dev_debug.mtk_register.trim().to_string(),
         le_keys_to_windows: s.dev_debug.le_keys_to_windows,
     };
     c.bt_chip_pid = s.bt_chip_pid;
@@ -1364,20 +1381,24 @@ fn codec_named_in_place(stream: &StreamStatus, before: Option<&CoreProfile>, sav
     as_before == *b
 }
 
-/// A new classic profile left on Auto without a microphone output gets
-/// VB-CABLE's (issue #86), unless its capture source is that cable (the
-/// microphone would loop into the stream). LE Audio takes Auto as On, so
+/// A new classic profile left on Auto without a microphone output gets the
+/// Hi-Fi Cable's, else VB-CABLE's (issue #86), unless its capture source is
+/// that cable (the microphone would loop into the stream). LE Audio takes Auto as On, so
 /// its profiles get none by themselves.
 fn default_mic_output(p: &mut CoreProfile) {
     if p.le_audio || !p.mic_device_id.is_empty() || HeadsetMic::parse(&p.headset_mic) != HeadsetMic::Auto {
         return;
     }
     let devices = audio_capture::render_devices().unwrap_or_default();
-    let Some(cable) = default_cable(&devices) else { return };
     let default_output = devices.iter().find(|d| d.is_default).map_or("", |d| d.id.as_str());
-    if profiles::mic_output_conflicts(&p.source(), &cable.id, default_output).is_some() {
+    // The Hi-Fi Cable first: VB-CABLE then stays free for the sound
+    let Some(cable) = [hifi_cable(&devices), default_cable(&devices)]
+        .into_iter()
+        .flatten()
+        .find(|c| profiles::mic_output_conflicts(&p.source(), &c.id, default_output).is_none())
+    else {
         return;
-    }
+    };
     tracing::info!("profile \"{}\": microphone output {} by default", p.name, cable.name);
     p.mic_device_id = cable.id.clone();
     p.mic_device_name = cable.name.clone();
@@ -1386,7 +1407,7 @@ fn default_mic_output(p: &mut CoreProfile) {
 /// VB-CABLE's playback side ("CABLE Input"), the 2-channel one before the
 /// 16-channel one (as the UI's vbCable)
 fn default_cable(devices: &[audio_capture::DeviceInfo]) -> Option<&audio_capture::DeviceInfo> {
-    let cables: Vec<_> = devices.iter().filter(|d| d.is_virtual && d.name.to_lowercase().contains("cable")).collect();
+    let cables: Vec<_> = devices.iter().filter(|d| profiles::is_vb_cable(&d.name, d.is_virtual)).collect();
     cables.iter().find(|d| !d.name.to_lowercase().contains("16ch")).or(cables.first()).copied()
 }
 
@@ -1419,6 +1440,12 @@ enum HeadsetChange {
     /// An LE Audio stream sets up its streams again (or a classic one still
     /// connecting starts again)
     Restart,
+}
+
+/// Why the headset microphone did not open (the UI's MIC_NOTES): the stream
+/// plays on with it as its message
+fn is_mic_note(key: &str) -> bool {
+    matches!(key, "error.headset_mic_loop" | "status.headset_mic_failed" | "status.headset_mic_output_failed")
 }
 
 /// The save changed only `headset_mic` / `mic_device_*` (None: something else
@@ -1586,6 +1613,7 @@ impl CoreState {
             started: Instant::now(),
             rates: Mutex::new(None),
             starting_profile: Mutex::new(None),
+            mic_note_over: Mutex::new(None),
             battery_warned: AtomicBool::new(false),
             connect_announce: AtomicBool::new(false),
             battery_deadline: Mutex::new(None),
@@ -1742,6 +1770,17 @@ impl CoreState {
         });
     }
 
+    /// A microphone note out of date: the message it replaced comes back
+    /// (plain "connected" without one). False when there was none.
+    fn drop_mic_note(&self, stream: &mut StreamStatus) -> bool {
+        if stream.state != StreamState::Streaming || !is_mic_note(&stream.message.key) {
+            return false;
+        }
+        let over = self.mic_note_over.lock().unwrap_or_else(|e| e.into_inner()).take();
+        stream.message = over.unwrap_or_else(|| Msg::new("status.connected"));
+        true
+    }
+
     /// A service event (from its thread)
     pub fn on_service_event(self: &Arc<Self>, e: ServiceEvent) {
         let (_, s) = self.snapshot();
@@ -1762,7 +1801,16 @@ impl CoreState {
                     CoreStreamState::Reconnecting => StreamState::Reconnecting,
                     CoreStreamState::Error => StreamState::Error,
                 };
-                stream.message = msg(&m);
+                let message = msg(&m);
+                {
+                    let mut over = self.mic_note_over.lock().unwrap_or_else(|e| e.into_inner());
+                    if !is_mic_note(&message.key) {
+                        *over = None;
+                    } else if !is_mic_note(&stream.message.key) {
+                        *over = Some(stream.message.clone());
+                    }
+                }
+                stream.message = message;
                 // The codec that stopped it, for the status line (issue #86)
                 stream.codec_stop = m.codec_stop.filter(|_| state == CoreStreamState::Error).map(|c| ipc::CodecStop {
                     codec: c.codec.key().into(),
@@ -1801,6 +1849,7 @@ impl CoreState {
                     stream.battery = None;
                     stream.battery_refused = false;
                     stream.voice = None;
+                    stream.voice_codecs.clear();
                 }
                 if matches!(state, CoreStreamState::Idle | CoreStreamState::Error) {
                     stream.info = None;
@@ -1808,6 +1857,7 @@ impl CoreState {
                     stream.battery = None;
                     stream.battery_refused = false;
                     stream.voice = None;
+                    stream.voice_codecs.clear();
                     if state == CoreStreamState::Idle {
                         stream.profile = None;
                     }
@@ -1861,7 +1911,13 @@ impl CoreState {
             }
             ServiceEvent::Volume(v) => stream.volume = Some(v),
             // Headset mode: the voice link carries audio, or no longer
-            ServiceEvent::Voice(v) => stream.voice = v,
+            ServiceEvent::Voice(v) => {
+                // The microphone opened: why it did not before is out of date
+                if v.is_some() {
+                    self.drop_mic_note(&mut stream);
+                }
+                stream.voice = v;
+            }
             // The Adapters screen shows the loader while the adapter starts
             ServiceEvent::Loader(p) => {
                 self.publish(Event::Adapter(AdapterState {
@@ -1895,11 +1951,12 @@ impl CoreState {
             }
             // A report that arrives after the device went off (HFP still
             // closing) is not shown on a device no longer connected
-            ServiceEvent::Battery(_) | ServiceEvent::BatteryRefused
+            ServiceEvent::Battery(_) | ServiceEvent::BatteryRefused | ServiceEvent::VoiceCodecs(_)
                 if matches!(stream.state, StreamState::Idle | StreamState::Error) =>
             {
                 tracing::debug!("battery report while not connected: ignored");
             }
+            ServiceEvent::VoiceCodecs(codecs) => stream.voice_codecs = codecs,
             ServiceEvent::BatteryRefused => {
                 stream.battery = None;
                 stream.battery_refused = true;
@@ -2008,6 +2065,39 @@ impl CoreState {
                     && let Err(e) = self.save_profiles(&list, active)
                 {
                     tracing::warn!("VB-Cable: profiles not saved: {}", e.code);
+                }
+            }
+            _ => return,
+        }
+        let _ = s.save(&self.config_dir());
+        self.service.set_settings(s);
+    }
+
+    /// The virtual cables taken into use when they come (issue #86): VB-CABLE
+    /// for the sound, then the Hi-Fi Cable for the microphone
+    pub fn watch_cables(&self, devices: &[audio_capture::DeviceInfo]) {
+        self.watch_vb_cable(devices);
+        self.watch_hifi_cable(devices);
+    }
+
+    /// The Hi-Fi Cable that came after it was missing takes the microphone
+    /// of the classic profiles whose microphone had no working output, one
+    /// time: one that works stays, as apps record from it
+    fn watch_hifi_cable(&self, devices: &[audio_capture::DeviceInfo]) {
+        let mut s = self.service.settings();
+        match (hifi_cable(devices), s.awaiting_hifi_cable) {
+            (None, false) => s.awaiting_hifi_cable = true,
+            (Some(cable), true) => {
+                s.awaiting_hifi_cable = false;
+                let default_output = devices.iter().find(|d| d.is_default).map_or("", |d| d.id.as_str());
+                let mut list = profiles::load(&self.config_dir());
+                let changed = profiles::use_mic_cable(&mut list, &cable.id, &cable.name, default_output);
+                tracing::info!("Hi-Fi Cable found: {changed} profile(s) play the microphone into it now");
+                let active = Some(s.last_profile.clone()).filter(|n| list.iter().any(|p| &p.name == n));
+                if changed > 0
+                    && let Err(e) = self.save_profiles(&list, active)
+                {
+                    tracing::warn!("Hi-Fi Cable: profiles not saved: {}", e.code);
                 }
             }
             _ => return,
@@ -2211,6 +2301,7 @@ impl CoreState {
             volume: None,
             battery: None,
             battery_refused: false,
+            voice_codecs: Vec::new(),
             voice: None,
             codec_stop: None,
         }));
@@ -2675,7 +2766,11 @@ impl CoreState {
                     let list: Vec<WindowsPairedDevice> = win_sys::bt_paired::paired_through(&instance_id)
                         .iter()
                         .filter(|d| d.is_a2dp_sink())
-                        .map(|d| WindowsPairedDevice { address: bt_host::addr_str(&d.address), name: d.name.clone() })
+                        .map(|d| WindowsPairedDevice {
+                            address: bt_host::addr_str(&d.address),
+                            name: d.name.clone(),
+                            audio: d.is_a2dp_sink(),
+                        })
                         .collect();
                     Ok(json(&list))
                 }))
@@ -2791,7 +2886,15 @@ impl CoreState {
                         // capture; false (no stream, or a stack without
                         // voice): it starts again instead
                         let mode = headset_mic_in_force(&in_order);
-                        self.service.set_headset_mic(mode, mode.is_on().then(|| in_order.mic_device_id.clone()))
+                        let kept =
+                            self.service.set_headset_mic(mode, mode.is_on().then(|| in_order.mic_device_id.clone()));
+                        // Another output or mode: the session tries again
+                        // and says so anew if it still cannot
+                        let mut stream = self.with_snapshot(|s| s.stream.clone());
+                        if kept && self.drop_mic_note(&mut stream) {
+                            self.publish(Event::Stream(stream));
+                        }
+                        kept
                     }
                     Some(HeadsetChange::Restart) | None => false,
                 };
@@ -2959,6 +3062,25 @@ impl CoreState {
             Method::AdapterRestoreDriver { instance_id } => {
                 blocking(Box::new(move |me| crate::driver::restore(me, &instance_id))).await
             }
+            Method::AdapterWindowsDevices { instance_id } => {
+                // Only the adapters listed: the ID names a device node to walk
+                if !self.with_snapshot(|s| s.adapter.adapters.iter().any(|a| a.instance_id == instance_id)) {
+                    return Ok(json(&Vec::<WindowsPairedDevice>::new()));
+                }
+                blocking(Box::new(move |_| {
+                    let list: Vec<WindowsPairedDevice> = win_sys::bt_paired::devices_through(&instance_id)
+                        .iter()
+                        .map(|d| WindowsPairedDevice {
+                            address: bt_host::addr_str(&d.address),
+                            name: d.name.clone(),
+                            audio: d.is_a2dp_sink(),
+                        })
+                        .collect();
+                    tracing::info!("adapter: Windows paired {} device(s) through it", list.len());
+                    Ok(json(&list))
+                }))
+                .await
+            }
             Method::AdapterRestart => {
                 blocking(Box::new(|me| {
                     let again = me.service.restart_adapter();
@@ -3101,7 +3223,7 @@ impl CoreState {
                 blocking(Box::new(|me| {
                     let devices = audio_capture::render_devices();
                     if let Ok(d) = &devices {
-                        me.watch_vb_cable(d);
+                        me.watch_cables(d);
                     }
                     let list: Vec<AudioDevice> = devices
                         .unwrap_or_default()
@@ -4082,6 +4204,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn a_microphone_that_opens_drops_why_it_did_not_before() {
+        let dir = std::env::temp_dir().join(format!("bluecaster-state-micnote-{}", std::process::id()));
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let options = bluecaster_core::ServiceOptions {
+            config_dir: dir.clone(),
+            hci_tcp: None,
+            capture: bt_host::HciCapture::new(),
+            afh: None,
+            usb: Default::default(),
+        };
+        let state =
+            CoreState::new(Arc::new(Service::new(options, tx)), Box::new(|_| {}), Box::new(|| {}), Box::new(|_| {}));
+        let say = |key| {
+            state.on_service_event(ServiceEvent::State(CoreStreamState::Streaming, bluecaster_core::Msg::new(key)))
+        };
+        let key = || state.snapshot().1.stream.message.key;
+        let voice = |on: bool| {
+            state.on_service_event(ServiceEvent::Voice(on.then(|| ipc::VoiceStatus {
+                codec: "msbc".into(),
+                link: "hfp".into(),
+                rate: 16000,
+                mic_device_id: "{other}".into(),
+            })))
+        };
+        say("status.connected_fallback_developer");
+        say("error.headset_mic_loop");
+        assert_eq!(key(), "error.headset_mic_loop");
+        // Closing changes nothing; another output that opens does
+        voice(false);
+        assert_eq!(key(), "error.headset_mic_loop");
+        voice(true);
+        assert_eq!(key(), "status.connected_fallback_developer");
+        // A note over a note keeps the message from before both
+        voice(false);
+        say("error.headset_mic_loop");
+        say("status.headset_mic_failed");
+        voice(true);
+        assert_eq!(key(), "status.connected_fallback_developer");
+        // Another message in between: nothing of the old one comes back
+        say("error.headset_mic_loop");
+        say("status.reconnected");
+        say("status.headset_mic_failed");
+        voice(true);
+        assert_eq!(key(), "status.reconnected");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// SBC at 48 kHz under ABR (bitpool 19..53), 1011-byte payloads
     fn sbc_abr_info() -> ipc::StreamInfo {
         serde_json::from_value(serde_json::json!({
@@ -4564,21 +4734,21 @@ mod tests {
 
         let base = CoreSettings::default();
         let ui = to_ipc_settings(&base);
-        // LE Audio on by default, GMAP low latency off
-        assert!(ui.le_audio_experimental && !ui.le_audio_low_latency);
-        let off = Settings { le_audio_experimental: false, le_audio_low_latency: true, ..ui };
-        let merged = merge_settings(&base, &off);
-        assert!(!merged.le_audio_experimental && merged.le_audio_low_latency);
-        assert_eq!(to_ipc_settings(&merged), off);
+        // LE Audio off by default (issue #86: Adapters' switch), GMAP low latency off
+        assert!(!ui.le_audio_experimental && !ui.le_audio_low_latency);
+        let on = Settings { le_audio_experimental: true, le_audio_low_latency: true, ..ui };
+        let merged = merge_settings(&base, &on);
+        assert!(merged.le_audio_experimental && merged.le_audio_low_latency);
+        assert_eq!(to_ipc_settings(&merged), on);
 
         // The output mute: off by default
         assert!(!to_ipc_settings(&base).mute_output);
-        let mute = Settings { mute_output: true, ..off.clone() };
+        let mute = Settings { mute_output: true, ..on.clone() };
         assert!(merge_settings(&base, &mute).mute_output);
 
         // Windows Volume Sync for every device: on by default
         assert!(to_ipc_settings(&base).volume_sync);
-        let no_sync = Settings { volume_sync: false, ..off };
+        let no_sync = Settings { volume_sync: false, ..on };
         let merged = merge_settings(&base, &no_sync);
         assert!(!merged.volume_sync);
         assert_eq!(to_ipc_settings(&merged), no_sync);
