@@ -102,7 +102,9 @@ the GATT client or the GATT server runs on the **BTstack thread**, through an
    SM pairing / re-encryption (a bond the device lost is deleted and pairing
    repeated once) -> **`on_encrypted`** -> GATT discovery into
    `LeDevice::services` (skipped when the device's Database Hash matches the
-   one kept with its services in `le_gatt_cache.txt`) -> PACS / ASCS reads and notifications ->
+   one kept with its services in `le_gatt_cache.txt`, or when it has no usable
+   Database Hash but Service Changed: a Service Changed indication or a failed
+   setup drops the kept list) -> PACS / ASCS reads and notifications ->
    **`on_gatt_ready`** -> the device id. On timeout / cancel the connect is
    cancelled; a link that still comes up afterwards is disconnected.
 5. `le_start_stream(devices, request, silence)`: **`prepare_group`** (worker)

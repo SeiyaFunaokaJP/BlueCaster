@@ -6,8 +6,13 @@
 //! Core 5.1 "GATT Caching") tells by its value whether its database
 //! changed: reading it on a later connection (one request, at the handle
 //! it had) and finding the kept value means the kept services are its
-//! services, and discovery is skipped. Any other answer, or a device
-//! without that characteristic, is discovered as before. The kept list is
+//! services, and discovery is skipped. A device without a usable Database
+//! Hash (none, or an empty value) that has Service Changed (0x2A05) is
+//! taken from the kept list as well: a bonded client may keep a server's
+//! handles, and the server indicates Service Changed when they change
+//! (Core Vol 3 Part G 2.5.2); that indication, or a setup that fails with
+//! kept services, drops the device's list so the next connection discovers.
+//! Any other device is discovered on every connection. The kept list is
 //! also what the Services tag shows for an LE device.
 //!
 //! One block per device, its identity address first:
@@ -30,6 +35,7 @@ pub const FILE_NAME: &str = "le_gatt_cache.txt";
 /// Generic Attribute service and its Database Hash characteristic
 pub const UUID_GATT_SERVICE: u16 = 0x1801;
 pub const UUID_DATABASE_HASH: u16 = 0x2B2A;
+pub const UUID_SERVICE_CHANGED: u16 = 0x2A05;
 
 /// One device's services as kept
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +57,15 @@ pub fn hash_handle(services: &[GattService]) -> Option<u16> {
         .flat_map(|s| s.chars.iter())
         .find(|c| c.uuid16 == UUID_DATABASE_HASH)
         .map(|c| c.value_handle)
+}
+
+/// The Service Changed characteristic in `services`
+pub fn service_changed(services: &[GattService]) -> Option<&GattChar> {
+    services
+        .iter()
+        .filter(|s| s.uuid16 == UUID_GATT_SERVICE)
+        .flat_map(|s| s.chars.iter())
+        .find(|c| c.uuid16 == UUID_SERVICE_CHANGED)
 }
 
 fn hex(bytes: &[u8]) -> String {
