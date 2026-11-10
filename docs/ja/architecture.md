@@ -44,7 +44,7 @@ config:
 flowchart TB
     ui["bluecaster.exe:<br>ウィンドウと<br>トレイのフライアウト<br>（Tauri + SolidJS）"]
     src["Windows の音声:<br>システムループバック /<br>仮想デバイス / アプリ単位"]
-    subgraph core["bluecaster-core.exe<br>（常駐、ユーザーモード）"]
+    subgraph core["bluecaster-core.exe"]
         ctl["トレイのメニュー /<br>IPC サーバー / CLI (--cli)"] --> svc["コアサービス:<br>接続の状態機械、コーデック選択、<br>プロファイル、再接続"]
         svc --> cap["WASAPI キャプチャ"]
         cap -- PCM --> enc["エンコード経路:<br>LDAC / aptX 系 / LHDC V5 /<br>Opus / AAC / SBC"]

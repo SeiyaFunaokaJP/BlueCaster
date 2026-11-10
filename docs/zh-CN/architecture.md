@@ -44,7 +44,7 @@ config:
 flowchart TB
     ui["bluecaster.exe：<br>窗口和托盘浮出窗口<br>（Tauri + SolidJS）"]
     src["Windows 音频：<br>系统环回 / 虚拟设备 /<br>单个应用"]
-    subgraph core["bluecaster-core.exe<br>（常驻，用户模式）"]
+    subgraph core["bluecaster-core.exe"]
         ctl["托盘菜单 / IPC 服务器 /<br>CLI（--cli）"] --> svc["核心服务：<br>连接状态机、编解码器选择、<br>配置文件、重新连接"]
         svc --> cap["WASAPI 捕获"]
         cap -- PCM --> enc["编码器流水线：<br>LDAC / aptX 系列 / LHDC V5 /<br>Opus / AAC / SBC"]

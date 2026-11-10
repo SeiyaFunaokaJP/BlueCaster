@@ -50,7 +50,7 @@ config:
 flowchart TB
     ui["bluecaster.exe:<br>Fenster und Flyout<br>im Infobereich<br>(Tauri + SolidJS)"]
     src["Windows-Audio:<br>System-Loopback /<br>virtuelles Gerät / eine App"]
-    subgraph core["bluecaster-core.exe<br>(resident, Benutzermodus)"]
+    subgraph core["bluecaster-core.exe"]
         ctl["Menü im Infobereich /<br>IPC-Server / CLI (--cli)"] --> svc["Kerndienst:<br>Verbindungszustandsautomat,<br>Codec-Auswahl, Profile,<br>Neuverbindung"]
         svc --> cap["WASAPI-Aufnahme"]
         cap -- PCM --> enc["Encoder-Pipeline:<br>LDAC / aptX-Familie / LHDC V5 /<br>Opus / AAC / SBC"]

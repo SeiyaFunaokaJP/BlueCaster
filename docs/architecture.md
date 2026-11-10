@@ -49,7 +49,7 @@ config:
 flowchart TB
     ui["bluecaster.exe:<br>window and tray flyout<br>(Tauri + SolidJS)"]
     src["Windows audio:<br>system loopback / virtual device /<br>one app"]
-    subgraph core["bluecaster-core.exe<br>(resident, user mode)"]
+    subgraph core["bluecaster-core.exe"]
         ctl["Tray menu / IPC server /<br>CLI (--cli)"] --> svc["Core service: connection<br>state machine, codec selection,<br>profiles, reconnect"]
         svc --> cap["WASAPI capture"]
         cap -- PCM --> enc["Encoder pipeline:<br>LDAC / aptX family / LHDC V5 /<br>Opus / AAC / SBC"]

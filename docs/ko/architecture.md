@@ -50,7 +50,7 @@ config:
 flowchart TB
     ui["bluecaster.exe:<br>창과 트레이 플라이아웃<br>(Tauri + SolidJS)"]
     src["Windows 오디오:<br>시스템 루프백 / 가상 장치 /<br>한 응용 프로그램"]
-    subgraph core["bluecaster-core.exe<br>(상주, 사용자 모드)"]
+    subgraph core["bluecaster-core.exe"]
         ctl["트레이 메뉴 / IPC 서버 /<br>CLI (--cli)"] --> svc["코어 서비스:<br>연결 상태 머신, 코덱 선택,<br>프로필, 다시 연결"]
         svc --> cap["WASAPI 캡처"]
         cap -- PCM --> enc["인코더 파이프라인:<br>LDAC / aptX 계열 / LHDC V5 /<br>Opus / AAC / SBC"]

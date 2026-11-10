@@ -49,7 +49,7 @@ config:
 flowchart TB
     ui["bluecaster.exe:<br>視窗與系統匣快顯視窗<br>(Tauri + SolidJS)"]
     src["Windows 音訊:<br>系統回送 / 虛擬裝置 /<br>單一應用程式"]
-    subgraph core["bluecaster-core.exe<br>(常駐，使用者模式)"]
+    subgraph core["bluecaster-core.exe"]
         ctl["系統匣選單 / IPC 伺服器 /<br>CLI (--cli)"] --> svc["核心服務:<br>連線狀態機、轉碼器選擇、<br>設定檔、重新連線"]
         svc --> cap["WASAPI 擷取"]
         cap -- PCM --> enc["編碼器管線:<br>LDAC / aptX 系列 / LHDC V5 /<br>Opus / AAC / SBC"]
