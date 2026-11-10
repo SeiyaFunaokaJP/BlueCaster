@@ -30,6 +30,8 @@ const CORE_EXCLUDE: &[&str] = &[
     "btstack_hid_parser.c",
     "btstack_base64_decoder.c",
     "btstack_base64_encoder.c",
+    // built from a patched copy (patched_hci)
+    "hci.c",
 ];
 
 const CLASSIC: &[&str] = &[
@@ -161,6 +163,7 @@ fn main() {
         .collect();
     core.sort();
     build.files(&core);
+    build.file(patched_hci(&btstack));
     let mut ble: Vec<PathBuf> = std::fs::read_dir(btstack.join("src/ble"))
         .unwrap()
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -249,6 +252,48 @@ fn replace_once(source: &mut String, file: &str, from: &str, to: &str) {
 fn replace_n(source: &mut String, file: &str, from: &str, to: &str, n: usize) {
     assert_eq!(source.matches(from).count(), n, "{file} patch: `{from}` not found {n} time(s) (BTstack changed?)");
     *source = source.replace(from, to);
+}
+
+/// src/hci.c tolerating a CIS of a CIG that failed to come up, written to
+/// OUT_DIR.
+///
+/// When LE Create CIS sets up several CIS and one of them fails, BTstack 1.8.1
+/// frees that CIS's stream (hci_cis_handle_created) but keeps its handle in
+/// the CIG. Once the other CIS are up, the CIG goes active and the CIS loops
+/// look the freed handle up and read through NULL: the core crashed in
+/// hci_iso_notify_can_send_now (issue #86, a headset that refused the
+/// second CIS with 0x1E when the microphone was on). Each lookup of a CIG's
+/// CIS now skips a handle without a stream; removing the CIG forgets it.
+fn patched_hci(btstack: &Path) -> PathBuf {
+    const FILE: &str = "hci.c";
+    // LF patterns: a checkout with core.autocrlf (CI) has CRLF
+    let mut source = std::fs::read_to_string(btstack.join("src").join(FILE)).unwrap().replace("\r\n", "\n");
+    source.insert_str(0, "/* BlueCaster: patched by btstack-sys build.rs (patched_hci) */\n");
+    // Central, CIG active: report can-send-now per CIS
+    replace_once(
+        &mut source,
+        FILE,
+        "// ignore already closed connections\n",
+        "// ignore already closed connections\n            if (iso_stream == NULL) continue;\n",
+    );
+    // Removing the CIG: a CIS without a stream is gone already
+    replace_once(
+        &mut source,
+        FILE,
+        "switch (stream->state) {",
+        "if (stream == NULL) { cig->cis_con_handles[i] = HCI_CON_HANDLE_INVALID; continue; }\n\
+         \x20                       switch (stream->state) {",
+    );
+    // hci_request_cis_can_send_now: every sending CIS of the CIG
+    replace_once(
+        &mut source,
+        FILE,
+        "cis->can_send_now_requested = true;",
+        "if (cis != NULL) cis->can_send_now_requested = true;",
+    );
+    let path = PathBuf::from(env::var("OUT_DIR").unwrap()).join(FILE);
+    std::fs::write(&path, source).unwrap();
+    path
 }
 
 /// src/classic/avdtp_initiator.c taking only the response to the command it
