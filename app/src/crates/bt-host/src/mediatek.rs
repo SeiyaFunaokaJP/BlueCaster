@@ -550,7 +550,15 @@ impl ChipLoader for Loader {
                 tracing::info!("mediatek: no answer to Read Local Version, sending it again");
                 self.read_version(tries + 1)
             }
-            State::Version { .. } => self.finish(Err(LoadError::Timeout("Read Local Version"))),
+            State::Version { .. } => {
+                // WinUSB on a chip the OEM driver had (MT7921): no answer at
+                // all. Not proof that the firmware runs (HCI Reset stays
+                // unanswered too): the ROM may wait for its download, so read
+                // the chip ID over endpoint 0 and take the normal path
+                tracing::info!("mediatek: no answer to Read Local Version, reading the chip ID to download");
+                self.state = State::ChipId;
+                vec![Action::UsbControl(read_register(REGISTER_CHIP_ID))]
+            }
             // The next read of the pending event
             state @ State::Waiting { .. } => {
                 self.state = state;
@@ -955,8 +963,18 @@ mod tests {
         assert_eq!(r.opcodes(), [OP_READ_LOCAL_VERSION, OP_READ_LOCAL_VERSION]);
         let r = run(&mut Chip { lost_versions: 1, ..Chip::new() }, files(&[10]));
         assert_eq!(r.result, Ok(Outcome::Loaded { firmware: NAME.into(), detail: None }));
-        let r = run(&mut Chip { lost_versions: 2, ..Chip::new() }, files(&[10]));
-        assert_eq!(r.result, Err(LoadError::Timeout("Read Local Version")));
+    }
+
+    /// Read Local Version never answered (MT7921 under WinUSB): the chip ID,
+    /// then the normal download
+    #[test]
+    fn a_chip_silent_to_the_version_is_downloaded_anyway() {
+        let mut chip = Chip { lost_versions: u32::MAX, ..Chip::new() };
+        let r = run(&mut chip, files(&[10]));
+        assert_eq!(r.result, Ok(Outcome::Loaded { firmware: NAME.into(), detail: None }));
+        assert_eq!(r.opcodes()[..2], [OP_READ_LOCAL_VERSION, OP_READ_LOCAL_VERSION]);
+        assert!(r.opcodes()[2..].iter().all(|&o| o == OP_WMT));
+        assert!(chip.bluetooth_on);
     }
 
     #[test]
