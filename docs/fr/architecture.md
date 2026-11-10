@@ -56,7 +56,7 @@ flowchart TB
         cap -- PCM --> enc["Pipeline d'encodage :<br>LDAC / famille aptX / LHDC V5 /<br>Opus / AAC / SBC"]
         enc --> bt["BTstack :<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
-    ui <-->|"canal nommé par utilisateur"| ctl
+    ui <-->|"canal nommé<br>par utilisateur"| ctl
     src --> cap
     bt -->|"WinUSB (nusb)"| usb["Adaptateur Bluetooth USB<br>(pilote WinUSB)"]
     usb -. Bluetooth .-> hp["Casque / enceintes"]

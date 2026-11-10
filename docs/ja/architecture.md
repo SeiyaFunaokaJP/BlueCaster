@@ -50,7 +50,7 @@ flowchart TB
         cap -- PCM --> enc["エンコード経路:<br>LDAC / aptX 系 / LHDC V5 /<br>Opus / AAC / SBC"]
         enc --> bt["BTstack:<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
-    ui <-->|"ユーザーごとの名前付きパイプ"| ctl
+    ui <-->|"ユーザーごとの<br>名前付きパイプ"| ctl
     src --> cap
     bt -->|"WinUSB (nusb)"| usb["USB Bluetooth アダプター<br>（WinUSB ドライバー）"]
     usb -. Bluetooth .-> hp["ヘッドホン / スピーカー"]

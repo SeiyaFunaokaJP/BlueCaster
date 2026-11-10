@@ -50,13 +50,13 @@ config:
 flowchart TB
     ui["bluecaster.exe:<br>ventana y panel desplegable<br>de la bandeja<br>(Tauri + SolidJS)"]
     src["Audio de Windows:<br>loopback del sistema /<br>dispositivo virtual /<br>una aplicación"]
-    subgraph core["bluecaster-core.exe<br>(residente, modo de usuario)"]
+    subgraph core["bluecaster-core.exe<br>(residente, modo<br>de usuario)"]
         ctl["Menú de la bandeja /<br>servidor IPC / CLI (--cli)"] --> svc["Servicio del núcleo:<br>máquina de estados de la conexión,<br>selección de códec, perfiles,<br>reconexión"]
         svc --> cap["Captura WASAPI"]
         cap -- PCM --> enc["Canal de codificación:<br>LDAC / familia aptX / LHDC V5 /<br>Opus / AAC / SBC"]
         enc --> bt["BTstack:<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
-    ui <-->|"canalización con nombre por usuario"| ctl
+    ui <-->|"canalización con nombre<br>por usuario"| ctl
     src --> cap
     bt -->|"WinUSB (nusb)"| usb["Adaptador Bluetooth USB<br>(controlador WinUSB)"]
     usb -. Bluetooth .-> hp["Auriculares / altavoces"]
