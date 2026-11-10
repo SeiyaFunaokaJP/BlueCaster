@@ -216,6 +216,7 @@ pub fn configure(config: &mut HostConfig, settings: &Settings, _config_dir: &Pat
                 && chips::chip_supported(a.vendor, a.device.vid, a.device.pid)
                 && !a.device.in_use()
         });
+        config.mediatek_skip_download = std::env::var_os("BLUECASTER_MEDIATEK_SKIP_FW").is_some_and(|v| v != "0");
         // Qualcomm: the same
         config.qualcomm_loader = winusb.iter().any(|a| {
             a.vendor == ChipVendor::Qualcomm

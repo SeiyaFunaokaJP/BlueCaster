@@ -338,7 +338,8 @@ impl HostApp {
         tracing::info!("MediaTek adapter: checking its firmware (experimental), folder {}", dir.display());
         let loader = mediatek::Loader::new(Box::new(move |name| {
             read_firmware_file(&dir, "mediatek", name).or_else(|| mediatek::from_windows_driver(name))
-        }));
+        }))
+        .proceed_on_silence();
         // Developer > Debug: a register write and the command before reset
         let command = crate::debug_command::get().filter(|_| crate::debug_command::before_reset());
         let loader =
