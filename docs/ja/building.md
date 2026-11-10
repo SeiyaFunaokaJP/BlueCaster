@@ -72,7 +72,7 @@ BlueCaster/
 ├── Cargo.toml              Cargo workspace
 ├── installer/              Release script, Inno Setup script, updater notes (installer/README.md)
 ├── compat/                 MSVC compatibility headers for the AOSP code
-├── docs/                   Documentation (this site) and the design document (v2-design.md)
+├── docs/                   Documentation (this site)
 ├── extern/                 Third-party C libraries (git submodules)
 │   ├── btstack/            BTstack Bluetooth stack
 │   ├── libldac/            AOSP LDAC encoder

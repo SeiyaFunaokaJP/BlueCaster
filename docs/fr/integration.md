@@ -53,6 +53,25 @@ Chaque message, dans les deux sens, est une trame : la longueur du JSON en **u32
 
 La version du protocole doit correspondre exactement. Les ajouts qui laissent la version 1 fonctionner sont plutôt annoncés dans `features` (voir [Compatibilité](#compatibility)).
 
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as bluecaster-core
+    C->>B: hello (protocol 1)
+    alt le protocole correspond
+        B-->>C: welcome (features)
+        B-->>C: snapshot (tout l'état, rev)
+        loop Tant que connecté, dans n'importe quel ordre
+            B-->>C: event (rev + 1)
+            C->>B: request (id)
+            B-->>C: response (même id)
+        end
+        B-->>C: bye (arrêt du cœur)
+    else mauvais protocole, ou pas de hello en 5 s
+        B-->>C: reject, canal fermé
+    end
+```
+
 ## État et événements {#state-and-events}
 
 ```json

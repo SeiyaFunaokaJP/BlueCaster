@@ -133,7 +133,7 @@ flowchart TD
     s2["Périphérique virtuel"]
     s3["Application (bouclage de processus)"]
     s1 & s2 & s3 --> cap["Capture en bouclage WASAPI (PCM)"]
-    cap --> enc["Encodeur audio : LDAC / famille aptX / LHDC V5 / Opus / AAC / SBC"]
+    cap --> enc["Encodeur audio :<br>LDAC / famille aptX / LHDC V5 / Opus / AAC / SBC"]
     enc --> bt["BTstack : A2DP Source → AVDTP → L2CAP → HCI"]
     bt --> usb["WinUSB → adaptateur Bluetooth USB"]
     usb -.-> hp["Casque"]

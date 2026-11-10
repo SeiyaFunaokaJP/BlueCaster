@@ -53,6 +53,25 @@ Jede Nachricht in beide Richtungen ist ein Frame: die Länge des JSON als **u32 
 
 Die Protokollversion muss genau übereinstimmen. Ergänzungen, mit denen Version 1 weiter funktioniert, werden stattdessen in `features` angekündigt (siehe [Kompatibilität](#compatibility)).
 
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as bluecaster-core
+    C->>B: hello (protocol 1)
+    alt Protokoll passt
+        B-->>C: welcome (features)
+        B-->>C: snapshot (ganzer Zustand, rev)
+        loop Solange verbunden, in beliebiger Reihenfolge
+            B-->>C: event (rev + 1)
+            C->>B: request (id)
+            B-->>C: response (dieselbe id)
+        end
+        B-->>C: bye (Kern wird beendet)
+    else falsches Protokoll oder kein hello binnen 5 s
+        B-->>C: reject, Pipe wird geschlossen
+    end
+```
+
 ## Zustand und Events {#state-and-events}
 
 ```json

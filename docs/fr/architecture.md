@@ -48,20 +48,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Audio Windows : bouclage système / périphérique virtuel / une application"]
-    ui["bluecaster.exe : fenêtre et volet de la zone de notification (Tauri + SolidJS)"]
-    subgraph core["bluecaster-core.exe (résident, mode utilisateur)"]
-        ctl["Menu de la zone de notification / serveur IPC / CLI (--cli)"] --> svc["Service du cœur : machine à états de la connexion, choix du codec, profils, reconnexion"]
+    ui["bluecaster.exe :<br>fenêtre et volet de la<br>zone de notification<br>(Tauri + SolidJS)"]
+    src["Audio Windows :<br>bouclage système /<br>périphérique virtuel /<br>une application"]
+    subgraph core["bluecaster-core.exe"]
+        ctl["Menu de la zone de notification /<br>serveur IPC / CLI (--cli)"] --> svc["Service du cœur :<br>machine à états de la connexion,<br>choix du codec, profils,<br>reconnexion"]
         svc --> cap["Capture WASAPI"]
-        cap -- PCM --> enc["Pipeline d'encodage : LDAC / famille aptX / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack : HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["Pipeline d'encodage :<br>LDAC / famille aptX / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack :<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
-    ui <-->|"canal nommé par utilisateur"| ctl
-    svc -.->|"UAC, uniquement pour changer le pilote ou importer les clés de Windows"| drv["bluecaster-driver.exe (élevé) : attribuer / restaurer WinUSB, lire les clés de liaison de Windows"]
+    ui <-->|"canal nommé<br>par utilisateur"| ctl
     src --> cap
-    bt -->|"WinUSB (nusb)"| usb["Adaptateur Bluetooth USB (pilote WinUSB)"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB (nusb)"| usb["Adaptateur Bluetooth USB<br>(pilote WinUSB)"]
     usb -. Bluetooth .-> hp["Casque / enceintes"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe (élevé) :<br>attribuer / restaurer WinUSB,<br>lire les clés de liaison de Windows"]
 ```
 
 - **Le cœur n'est pas un service Windows.** C'est un processus ordinaire de
@@ -116,16 +115,16 @@ sequenceDiagram
     participant App as BlueCaster (BTstack)
     participant Ad as Adaptateur USB
     participant Sink as Casque
-    App->>Ad: Ouverture via WinUSB, reset / init HCI
+    App->>Ad: Ouverture via WinUSB,<br>reset / init HCI
     opt Realtek, Intel, Broadcom
         App->>Ad: Envoi du firmware
     end
     App->>Sink: Connexion ACL
-    Note over App,Sink: SSP Just Works à la première connexion (clé de liaison enregistrée)
-    App->>Sink: Canal L2CAP, PSM 0x0019 (signalisation AVDTP)
+    Note over App,Sink: SSP Just Works à la première connexion<br>(clé de liaison enregistrée)
+    App->>Sink: Canal L2CAP, PSM 0x0019<br>(signalisation AVDTP)
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: Stream endpoints et codecs
-    App->>Sink: SET_CONFIGURATION (codec choisi), OPEN, START
+    App->>Sink: SET_CONFIGURATION<br>(codec choisi), OPEN, START
     loop Pendant la diffusion
         App->>Sink: Paquets média AVDTP sur L2CAP
     end
@@ -175,10 +174,10 @@ config:
     rankSpacing: 30
 ---
 flowchart TD
-    out["Sortie audio du système (bouclage / périphérique virtuel / une application)"]
-    out --> cap["thread capture : WASAPI, piloté par événements (généralement float32, 44.1–96 kHz)"]
-    cap -->|"anneau sans verrou (PCM)"| enc["thread encode : conversion, downmix, encodeur, charge utile média + en-tête RTP, ABR"]
-    enc -->|"anneau sans verrou (paquets)"| stack["thread bt-runloop : BTstack → AVDTP → L2CAP → HCI"]
+    out["Sortie audio du système<br>(bouclage / périphérique virtuel / une application)"]
+    out --> cap["thread capture :<br>WASAPI, piloté par événements<br>(généralement float32, 44.1–96 kHz)"]
+    cap -->|"anneau sans verrou (PCM)"| enc["thread encode :<br>conversion, downmix, encodeur,<br>charge utile média + en-tête RTP, ABR"]
+    enc -->|"anneau sans<br>verrou (paquets)"| stack["thread bt-runloop : BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → adaptateur Bluetooth USB → radio"]
     usb -.-> hp["Casque / enceintes"]
 ```
@@ -234,7 +233,7 @@ stateDiagram-v2
     Idle --> Connecting: Démarrer
     Connecting --> Streaming: flux démarré
     Connecting --> Idle: arrêté
-    Connecting --> Error: échec init / connexion / codec
+    Connecting --> Error: échec init /<br>connexion / codec
     Streaming --> Reconnecting: connexion perdue
     Reconnecting --> Streaming: reconnecté
     Reconnecting --> Error: échec de la reconnexion
@@ -270,6 +269,22 @@ le pilote > Choisir parmi une liste > WinUsb Device » dans le Gestionnaire de p
 Le cœur ne s'exécute jamais en administrateur : pour une attribution ou une restauration, il
 démarre l'assistant avec une invite UAC (`ShellExecuteEx` "runas") et lit son résultat JSON.
 Lister les adaptateurs et leur pilote ne nécessite aucune élévation.
+
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver (élevé)
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: lancement avec une invite UAC
+    alt Attribuer
+        Drv->>Win: DeviceInterfaceGUIDs<br>dans Device Parameters
+        Drv->>Win: installer winusb.inf<br>(WinUsb Device)
+    else Restaurer
+        Drv->>Win: supprimer le périphérique<br>et le réénumérer
+        Win->>Win: choisit de nouveau<br>son meilleur pilote
+    end
+    Drv-->>Core: résultat (JSON)
+```
 
 ## Modules principaux
 

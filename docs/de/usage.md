@@ -254,6 +254,23 @@ BlueCaster unterstützt vier Aufnahmemodi, aufgeführt als **Windows-Standard** 
 | Ein Soundgerät | Was ein Ausgabegerät wiedergibt (Lautsprecher, ein USB-Headset, ein Fernseher, ...), egal welches die Windows-Standardausgabe ist |
 | Anwendung | Nur was eine App (und ihre untergeordneten Prozesse) wiedergibt, nach der eigenen Verarbeitung der App. Erfordert Windows 11 oder Windows 10 Version 2004 (Build 19041) oder höher |
 
+```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
+flowchart TD
+    apps["Apps"] --> out["Ausgabegerät<br>(Lautsprecher, HDMI-Fernseher, ...)"]
+    apps --> virt["Virtuelles Gerät<br>(VB-CABLE, ...)"]
+    out --> there["Spielt dort weiter"]
+    out -.->|"Windows-Standard /<br>ein Soundgerät"| bc["BlueCaster"]
+    virt -.->|"Virtuelles Gerät"| bc
+    apps -.->|"Anwendung:<br>nur eine App"| bc
+    bc --> hp["Bluetooth-Kopfhörer"]
+```
+
 **Audiogeräte** zeigt dieselbe Erklärung unter **Ausgabequelle**. Ein neues Gerät nimmt **Windows-Standard** auf, was ohne weitere Installation funktioniert; wählen Sie dort eine andere Quelle dafür.
 
 Die Aufnahme von **Windows-Standard** kopiert das Audio; sie nimmt es dem Standardausgabegerät nicht weg, sodass das Audio auch dort wiedergegeben wird (Lautsprecher, kabelgebundene Kopfhörer, ein HDMI-Fernseher, ...). Um es nur auf den Bluetooth-Kopfhörern zu hören, verwenden Sie ein virtuelles Gerät wie VB-CABLE.
@@ -411,6 +428,22 @@ Wenn Sie einen bestimmten Codec anfordern, den die Kopfhörer nicht aufführen:
 |:---|:----------|
 | App (**Codecs**, Automatisch aus) | Verbindet wie die Automatik mit dem ersten Codec in der Reihenfolge des Geräts (die Prioritätsreihenfolge der Automatik, sofern Sie die Karten nicht verschoben haben), den die Kopfhörer anbieten (Opus gewählt, Kopfhörer mit aptX Adaptive, aptX, AAC und SBC: aptX Adaptive, nicht aptX unterhalb von Opus; mit SBC XQ an erster Stelle: SBC XQ), und das Codec-Abzeichen zeigt einige Sekunden lang, welcher Codec stattdessen verwendet wird und warum. Das gilt für einen Codec, der gewählt wurde, als die Kopfhörer ihn anboten: Die Seite **Codecs** zeigt den verwendeten als gewählt an. Eine Karte, die gewählt wurde, als sie den Codec (bei ihrer letzten Verbindung) nicht anboten, wird trotzdem angefordert, ohne Ausweichen: Lehnen sie ihn ab, wird die Verbindung mit einem Fehler beendet. |
 | CLI (`-c <codec>`) | Bricht mit einem Fehler ab („Das Gerät unterstützt ... nicht“); haben Sie aptX, aptX HD oder aptX LL angefordert und bieten die Kopfhörer nur aptX Adaptive an, sagt die Meldung dies. Fügen Sie `--fallback` hinzu, um wie die App auszuweichen, oder verwenden Sie `-c auto`. |
+
+```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
+flowchart TD
+    q{"Bieten die Kopfhörer<br>den gewählten Codec an?"}
+    q -->|"Ja"| use["Verbindet damit"]
+    q -->|"Nein"| how{"Wie gewählt?"}
+    how -->|"App: Karte gewählt,<br>als er angeboten wurde"| fb["Erster angebotener Codec<br>in der Reihenfolge des Geräts,<br>wie die Automatik; das<br>Codec-Abzeichen sagt, warum"]
+    how -->|"App: Karte gewählt,<br>als er nicht<br>angeboten wurde"| force["Trotzdem angefordert;<br>Fehler, wenn abgelehnt"]
+    how -->|"CLI: -c"| cli["Fehler<br>(--fallback: wie die App)"]
+```
 
 Frühere Versionen hatten stattdessen die Option **Einen anderen unterstützten Codec verwenden, wenn dieser nicht verfügbar ist**; das Ausweichen ist jetzt immer an. Einige Vorabversionen von 2.0.2 nahmen den nächsten Codec unterhalb des gewählten statt des besten.
 

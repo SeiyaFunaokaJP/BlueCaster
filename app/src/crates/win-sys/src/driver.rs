@@ -27,11 +27,10 @@
 //! `driver_state` is read-only and needs none.
 //!
 //! Whether SetupDiBuildDriverInfoList offers winusb.inf (class USBDevice)
-//! for a device of another class (Bluetooth) varies (docs/v2-design.md
-//! phase 0; both paths have run on real adapters). If it does not, the class
-//! is changed to USBDevice first (what installing a driver of another class
-//! does anyway) and the list is built again; if that fails too, the device
-//! is put back as by `restore`.
+//! for a device of another class (Bluetooth) varies (both paths have run on
+//! real adapters). If it does not, the class is changed to USBDevice first
+//! (what installing a driver of another class does anyway) and the list is
+//! built again; if that fails too, the device is put back as by `restore`.
 
 use std::time::{Duration, Instant};
 

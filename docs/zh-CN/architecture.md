@@ -42,20 +42,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Windows 音频：系统环回 / 虚拟设备 / 单个应用"]
-    ui["bluecaster.exe：窗口和托盘浮出窗口（Tauri + SolidJS）"]
-    subgraph core["bluecaster-core.exe（常驻，用户模式）"]
-        ctl["托盘菜单 / IPC 服务器 / CLI（--cli）"] --> svc["核心服务：连接状态机、编解码器选择、配置文件、重新连接"]
+    ui["bluecaster.exe：<br>窗口和托盘浮出窗口<br>（Tauri + SolidJS）"]
+    src["Windows 音频：<br>系统环回 / 虚拟设备 /<br>单个应用"]
+    subgraph core["bluecaster-core.exe"]
+        ctl["托盘菜单 / IPC 服务器 /<br>CLI（--cli）"] --> svc["核心服务：<br>连接状态机、编解码器选择、<br>配置文件、重新连接"]
         svc --> cap["WASAPI 捕获"]
-        cap -- PCM --> enc["编码器流水线：LDAC / aptX 系列 / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack：HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["编码器流水线：<br>LDAC / aptX 系列 / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack：<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
     ui <-->|"每个用户的命名管道"| ctl
-    svc -.->|"UAC，仅用于更改驱动程序或导入 Windows 的密钥"| drv["bluecaster-driver.exe（提升权限）：分配 / 恢复 WinUSB，读取 Windows 的链接密钥"]
     src --> cap
-    bt -->|"WinUSB（nusb）"| usb["USB Bluetooth 适配器（WinUSB 驱动程序）"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB（nusb）"| usb["USB Bluetooth 适配器<br>（WinUSB 驱动程序）"]
     usb -. Bluetooth .-> hp["耳机 / 音箱"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe（提升权限）：<br>分配 / 恢复 WinUSB，<br>读取 Windows 的链接密钥"]
 ```
 
 - **核心不是 Windows 服务。** 它是已登录用户的普通进程，因为 WASAPI 环回捕获的是该用户会话的音频。每个会话的互斥体保证只有一个实例；再次启动它会打开窗口。
@@ -92,16 +91,16 @@ sequenceDiagram
     participant App as BlueCaster（BTstack）
     participant Ad as USB 适配器
     participant Sink as 耳机
-    App->>Ad: 通过 WinUSB 打开，HCI reset / 初始化
+    App->>Ad: 通过 WinUSB 打开，<br>HCI reset / 初始化
     opt Realtek、Intel、Broadcom
         App->>Ad: 上传固件
     end
     App->>Sink: ACL 连接
-    Note over App,Sink: 首次连接时进行 SSP Just Works（保存链接密钥）
-    App->>Sink: L2CAP 信道，PSM 0x0019（AVDTP 信令）
+    Note over App,Sink: 首次连接时进行 SSP Just Works<br>（保存链接密钥）
+    App->>Sink: L2CAP 信道，PSM 0x0019<br>（AVDTP 信令）
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: 流端点和编解码器
-    App->>Sink: SET_CONFIGURATION（所选编解码器）、OPEN、START
+    App->>Sink: SET_CONFIGURATION<br>（所选编解码器）、OPEN、START
     loop 串流期间
         App->>Sink: 通过 L2CAP 发送 AVDTP 媒体数据包
     end
@@ -143,9 +142,9 @@ config:
 ---
 flowchart TD
     out["系统音频输出（环回 / 虚拟设备 / 单个应用）"]
-    out --> cap["capture 线程：WASAPI，事件驱动（通常为 float32，44.1–96 kHz）"]
-    cap -->|"无锁环形缓冲区（PCM）"| enc["encode 线程：转换、缩混、编码器、媒体负载 + RTP 标头、ABR"]
-    enc -->|"无锁环形缓冲区（数据包）"| stack["bt-runloop 线程：BTstack → AVDTP → L2CAP → HCI"]
+    out --> cap["capture 线程：<br>WASAPI，事件驱动（通常为 float32，44.1–96 kHz）"]
+    cap -->|"无锁环形缓冲区（PCM）"| enc["encode 线程：<br>转换、缩混、编码器、媒体负载 + RTP 标头、ABR"]
+    enc -->|"无锁环形缓冲区<br>（数据包）"| stack["bt-runloop 线程：BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → USB Bluetooth 适配器 → 无线电"]
     usb -.-> hp["耳机 / 音箱"]
 ```
@@ -182,7 +181,7 @@ stateDiagram-v2
     Idle --> Connecting: 开始
     Connecting --> Streaming: 流已开始
     Connecting --> Idle: 已停止
-    Connecting --> Error: 初始化 / 连接 / 编解码器失败
+    Connecting --> Error: 初始化 / 连接 /<br>编解码器失败
     Streaming --> Reconnecting: 连接断开
     Reconnecting --> Streaming: 已重新连接
     Reconnecting --> Error: 重新连接失败
@@ -202,6 +201,22 @@ Windows 8 及更高版本自带 Microsoft 签名的 WinUSB 驱动程序（`winus
 4. **恢复**：删除设备（`DiUninstallDevice`）并重新枚举；Windows 随后会再次选择其排名最高的驱动程序（通常是 `BthUSB` 或厂商的驱动程序）。适配器之前的驱动程序会记录在设置文件夹（`driver\`）中，并在恢复后进行比对。`restore --records <folder>` 会在一次提升权限的运行中恢复所有已记录的适配器；卸载程序在询问后会使用它。
 
 核心从不以管理员身份运行：分配或恢复时，它会通过 UAC 提示（`ShellExecuteEx` "runas"）启动辅助程序，并读取其 JSON 结果。列出适配器及其驱动程序不需要提升权限。
+
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver（提升权限）
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: 通过 UAC 提示启动
+    alt 分配
+        Drv->>Win: 在 Device Parameters<br>中写入 DeviceInterfaceGUIDs
+        Drv->>Win: 安装 winusb.inf（WinUsb Device）
+    else 恢复
+        Drv->>Win: 删除设备并重新枚举
+        Win->>Win: 重新选择最合适的驱动程序
+    end
+    Drv-->>Core: 结果（JSON）
+```
 
 ## 主要模块 {#key-modules}
 

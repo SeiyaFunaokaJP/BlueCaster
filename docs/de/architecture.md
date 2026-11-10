@@ -48,20 +48,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Windows-Audio: System-Loopback / virtuelles Gerät / eine App"]
-    ui["bluecaster.exe: Fenster und Flyout im Infobereich (Tauri + SolidJS)"]
-    subgraph core["bluecaster-core.exe (resident, Benutzermodus)"]
-        ctl["Menü im Infobereich / IPC-Server / CLI (--cli)"] --> svc["Kerndienst: Verbindungszustandsautomat, Codec-Auswahl, Profile, Neuverbindung"]
+    ui["bluecaster.exe:<br>Fenster und Flyout<br>im Infobereich<br>(Tauri + SolidJS)"]
+    src["Windows-Audio:<br>System-Loopback /<br>virtuelles Gerät / eine App"]
+    subgraph core["bluecaster-core.exe"]
+        ctl["Menü im Infobereich /<br>IPC-Server / CLI (--cli)"] --> svc["Kerndienst:<br>Verbindungszustandsautomat,<br>Codec-Auswahl, Profile,<br>Neuverbindung"]
         svc --> cap["WASAPI-Aufnahme"]
-        cap -- PCM --> enc["Encoder-Pipeline: LDAC / aptX-Familie / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack: HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["Encoder-Pipeline:<br>LDAC / aptX-Familie / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack:<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
     ui <-->|"Named Pipe pro Benutzer"| ctl
-    svc -.->|"UAC, nur zum Ändern des Treibers oder zum Import der Schlüssel von Windows"| drv["bluecaster-driver.exe (mit Administratorrechten): WinUSB zuweisen / wiederherstellen, Link Keys von Windows lesen"]
     src --> cap
-    bt -->|"WinUSB (nusb)"| usb["USB-Bluetooth-Adapter (WinUSB-Treiber)"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB (nusb)"| usb["USB-Bluetooth-Adapter<br>(WinUSB-Treiber)"]
     usb -. Bluetooth .-> hp["Kopfhörer / Lautsprecher"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe<br>(mit Administratorrechten):<br>WinUSB zuweisen / wiederherstellen,<br>Link Keys von Windows lesen"]
 ```
 
 - **Der Kern ist kein Windows-Dienst.** Er ist ein gewöhnlicher Prozess des
@@ -116,16 +115,16 @@ sequenceDiagram
     participant App as BlueCaster (BTstack)
     participant Ad as USB-Adapter
     participant Sink as Kopfhörer
-    App->>Ad: Öffnen über WinUSB, HCI Reset / Init
+    App->>Ad: Öffnen über WinUSB,<br>HCI Reset / Init
     opt Realtek, Intel, Broadcom
         App->>Ad: Firmware-Upload
     end
     App->>Sink: ACL-Verbindung
-    Note over App,Sink: SSP Just Works bei der ersten Verbindung (Link Key gespeichert)
-    App->>Sink: L2CAP-Kanal, PSM 0x0019 (AVDTP-Signalisierung)
+    Note over App,Sink: SSP Just Works bei der ersten Verbindung<br>(Link Key gespeichert)
+    App->>Sink: L2CAP-Kanal, PSM 0x0019<br>(AVDTP-Signalisierung)
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: Stream-Endpunkte und Codecs
-    App->>Sink: SET_CONFIGURATION (gewählter Codec), OPEN, START
+    App->>Sink: SET_CONFIGURATION<br>(gewählter Codec), OPEN, START
     loop Während des Streamings
         App->>Sink: AVDTP-Medienpakete über L2CAP
     end
@@ -175,10 +174,10 @@ config:
     rankSpacing: 30
 ---
 flowchart TD
-    out["Systemaudio-Ausgabe (Loopback / virtuelles Gerät / eine App)"]
-    out --> cap["Thread capture: WASAPI, ereignisgesteuert (meist float32, 44,1–96 kHz)"]
-    cap -->|"sperrfreier Ringpuffer (PCM)"| enc["Thread encode: Umwandlung, Downmix, Encoder, Mediennutzdaten + RTP-Header, ABR"]
-    enc -->|"sperrfreier Ringpuffer (Pakete)"| stack["Thread bt-runloop: BTstack → AVDTP → L2CAP → HCI"]
+    out["Systemaudio-Ausgabe<br>(Loopback / virtuelles Gerät / eine App)"]
+    out --> cap["Thread capture:<br>WASAPI, ereignisgesteuert (meist float32, 44,1–96 kHz)"]
+    cap -->|"sperrfreier<br>Ringpuffer (PCM)"| enc["Thread encode:<br>Umwandlung, Downmix, Encoder,<br>Mediennutzdaten + RTP-Header, ABR"]
+    enc -->|"sperrfreier<br>Ringpuffer (Pakete)"| stack["Thread bt-runloop: BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → USB-Bluetooth-Adapter → Funk"]
     usb -.-> hp["Kopfhörer / Lautsprecher"]
 ```
@@ -234,10 +233,10 @@ stateDiagram-v2
     Idle --> Connecting: Start
     Connecting --> Streaming: Stream gestartet
     Connecting --> Idle: gestoppt
-    Connecting --> Error: Fehler bei Init / Verbindung / Codec
+    Connecting --> Error: Fehler bei Init /<br>Verbindung / Codec
     Streaming --> Reconnecting: Verbindung verloren
     Reconnecting --> Streaming: wieder verbunden
-    Reconnecting --> Error: Neuverbindung fehlgeschlagen
+    Reconnecting --> Error: Neuverbindung<br>fehlgeschlagen
     Streaming --> Idle: Stopp
     Error --> Connecting: erneut starten
 ```
@@ -270,6 +269,22 @@ Windows 8 und neuer enthalten den von Microsoft signierten WinUSB-Treiber
 Der Kern läuft nie als Administrator: Für eine Zuweisung oder Wiederherstellung startet er
 das Hilfsprogramm mit einer UAC-Abfrage (`ShellExecuteEx` "runas") und liest dessen
 JSON-Ergebnis. Das Auflisten der Adapter und ihrer Treiber benötigt keine Administratorrechte.
+
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver (mit Administratorrechten)
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: Start mit UAC-Abfrage
+    alt Zuweisen
+        Drv->>Win: DeviceInterfaceGUIDs<br>in Device Parameters
+        Drv->>Win: winusb.inf<br>(WinUsb Device) installieren
+    else Wiederherstellen
+        Drv->>Win: Gerät entfernen und neu aufzählen
+        Win->>Win: wählt seinen besten Treiber wieder
+    end
+    Drv-->>Core: Ergebnis (JSON)
+```
 
 ## Wichtige Module
 

@@ -47,20 +47,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Windows 音訊: 系統回送 / 虛擬裝置 / 單一應用程式"]
-    ui["bluecaster.exe: 視窗與系統匣快顯視窗 (Tauri + SolidJS)"]
-    subgraph core["bluecaster-core.exe (常駐，使用者模式)"]
-        ctl["系統匣選單 / IPC 伺服器 / CLI (--cli)"] --> svc["核心服務: 連線狀態機、轉碼器選擇、設定檔、重新連線"]
+    ui["bluecaster.exe:<br>視窗與系統匣快顯視窗<br>(Tauri + SolidJS)"]
+    src["Windows 音訊:<br>系統回送 / 虛擬裝置 /<br>單一應用程式"]
+    subgraph core["bluecaster-core.exe"]
+        ctl["系統匣選單 / IPC 伺服器 /<br>CLI (--cli)"] --> svc["核心服務:<br>連線狀態機、轉碼器選擇、<br>設定檔、重新連線"]
         svc --> cap["WASAPI 擷取"]
-        cap -- PCM --> enc["編碼器管線: LDAC / aptX 系列 / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack: HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["編碼器管線:<br>LDAC / aptX 系列 / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack:<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
     ui <-->|"每位使用者專屬的具名管道"| ctl
-    svc -.->|"UAC，僅用於變更驅動程式或匯入 Windows 的金鑰"| drv["bluecaster-driver.exe (提高權限): 指派 / 還原 WinUSB、讀取 Windows 的連結金鑰"]
     src --> cap
-    bt -->|"WinUSB (nusb)"| usb["USB 藍牙介面卡 (WinUSB 驅動程式)"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB (nusb)"| usb["USB 藍牙介面卡<br>(WinUSB 驅動程式)"]
     usb -. 藍牙 .-> hp["耳機 / 喇叭"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe (提高權限):<br>指派 / 還原 WinUSB、<br>讀取 Windows 的連結金鑰"]
 ```
 
 - **核心不是 Windows 服務。** 它是已登入使用者的一般處理程序，因為 WASAPI
@@ -108,16 +107,16 @@ sequenceDiagram
     participant App as BlueCaster (BTstack)
     participant Ad as USB 介面卡
     participant Sink as 耳機
-    App->>Ad: 透過 WinUSB 開啟，HCI reset / 初始化
+    App->>Ad: 透過 WinUSB 開啟，<br>HCI reset / 初始化
     opt Realtek、Intel、Broadcom
         App->>Ad: 上傳韌體
     end
     App->>Sink: ACL 連線
-    Note over App,Sink: 首次連線時進行 SSP Just Works（儲存連結金鑰）
-    App->>Sink: L2CAP 通道，PSM 0x0019 (AVDTP 信令)
+    Note over App,Sink: 首次連線時進行 SSP Just Works<br>（儲存連結金鑰）
+    App->>Sink: L2CAP 通道，PSM 0x0019<br>(AVDTP 信令)
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: 串流端點與轉碼器
-    App->>Sink: SET_CONFIGURATION (所選轉碼器)、OPEN、START
+    App->>Sink: SET_CONFIGURATION<br>(所選轉碼器)、OPEN、START
     loop 串流期間
         App->>Sink: 透過 L2CAP 傳送 AVDTP 媒體封包
     end
@@ -166,8 +165,8 @@ config:
 ---
 flowchart TD
     out["系統音訊輸出 (回送 / 虛擬裝置 / 單一應用程式)"]
-    out --> cap["capture 執行緒: WASAPI，事件驅動 (通常為 float32，44.1–96 kHz)"]
-    cap -->|"無鎖環形緩衝區 (PCM)"| enc["encode 執行緒: 轉換、降混、編碼器、媒體酬載 + RTP 標頭、ABR"]
+    out --> cap["capture 執行緒:<br>WASAPI，事件驅動 (通常為 float32，44.1–96 kHz)"]
+    cap -->|"無鎖環形緩衝區 (PCM)"| enc["encode 執行緒:<br>轉換、降混、編碼器、媒體酬載 + RTP 標頭、ABR"]
     enc -->|"無鎖環形緩衝區 (封包)"| stack["bt-runloop 執行緒: BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → USB 藍牙介面卡 → 無線電"]
     usb -.-> hp["耳機 / 喇叭"]
@@ -219,7 +218,7 @@ stateDiagram-v2
     Idle --> Connecting: 開始
     Connecting --> Streaming: 串流已開始
     Connecting --> Idle: 已停止
-    Connecting --> Error: 初始化 / 連線 / 轉碼器失敗
+    Connecting --> Error: 初始化 / 連線 /<br>轉碼器失敗
     Streaming --> Reconnecting: 連線中斷
     Reconnecting --> Streaming: 已重新連線
     Reconnecting --> Error: 重新連線失敗
@@ -252,6 +251,22 @@ Windows 8 以上內建由 Microsoft 簽署的 WinUSB 驅動程式（`winusb.inf`
 核心絕不會以系統管理員身分執行：進行指派或還原時，它會以 UAC 提示
 （`ShellExecuteEx` "runas"）啟動輔助程式，並讀取其 JSON 結果。列出介面卡及其
 驅動程式不需要提高權限。
+
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver（提高權限）
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: 透過 UAC 提示啟動
+    alt 指派
+        Drv->>Win: 在 Device Parameters<br>寫入 DeviceInterfaceGUIDs
+        Drv->>Win: 安裝 winusb.inf（WinUsb Device）
+    else 還原
+        Drv->>Win: 移除裝置並重新列舉
+        Win->>Win: 重新選擇最合適的驅動程式
+    end
+    Drv-->>Core: 結果（JSON）
+```
 
 ## 主要模組 {#key-modules}
 

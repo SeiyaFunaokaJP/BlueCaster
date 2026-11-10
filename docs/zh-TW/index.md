@@ -133,7 +133,7 @@ flowchart TD
     s2["虛擬裝置"]
     s3["應用程式（處理程序回送）"]
     s1 & s2 & s3 --> cap["WASAPI 回送擷取 (PCM)"]
-    cap --> enc["音訊編碼器: LDAC / aptX 系列 / LHDC V5 / Opus / AAC / SBC"]
+    cap --> enc["音訊編碼器:<br>LDAC / aptX 系列 / LHDC V5 / Opus / AAC / SBC"]
     enc --> bt["BTstack: A2DP Source → AVDTP → L2CAP → HCI"]
     bt --> usb["WinUSB → USB 藍牙介面卡"]
     usb -.-> hp["耳機"]

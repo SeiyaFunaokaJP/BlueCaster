@@ -133,7 +133,7 @@ flowchart TD
     s2["虚拟设备"]
     s3["应用程序（进程环回）"]
     s1 & s2 & s3 --> cap["WASAPI 环回捕获（PCM）"]
-    cap --> enc["音频编码器：LDAC / aptX 系列 / LHDC V5 / Opus / AAC / SBC"]
+    cap --> enc["音频编码器：<br>LDAC / aptX 系列 / LHDC V5 / Opus / AAC / SBC"]
     enc --> bt["BTstack：A2DP Source → AVDTP → L2CAP → HCI"]
     bt --> usb["WinUSB → USB Bluetooth 适配器"]
     usb -.-> hp["耳机"]

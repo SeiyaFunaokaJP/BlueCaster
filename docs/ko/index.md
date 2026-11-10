@@ -133,7 +133,7 @@ flowchart TD
     s2["가상 장치"]
     s3["응용 프로그램 (프로세스 루프백)"]
     s1 & s2 & s3 --> cap["WASAPI 루프백 캡처 (PCM)"]
-    cap --> enc["오디오 인코더: LDAC / aptX 계열 / LHDC V5 / Opus / AAC / SBC"]
+    cap --> enc["오디오 인코더:<br>LDAC / aptX 계열 / LHDC V5 / Opus / AAC / SBC"]
     enc --> bt["BTstack: A2DP Source → AVDTP → L2CAP → HCI"]
     bt --> usb["WinUSB → USB Bluetooth 어댑터"]
     usb -.-> hp["헤드폰"]

@@ -42,20 +42,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Windows の音声: システムループバック / 仮想デバイス / アプリ単位"]
-    ui["bluecaster.exe: ウィンドウとトレイのフライアウト（Tauri + SolidJS）"]
-    subgraph core["bluecaster-core.exe（常駐、ユーザーモード）"]
-        ctl["トレイのメニュー / IPC サーバー / CLI (--cli)"] --> svc["コアサービス: 接続の状態機械、コーデック選択、プロファイル、再接続"]
+    ui["bluecaster.exe:<br>ウィンドウと<br>トレイのフライアウト<br>（Tauri + SolidJS）"]
+    src["Windows の音声:<br>システムループバック /<br>仮想デバイス / アプリ単位"]
+    subgraph core["bluecaster-core.exe"]
+        ctl["トレイのメニュー /<br>IPC サーバー / CLI (--cli)"] --> svc["コアサービス:<br>接続の状態機械、コーデック選択、<br>プロファイル、再接続"]
         svc --> cap["WASAPI キャプチャ"]
-        cap -- PCM --> enc["エンコード経路: LDAC / aptX 系 / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack: HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["エンコード経路:<br>LDAC / aptX 系 / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack:<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
-    ui <-->|"ユーザーごとの名前付きパイプ"| ctl
-    svc -.->|"UAC（ドライバーの変更と Windows のキーの取り込みのときだけ）"| drv["bluecaster-driver.exe（昇格）: WinUSB の割り当て / 復元、Windows のリンクキーの読み取り"]
+    ui <-->|"ユーザーごとの<br>名前付きパイプ"| ctl
     src --> cap
-    bt -->|"WinUSB (nusb)"| usb["USB Bluetooth アダプター（WinUSB ドライバー）"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB (nusb)"| usb["USB Bluetooth アダプター<br>（WinUSB ドライバー）"]
     usb -. Bluetooth .-> hp["ヘッドホン / スピーカー"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe（昇格）:<br>WinUSB の割り当て / 復元、<br>Windows のリンクキーの読み取り"]
 ```
 
 - **コアは Windows サービスではありません。** サインインしたユーザーの普通のプロセスとして動きます。WASAPI ループバックで取り込むのは、そのユーザーのセッションの音だからです。セッションごとの mutex で 1 つだけに保ち、もう一度起動するとウィンドウが開きます。
@@ -92,16 +91,16 @@ sequenceDiagram
     participant App as BlueCaster (BTstack)
     participant Ad as USB アダプター
     participant Sink as ヘッドホン
-    App->>Ad: WinUSB で開く、HCI リセット / 初期化
+    App->>Ad: WinUSB で開く、<br>HCI リセット / 初期化
     opt Realtek、Intel、Broadcom
         App->>Ad: ファームウェアのアップロード
     end
     App->>Sink: ACL 接続
-    Note over App,Sink: 初回の接続は SSP Just Works（リンクキーを保存）
-    App->>Sink: L2CAP チャネル、PSM 0x0019（AVDTP シグナリング）
+    Note over App,Sink: 初回の接続は SSP Just Works<br>（リンクキーを保存）
+    App->>Sink: L2CAP チャネル、PSM 0x0019<br>（AVDTP シグナリング）
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: ストリームエンドポイントとコーデック
-    App->>Sink: SET_CONFIGURATION（選んだコーデック）、OPEN、START
+    App->>Sink: SET_CONFIGURATION<br>（選んだコーデック）、OPEN、START
     loop ストリーミング中
         App->>Sink: L2CAP 上の AVDTP メディアパケット
     end
@@ -142,10 +141,10 @@ config:
     rankSpacing: 30
 ---
 flowchart TD
-    out["システムの音声出力（ループバック / 仮想デバイス / アプリ単位）"]
-    out --> cap["capture スレッド: WASAPI、イベント駆動（通常 float32、44.1–96 kHz）"]
-    cap -->|"ロックフリーのリング（PCM）"| enc["encode スレッド: 形式変換、ダウンミックス、エンコーダー、メディアペイロード + RTP ヘッダー、ABR"]
-    enc -->|"ロックフリーのリング（パケット）"| stack["bt-runloop スレッド: BTstack → AVDTP → L2CAP → HCI"]
+    out["システムの音声出力<br>（ループバック / 仮想デバイス / アプリ単位）"]
+    out --> cap["capture スレッド:<br>WASAPI、イベント駆動（通常 float32、44.1–96 kHz）"]
+    cap -->|"ロックフリーのリング<br>（PCM）"| enc["encode スレッド:<br>形式変換、ダウンミックス、エンコーダー、<br>メディアペイロード + RTP ヘッダー、ABR"]
+    enc -->|"ロックフリーのリング<br>（パケット）"| stack["bt-runloop スレッド: BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → USB Bluetooth アダプター → 無線"]
     usb -.-> hp["ヘッドホン / スピーカー"]
 ```
@@ -181,7 +180,7 @@ stateDiagram-v2
     Idle --> Connecting: 開始
     Connecting --> Streaming: ストリーム開始
     Connecting --> Idle: 停止
-    Connecting --> Error: 初期化 / 接続 / コーデックの失敗
+    Connecting --> Error: 初期化 / 接続 /<br>コーデックの失敗
     Streaming --> Reconnecting: 接続断
     Reconnecting --> Streaming: 再接続成功
     Reconnecting --> Error: 再接続失敗
@@ -201,6 +200,22 @@ Windows 8 以降には、Microsoft 署名済みの WinUSB ドライバー（`win
 4. **復元**: デバイスを削除（`DiUninstallDevice`）して再列挙すると、Windows が一番順位の高いドライバー（通常は `BthUSB` かメーカーのドライバー）を選び直します。割り当て前のドライバーは設定フォルダー（`driver\`）に記録しておき、復元の後に比べます。`restore --records <folder>` は、記録のあるアダプターをまとめて 1 回の昇格で復元します。アンインストーラーは確認のうえでこれを使います。
 
 コアは管理者として動きません。割り当てと復元のときは、UAC の確認付きでヘルパーを起動し（`ShellExecuteEx` の "runas"）、その JSON の結果を読みます。アダプターとそのドライバーの一覧には昇格は不要です。
+
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver（昇格）
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: UAC のプロンプトで起動
+    alt 割り当て
+        Drv->>Win: Device Parameters に<br>DeviceInterfaceGUIDs
+        Drv->>Win: winusb.inf<br>（WinUsb Device）をインストール
+    else 復元
+        Drv->>Win: デバイスを削除して再列挙
+        Win->>Win: 最適なドライバーを選び直す
+    end
+    Drv-->>Core: 結果（JSON）
+```
 
 ## 主要モジュール {#key-modules}
 

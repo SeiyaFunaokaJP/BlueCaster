@@ -48,20 +48,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Windows 오디오: 시스템 루프백 / 가상 장치 / 한 응용 프로그램"]
-    ui["bluecaster.exe: 창과 트레이 플라이아웃 (Tauri + SolidJS)"]
-    subgraph core["bluecaster-core.exe (상주, 사용자 모드)"]
-        ctl["트레이 메뉴 / IPC 서버 / CLI (--cli)"] --> svc["코어 서비스: 연결 상태 머신, 코덱 선택, 프로필, 다시 연결"]
+    ui["bluecaster.exe:<br>창과 트레이 플라이아웃<br>(Tauri + SolidJS)"]
+    src["Windows 오디오:<br>시스템 루프백 / 가상 장치 /<br>한 응용 프로그램"]
+    subgraph core["bluecaster-core.exe"]
+        ctl["트레이 메뉴 / IPC 서버 /<br>CLI (--cli)"] --> svc["코어 서비스:<br>연결 상태 머신, 코덱 선택,<br>프로필, 다시 연결"]
         svc --> cap["WASAPI 캡처"]
-        cap -- PCM --> enc["인코더 파이프라인: LDAC / aptX 계열 / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack: HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["인코더 파이프라인:<br>LDAC / aptX 계열 / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack:<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
     ui <-->|"사용자별 named pipe"| ctl
-    svc -.->|"UAC, 드라이버 변경이나 Windows 키 가져오기 때만"| drv["bluecaster-driver.exe (관리자 권한): WinUSB 할당 / 복원, Windows 링크 키 읽기"]
     src --> cap
-    bt -->|"WinUSB (nusb)"| usb["USB Bluetooth 어댑터 (WinUSB 드라이버)"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB (nusb)"| usb["USB Bluetooth 어댑터<br>(WinUSB 드라이버)"]
     usb -. Bluetooth .-> hp["헤드폰 / 스피커"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe (관리자 권한):<br>WinUSB 할당 / 복원,<br>Windows 링크 키 읽기"]
 ```
 
 - **코어는 Windows 서비스가 아닙니다.** WASAPI 루프백은 로그인한 사용자 세션의
@@ -116,11 +115,11 @@ sequenceDiagram
         App->>Ad: 펌웨어 업로드
     end
     App->>Sink: ACL 연결
-    Note over App,Sink: 첫 연결 시 SSP Just Works (링크 키 저장)
-    App->>Sink: L2CAP 채널, PSM 0x0019 (AVDTP 시그널링)
+    Note over App,Sink: 첫 연결 시 SSP Just Works<br>(링크 키 저장)
+    App->>Sink: L2CAP 채널, PSM 0x0019<br>(AVDTP 시그널링)
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: 스트림 엔드포인트와 코덱
-    App->>Sink: SET_CONFIGURATION (선택한 코덱), OPEN, START
+    App->>Sink: SET_CONFIGURATION<br>(선택한 코덱), OPEN, START
     loop 스트리밍 중
         App->>Sink: L2CAP를 통한 AVDTP 미디어 패킷
     end
@@ -170,9 +169,9 @@ config:
     rankSpacing: 30
 ---
 flowchart TD
-    out["시스템 오디오 출력 (루프백 / 가상 장치 / 한 응용 프로그램)"]
-    out --> cap["capture 스레드: WASAPI, 이벤트 기반 (보통 float32, 44.1–96 kHz)"]
-    cap -->|"lock-free 링 (PCM)"| enc["encode 스레드: 변환, 다운믹스, 인코더, 미디어 페이로드 + RTP 헤더, ABR"]
+    out["시스템 오디오 출력<br>(루프백 / 가상 장치 / 한 응용 프로그램)"]
+    out --> cap["capture 스레드:<br>WASAPI, 이벤트 기반 (보통 float32, 44.1–96 kHz)"]
+    cap -->|"lock-free 링 (PCM)"| enc["encode 스레드:<br>변환, 다운믹스, 인코더, 미디어 페이로드 + RTP 헤더, ABR"]
     enc -->|"lock-free 링 (패킷)"| stack["bt-runloop 스레드: BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → USB Bluetooth 어댑터 → 무선"]
     usb -.-> hp["헤드폰 / 스피커"]
@@ -227,7 +226,7 @@ stateDiagram-v2
     Idle --> Connecting: 시작
     Connecting --> Streaming: 스트림 시작됨
     Connecting --> Idle: 중지됨
-    Connecting --> Error: 초기화 / 연결 / 코덱 실패
+    Connecting --> Error: 초기화 / 연결 /<br>코덱 실패
     Streaming --> Reconnecting: 연결 끊김
     Reconnecting --> Streaming: 다시 연결됨
     Reconnecting --> Error: 다시 연결 실패
@@ -263,6 +262,22 @@ Windows 8 이상에는 Microsoft가 서명한 WinUSB 드라이버(`winusb.inf`)�
 코어는 관리자 권한으로 실행되지 않습니다. 할당이나 복원을 할 때는 UAC 프롬프트와
 함께 도우미를 시작하고(`ShellExecuteEx` "runas") 그 JSON 결과를 읽습니다.
 어댑터와 그 드라이버 목록을 가져오는 데는 권한 상승이 필요 없습니다.
+
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver (관리자 권한)
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: UAC 프롬프트로 시작
+    alt 할당
+        Drv->>Win: Device Parameters에<br>DeviceInterfaceGUIDs 기록
+        Drv->>Win: winusb.inf (WinUsb Device) 설치
+    else 복원
+        Drv->>Win: 장치를 제거하고 다시 열거
+        Win->>Win: 가장 알맞은 드라이버를 다시 선택
+    end
+    Drv-->>Core: 결과 (JSON)
+```
 
 ## 주요 모듈
 

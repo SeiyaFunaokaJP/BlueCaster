@@ -47,20 +47,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Windows audio: system loopback / virtual device / one app"]
-    ui["bluecaster.exe: window and tray flyout (Tauri + SolidJS)"]
-    subgraph core["bluecaster-core.exe (resident, user mode)"]
-        ctl["Tray menu / IPC server / CLI (--cli)"] --> svc["Core service: connection state machine, codec selection, profiles, reconnect"]
+    ui["bluecaster.exe:<br>window and tray flyout<br>(Tauri + SolidJS)"]
+    src["Windows audio:<br>system loopback / virtual device /<br>one app"]
+    subgraph core["bluecaster-core.exe"]
+        ctl["Tray menu / IPC server /<br>CLI (--cli)"] --> svc["Core service: connection<br>state machine, codec selection,<br>profiles, reconnect"]
         svc --> cap["WASAPI capture"]
-        cap -- PCM --> enc["Encoder pipeline: LDAC / aptX family / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack: HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["Encoder pipeline:<br>LDAC / aptX family / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack:<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
     ui <-->|"per-user named pipe"| ctl
-    svc -.->|"UAC, only to change the driver or import Windows' keys"| drv["bluecaster-driver.exe (elevated): assign / restore WinUSB, read Windows' link keys"]
     src --> cap
-    bt -->|"WinUSB (nusb)"| usb["USB Bluetooth adapter (WinUSB driver)"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB (nusb)"| usb["USB Bluetooth adapter<br>(WinUSB driver)"]
     usb -. Bluetooth .-> hp["Headphones / speakers"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe (elevated):<br>assign / restore WinUSB,<br>read Windows' link keys"]
 ```
 
 - **The core is not a Windows service.** It is an ordinary process of the
@@ -120,11 +119,11 @@ sequenceDiagram
         App->>Ad: Firmware upload
     end
     App->>Sink: ACL connection
-    Note over App,Sink: SSP Just Works on first connect (link key saved)
-    App->>Sink: L2CAP channel, PSM 0x0019 (AVDTP signaling)
+    Note over App,Sink: SSP Just Works on first connect<br>(link key saved)
+    App->>Sink: L2CAP channel, PSM 0x0019<br>(AVDTP signaling)
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: Stream endpoints and codecs
-    App->>Sink: SET_CONFIGURATION (selected codec), OPEN, START
+    App->>Sink: SET_CONFIGURATION<br>(selected codec), OPEN, START
     loop While streaming
         App->>Sink: AVDTP media packets over L2CAP
     end
@@ -175,8 +174,8 @@ config:
 ---
 flowchart TD
     out["System audio output (loopback / virtual device / one app)"]
-    out --> cap["capture thread: WASAPI, event-driven (usually float32, 44.1–96 kHz)"]
-    cap -->|"lock-free ring (PCM)"| enc["encode thread: conversion, downmix, encoder, media payload + RTP header, ABR"]
+    out --> cap["capture thread:<br>WASAPI, event-driven (usually float32, 44.1–96 kHz)"]
+    cap -->|"lock-free ring (PCM)"| enc["encode thread:<br>conversion, downmix, encoder,<br>media payload + RTP header, ABR"]
     enc -->|"lock-free ring (packets)"| stack["bt-runloop thread: BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → USB Bluetooth adapter → radio"]
     usb -.-> hp["Headphones / speakers"]
@@ -233,7 +232,7 @@ stateDiagram-v2
     Idle --> Connecting: Start
     Connecting --> Streaming: stream started
     Connecting --> Idle: stopped
-    Connecting --> Error: init / connect / codec failure
+    Connecting --> Error: init / connect /<br>codec failure
     Streaming --> Reconnecting: connection lost
     Reconnecting --> Streaming: reconnected
     Reconnecting --> Error: reconnect failed
@@ -269,6 +268,22 @@ driver > Let me pick > WinUsb Device" does, through SetupAPI:
 The core never runs as administrator: for an assignment or a restore it starts
 the helper with a UAC prompt (`ShellExecuteEx` "runas") and reads its JSON
 result. Listing adapters and their driver needs no elevation.
+
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver (elevated)
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: start with a UAC prompt
+    alt Assign
+        Drv->>Win: DeviceInterfaceGUIDs<br>in Device Parameters
+        Drv->>Win: install winusb.inf (WinUsb Device)
+    else Restore
+        Drv->>Win: remove the device and re-enumerate
+        Win->>Win: picks its best driver again
+    end
+    Drv-->>Core: result (JSON)
+```
 
 ## Key Modules
 

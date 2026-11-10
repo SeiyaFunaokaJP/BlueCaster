@@ -53,6 +53,25 @@ nav_order: 2.7
 
 プロトコルのバージョンは完全に一致する必要があります。バージョン 1 のまま使える追加は、代わりに `features` で知らせます（[互換性](#compatibility)を参照）。
 
+```mermaid
+sequenceDiagram
+    participant C as クライアント
+    participant B as bluecaster-core
+    C->>B: hello (protocol 1)
+    alt プロトコルが一致
+        B-->>C: welcome (features)
+        B-->>C: snapshot (状態すべて、rev)
+        loop 接続中（順不同）
+            B-->>C: event (rev + 1)
+            C->>B: request (id)
+            B-->>C: response (同じ id)
+        end
+        B-->>C: bye (コアの終了時)
+    else プロトコルが違う、または 5 秒以内に hello がない
+        B-->>C: reject, パイプを閉じる
+    end
+```
+
 ## 状態とイベント {#state-and-events}
 
 ```json

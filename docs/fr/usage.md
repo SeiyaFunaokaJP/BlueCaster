@@ -254,6 +254,23 @@ BlueCaster propose quatre modes de capture audio, listés comme **Sortie par dé
 | Un périphérique audio | Ce que joue un périphérique de sortie (haut-parleurs, casque USB, téléviseur, ...), quelle que soit la sortie par défaut de Windows |
 | Application | Uniquement ce que joue une application (et ses processus enfants), après son propre traitement. Nécessite Windows 11 ou Windows 10 version 2004 (build 19041) ou ultérieure |
 
+```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
+flowchart TD
+    apps["Applications"] --> out["Périphérique de sortie<br>(haut-parleurs, téléviseur HDMI, ...)"]
+    apps --> virt["Périphérique virtuel<br>(VB-CABLE, ...)"]
+    out --> there["Y joue aussi"]
+    out -.->|"Sortie par défaut<br>de Windows /<br>un périphérique audio"| bc["BlueCaster"]
+    virt -.->|"Périphérique virtuel"| bc
+    apps -.->|"Application :<br>une seule application"| bc
+    bc --> hp["Casque Bluetooth"]
+```
+
 **Périphériques audio** affiche la même explication sous **Source de sortie**. Un nouvel appareil capture la **Sortie par défaut de Windows**, qui fonctionne sans rien installer d'autre ; choisissez-y une autre source pour lui.
 
 Capturer la **Sortie par défaut de Windows** copie l'audio ; il ne le retire pas du périphérique de sortie par défaut, si bien que l'audio y est aussi joué (haut-parleurs, casque filaire, téléviseur HDMI, ...). Pour ne l'entendre que dans le casque Bluetooth, utilisez un périphérique virtuel comme VB-CABLE.
@@ -411,6 +428,22 @@ Lorsque vous demandez un codec précis que le casque ne propose pas :
 |:------|:---------|
 | Application (**Codecs**, Auto désactivé) | Se connecte avec le premier codec, dans l'ordre de l'appareil (l'ordre de priorité d'Auto, sauf si vous avez fait glisser les cartes), que le casque propose, comme le ferait Auto (Opus choisi, casque avec aptX Adaptive, aptX, AAC et SBC : aptX Adaptive, et non l'aptX situé sous Opus ; avec SBC XQ placé en premier : SBC XQ), et le badge du codec indique pendant quelques secondes quel codec est utilisé à la place et pourquoi. Cela vaut pour un codec choisi alors que le casque le proposait : l'écran **Codecs** affiche comme choisi celui qui est utilisé. Une carte choisie alors qu'il ne proposait pas ce codec (lors de sa dernière connexion) est demandée quand même, sans repli : s'il le refuse, la connexion s'arrête avec une erreur. |
 | CLI (`-c <codec>`) | S'arrête sur une erreur (« Device does not support ... ») ; si vous avez demandé aptX, aptX HD ou aptX LL et que le casque ne propose que l'aptX Adaptive, le message le précise. Ajoutez `--fallback` pour vous replier comme l'application, ou utilisez `-c auto`. |
+
+```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
+flowchart TD
+    q{"Le casque propose-t-il<br>le codec choisi ?"}
+    q -->|"Oui"| use["Se connecte avec"]
+    q -->|"Non"| how{"Comment a-t-il été choisi ?"}
+    how -->|"Application : carte<br>choisie quand il<br>était proposé"| fb["Premier codec proposé<br>dans l'ordre de l'appareil,<br>comme Auto ; le badge<br>du codec dit pourquoi"]
+    how -->|"Application : carte<br>choisie quand il<br>n'était pas proposé"| force["Demandé quand même ;<br>erreur s'il est refusé"]
+    how -->|"CLI: -c"| cli["Erreur<br>(--fallback : comme l'application)"]
+```
 
 Les versions précédentes avaient à la place l'option **Utiliser un autre codec pris en charge si celui-ci n'est pas disponible** ; le repli est désormais toujours actif. Certaines préversions 2.0.2 prenaient le codec situé juste sous celui choisi plutôt que le meilleur.
 

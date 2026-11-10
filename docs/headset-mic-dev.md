@@ -1,3 +1,10 @@
+---
+title: Headset microphone (developer note)
+layout: default
+nav_exclude: true
+english_only: true
+---
+
 # Headset microphone (developer note)
 
 Status: user-facing since `feat/headset-mic-for-all` (developer mode no
