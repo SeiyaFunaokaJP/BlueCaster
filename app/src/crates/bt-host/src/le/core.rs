@@ -283,6 +283,10 @@ pub struct LeCore {
     connect: Option<ConnectAttempt>,
     /// By RPA
     rpa_cache: HashMap<[u8; 6], RpaEntry>,
+    /// Identity (non-RPA) addresses by when they were last seen advertising
+    /// (run loop ms): a device that switched back from an RPA to its
+    /// identity is connected with the identity
+    identity_seen: HashMap<[u8; 6], u32>,
     pub(crate) gatt: GattClient,
     server: GattServer,
     presets: PresetTable,
@@ -487,6 +491,13 @@ impl<'a> LeCtx<'a> {
 
     fn lookup_rpa(&mut self, addr: LeAddr, seen: bool) {
         if !addr.is_rpa() {
+            if seen {
+                if self.core.identity_seen.len() >= RPA_CACHE_MAX && !self.core.identity_seen.contains_key(&addr.addr) {
+                    self.core.identity_seen.clear();
+                }
+                let now = self.stack.time_ms();
+                self.core.identity_seen.insert(addr.addr, now);
+            }
             return;
         }
         if !self.core.rpa_cache.contains_key(&addr.addr) {
@@ -534,11 +545,21 @@ impl<'a> LeCtx<'a> {
                     .then_some((now.wrapping_sub(seen), *rpa))
             })
             .min_by_key(|(age, _)| *age);
+        let identity_age = self.core.identity_seen.get(&d.addr.addr).map(|&t| now.wrapping_sub(t));
         tracing::debug!(
-            "LE Audio: connect address for device {dev:?}: given {given}, freshest resolved RPA {:?}",
+            "LE Audio: connect address for device {dev:?}: given {given}, freshest resolved RPA {:?}, identity seen {identity_age:?} ms ago",
             best.map(|(age, rpa)| (crate::addr_str(&rpa), age))
         );
         match best {
+            // The device advertises with its identity again (seen after the
+            // RPA): an RPA it no longer uses gets no answer
+            Some((age, _)) if identity_age.is_some_and(|i| i < age) => {
+                if given.addr == d.addr.addr {
+                    given
+                } else {
+                    d.addr
+                }
+            }
             Some((_, rpa)) => LeAddr { addr: rpa, addr_type: LeAddr::RANDOM },
             None => given,
         }
@@ -1858,6 +1879,7 @@ impl LeCore {
             scan_found: 0,
             connect: None,
             rpa_cache: HashMap::new(),
+            identity_seen: HashMap::new(),
             gatt: GattClient::new(),
             server: GattServer::new(),
             presets: PresetTable::new(),
@@ -1945,6 +1967,7 @@ impl LeCore {
         self.scanning = false;
         self.connect = None;
         self.rpa_cache.clear();
+        self.identity_seen.clear();
         self.gatt = GattClient::new();
         self.sink_pacs_by_char.clear();
         self.source_pacs_by_char.clear();
@@ -2007,6 +2030,7 @@ impl LeCore {
         self.devices.clear();
         self.scan_results.clear();
         self.rpa_cache.clear();
+        self.identity_seen.clear();
         self.queue = None;
         self.status = None;
         tracing::info!("LE Audio: stopped");
