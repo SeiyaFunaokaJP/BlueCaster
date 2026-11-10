@@ -307,12 +307,13 @@ NEGOTIATION = {
     'oppo-never': ('lhdcv5', OPPO_SINK + ['--oppo', 'off'], 'lhdcv5', OPPO_NAME),
     # (earbuds that keep their limit: each stream asks, gains nothing, undoes it)
     'oppo-every-connection': ('lhdcv5', OPPO_SINK + ['--oppo', 'off', '--oppo-no-change'], 'lhdcv5', OPPO_TWICE),
-    # LE keys derived from the link key (issue #86; developer mode and LE
-    # Audio on, DEV_SETTINGS): asked after pairing, and the sink's LTK, IRK
-    # and identity address kept (CTKD_CASES); the next connection, from a
-    # sink that lists SMP over BR/EDR only from then on; none from a sink
-    # without it, one that refuses or one that never answers, and none with
-    # developer mode off; the stream as always
+    # LE keys derived from the link key (issue #86; LE Audio on,
+    # DEV_SETTINGS): asked after pairing, and the sink's LTK, IRK and
+    # identity address kept (CTKD_CASES); the next connection, from a sink
+    # that lists SMP over BR/EDR only from then on; none from a sink without
+    # it, one that refuses or one that never answers; with developer mode
+    # off too (one pairing for both kinds), none with LE Audio off; the
+    # stream as always
     'ctkd': ('sbc', CTKD_SINK, 'sbc', ['--sessions', '2']),
     'ctkd-next-connection': ('sbc', CTKD_SINK + ['--ctkd-from', '2', '--ctkd-public-identity'], 'sbc',
                              ['--sessions', '3']),
@@ -320,6 +321,7 @@ NEGOTIATION = {
     'ctkd-refused': ('sbc', CTKD_SINK + ['--ctkd-refuse'], 'sbc', []),
     'ctkd-silent': ('sbc', CTKD_SINK + ['--ctkd-silent'], 'sbc', []),
     'ctkd-developer-off': ('sbc', CTKD_SINK, 'sbc', []),
+    'ctkd-le-off': ('sbc', CTKD_SINK, 'sbc', []),
 }
 # Cases that must stop with an error before streaming: what the CLI's log
 # says of it (its "Codec stop" line carries the structured cause)
@@ -341,6 +343,7 @@ DEV_SETTINGS = {
     'ctkd-refused': CTKD_ON,
     'ctkd-silent': CTKD_ON,
     'ctkd-developer-off': {'debug_mode': False, 'le_audio_experimental': True},
+    'ctkd-le-off': {'debug_mode': True, 'le_audio_experimental': False},
 }
 QUALITY_ON, QUALITY_OFF = 'Huawei control: 2BA2 010101', 'Huawei control: 2BA2 010100'
 HI_RES_ON, HI_RES_OFF, HI_RES_CODEC = 'OPPO control: 0403 1801', 'OPPO control: 0403 1800', 'OPPO control: 041A 080100'
@@ -401,11 +404,12 @@ LOG_CHECKS = {
                     # NoAnswer after SM's 30 s (--duration 35), else the link ends
                     # first and the next connection asks again (NotAsked)
                     ('bluecaster.log', f'CTKD: no LE keys from {SINK_ADDRESS} (', 1)],
-    'ctkd-developer-off': [('sink.log', 'SMP over BR/EDR listed', True), ('sink.log', 'CTKD:', False),
-                           ('bluecaster.log', 'CTKD', False)],
+    'ctkd-developer-off': [('bluecaster.log', CTKD_GIVEN, 1), ('sink.log', 'CTKD: keys LTK', 1)],
+    'ctkd-le-off': [('sink.log', 'SMP over BR/EDR listed', True), ('sink.log', 'CTKD:', False),
+                    ('bluecaster.log', CTKD_GIVEN, False)],
 }
 # Cases whose LE keys BlueCaster keeps must equal the sink's (ctkd_check)
-CTKD_CASES = {'ctkd', 'ctkd-next-connection'}
+CTKD_CASES = {'ctkd', 'ctkd-next-connection', 'ctkd-developer-off'}
 TONES = ((1000.0, 0.5), (1500.0, 0.5))  # (frequency, amplitude) per channel, as --test-tone
 LATE_SDU_FAILURE = 'reached the controller after their SDU interval began'  # LE Audio cases run once more
 

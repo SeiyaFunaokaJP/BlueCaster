@@ -1306,6 +1306,22 @@ fn voice_line(lang: &str, codec: &str) -> String {
 
 /// A tray menu item: the device, its LE Audio entry tagged as in the
 /// flyout ("WF-1000XM5 (LE Audio)")
+/// The profiles the tray offers, one per device as the window lists it
+/// (issue #86): with LE Audio on, a device with an LE Audio profile by that
+/// one alone; off, no LE Audio profile
+fn tray_profiles(profiles: &[Profile], le_on: bool) -> Vec<&Profile> {
+    profiles
+        .iter()
+        .filter(|p| {
+            if !le_on {
+                return !p.le_audio;
+            }
+            p.le_audio
+                || !profiles.iter().any(|o| o.le_audio && o.device_address.eq_ignore_ascii_case(&p.device_address))
+        })
+        .collect()
+}
+
 fn tray_label(device: &str, le_audio: bool, le_tag: &str) -> String {
     if le_audio { format!("{device} ({le_tag})") } else { device.to_string() }
 }
@@ -1786,11 +1802,12 @@ impl CoreState {
             base
         };
         let le = bluecaster_core::messages::translate(&lang, "device.tag_le_audio", "LE Audio");
-        let labels = s.profiles.iter().map(|p| tray_label(device_name(&s.devices, p), p.le_audio, &le)).collect();
+        let shown = tray_profiles(&s.profiles, s.settings.le_audio_experimental);
+        let labels = shown.iter().map(|p| tray_label(device_name(&s.devices, p), p.le_audio, &le)).collect();
         (self.tray)(TrayView {
             streaming,
             tooltip,
-            profiles: s.profiles.iter().map(|p| p.name.clone()).collect(),
+            profiles: shown.iter().map(|p| p.name.clone()).collect(),
             labels,
             active_profile: s.active_profile.clone(),
             language: lang,
@@ -3906,6 +3923,17 @@ mod tests {
         assert_eq!(device_name(&[], &unnamed), "AA:BB:CC:DD:EE:FF");
         assert_eq!(tray_label("Air Pro 4+", true, "LE Audio"), "Air Pro 4+ (LE Audio)");
         assert_eq!(tray_label("Air Pro 4+", false, "LE Audio"), "Air Pro 4+");
+        // One per device (issue #86)
+        let p = |name: &str, addr: &str, le_audio| Profile {
+            name: name.into(),
+            device_address: addr.into(),
+            le_audio,
+            ..to_ipc_profile(&CoreProfile::default(), 0)
+        };
+        let list = [p("Buds", "AA:01", false), p("Buds LE Audio", "aa:01", true), p("XM4", "AA:02", false)];
+        let names = |le| tray_profiles(&list, le).iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(true), ["Buds LE Audio", "XM4"]);
+        assert_eq!(names(false), ["Buds", "XM4"]);
     }
 
     #[test]
