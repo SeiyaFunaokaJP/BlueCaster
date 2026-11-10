@@ -1297,7 +1297,7 @@ fn voice_line(lang: &str, codec: &str) -> String {
     let name = match codec {
         "cvsd" => tr("codec.cvsd", "CVSD"),
         "msbc" => tr("codec.msbc", "mSBC"),
-        "lc3_swb" => tr("codec.lc3_swb", "LC3-SWB"),
+        "lc3_swb" => tr("codec.lc3_swb", "LC3"),
         "lc3" => "LC3".to_string(),
         other => other.to_string(),
     };
@@ -1312,6 +1312,19 @@ fn tray_label(device: &str, le_audio: bool, le_tag: &str) -> String {
 
 /// A saved profile is the one streaming or connecting (under its name before
 /// the save): it is started again with the new settings
+/// The profile that connects after LE Audio was turned on or off while
+/// `in_use` streamed (issue #86): the same device's LE Audio profile when it
+/// is on, its classic one when it is off; `in_use` when the device has no
+/// such profile (one that cannot stream says why)
+fn le_switched_profile(list: &[CoreProfile], in_use: &CoreProfile, le_on: bool) -> String {
+    if in_use.le_audio == le_on {
+        return in_use.name.clone();
+    }
+    list.iter()
+        .find(|p| p.le_audio == le_on && p.device_address.eq_ignore_ascii_case(&in_use.device_address))
+        .map_or_else(|| in_use.name.clone(), |p| p.name.clone())
+}
+
 fn restart_after_save(stream: &StreamStatus, saved: &str) -> bool {
     matches!(stream.state, StreamState::Connecting | StreamState::Streaming | StreamState::Reconnecting)
         && stream.profile.as_deref() == Some(saved)
@@ -2327,6 +2340,17 @@ impl CoreState {
     /// and a second save right behind it (Home turns Auto-select off, then
     /// saves the codec) is one restart, not two (issue #86: a second restart
     /// broke off the first one's connection)
+    /// The adapter's state after the stack was shut down to start again
+    fn publish_adapter_stopped(&self) {
+        let (_, s) = self.snapshot();
+        self.publish(Event::Adapter(AdapterState {
+            status: AdapterStatus::Stopped,
+            error: None,
+            rom_firmware: false,
+            ..s.adapter
+        }));
+    }
+
     fn restart_profile(&self, name: &str) -> Result<(), ErrorInfo> {
         self.restarting.store(true, Ordering::Release);
         let r = self.start_profile(name);
@@ -3048,8 +3072,34 @@ impl CoreState {
                             me.restart_profile(&name)?;
                         }
                     }
+                    // LE Audio on / off while a device is connected (issue
+                    // #86): the stack starts again at once, and the device
+                    // connects again over what is now on (its LE Audio
+                    // profile, or its classic one)
+                    if le_toggled {
+                        let (_, s) = me.snapshot();
+                        let list = profiles::load(&me.config_dir());
+                        let in_use = s
+                            .stream
+                            .profile
+                            .as_deref()
+                            .filter(|n| restart_after_save(&s.stream, n))
+                            .and_then(|n| list.iter().find(|p| p.name == n));
+                        if let Some(p) = in_use {
+                            let le_on = me.service.settings().le_audio_experimental;
+                            let next = le_switched_profile(&list, p, le_on);
+                            tracing::info!(
+                                "LE Audio {}: Bluetooth starts again, profile {} connects",
+                                if le_on { "on" } else { "off" },
+                                bluecaster_core::diag::quoted(&next)
+                            );
+                            me.service.restart_adapter();
+                            me.publish_adapter_stopped();
+                            me.restart_profile(&next)?;
+                        }
+                    }
                     // LE Audio on / off waits for the next scan or connection
-                    // while the stack is in use (v1's deferred text)
+                    // while the stack is in use otherwise (v1's deferred text)
                     let le_audio_deferred = le_toggled && me.service.le_audio_deferred();
                     Ok(json(&SettingsApplied { le_audio_deferred }))
                 }))
@@ -3084,13 +3134,7 @@ impl CoreState {
             Method::AdapterRestart => {
                 blocking(Box::new(|me| {
                     let again = me.service.restart_adapter();
-                    let (_, s) = me.snapshot();
-                    me.publish(Event::Adapter(AdapterState {
-                        status: AdapterStatus::Stopped,
-                        error: None,
-                        rom_firmware: false,
-                        ..s.adapter
-                    }));
+                    me.publish_adapter_stopped();
                     // The device streamed before connects again on the new
                     // stack, with the same profile (issue #86)
                     if let Some(mut req) = again {
@@ -3927,10 +3971,30 @@ mod tests {
     }
 
     #[test]
+    fn le_audio_switched_connects_the_same_device_over_the_other_stack() {
+        let mk = |name: &str, addr: &str, le: bool| CoreProfile {
+            name: name.into(),
+            device_address: addr.into(),
+            le_audio: le,
+            ..CoreProfile::default()
+        };
+        let list = vec![
+            mk("Buds", "AA:BB:CC:DD:EE:01", false),
+            mk("Buds LE Audio", "aa:bb:cc:dd:ee:01", true),
+            mk("Other", "AA:BB:CC:DD:EE:02", false),
+        ];
+        assert_eq!(le_switched_profile(&list, &list[0], true), "Buds LE Audio");
+        assert_eq!(le_switched_profile(&list, &list[1], false), "Buds");
+        // Nothing to switch to: the same one
+        assert_eq!(le_switched_profile(&list, &list[2], true), "Other");
+        assert_eq!(le_switched_profile(&list, &list[0], false), "Buds");
+    }
+
+    #[test]
     fn the_tray_names_the_voice_codec() {
         assert_eq!(voice_line("en", "msbc"), "Voice: mSBC");
         assert_eq!(voice_line("en", "cvsd"), "Voice: CVSD");
-        assert_eq!(voice_line("en", "lc3_swb"), "Voice: LC3-SWB");
+        assert_eq!(voice_line("en", "lc3_swb"), "Voice: LC3");
         assert_eq!(voice_line("en", "lc3"), "Voice: LC3");
     }
 
