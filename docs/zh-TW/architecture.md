@@ -107,16 +107,16 @@ sequenceDiagram
     participant App as BlueCaster (BTstack)
     participant Ad as USB 介面卡
     participant Sink as 耳機
-    App->>Ad: 透過 WinUSB 開啟，HCI reset / 初始化
+    App->>Ad: 透過 WinUSB 開啟，<br>HCI reset / 初始化
     opt Realtek、Intel、Broadcom
         App->>Ad: 上傳韌體
     end
     App->>Sink: ACL 連線
-    Note over App,Sink: 首次連線時進行 SSP Just Works（儲存連結金鑰）
-    App->>Sink: L2CAP 通道，PSM 0x0019 (AVDTP 信令)
+    Note over App,Sink: 首次連線時進行 SSP Just Works<br>（儲存連結金鑰）
+    App->>Sink: L2CAP 通道，PSM 0x0019<br>(AVDTP 信令)
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: 串流端點與轉碼器
-    App->>Sink: SET_CONFIGURATION (所選轉碼器)、OPEN、START
+    App->>Sink: SET_CONFIGURATION<br>(所選轉碼器)、OPEN、START
     loop 串流期間
         App->>Sink: 透過 L2CAP 傳送 AVDTP 媒體封包
     end
@@ -259,7 +259,7 @@ sequenceDiagram
     participant Win as Windows (SetupAPI)
     Core->>Drv: 透過 UAC 提示啟動
     alt 指派
-        Drv->>Win: 在 Device Parameters 寫入 DeviceInterfaceGUIDs
+        Drv->>Win: 在 Device Parameters<br>寫入 DeviceInterfaceGUIDs
         Drv->>Win: 安裝 winusb.inf（WinUsb Device）
     else 還原
         Drv->>Win: 移除裝置並重新列舉

@@ -91,16 +91,16 @@ sequenceDiagram
     participant App as BlueCaster (BTstack)
     participant Ad as USB アダプター
     participant Sink as ヘッドホン
-    App->>Ad: WinUSB で開く、HCI リセット / 初期化
+    App->>Ad: WinUSB で開く、<br>HCI リセット / 初期化
     opt Realtek、Intel、Broadcom
         App->>Ad: ファームウェアのアップロード
     end
     App->>Sink: ACL 接続
-    Note over App,Sink: 初回の接続は SSP Just Works（リンクキーを保存）
-    App->>Sink: L2CAP チャネル、PSM 0x0019（AVDTP シグナリング）
+    Note over App,Sink: 初回の接続は SSP Just Works<br>（リンクキーを保存）
+    App->>Sink: L2CAP チャネル、PSM 0x0019<br>（AVDTP シグナリング）
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: ストリームエンドポイントとコーデック
-    App->>Sink: SET_CONFIGURATION（選んだコーデック）、OPEN、START
+    App->>Sink: SET_CONFIGURATION<br>（選んだコーデック）、OPEN、START
     loop ストリーミング中
         App->>Sink: L2CAP 上の AVDTP メディアパケット
     end
@@ -208,8 +208,8 @@ sequenceDiagram
     participant Win as Windows (SetupAPI)
     Core->>Drv: UAC のプロンプトで起動
     alt 割り当て
-        Drv->>Win: Device Parameters に DeviceInterfaceGUIDs
-        Drv->>Win: winusb.inf（WinUsb Device）をインストール
+        Drv->>Win: Device Parameters に<br>DeviceInterfaceGUIDs
+        Drv->>Win: winusb.inf<br>（WinUsb Device）をインストール
     else 復元
         Drv->>Win: デバイスを削除して再列挙
         Win->>Win: 最適なドライバーを選び直す

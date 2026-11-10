@@ -133,7 +133,7 @@ flowchart TD
     s2["仮想デバイス"]
     s3["アプリ（プロセスループバック）"]
     s1 & s2 & s3 --> cap["WASAPI ループバックキャプチャ (PCM)"]
-    cap --> enc["オーディオエンコーダー: LDAC / aptX 系 / LHDC V5 / Opus / AAC / SBC"]
+    cap --> enc["オーディオエンコーダー:<br>LDAC / aptX 系 / LHDC V5 / Opus / AAC / SBC"]
     enc --> bt["BTstack: A2DP Source → AVDTP → L2CAP → HCI"]
     bt --> usb["WinUSB → USB Bluetooth アダプター"]
     usb -.-> hp["ヘッドホン"]

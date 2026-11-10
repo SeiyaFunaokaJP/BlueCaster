@@ -115,11 +115,11 @@ sequenceDiagram
         App->>Ad: 펌웨어 업로드
     end
     App->>Sink: ACL 연결
-    Note over App,Sink: 첫 연결 시 SSP Just Works (링크 키 저장)
-    App->>Sink: L2CAP 채널, PSM 0x0019 (AVDTP 시그널링)
+    Note over App,Sink: 첫 연결 시 SSP Just Works<br>(링크 키 저장)
+    App->>Sink: L2CAP 채널, PSM 0x0019<br>(AVDTP 시그널링)
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: 스트림 엔드포인트와 코덱
-    App->>Sink: SET_CONFIGURATION (선택한 코덱), OPEN, START
+    App->>Sink: SET_CONFIGURATION<br>(선택한 코덱), OPEN, START
     loop 스트리밍 중
         App->>Sink: L2CAP를 통한 AVDTP 미디어 패킷
     end
@@ -270,7 +270,7 @@ sequenceDiagram
     participant Win as Windows (SetupAPI)
     Core->>Drv: UAC 프롬프트로 시작
     alt 할당
-        Drv->>Win: Device Parameters에 DeviceInterfaceGUIDs 기록
+        Drv->>Win: Device Parameters에<br>DeviceInterfaceGUIDs 기록
         Drv->>Win: winusb.inf (WinUsb Device) 설치
     else 복원
         Drv->>Win: 장치를 제거하고 다시 열거

@@ -115,16 +115,16 @@ sequenceDiagram
     participant App as BlueCaster (BTstack)
     participant Ad as USB-Adapter
     participant Sink as Kopfhörer
-    App->>Ad: Öffnen über WinUSB, HCI Reset / Init
+    App->>Ad: Öffnen über WinUSB,<br>HCI Reset / Init
     opt Realtek, Intel, Broadcom
         App->>Ad: Firmware-Upload
     end
     App->>Sink: ACL-Verbindung
-    Note over App,Sink: SSP Just Works bei der ersten Verbindung (Link Key gespeichert)
-    App->>Sink: L2CAP-Kanal, PSM 0x0019 (AVDTP-Signalisierung)
+    Note over App,Sink: SSP Just Works bei der ersten Verbindung<br>(Link Key gespeichert)
+    App->>Sink: L2CAP-Kanal, PSM 0x0019<br>(AVDTP-Signalisierung)
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: Stream-Endpunkte und Codecs
-    App->>Sink: SET_CONFIGURATION (gewählter Codec), OPEN, START
+    App->>Sink: SET_CONFIGURATION<br>(gewählter Codec), OPEN, START
     loop Während des Streamings
         App->>Sink: AVDTP-Medienpakete über L2CAP
     end
@@ -277,8 +277,8 @@ sequenceDiagram
     participant Win as Windows (SetupAPI)
     Core->>Drv: Start mit UAC-Abfrage
     alt Zuweisen
-        Drv->>Win: DeviceInterfaceGUIDs in Device Parameters
-        Drv->>Win: winusb.inf (WinUsb Device) installieren
+        Drv->>Win: DeviceInterfaceGUIDs<br>in Device Parameters
+        Drv->>Win: winusb.inf<br>(WinUsb Device) installieren
     else Wiederherstellen
         Drv->>Win: Gerät entfernen und neu aufzählen
         Win->>Win: wählt seinen besten Treiber wieder

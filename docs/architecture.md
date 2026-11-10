@@ -119,11 +119,11 @@ sequenceDiagram
         App->>Ad: Firmware upload
     end
     App->>Sink: ACL connection
-    Note over App,Sink: SSP Just Works on first connect (link key saved)
-    App->>Sink: L2CAP channel, PSM 0x0019 (AVDTP signaling)
+    Note over App,Sink: SSP Just Works on first connect<br>(link key saved)
+    App->>Sink: L2CAP channel, PSM 0x0019<br>(AVDTP signaling)
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: Stream endpoints and codecs
-    App->>Sink: SET_CONFIGURATION (selected codec), OPEN, START
+    App->>Sink: SET_CONFIGURATION<br>(selected codec), OPEN, START
     loop While streaming
         App->>Sink: AVDTP media packets over L2CAP
     end
@@ -276,7 +276,7 @@ sequenceDiagram
     participant Win as Windows (SetupAPI)
     Core->>Drv: start with a UAC prompt
     alt Assign
-        Drv->>Win: DeviceInterfaceGUIDs in Device Parameters
+        Drv->>Win: DeviceInterfaceGUIDs<br>in Device Parameters
         Drv->>Win: install winusb.inf (WinUsb Device)
     else Restore
         Drv->>Win: remove the device and re-enumerate

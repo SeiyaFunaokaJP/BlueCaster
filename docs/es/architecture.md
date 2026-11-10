@@ -115,18 +115,18 @@ sequenceDiagram
     participant App as BlueCaster (BTstack)
     participant Ad as Adaptador USB
     participant Sink as Auriculares
-    App->>Ad: Apertura mediante WinUSB, reinicio / inicialización HCI
+    App->>Ad: Apertura mediante WinUSB,<br>reinicio / inicialización HCI
     opt Realtek, Intel, Broadcom
         App->>Ad: Carga del firmware
     end
     App->>Sink: Conexión ACL
-    Note over App,Sink: SSP Just Works en la primera conexión (se guarda la clave de enlace)
-    App->>Sink: Canal L2CAP, PSM 0x0019 (señalización AVDTP)
+    Note over App,Sink: SSP Just Works en la primera conexión<br>(se guarda la clave de enlace)
+    App->>Sink: Canal L2CAP, PSM 0x0019<br>(señalización AVDTP)
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: Extremos de transmisión y códecs
-    App->>Sink: SET_CONFIGURATION (códec seleccionado), OPEN, START
+    App->>Sink: SET_CONFIGURATION<br>(códec seleccionado), OPEN, START
     loop Durante la transmisión
-        App->>Sink: Paquetes multimedia AVDTP sobre L2CAP
+        App->>Sink: Paquetes multimedia<br>AVDTP sobre L2CAP
     end
 ```
 
@@ -277,11 +277,11 @@ sequenceDiagram
     participant Win as Windows (SetupAPI)
     Core->>Drv: inicio con un aviso de UAC
     alt Asignar
-        Drv->>Win: DeviceInterfaceGUIDs en Device Parameters
-        Drv->>Win: instalar winusb.inf (WinUsb Device)
+        Drv->>Win: DeviceInterfaceGUIDs<br>en Device Parameters
+        Drv->>Win: instalar winusb.inf<br>(WinUsb Device)
     else Restaurar
-        Drv->>Win: quitar el dispositivo y volver a enumerarlo
-        Win->>Win: vuelve a elegir su mejor controlador
+        Drv->>Win: quitar el dispositivo<br>y volver a enumerarlo
+        Win->>Win: vuelve a elegir su<br>mejor controlador
     end
     Drv-->>Core: resultado (JSON)
 ```

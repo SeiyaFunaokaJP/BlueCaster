@@ -131,7 +131,7 @@ flowchart TD
     s2["Virtual device"]
     s3["Application (process loopback)"]
     s1 & s2 & s3 --> cap["WASAPI loopback capture (PCM)"]
-    cap --> enc["Audio encoder: LDAC / aptX family / LHDC V5 / Opus / AAC / SBC"]
+    cap --> enc["Audio encoder:<br>LDAC / aptX family / LHDC V5 / Opus / AAC / SBC"]
     enc --> bt["BTstack: A2DP Source → AVDTP → L2CAP → HCI"]
     bt --> usb["WinUSB → USB Bluetooth adapter"]
     usb -.-> hp["Headphones"]
