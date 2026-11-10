@@ -142,14 +142,19 @@ pub struct Settings {
     /// released, so headphones turned off can go to a phone instead.
     #[serde(default = "default_true")]
     pub auto_reconnect: bool,
-    /// No VB-Cable when last looked: once it is there, the profiles that
-    /// capture System Loopback take it, one time (issue #86)
+    /// No VB-Cable when last looked: once it is there, it is taken into use
+    /// one time (issue #86; the core's watch_cables)
     pub awaiting_vb_cable: bool,
-    /// No Hi-Fi Cable when last looked: once it is there, the classic
-    /// profiles whose microphone has no working output play it there, one
-    /// time (issue #86)
+    /// No Hi-Fi Cable when last looked: once it is there, it is taken into
+    /// use one time (issue #86; the core's watch_cables)
     #[serde(default)]
     pub awaiting_hifi_cable: bool,
+    /// The suggestion to install VB-CABLE was closed
+    #[serde(default)]
+    pub vb_cable_note_hidden: bool,
+    /// The suggestion to get the Hi-Fi Cable was closed
+    #[serde(default)]
+    pub hifi_cable_note_hidden: bool,
     /// Each device's volume (address -> AVRCP volume 0..127), set again when
     /// it connects (issue #86: one device's volume must not carry over to
     /// another)
@@ -361,6 +366,8 @@ impl Default for Settings {
             auto_reconnect: true,
             awaiting_vb_cable: false,
             awaiting_hifi_cable: false,
+            vb_cable_note_hidden: false,
+            hifi_cable_note_hidden: false,
             saved_volumes: BTreeMap::new(),
             device_options: None,
             volume_sync: true,

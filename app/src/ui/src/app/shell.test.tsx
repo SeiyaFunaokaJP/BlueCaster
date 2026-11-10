@@ -334,22 +334,37 @@ describe("Audio Devices without a virtual device (issue #86)", () => {
     await waitFor(() => expect(screen.queryByText(t("ui.setup.vbcable_note"))).toBeNull());
   });
 
-  it("asks for the Hi-Fi Cable once VB-Cable is there, and not once it is installed", async () => {
+  it("suggests both cables, each until installed or closed", async () => {
     location.hash = "#/devices";
     const m = new MockCore({ speed: 0 });
     m.noVirtual = true;
     mock = m;
-    render(() => <App core={createCore(m)} />);
-    // One note at a time: VB-Cable's first
+    const core = createCore(m);
+    render(() => <App core={core} />);
     expect(await screen.findByText(t("ui.setup.vbcable_note"))).toBeInTheDocument();
-    expect(screen.queryByText(t("ui.setup.hificable_note"))).toBeNull();
-    m.noVirtual = false;
-    window.dispatchEvent(new Event("focus"));
-    expect(await screen.findByText(t("ui.setup.hificable_note"))).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: t("hificable.download") })).toBeInTheDocument();
-    m.hifiCable = true;
-    window.dispatchEvent(new Event("focus"));
+    expect(screen.getByText(t("ui.setup.hificable_note"))).toBeInTheDocument();
+    // VB-Audio's donationware, named beside the Install button
+    expect(screen.getByText(t("vbcable.origin"), { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "vb-cable.com" })).toBeInTheDocument();
+    // Installing VB-CABLE: its note goes, the Hi-Fi Cable's stays
+    fireEvent.click(screen.getByRole("button", { name: t("vbcable.install") }));
+    await waitFor(() => expect(screen.queryByText(t("ui.setup.vbcable_note"))).toBeNull());
+    expect(screen.getByText(t("ui.setup.hificable_note"))).toBeInTheDocument();
+    // Closed: gone, and saved
+    const note = screen.getByText(t("ui.setup.hificable_note")).closest(".cable-note") as HTMLElement;
+    fireEvent.click(within(note).getByRole("button", { name: t("modal.close") }));
     await waitFor(() => expect(screen.queryByText(t("ui.setup.hificable_note"))).toBeNull());
+    expect(core.state.snap!.settings.hifi_cable_note_hidden).toBe(true);
+  });
+
+  it("keeps the cables on Settings after their notes were closed", async () => {
+    location.hash = "#/settings";
+    const m = new MockCore({ speed: 0 });
+    m.noVirtual = true;
+    mock = m;
+    render(() => <App core={createCore(m)} />);
+    expect(await screen.findByRole("button", { name: t("vbcable.install") })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("hificable.download") })).toBeInTheDocument();
   });
 });
 
@@ -594,7 +609,6 @@ describe("setup device step", () => {
       fireEvent.click(next);
     }
     expect(await screen.findByText(t("ui.setup.vbcable_note"))).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: t("vbcable.download") }));
     await connectNew(calls, "Galaxy Buds2 Pro");
     expect(core.state.snap!.profiles.find((p) => p.name === "Galaxy Buds2 Pro | Auto")).toMatchObject({
       capture_mode: "loopback",
@@ -623,6 +637,24 @@ describe("setup device step", () => {
       capture_mode: "virtual",
       audio_device_name: "CABLE Input (VB-Audio Virtual Cable)",
       auto_switch_device: true,
+    });
+  });
+
+  it("captures the Hi-Fi Cable for a new device where it is installed", async () => {
+    const { calls, core, mock: m } = start("#/setup");
+    m.hifiCable = true;
+    await screen.findByRole("heading", { level: 1, name: "Setup Wizard" });
+    for (let i = 0; i < 2; i++) {
+      const next = screen.getByRole("button", { name: "Next" });
+      await waitFor(() => expect(next).not.toBeDisabled());
+      fireEvent.click(next);
+    }
+    await waitFor(() => expect(calls.some((c) => c.method === "audio.devices")).toBe(true));
+    expect(screen.queryByText(t("ui.setup.hificable_note"))).toBeNull();
+    await connectNew(calls, "Galaxy Buds2 Pro");
+    expect(core.state.snap!.profiles.find((p) => p.name === "Galaxy Buds2 Pro | Auto")).toMatchObject({
+      capture_mode: "virtual",
+      audio_device_name: "Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)",
     });
   });
 });

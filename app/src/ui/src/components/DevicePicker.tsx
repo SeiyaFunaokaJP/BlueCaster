@@ -100,7 +100,7 @@ async function classicProfile(
   if (own) return own.name;
   const profileName = freeName(app, defaultProfileName(saved, address, false, t("codec.auto")));
   // Captured by System Loopback, as every new device (issue #86), unless
-  // the setup found VB-Cable
+  // the setup found a virtual cable
   const capture = cable ? { capture_mode: "virtual", audio_device_id: cable.id, audio_device_name: cable.name } : {};
   const profile = normalizeProfile({ ...newProfile(), ...capture, name: profileName, device_address: address, device_name: saved });
   const made = await app.run(() => app.core.request("profile.save", { profile, original_name: null }));

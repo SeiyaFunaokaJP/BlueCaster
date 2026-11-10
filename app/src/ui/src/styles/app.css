@@ -3484,6 +3484,26 @@ option {
   gap: var(--s4);
   color: var(--text-2);
 }
+.cable-note-text {
+  flex: 1;
+  min-width: 0;
+}
+.cable-note-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s2);
+}
+.cable-origin {
+  margin-top: var(--s1);
+}
+.source-advice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+}
 .setup-general .field {
   flex-direction: row;
   align-items: center;

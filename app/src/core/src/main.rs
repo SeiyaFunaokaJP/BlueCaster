@@ -18,6 +18,7 @@ mod resident;
 mod rfcomm;
 mod server;
 mod state;
+mod vb_cable;
 mod zip;
 
 fn main() {

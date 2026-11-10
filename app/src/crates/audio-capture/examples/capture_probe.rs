@@ -120,13 +120,15 @@ fn main() -> Result<(), CaptureError> {
             Capture::open(&Source::RenderDevice { id: d.id.clone() }, &CaptureOptions::default()).map(|c| c.format());
         println!(
             "  {}{} {}  [{}]
-      mix rate {:?}, loopback format {:?}",
+      mix rate {:?}, loopback format {:?}, recording side {:?} at {:?} Hz",
             if d.is_default { "*" } else { " " },
             if d.is_virtual { "v" } else { " " },
             d.name,
             d.id,
             audio_capture::mix_rate(Some(&d.id)),
-            opened
+            opened,
+            d.capture_name,
+            d.capture_rate
         );
     }
     println!("default: {:?}, mix rate {:?}", audio_capture::default_render_device(), audio_capture::mix_rate(None));

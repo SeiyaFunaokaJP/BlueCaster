@@ -9,7 +9,9 @@
 // cable and outputs without a recording side (under Monitoring) only in
 // developer mode. The output source's cable is listed but disabled, saying
 // so. A classic device that has no profile yet shows what its first one
-// gets: Auto with VB-CABLE (the core's default_mic_output).
+// gets: Auto with VB-CABLE, else the Hi-Fi Cable (the core's
+// default_mic_output). The Hi-Fi Cable with its two sides at different
+// sample rates is said (it may pass nothing then; on one PC it still did).
 
 import { createSignal, Show } from "solid-js";
 import { useApp } from "../app/context";
@@ -62,8 +64,8 @@ export function InputSource(props: {
     if (!e) return null;
     if (e.profile) return e.profile;
     const base = entryBase(e, snap().profiles);
-    // The Hi-Fi Cable first, VB-Cable then stays free for the sound
-    const cable = [hifiCable(props.devices), vbCable(props.devices)].find(
+    // VB-Cable first: the Hi-Fi Cable, with less delay, stays free for the sound
+    const cable = [vbCable(props.devices), hifiCable(props.devices)].find(
       (c) => c && c.id !== looped(),
     );
     return !e.le_audio && cable
@@ -98,6 +100,13 @@ export function InputSource(props: {
     const switches = props.source.capture_mode === "virtual" && props.source.auto_switch_device !== false;
     return !!d?.is_default && !switches && !usedBySource(d.id);
   };
+  /** The Hi-Fi Cable chosen with its two sides at different sample rates:
+   *  [playback, recording] */
+  const hifiRates = (): [number, number] | null => {
+    const d = props.devices.find((x) => x.id === chosen());
+    if (!d || !isHifiCable(d) || !d.mix_rate || !d.capture_rate) return null;
+    return d.mix_rate === d.capture_rate ? null : [d.mix_rate, d.capture_rate];
+  };
   const [busy, setBusy] = createSignal(false);
   const save = async (patch: Partial<Profile>) => {
     const e = entry();
@@ -113,11 +122,11 @@ export function InputSource(props: {
     setBusy(false);
   };
   const options = (): Option<string>[] => {
-    // Cables first (the Hi-Fi Cable, the microphone's own, then the standard
-    // one before the 16-channel one), then what only plays the microphone; a
-    // group's options next to each other
+    // Cables first (VB-Cable, the microphone's own, then the Hi-Fi Cable and
+    // the 16-channel one), then what only plays the microphone; a group's
+    // options next to each other
     const rank = (d: AudioDevice) =>
-      (d.capture_name || d.is_virtual ? 0 : 2) + Number(multichannelCable(d)) - Number(isHifiCable(d));
+      (d.capture_name || d.is_virtual ? 0 : 2) + Number(multichannelCable(d) || isHifiCable(d));
     const list = props.devices
       .filter(
         (d) =>
@@ -207,6 +216,14 @@ export function InputSource(props: {
             <Icon name="warning" />
             <span>{t("capture.mic_loop_here")}</span>
           </p>
+        </Show>
+        <Show when={mode() !== "off" && hifiRates()}>
+          {(r) => (
+            <p class="field-warn">
+              <Icon name="warning" />
+              <span>{t("capture.hifi_rates_differ", r()[0], r()[1])}</span>
+            </p>
+          )}
         </Show>
         <Show when={mode() !== "off" && playsDefault()}>
           <p class="field-warn">
