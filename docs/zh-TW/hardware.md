@@ -25,14 +25,16 @@ nav_order: 2.5
 | TP-Link UB500 | Realtek RTL8761BU | 2357:0604 | USB 接收器 | ✅ 測試最完整 | 韌體 `rtl8761bu`。不支援 LE Audio（沒有等時通道） | 維護者；[#84](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/84)、[#87](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/87) |
 | 通用 RTL8761B 接收器 | Realtek RTL8761BU | 0BDA:A729 | USB 接收器 | ✅ | 韌體 `rtl8761bu`。自 2.0.2 起會自動偵測（之前：晶片請選擇 RTL8761BU）。不支援 LE Audio | [#66](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/66)、[#86](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/86) |
 | 筆電內建的 Realtek RTL8852BE | Realtek RTL8852BU | 0BDA:4853 | 內建 | ✅ | 韌體 `rtl8852bu`，自 2.0.2-beta.1 起可辨識。BlueCaster 使用期間，Windows 本身沒有藍牙可用 | [#81](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/81) |
-| ASUS BT400 | Broadcom BCM20702 | 0B05:17CB | USB 接收器 | ✅ 實驗性 | 以其 ROM 韌體運作，不需要任何檔案。回報於 v1（1.0.12–1.0.17） | [#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18)、[#27](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/27)、[#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30) |
+| ASUS BT400 | Broadcom BCM20702 | 0B05:17CB | USB 接收器 | ✅ | 以其 ROM 韌體運作，不需要任何檔案。回報於 v1（1.0.12–1.0.17） | [#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18)、[#27](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/27)、[#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30) |
 | 「Realtek Bluetooth 6.0」接收器 | Realtek RTL8761B | 0BDA:A760 | USB 接收器 | ✅ | 尚無法自動偵測（LMP subversion 0x8761）。不支援 LE Audio | [#208](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/208) |
 | CSR8510 A10 接收器 | CSR8510 | 0A12:0001 | USB 接收器 | ✅ | 不需要韌體檔案 | [#32](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/32) |
-| Intel AX211（內建 Wi-Fi / 藍牙網卡） | Intel AX211（TLV bootloader） | 8087:0033 | 內建 | ✅ 實驗性 | 韌體取自 linux-firmware `intel/`，從 bootloader 載入，需 1.5–1.7 秒：`ibt-0180-0041`（variant 0x1B）或 `ibt-1040-0041`（variant 0x19），記錄中會寫明檔案名稱。配對、AAC 與 LDAC 可用。BlueCaster 使用期間，Windows 本身沒有藍牙可用 | [#261](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/261) |
+| Intel AX211（內建 Wi-Fi / 藍牙網卡） | Intel AX211（TLV bootloader） | 8087:0033 | 內建 | ✅ | 韌體取自 linux-firmware `intel/`，從 bootloader 載入，需 1.5–1.7 秒：`ibt-0180-0041`（variant 0x1B）或 `ibt-1040-0041`（variant 0x19），記錄中會寫明檔案名稱。配對、AAC 與 LDAC 可用。BlueCaster 使用期間，Windows 本身沒有藍牙可用 | [#261](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/261) |
+| MediaTek MT7925（內建 Wi-Fi / 藍牙網卡） | MediaTek MT7925 | 0E8D:7925 | 內建 | ✅ | 韌體取自 MediaTek 的 Windows 驅動程式。A2DP 可用；LE Audio 需開啟 開發者 > Debug 中的一項設定才能播放 | [#86](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/86) |
+| MediaTek MT7921（內建 Wi-Fi / 藍牙網卡） | MediaTek MT7921 | 13D3:3606 | 內建 | ✅ | – | [#432](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/432) |
 | 「MA530」介面卡 | 未提供 | – | USB 接收器 | ✅ | 回報於 v1.0.9 | [#3](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/3)、[#9](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/9) |
 | UGREEN 藍牙 5.4 與 6.0 接收器 | 未提供 | – | USB 接收器 | ✅ | 回報於 2.0.1 | [#11](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/11#issuecomment-6563908711) |
 
-MediaTek 與 Qualcomm 介面卡尚無回報：對它們的預期請參閱 [建議的介面卡](setup#adapters)。
+Qualcomm 介面卡尚無回報：對它們的預期請參閱 [建議的介面卡](setup#adapters)。
 
 ## 耳機
 
@@ -63,5 +65,5 @@ MediaTek 與 Qualcomm 介面卡尚無回報：對它們的預期請參閱 [建�
 ## 尚未驗證
 
 - **實際耳機上的編解碼器**：aptX HD、aptX Low Latency、Opus、Opus 05、FastStream
-- **LE Audio**：只對模擬器測試過；上述介面卡都沒有等時通道
+- **LE Audio**：只對模擬器及在 MediaTek MT7925 上測試過
 - **ARM64 版 Windows**，以及 **搭配 v2 的 Windows 10**（v1 曾在 Windows 10 22H2 上執行：[#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18)、[#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30)）

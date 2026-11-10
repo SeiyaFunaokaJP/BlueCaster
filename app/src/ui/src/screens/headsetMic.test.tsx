@@ -102,18 +102,52 @@ describe("Input Source on Audio Devices", () => {
     expect(micSelect(wh).value).toBe(CABLE);
   });
 
-  it("lists the Hi-Fi Cable first, keeping the device chosen (issue #86)", async () => {
+  it("lists VB-Cable first and the Hi-Fi Cable after, keeping the device chosen", async () => {
     start("#/devices", "voice");
     mock!.hifiCable = true;
     const wh = await deviceEntry(/WH-1000XM5/);
     await waitFor(() =>
       expect([...micSelect(wh).options].map((o) => o.textContent)).toEqual([
-        "Hi-Fi Cable Output (VB-Audio Hi-Fi Cable)",
         "CABLE Output (VB-Audio Virtual Cable)",
         "Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)",
+        "Hi-Fi Cable Output (VB-Audio Hi-Fi Cable)",
       ]),
     );
     expect(micSelect(wh).value).toBe(CABLE);
+  });
+
+  it("recommends the Hi-Fi Cable over VB-Cable for the sound, and swaps them", async () => {
+    const { core } = start("#/devices", "voice");
+    const wh = await deviceEntry(/WH-1000XM5/);
+    const source = () => within(wh).getByLabelText(t("capture.mode")) as HTMLSelectElement;
+    await within(source()).findByRole("option", { name: "CABLE Input (VB-Audio Virtual Cable)" });
+    fireEvent.change(source(), { target: { value: `virtual:${CABLE}` } });
+    await waitFor(() => expect(wh.textContent).toContain(t("capture.vbcable_delay")));
+    // Not installed: where to get it
+    expect(within(wh).getByRole("button", { name: t("hificable.download") })).toBeInTheDocument();
+    mock!.hifiCable = true;
+    window.dispatchEvent(new Event("focus"));
+    fireEvent.click(await within(wh).findByRole("button", { name: t("capture.use_hificable") }));
+    await waitFor(() => {
+      const p = core.state.snap!.profiles.find((x) => x.device_address === "AC:80:0A:12:34:56" && !x.le_audio)!;
+      expect(p.audio_device_name).toBe("Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)");
+      expect(p.mic_device_id).toBe(CABLE);
+    });
+    expect(wh.textContent).not.toContain(t("capture.vbcable_delay"));
+  });
+
+  it("says when the Hi-Fi Cable's two sides run at different rates", async () => {
+    start("#/devices", "voice");
+    mock!.hifiCable = true;
+    mock!.hifiCaptureRate = 44100;
+    const wh = await deviceEntry(/WH-1000XM5/);
+    const hifi = await waitFor(() => {
+      const o = [...micSelect(wh).options].find((x) => /Hi-Fi/.test(x.textContent ?? ""));
+      expect(o).toBeTruthy();
+      return o!;
+    });
+    fireEvent.change(micSelect(wh), { target: { value: hifi.value } });
+    await waitFor(() => expect(wh.textContent).toContain(t("capture.hifi_rates_differ", 48000, 44100)));
   });
 
   it("adds the 16-channel cable's own name in developer mode, not a second CABLE Output", async () => {

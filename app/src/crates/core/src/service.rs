@@ -586,7 +586,7 @@ impl Inner {
         let mut last = InitFailure::Failed;
         let le_on = self.le_wanted();
         if le_on {
-            tracing::info!("LE Audio (experimental) is on: BTstack starts with LE");
+            tracing::info!("LE Audio is on: BTstack starts with LE");
         }
         for attempt in 1..=attempts {
             if attempt > 1 {
@@ -742,11 +742,7 @@ impl Inner {
             } else if self.le_active() != le_wanted {
                 // Turned on or off while streaming or scanning: applied now,
                 // before the next scan or connection (v1)
-                Some(if le_wanted {
-                    "LE Audio (experimental) was turned on"
-                } else {
-                    "LE Audio (experimental) was turned off"
-                })
+                Some(if le_wanted { "LE Audio was turned on" } else { "LE Audio was turned off" })
             } else if (self.voice_wanted.load(Ordering::Acquire) || self.mic_test.needs_voice()) && !h.voice_enabled() {
                 Some("headset mode needs the stack with voice")
             } else if !h.controller_responds(CONTROLLER_PROBE) {
@@ -1055,7 +1051,7 @@ fn apply_dev_overrides(settings: &Settings) {
     // Developer > Debug, read when the adapter opens next
     let debug = if settings.debug_mode { settings.dev_debug.clone() } else { Default::default() };
     hci_transport::iso_intr::set_config(hci_transport::iso_intr::IsoInterfaceConfig {
-        enabled: debug.mtk_iso_interface,
+        bulk: debug.mtk_iso_bulk,
         pad_to: debug.mtk_iso_pad.into(),
     });
     let command = bt_host::debug_command::parse(&debug.mtk_command).unwrap_or_else(|e| {
@@ -1205,12 +1201,12 @@ impl Service {
         if old.le_audio_experimental != new_le && host.is_some() && self.inner.le_active() != self.inner.le_wanted() {
             if self.is_running() || self.is_scanning() {
                 tracing::info!(
-                    "LE Audio (experimental) turned {}: BTstack restarts before the next scan or connection",
+                    "LE Audio turned {}: BTstack restarts before the next scan or connection",
                     if new_le { "on" } else { "off" }
                 );
             } else {
                 tracing::info!(
-                    "LE Audio (experimental) turned {}: stopping BTstack, the next scan or connection starts it anew",
+                    "LE Audio turned {}: stopping BTstack, the next scan or connection starts it anew",
                     if new_le { "on" } else { "off" }
                 );
                 self.inner.shutdown_host();

@@ -25,14 +25,16 @@ BlueCaster를 사용한 어댑터와 헤드폰으로, 관리자 자신의 테스
 | TP-Link UB500 | Realtek RTL8761BU | 2357:0604 | USB 동글 | ✅ 가장 많이 테스트됨 | 펌웨어 `rtl8761bu`. LE 오디오 미지원(아이소크로너스 채널 없음) | 관리자; [#84](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/84), [#87](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/87) |
 | 범용 RTL8761B 동글 | Realtek RTL8761BU | 0BDA:A729 | USB 동글 | ✅ | 펌웨어 `rtl8761bu`. 2.0.2부터 자동으로 감지됨(그 전에는 칩으로 RTL8761BU를 선택). LE 오디오 미지원 | [#66](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/66), [#86](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/86) |
 | 노트북 내장 Realtek RTL8852BE | Realtek RTL8852BU | 0BDA:4853 | 내장 | ✅ | 펌웨어 `rtl8852bu`, 2.0.2-beta.1부터 인식됨. BlueCaster가 사용하는 동안 Windows 자체 Bluetooth는 사용할 수 없음 | [#81](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/81) |
-| ASUS BT400 | Broadcom BCM20702 | 0B05:17CB | USB 동글 | ✅ 실험적 | ROM 펌웨어로 작동하며 파일이 필요 없음. v1(1.0.12–1.0.17)에서 보고됨 | [#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18), [#27](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/27), [#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30) |
+| ASUS BT400 | Broadcom BCM20702 | 0B05:17CB | USB 동글 | ✅ | ROM 펌웨어로 작동하며 파일이 필요 없음. v1(1.0.12–1.0.17)에서 보고됨 | [#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18), [#27](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/27), [#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30) |
 | "Realtek Bluetooth 6.0" 동글 | Realtek RTL8761B | 0BDA:A760 | USB 동글 | ✅ | 아직 자동으로 감지되지 않음(LMP 서브버전 0x8761). LE 오디오 미지원 | [#208](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/208) |
 | CSR8510 A10 동글 | CSR8510 | 0A12:0001 | USB 동글 | ✅ | 펌웨어 파일 불필요 | [#32](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/32) |
-| Intel AX211 (내장 Wi-Fi / Bluetooth 카드) | Intel AX211 (TLV 부트로더) | 8087:0033 | 내장 | ✅ 실험적 | linux-firmware `intel/`의 펌웨어를 부트로더에서 1.5–1.7초 만에 로드: `ibt-0180-0041`(variant 0x1B) 또는 `ibt-1040-0041`(variant 0x19). 필요한 파일은 로그에 나옴. 페어링, AAC, LDAC 작동. BlueCaster가 사용하는 동안 Windows 자체 Bluetooth는 사용할 수 없음 | [#261](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/261) |
+| Intel AX211 (내장 Wi-Fi / Bluetooth 카드) | Intel AX211 (TLV 부트로더) | 8087:0033 | 내장 | ✅ | linux-firmware `intel/`의 펌웨어를 부트로더에서 1.5–1.7초 만에 로드: `ibt-0180-0041`(variant 0x1B) 또는 `ibt-1040-0041`(variant 0x19). 필요한 파일은 로그에 나옴. 페어링, AAC, LDAC 작동. BlueCaster가 사용하는 동안 Windows 자체 Bluetooth는 사용할 수 없음 | [#261](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/261) |
+| MediaTek MT7925 (내장 Wi-Fi / Bluetooth 카드) | MediaTek MT7925 | 0E8D:7925 | 내장 | ✅ | MediaTek의 Windows 드라이버에서 펌웨어를 읽음. A2DP 작동. LE 오디오는 개발자 > Debug 설정으로 재생됨 | [#86](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/86) |
+| MediaTek MT7921 (내장 Wi-Fi / Bluetooth 카드) | MediaTek MT7921 | 13D3:3606 | 내장 | ✅ | – | [#432](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/432) |
 | "MA530" 어댑터 | 알 수 없음 | – | USB 동글 | ✅ | v1.0.9에서 보고됨 | [#3](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/3), [#9](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/9) |
 | UGREEN Bluetooth 5.4 및 6.0 동글 | 알 수 없음 | – | USB 동글 | ✅ | 2.0.1에서 보고됨 | [#11](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/11#issuecomment-6563908711) |
 
-MediaTek과 Qualcomm 어댑터는 아직 보고가 없습니다. 이 어댑터들에 대해 예상되는 내용은 [권장 어댑터](setup#adapters)를 참조하십시오.
+Qualcomm 어댑터는 아직 보고가 없습니다. 이 어댑터들에 대해 예상되는 내용은 [권장 어댑터](setup#adapters)를 참조하십시오.
 
 ## 헤드폰
 
@@ -63,5 +65,5 @@ MediaTek과 Qualcomm 어댑터는 아직 보고가 없습니다. 이 어댑터�
 ## 아직 검증되지 않음
 
 - **실제 헤드폰에서의 코덱**: aptX HD, aptX Low Latency, Opus, Opus 05, FastStream
-- **LE 오디오**: 에뮬레이터로만 테스트됨. 위 어댑터 중 아이소크로너스 채널이 있는 것은 없음
+- **LE 오디오**: 에뮬레이터와 MediaTek MT7925에서만 테스트됨
 - **ARM64용 Windows**, 그리고 **v2를 사용하는 Windows 10**(v1은 Windows 10 22H2에서 실행됨: [#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18), [#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30))

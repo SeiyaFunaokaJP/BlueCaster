@@ -37,9 +37,6 @@
 // its rate among those the headphones allow (the profile's mic_rate, 0 =
 // Auto). The choice stays in the profile while Auto-select is on. The
 // microphone stays mono.
-// Every codec is offered, the experimental ones too (issue #86: they are
-// marked in the README only; the core no longer reads
-// settings.experimental_codecs).
 // A codec's "..." applies each change at once (issue #86): the codec in use
 // is saved, which starts the stream again but for the bitpools, which the
 // encoder takes as the slider moves; another codec's settings are only kept
@@ -263,10 +260,10 @@ export function pickedCodec(
   // One chosen on its card though the device does not offer it: that one;
   // one it no longer offers: the one used instead (issue #86)
   if (!autoAll && codec !== "auto") {
-    if (blocked) return effectiveCodec(codec, known, true, order);
-    return p.codec_forced ? codec : (effectiveCodec(codec, known, true, order) ?? codec);
+    if (blocked) return effectiveCodec(codec, known, order);
+    return p.codec_forced ? codec : (effectiveCodec(codec, known, order) ?? codec);
   }
-  return streamingCodec(snap, entry) ?? effectiveCodec("auto", known, true, order);
+  return streamingCodec(snap, entry) ?? effectiveCodec("auto", known, order);
 }
 
 /** Whether a codec's card shows: the one picked always, the others unless

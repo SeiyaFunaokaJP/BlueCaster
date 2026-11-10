@@ -24,18 +24,19 @@ use windows::Win32::Devices::FunctionDiscovery::{
 use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Foundation::{RPC_E_CHANGED_MODE, S_OK};
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
-use windows::Win32::Media::Audio::PKEY_AudioEndpoint_FormFactor;
 use windows::Win32::Media::Audio::{
     AudioSessionStateActive, AudioSessionStateExpired, DEVICE_STATE_ACTIVE, ERole, IAudioSessionControl2,
     IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator, ISimpleAudioVolume, MMDeviceEnumerator, WAVEFORMATEX,
     eCapture, eConsole, eMultimedia, eRender,
 };
+use windows::Win32::Media::Audio::{PKEY_AudioEndpoint_FormFactor, PKEY_AudioEngine_DeviceFormat};
 use windows::Win32::System::Com::StructuredStorage::{
     PROPVARIANT, PropVariantClear, PropVariantToGUID, PropVariantToStringAlloc, PropVariantToUInt32,
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, STGM_READ,
 };
+use windows::Win32::System::Variant::VT_BLOB;
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 use windows::core::{BOOL, GUID, HRESULT, IUnknown, IUnknown_Vtbl, Interface, PCWSTR};
 
@@ -545,12 +546,39 @@ fn string_property(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<String> 
     out
 }
 
-/// The recording side of each render endpoint in `render_ids`, by its
-/// friendly name: the capture endpoint paired with it ("CABLE Output
-/// (VB-Audio Virtual Cable)" for "CABLE Input"; same container, else same
-/// adapter name), None where none is. What apps pick as the microphone
-/// when the headset microphone is rendered to that endpoint.
-pub fn paired_capture_names(render_ids: &[String]) -> windows::core::Result<Vec<Option<String>>> {
+/// The sample rate of the format Windows runs an endpoint in
+/// (PKEY_AudioEngine_DeviceFormat, the Sound settings' "Default Format": a
+/// VT_BLOB holding a WAVEFORMATEX or WAVEFORMATEXTENSIBLE)
+fn format_rate(store: &IPropertyStore) -> Option<u32> {
+    // SAFETY: a valid PROPERTYKEY; the value is ours to clear.
+    let mut v = unsafe { store.GetValue(&PKEY_AudioEngine_DeviceFormat) }.ok()?;
+    // SAFETY: the union is read as a blob only when its type says it is one;
+    // the blob's bytes are read within its size, before the value is cleared.
+    let rate = unsafe {
+        let inner = &v.Anonymous.Anonymous;
+        let blob = inner.Anonymous.blob;
+        (inner.vt == VT_BLOB && !blob.pBlobData.is_null() && blob.cbSize as usize >= size_of::<WAVEFORMATEX>())
+            .then(|| blob.pBlobData.cast::<WAVEFORMATEX>().read_unaligned().nSamplesPerSec)
+    };
+    // SAFETY: clears the value GetValue gave us, once.
+    let _ = unsafe { PropVariantClear(&mut v) };
+    rate.filter(|&r| r > 0)
+}
+
+/// A render endpoint's recording side: its friendly name and the sample rate
+/// Windows runs it at
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CaptureSide {
+    pub name: Option<String>,
+    pub rate: Option<u32>,
+}
+
+/// The recording side of each render endpoint in `render_ids`: the capture
+/// endpoint paired with it ("CABLE Output (VB-Audio Virtual Cable)" for
+/// "CABLE Input"; same container, else same adapter name), None where none
+/// is. What apps pick as the microphone when the headset microphone is
+/// rendered to that endpoint.
+pub fn paired_capture_sides(render_ids: &[String]) -> windows::core::Result<Vec<Option<CaptureSide>>> {
     let enumerator = enumerator()?;
     // SAFETY: plain call on a live enumerator.
     let devices = unsafe { enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)? };
@@ -561,10 +589,12 @@ pub fn paired_capture_names(render_ids: &[String]) -> windows::core::Result<Vec<
         // SAFETY: `i` is within the collection's count.
         let Ok(device) = (unsafe { devices.Item(i) }) else { continue };
         // SAFETY: plain call on a live device.
-        let name = unsafe { device.OpenPropertyStore(STGM_READ) }
-            .ok()
-            .and_then(|store| string_property(&store, &PKEY_Device_FriendlyName));
-        captures.push((pairing(&device), name));
+        let store = unsafe { device.OpenPropertyStore(STGM_READ) }.ok();
+        let side = CaptureSide {
+            name: store.as_ref().and_then(|s| string_property(s, &PKEY_Device_FriendlyName)),
+            rate: store.as_ref().and_then(format_rate),
+        };
+        captures.push((pairing(&device), side));
     }
     let keys: Vec<Pairing> = captures.iter().map(|(p, _)| p.clone()).collect();
     Ok(render_ids
@@ -572,7 +602,7 @@ pub fn paired_capture_names(render_ids: &[String]) -> windows::core::Result<Vec<
         .map(|id| {
             let render = pairing(&render_device(&enumerator, Some(id)).ok()?);
             // Several (one adapter with more cables): the first named one
-            paired(&render, &keys).into_iter().find_map(|i| captures[i].1.clone())
+            paired(&render, &keys).into_iter().map(|i| &captures[i].1).find(|c| c.name.is_some()).cloned()
         })
         .collect())
 }

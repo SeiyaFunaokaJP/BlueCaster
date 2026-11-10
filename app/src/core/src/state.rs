@@ -321,6 +321,8 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
         include_alphas: s.include_alphas,
         media_keys: s.media_keys,
         auto_reconnect: s.auto_reconnect,
+        vb_cable_note_hidden: s.vb_cable_note_hidden,
+        hifi_cable_note_hidden: s.hifi_cable_note_hidden,
         volume_sync: s.volume_sync,
         mute_output: s.mute_output,
         volume_mixer: s.volume_mixer,
@@ -362,7 +364,7 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
             health_every_interval: s.dev_log.health_every_interval,
         },
         dev_debug: ipc::DevDebug {
-            mtk_iso_interface: s.dev_debug.mtk_iso_interface,
+            mtk_iso_bulk: s.dev_debug.mtk_iso_bulk,
             mtk_iso_pad: s.dev_debug.mtk_iso_pad,
             mtk_command: s.dev_debug.mtk_command.clone(),
             mtk_iso_queue: s.dev_debug.mtk_iso_queue,
@@ -377,7 +379,6 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
         remote_sink: s.remote_sink.clone(),
         le_audio_experimental: s.le_audio_experimental,
         le_audio_low_latency: s.le_audio_low_latency,
-        experimental_codecs: s.experimental_codecs,
         auto_codec: s.auto_codec,
     }
 }
@@ -410,6 +411,8 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
     c.include_alphas = s.include_alphas;
     c.media_keys = s.media_keys;
     c.auto_reconnect = s.auto_reconnect;
+    c.vb_cable_note_hidden = s.vb_cable_note_hidden;
+    c.hifi_cable_note_hidden = s.hifi_cable_note_hidden;
     c.volume_sync = s.volume_sync;
     c.mute_output = s.mute_output;
     c.volume_mixer = s.volume_mixer;
@@ -464,7 +467,7 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
     }
     .clamped();
     c.dev_debug = bluecaster_core::settings::DevDebug {
-        mtk_iso_interface: s.dev_debug.mtk_iso_interface,
+        mtk_iso_bulk: s.dev_debug.mtk_iso_bulk,
         mtk_iso_pad: s.dev_debug.mtk_iso_pad.min(hci_transport::iso_intr::PAD_MAX as u16),
         mtk_command: s.dev_debug.mtk_command.trim().to_string(),
         mtk_iso_queue: s.dev_debug.mtk_iso_queue.min(12),
@@ -479,7 +482,6 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
     c.remote_sink = s.remote_sink.clone();
     c.le_audio_experimental = s.le_audio_experimental;
     c.le_audio_low_latency = s.le_audio_low_latency;
-    // experimental_codecs: always on (issue #86), as loaded
     c.auto_codec = s.auto_codec;
     c
 }
@@ -1237,9 +1239,7 @@ fn connected_balloon(lang: &str, device: Option<&str>, stream: &StreamStatus) ->
     lines.push(i.codec.clone());
     lines.push(codec_params(&i.codec, i.bitrate_kbps, i.sample_rate, i.bits, i.abr));
     if let Some(req) = &i.requested_codec {
-        let (key, default) = if stream.message.key == "status.connected_fallback_experimental" {
-            ("ui.codec.fallback_experimental", "(%s is experimental)")
-        } else if stream.message.key == "status.connected_fallback_developer" {
+        let (key, default) = if stream.message.key == "status.connected_fallback_developer" {
             ("ui.codec.fallback_developer", "(%s needs developer mode)")
         } else if i.requested_in_use {
             ("ui.codec.fallback_in_use", "(%s is in use)")
@@ -1435,8 +1435,8 @@ fn codec_named_in_place(stream: &StreamStatus, before: Option<&CoreProfile>, sav
     as_before == *b
 }
 
-/// A new classic profile left on Auto without a microphone output gets the
-/// Hi-Fi Cable's, else VB-CABLE's (issue #86), unless its capture source is
+/// A new classic profile left on Auto without a microphone output gets
+/// VB-CABLE's, else the Hi-Fi Cable's (issue #86), unless its capture source is
 /// that cable (the microphone would loop into the stream). LE Audio takes Auto as On, so
 /// its profiles get none by themselves.
 fn default_mic_output(p: &mut CoreProfile) {
@@ -1445,8 +1445,9 @@ fn default_mic_output(p: &mut CoreProfile) {
     }
     let devices = audio_capture::render_devices().unwrap_or_default();
     let default_output = devices.iter().find(|d| d.is_default).map_or("", |d| d.id.as_str());
-    // The Hi-Fi Cable first: VB-CABLE then stays free for the sound
-    let Some(cable) = [hifi_cable(&devices), default_cable(&devices)]
+    // VB-CABLE first: the Hi-Fi Cable, with less delay, stays free for the
+    // sound
+    let Some(cable) = [default_cable(&devices), hifi_cable(&devices)]
         .into_iter()
         .flatten()
         .find(|c| profiles::mic_output_conflicts(&p.source(), &c.id, default_output).is_none())
@@ -2127,23 +2128,30 @@ impl CoreState {
         Ok(Value::Null)
     }
 
-    /// VB-Cable that came after it was missing is taken into use, one time
-    /// (issue #86): a device the user set up otherwise before stays as it is
-    pub fn watch_vb_cable(&self, devices: &[audio_capture::DeviceInfo]) {
+    /// VB-CABLE that came after it was missing is taken into use, one time
+    /// (issue #86): for the sound where the Hi-Fi Cable is not there (the
+    /// profiles that capture System Loopback), else for the microphone (the
+    /// classic profiles whose microphone has no working output). A device
+    /// the user set up otherwise before stays as it is.
+    fn watch_vb_cable(&self, devices: &[audio_capture::DeviceInfo]) {
         let mut s = self.service.settings();
         match (vb_cable(devices), s.awaiting_vb_cable) {
             (None, false) => s.awaiting_vb_cable = true,
-            (Some(cable), true) => {
+            (Some(_), true) => {
                 s.awaiting_vb_cable = false;
+                let cable = default_cable(devices).expect("VB-CABLE is there");
                 let mut list = profiles::load(&self.config_dir());
-                let changed = profiles::use_virtual_device(&mut list, &cable.id, &cable.name);
-                tracing::info!("VB-Cable found: {changed} profile(s) capture it now");
-                let active = Some(s.last_profile.clone()).filter(|n| list.iter().any(|p| &p.name == n));
-                if changed > 0
-                    && let Err(e) = self.save_profiles(&list, active)
-                {
-                    tracing::warn!("VB-Cable: profiles not saved: {}", e.code);
-                }
+                let changed = if hifi_cable(devices).is_some() {
+                    let default_output = devices.iter().find(|d| d.is_default).map_or("", |d| d.id.as_str());
+                    let n = profiles::use_mic_cable(&mut list, &cable.id, &cable.name, default_output);
+                    tracing::info!("VB-Cable found: {n} profile(s) play the microphone into it now");
+                    n
+                } else {
+                    let n = profiles::use_virtual_device(&mut list, &cable.id, &cable.name);
+                    tracing::info!("VB-Cable found: {n} profile(s) capture it now");
+                    n
+                };
+                self.save_found_cable(&list, &s, changed, "VB-Cable");
             }
             _ => return,
         }
@@ -2151,16 +2159,17 @@ impl CoreState {
         self.service.set_settings(s);
     }
 
-    /// The virtual cables taken into use when they come (issue #86): VB-CABLE
-    /// for the sound, then the Hi-Fi Cable for the microphone
+    /// The virtual cables taken into use when they come (issue #86): the
+    /// Hi-Fi Cable for the sound (less delay), VB-CABLE for the microphone
     pub fn watch_cables(&self, devices: &[audio_capture::DeviceInfo]) {
         self.watch_vb_cable(devices);
         self.watch_hifi_cable(devices);
     }
 
-    /// The Hi-Fi Cable that came after it was missing takes the microphone
-    /// of the classic profiles whose microphone had no working output, one
-    /// time: one that works stays, as apps record from it
+    /// The Hi-Fi Cable that came after it was missing, one time: the profiles
+    /// that capture System Loopback capture it, then the classic profiles
+    /// whose microphone had no working output play it there (one that works
+    /// stays, as apps record from it)
     fn watch_hifi_cable(&self, devices: &[audio_capture::DeviceInfo]) {
         let mut s = self.service.settings();
         match (hifi_cable(devices), s.awaiting_hifi_cable) {
@@ -2169,19 +2178,27 @@ impl CoreState {
                 s.awaiting_hifi_cable = false;
                 let default_output = devices.iter().find(|d| d.is_default).map_or("", |d| d.id.as_str());
                 let mut list = profiles::load(&self.config_dir());
-                let changed = profiles::use_mic_cable(&mut list, &cable.id, &cable.name, default_output);
-                tracing::info!("Hi-Fi Cable found: {changed} profile(s) play the microphone into it now");
-                let active = Some(s.last_profile.clone()).filter(|n| list.iter().any(|p| &p.name == n));
-                if changed > 0
-                    && let Err(e) = self.save_profiles(&list, active)
-                {
-                    tracing::warn!("Hi-Fi Cable: profiles not saved: {}", e.code);
-                }
+                let sound = profiles::use_virtual_device(&mut list, &cable.id, &cable.name);
+                let mic = profiles::use_mic_cable(&mut list, &cable.id, &cable.name, default_output);
+                tracing::info!(
+                    "Hi-Fi Cable found: {sound} profile(s) capture it, {mic} play the microphone into it now"
+                );
+                self.save_found_cable(&list, &s, sound + mic, "Hi-Fi Cable");
             }
             _ => return,
         }
         let _ = s.save(&self.config_dir());
         self.service.set_settings(s);
+    }
+
+    /// The profiles a cable that came changed, saved (`changed` > 0)
+    fn save_found_cable(&self, list: &[CoreProfile], s: &CoreSettings, changed: usize, what: &str) {
+        let active = Some(s.last_profile.clone()).filter(|n| list.iter().any(|p| &p.name == n));
+        if changed > 0
+            && let Err(e) = self.save_profiles(list, active)
+        {
+            tracing::warn!("{what}: profiles not saved: {}", e.code);
+        }
     }
 
     fn save_settings(&self, s: CoreSettings) -> Result<(), ErrorInfo> {
@@ -2305,7 +2322,6 @@ impl CoreState {
             .unwrap_or(p)
             .to_request(settings.legacy_max_media_payload())
             .map_err(|_| err("profile.invalid_address", "error.invalid_address"))?;
-        req.experimental_codecs = settings.experimental_codecs;
         req.developer_codecs = settings.debug_mode;
         req.volume_sync = effective_volume_sync(settings.volume_sync, req.volume_sync);
         req.mute_output = settings.mutes_output();
@@ -2340,7 +2356,6 @@ impl CoreState {
     pub fn start_custom(&self, c: &CustomStream) -> Result<(), ErrorInfo> {
         let settings = self.service.settings();
         let mut req = custom_request(c, settings.legacy_max_media_payload())?;
-        req.experimental_codecs = settings.experimental_codecs;
         req.developer_codecs = settings.debug_mode;
         req.mute_output = settings.mutes_output();
         tracing::info!("custom stream to {}: codec {}, source {}", c.device, c.codec, req.source);
@@ -3244,7 +3259,6 @@ impl CoreState {
                     // stack, with the same profile (issue #86)
                     if let Some(mut req) = again {
                         let settings = me.service.settings();
-                        req.experimental_codecs = settings.experimental_codecs;
                         req.developer_codecs = settings.debug_mode;
                         let profile = me.starting_profile.lock().unwrap_or_else(|e| e.into_inner()).clone();
                         me.begin_stream(req, profile);
@@ -3388,10 +3402,22 @@ impl CoreState {
                                 is_default: d.is_default,
                                 is_virtual: d.is_virtual,
                                 capture_name: d.capture_name,
+                                capture_rate: d.capture_rate,
                             }
                         })
                         .collect();
                     Ok(json(&list))
+                }))
+                .await
+            }
+            Method::AudioInstallVbCable => {
+                blocking(Box::new(|me| {
+                    let found = crate::vb_cable::install()?;
+                    // Taken into use as any VB-CABLE that comes (watch_cables)
+                    if let Ok(d) = audio_capture::render_devices() {
+                        me.watch_cables(&d);
+                    }
+                    Ok(json(&found))
                 }))
                 .await
             }
@@ -3714,6 +3740,7 @@ mod tests {
             is_default: false,
             is_virtual: virt,
             capture_name: None,
+            capture_rate: None,
         };
         let list = [
             dev("spk", "Speakers (Realtek(R) Audio)", false),

@@ -219,11 +219,6 @@ NEGOTIATION = {
     # Opus 05: 48 kHz from a 44.1 kHz request; Auto never takes it (AAC here)
     'opus05-from-44k': ('opus05', [], 'opus05', ['--rate', '44100']),
     'auto-not-opus05': ('auto', ['--codecs', 'sbc', 'aac', 'opus05'], 'aac', []),
-    # Codecs > Enable experimental codecs off (issue #86): Auto passes over
-    # Opus, and a chosen aptX HD falls back past aptX LL (experimental too)
-    'auto-no-experimental': ('auto', ['--codecs', 'sbc', 'aac', 'opus'], 'aac', ['--no-experimental']),
-    'noexp-aptxhd-to-aac': ('aptxhd', ['--codecs', 'sbc', 'aac', 'aptxhd', 'aptxll'], 'aac',
-                            ['--fallback', '--no-experimental']),
     # aptX Adaptive (offered by the sink only when named, with SBC, AAC and
     # aptX as aptX Adaptive headsets list them: emu_sink.py): HQ, low latency
     # (SSRC 0xA1, 348-byte packets), an R2 sink in HQ and LL (frame types 3 /
@@ -1433,7 +1428,7 @@ def main():
                         default=CODECS + list(NEGOTIATION),
                         help='codecs and negotiation cases (%(default)s)')
     parser.add_argument('--le-audio', nargs='*', metavar='CASE',
-                        help='run the LE Audio (experimental) cases instead (default: all of them)')
+                        help='run the LE Audio cases instead (default: all of them)')
     parser.add_argument('--scan', nargs='*', metavar='CASE',
                         help=f'run the device scan cases instead ({", ".join(SCAN_CASES)}; default: all of them)')
     parser.add_argument('--link', nargs='*', metavar='CASE',

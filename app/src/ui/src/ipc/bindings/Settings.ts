@@ -50,6 +50,15 @@ media_keys: boolean,
  */
 auto_reconnect: boolean, 
 /**
+ * The suggestion to install VB-CABLE was closed: Settings still offers it
+ */
+vb_cable_note_hidden: boolean, 
+/**
+ * The suggestion to get the Hi-Fi Cable was closed: Settings still
+ * offers it
+ */
+hifi_cable_note_hidden: boolean, 
+/**
  * Windows Volume Sync for every device (on by default): the audio
  * device's volume and the captured device's Windows volume follow each
  * other. Off: no stream syncs. A change starts the profile in use
@@ -110,11 +119,6 @@ le_audio_experimental: boolean,
  * LE Audio stream is set up); only with le_audio_experimental
  */
 le_audio_low_latency: boolean, 
-/**
- * Before 2.0.2: Codecs > "Enable experimental codecs". Every codec
- * is used now: the core reads it as on whatever is sent
- */
-experimental_codecs: boolean, 
 /**
  * Codecs > "Auto-select the codec with the highest quality", for every
  * device (on by default): on, every A2DP profile streams as Auto; off,

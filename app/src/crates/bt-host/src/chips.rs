@@ -82,38 +82,35 @@ pub static OEM_TABLE: &[OemChipMapping] = &[
 ];
 
 /// The controller vendor, guessed from the USB VID:PID. Decides which
-/// firmware loader (if any) runs before HCI init. Only Realtek is well
-/// tested; the Intel (crate::intel), MediaTek MT79xx (crate::mediatek),
-/// Qualcomm ROME / WCN6855 (crate::qualcomm) and Broadcom loaders are
-/// experimental. CSR, Barrot and Actions run from ROM; Marvell's firmware
-/// comes from its Wi-Fi driver.
+/// firmware loader (if any) runs before HCI init: Realtek's, Intel's
+/// (crate::intel), MediaTek MT79xx (crate::mediatek), Qualcomm ROME /
+/// WCN6855 (crate::qualcomm) and Broadcom's. CSR, Barrot and Actions run
+/// from ROM; Marvell's firmware comes from its Wi-Fi driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ChipVendor {
     #[default]
     Unknown,
     /// rtl*_fw.bin + rtl*_config.bin (btstack_chipset_realtek)
     Realtek,
-    /// ibt-*.sfi + ibt-*.ddc, legacy and TLV bootloaders (experimental)
+    /// ibt-*.sfi + ibt-*.ddc, legacy and TLV bootloaders
     Intel,
-    /// optional *.hcd PatchRAM (experimental)
+    /// optional *.hcd PatchRAM
     Broadcom,
     /// ROM firmware, nothing to load
     Csr,
     /// needs WMT firmware download: the chips in [`LOADER_CHIPS`] only
-    /// (experimental)
     MediaTek,
     /// needs rampatch/NVM download: the chips in [`LOADER_CHIPS`] only
-    /// (experimental)
     Qualcomm,
     /// ROM firmware, nothing to load: cheap Bluetooth 5.4 / 6.0 dongles
     Barrot,
     /// Bluetooth part of a Wi-Fi combo (88W8897 in Surface Pro / Book):
     /// the Wi-Fi driver downloads one image for both, nothing for us to
-    /// load (experimental, untested)
+    /// load (untested)
     Marvell,
     /// ROM firmware, nothing to load: the ATS2851 dongle, which lists
     /// commands it cannot do (hidden from BTstack:
-    /// btstack_sys::transport::broken_command_bits; experimental, untested)
+    /// btstack_sys::transport::broken_command_bits; untested)
     Actions,
 }
 
@@ -134,16 +131,10 @@ impl ChipVendor {
         }
     }
 
-    /// Tag shown after the name: loaders that are experimental or missing,
-    /// for the whole vendor ([`chip_support_tag`] for one adapter)
-    pub fn support_tag(self) -> Option<&'static str> {
-        match self {
-            ChipVendor::Intel | ChipVendor::Broadcom | ChipVendor::Marvell | ChipVendor::Actions => {
-                Some("experimental")
-            }
-            ChipVendor::MediaTek | ChipVendor::Qualcomm => Some("unsupported"),
-            _ => None,
-        }
+    /// A loader covers only the chips of this vendor in [`LOADER_CHIPS`]:
+    /// the others are unsupported ([`chip_supported`])
+    fn listed_chips_only(self) -> bool {
+        matches!(self, ChipVendor::MediaTek | ChipVendor::Qualcomm)
     }
 }
 
@@ -151,11 +142,12 @@ impl ChipVendor {
 /// (vendor, VID, PID): a loader that covers only some of a vendor's chips
 /// lists them here, and only they leave "unsupported" (docs/chip-support.md)
 pub const LOADER_CHIPS: &[(ChipVendor, u16, u16)] = &[
-    // MediaTek MT79xx (crate::mediatek, experimental): the Bluetooth USB IDs
+    // MediaTek MT79xx (crate::mediatek): the Bluetooth USB IDs
     // of MediaTek's Windows driver 1.1147.0.616 (MT7902, MT7920, MT7921,
     // MT7922, MT7925) and the MT7925 section of 26.40.3.69. The loader reads
     // the chip ID itself and refuses another chip before sending anything.
-    // Only the MT7925 (0E8D:7925) has been seen (#86). Left out: the other IDs
+    // The MT7925 (0E8D:7925, #86) and an MT7921 (13D3:3606, PR #432) have
+    // been seen. Left out: the other IDs
     // of 26.40.3.69, which also covers the MT6639 (MT7927)
     (ChipVendor::MediaTek, 0x0489, 0xE0C8),
     (ChipVendor::MediaTek, 0x0489, 0xE0CD),
@@ -255,7 +247,7 @@ pub const LOADER_CHIPS: &[(ChipVendor, u16, u16)] = &[
     (ChipVendor::MediaTek, 0x15A9, 0x0047),
     (ChipVendor::MediaTek, 0x2C7C, 0x7009),
     (ChipVendor::MediaTek, 0x2C7C, 0x700A),
-    // Qualcomm ROME and WCN6855 (crate::qualcomm, experimental): the USB IDs
+    // Qualcomm ROME and WCN6855 (crate::qualcomm): the USB IDs
     // of Qualcomm's Windows drivers 10.0.0.1272 (QCA61x4, QCA9377; not its
     // QCA6290, 0CF3:E400) and 2.0.0.1400 (WCN6855, FastConnect 6900). The
     // loader reads the ROM version itself and refuses another chip before
@@ -368,14 +360,10 @@ pub fn chip_supported(vendor: ChipVendor, vid: u16, pid: u16) -> bool {
     supported_in(LOADER_CHIPS, vendor, vid, pid)
 }
 
-/// Tag shown after one adapter's name: its vendor's, except "experimental"
-/// for a chip in [`LOADER_CHIPS`] and a Realtek chip whose firmware comes
-/// from Realtek's Windows driver (crate::realtek_btnic)
+/// Tag shown after one adapter's name: "unsupported" for a chip whose
+/// loader BlueCaster lacks, else none
 pub fn chip_support_tag(vendor: ChipVendor, vid: u16, pid: u16) -> Option<&'static str> {
-    if vendor == ChipVendor::Realtek && crate::realtek_btnic::chip(vid, pid).is_some() {
-        return Some("experimental");
-    }
-    tag_in(LOADER_CHIPS, vendor, vid, pid)
+    (!chip_supported(vendor, vid, pid)).then_some("unsupported")
 }
 
 /// Vendor commands a chip script (crate::script) may never send to this
@@ -390,14 +378,7 @@ pub fn denied_opcodes(vendor: ChipVendor) -> &'static [u16] {
 }
 
 fn supported_in(table: &[(ChipVendor, u16, u16)], vendor: ChipVendor, vid: u16, pid: u16) -> bool {
-    vendor.support_tag() != Some("unsupported") || table.contains(&(vendor, vid, pid))
-}
-
-fn tag_in(table: &[(ChipVendor, u16, u16)], vendor: ChipVendor, vid: u16, pid: u16) -> Option<&'static str> {
-    match vendor.support_tag() {
-        Some("unsupported") if supported_in(table, vendor, vid, pid) => Some("experimental"),
-        tag => tag,
-    }
+    !vendor.listed_chips_only() || table.contains(&(vendor, vid, pid))
 }
 
 /// The chip table entry of a Realtek PID
@@ -555,8 +536,9 @@ pub fn company_name(company_id: u16) -> Option<&'static str> {
 }
 
 /// The adapter's name in the list: "RTL8761BU (0x2357:0x0604)" for a known
-/// Realtek chip, "Intel (0x8087:0x0033) [experimental]" for another known
-/// vendor, else "0x1234:0x5678"
+/// Realtek chip, "Intel (0x8087:0x0033)" for another known vendor (with
+/// " [unsupported]" for a chip BlueCaster has no loader for), else
+/// "0x1234:0x5678"
 pub fn display_name(vid: u16, pid: u16, realtek_pid: Option<u16>, vendor: ChipVendor) -> String {
     if let Some(chip) = realtek_pid.and_then(realtek_chip_name) {
         return format!("{chip} (0x{vid:04X}:0x{pid:04X})");
@@ -564,7 +546,7 @@ pub fn display_name(vid: u16, pid: u16, realtek_pid: Option<u16>, vendor: ChipVe
     if vendor == ChipVendor::Realtek
         && let Some((chip, _)) = crate::realtek_btnic::chip(vid, pid)
     {
-        return format!("{chip} (0x{vid:04X}:0x{pid:04X}) [experimental]");
+        return format!("{chip} (0x{vid:04X}:0x{pid:04X})");
     }
     if vendor != ChipVendor::Unknown && vendor != ChipVendor::Realtek {
         let tag = chip_support_tag(vendor, vid, pid).map(|t| format!(" [{t}]")).unwrap_or_default();
@@ -748,13 +730,10 @@ mod tests {
     fn a_loader_for_some_chips_leaves_the_others_unsupported() {
         let table = [(ChipVendor::MediaTek, 0x0E8D, 0x7999)];
         assert!(supported_in(&table, ChipVendor::MediaTek, 0x0E8D, 0x7999));
-        assert_eq!(tag_in(&table, ChipVendor::MediaTek, 0x0E8D, 0x7999), Some("experimental"));
         assert!(!supported_in(&table, ChipVendor::MediaTek, 0x0E8D, 0x7925));
-        assert_eq!(tag_in(&table, ChipVendor::MediaTek, 0x0E8D, 0x7925), Some("unsupported"));
         // Vendors with a loader for all their chips, or none needed
         assert!(supported_in(&[], ChipVendor::Intel, 0x8087, 0x0033));
-        assert_eq!(tag_in(&[], ChipVendor::Intel, 0x8087, 0x0033), Some("experimental"));
         assert!(supported_in(&[], ChipVendor::Realtek, 0x0BDA, 0x8771));
-        assert_eq!(tag_in(&[], ChipVendor::Csr, 0x0A12, 0x0001), None);
+        assert!(supported_in(&[], ChipVendor::Csr, 0x0A12, 0x0001));
     }
 }

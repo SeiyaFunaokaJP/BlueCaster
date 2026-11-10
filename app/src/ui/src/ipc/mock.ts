@@ -193,6 +193,8 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
     include_alphas: false,
     media_keys: true,
     auto_reconnect: true,
+    vb_cable_note_hidden: false,
+    hifi_cable_note_hidden: false,
     volume_sync: true,
     mute_output: false,
     volume_mixer: false,
@@ -219,7 +221,7 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
       health_every_interval: false,
     },
     dev_debug: {
-      mtk_iso_interface: false,
+      mtk_iso_bulk: false,
       mtk_iso_pad: 0,
       mtk_command: "",
       mtk_iso_queue: 0,
@@ -234,7 +236,6 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
     remote_sink: "",
     le_audio_experimental: false,
     le_audio_low_latency: false,
-    experimental_codecs: true,
     // Off, as schema 5 sets it: WH-1000XM5 chose LDAC
     auto_codec: false,
     ...over,
@@ -595,6 +596,7 @@ const CABLE: AudioDevice = {
   mix_channels: 2,
   mix_bits: 24,
   capture_name: "CABLE Output (VB-Audio Virtual Cable)",
+  capture_rate: 48000,
 };
 /** VB-Audio Hi-Fi Cable (MockCore.hifiCable) */
 const HIFI_CABLE: AudioDevice = {
@@ -606,6 +608,7 @@ const HIFI_CABLE: AudioDevice = {
   mix_channels: 2,
   mix_bits: 24,
   capture_name: "Hi-Fi Cable Output (VB-Audio Hi-Fi Cable)",
+  capture_rate: 48000,
 };
 
 const AUDIO_DEVICES: AudioDevice[] = [
@@ -618,6 +621,7 @@ const AUDIO_DEVICES: AudioDevice[] = [
     mix_channels: 16,
     mix_bits: 24,
     capture_name: "CABLE Output (VB-Audio Virtual Cable)",
+    capture_rate: 48000,
   },
   {
     id: "{0.0.0.00000000}.{speakers}",
@@ -628,6 +632,7 @@ const AUDIO_DEVICES: AudioDevice[] = [
     mix_channels: 2,
     mix_bits: 32,
     capture_name: null,
+    capture_rate: null,
   },
   CABLE,
   {
@@ -639,6 +644,7 @@ const AUDIO_DEVICES: AudioDevice[] = [
     mix_channels: 8,
     mix_bits: 32,
     capture_name: "Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)",
+    capture_rate: 48000,
   },
   {
     id: "{0.0.0.00000000}.{display}",
@@ -649,6 +655,7 @@ const AUDIO_DEVICES: AudioDevice[] = [
     mix_channels: 2,
     mix_bits: 32,
     capture_name: null,
+    capture_rate: null,
   },
 ];
 
@@ -1362,8 +1369,6 @@ export class MockCore implements Transport {
             next.le_audio_experimental ?? before.le_audio_experimental,
           le_audio_low_latency:
             next.le_audio_low_latency ?? before.le_audio_low_latency,
-          // Always on, as the core reads it (issue #86)
-          experimental_codecs: true,
           auto_codec: next.auto_codec ?? before.auto_codec,
           // As the core's serde default for a client that sends none
           setup_done: next.setup_done ?? true,
@@ -1386,7 +1391,7 @@ export class MockCore implements Transport {
           this.log(
             "info",
             "bluecaster_core_exe::state",
-            `LE Audio (experimental) ${on}${busy ? ": takes effect at the next scan or connection" : ""}`,
+            `LE Audio ${on}${busy ? ": takes effect at the next scan or connection" : ""}`,
           );
           if (!busy && this.snap.adapter.status !== "stopped")
             this.setAdapter("stopped");
@@ -1465,13 +1470,19 @@ export class MockCore implements Transport {
       case "adapter.download_firmware":
         return this.downloadFirmware(String(p.file));
       case "audio.devices": {
-        const all = this.hifiCable ? [...AUDIO_DEVICES, HIFI_CABLE] : AUDIO_DEVICES;
+        const hifi = { ...HIFI_CABLE, capture_rate: this.hifiCaptureRate };
+        const all = this.hifiCable ? [...AUDIO_DEVICES, hifi] : AUDIO_DEVICES;
         const list = this.noVirtual ? all.filter((d) => !d.is_virtual) : all;
         const def = this.defaultOutput;
         return def === null ? list : list.map((d) => ({ ...d, is_default: d.id === def }));
       }
       case "audio.apps":
         return AUDIO_APPS;
+      case "audio.install_vb_cable":
+        if (this.vbCableDownloadFails)
+          throw errorInfo("vb_cable.download_failed", "error.vb_cable_download_failed");
+        this.noVirtual = false;
+        return true;
       case "audio.mixer":
         return this.mixer;
       case "audio.mixer_set":
@@ -1678,6 +1689,11 @@ export class MockCore implements Transport {
   noVirtual = false;
   /** VB-Audio Hi-Fi Cable installed (?hificable): the microphone's second cable */
   hifiCable = false;
+  /** The sample rate of the Hi-Fi Cable's recording side (its playback
+   *  side runs at 48 kHz) */
+  hifiCaptureRate = 48000;
+  /** audio.install_vb_cable cannot reach VB-Audio */
+  vbCableDownloadFails = false;
   /** Now and then the capture falls behind (?capturedrops): audio dropped at capture */
   captureDrops = false;
   /** Windows' default output (audio.devices), if not the speakers */
@@ -1694,7 +1710,7 @@ export class MockCore implements Transport {
         ...mtk,
         driver: "winusb",
         driver_service: "WinUSB",
-        display_name: "MT7925 (0x0E8D:0x7925) [experimental]",
+        display_name: "MT7925 (0x0E8D:0x7925)",
         vendor_note: { key: "firmware.vendor_mediatek", args: [] },
       },
     ];
@@ -3065,7 +3081,7 @@ export class MockCore implements Transport {
       `Adapter: ${s.adapter.adapters.map((a) => `${a.display_name} [${a.driver_service}]`).join(", ") || "none"}`,
       `Firmware files: ${s.adapter.adapters.map((a) => `${a.display_name}: ${a.firmware_present === null ? "none needed" : a.firmware_present ? "present" : "MISSING"} (${a.firmware_files.join(", ")})`).join("; ")}`,
       `State: ${s.stream.state}${s.stream.info ? ` ${s.stream.info.codec} ${s.stream.info.bitrate_kbps} kbps` : ""}${s.stream.info?.le ? ` (${s.stream.info.le.summary})` : ""}`,
-      `LE Audio (experimental): ${s.settings.le_audio_experimental ? "on" : "off"}${s.settings.le_audio_low_latency ? ", low latency" : ""}`,
+      `LE Audio: ${s.settings.le_audio_experimental ? "on" : "off"}${s.settings.le_audio_low_latency ? ", low latency" : ""}`,
       `Profiles: ${s.profiles.map((p) => `${p.name} [${p.device_address}]`).join(", ")}`,
       `Config: ${s.config_dir}`,
     ].join("\n");

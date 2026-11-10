@@ -71,8 +71,6 @@ Usage: bluecaster-core --cli [-d XX:XX:XX:XX:XX:XX] [options]
                         best one it offers (as the app does), instead of an error
   --force-codec         a codec -c the device does not offer is asked for anyway
   --unlisted-options    the codec's settings beyond what the device lists
-  --no-experimental     never use the experimental codecs (aptX HD, aptX LL, Opus,
-                        Opus 05, FastStream: experimental in the README)
   -m <mode>             capture: loopback (default), virtual, app
   --audio-device <id>   render device for -m virtual
   --app <exe>           executable for -m app
@@ -86,7 +84,7 @@ Usage: bluecaster-core --cli [-d XX:XX:XX:XX:XX:XX] [options]
                         mono (dual channel: -c sbcxq)
   --sbc-bitpool <n>     SBC / SBC XQ bitpool (default: by quality)
   --afh <policy>        auto, off or Wi-Fi channels to avoid such as 6,11;
-                        blend-mild, blend-medium, blend-strong (experimental)
+                        blend-mild, blend-medium, blend-strong
   --remote-sink <host[:port]|auto>
                         statistics of a measuring receiver (tools/linux_sink);
                         without -d, stream to that receiver
@@ -99,7 +97,7 @@ Usage: bluecaster-core --cli [-d XX:XX:XX:XX:XX:XX] [options]
                         (docs/chip-support.md), save its report and exit
   --allow-writes        let --script send requests that may change the chip
 
-LE Audio (experimental, LC3 over LE isochronous channels):
+LE Audio (LC3 over LE isochronous channels):
   --le-audio            stream to the LE Audio device -d (BAP unicast, LC3)
   --le-device <address> another device of the group (e.g. the second earbud)
   --le-preset <name>    use only this BAP configuration (e.g. 48_2_2, 16_2_1)
@@ -175,8 +173,6 @@ struct Args {
     force_codec: bool,
     /// --unlisted-options: settings beyond what the device lists
     unlisted_options: bool,
-    /// --no-experimental: settings experimental_codecs off
-    no_experimental: bool,
     mode: String,
     audio_device: String,
     app: String,
@@ -274,7 +270,6 @@ fn parse(args: &[String]) -> Result<Args, String> {
         fallback: false,
         force_codec: false,
         unlisted_options: false,
-        no_experimental: false,
         mode: "loopback".into(),
         audio_device: String::new(),
         app: String::new(),
@@ -335,7 +330,6 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--fallback" => a.fallback = true,
             "--force-codec" => a.force_codec = true,
             "--unlisted-options" => a.unlisted_options = true,
-            "--no-experimental" => a.no_experimental = true,
             "-m" => a.mode = value(&mut it, "-m")?.to_lowercase(),
             "--audio-device" => a.audio_device = value(&mut it, "--audio-device")?,
             "--app" => a.app = value(&mut it, "--app")?,
@@ -760,7 +754,6 @@ pub fn run(args: &[String]) -> i32 {
         codec_fallback: a.fallback,
         codec_forced: a.force_codec,
         unlisted_options: a.unlisted_options,
-        experimental_codecs: !a.no_experimental,
         // The command line is a developer's: every codec, as asked
         developer_codecs: true,
         auto_order: codec::AutoOrder::default(),
@@ -1201,7 +1194,7 @@ fn le_run(a: &Args, service: &Service, running: &Arc<AtomicBool>) -> i32 {
     let is_running = || running.load(Ordering::Acquire);
 
     outln!(
-        "\n[LE Audio, experimental] Initializing BTstack ({} transport)...",
+        "\n[LE Audio] Initializing BTstack ({} transport)...",
         if a.hci_tcp.is_none() { "WinUSB" } else { "H4 over TCP" }
     );
     let host = match service.ensure_host() {

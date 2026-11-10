@@ -48,7 +48,7 @@ const hex4 = (n: number) => n.toString(16).toUpperCase().padStart(4, "0");
  *  gives it with the chip (issue #86); before Windows' Bluetooth ever ran
  *  it and with no product name of its own, the vendor and chip ("Realtek
  *  RTL8761BU"), without the VID:PID the line below shows and the
- *  "[unsupported]" / "[experimental]" tags say */
+ *  "[unsupported]" tag says */
 export function adapterName(
   a: Pick<AdapterInfo, "display_name" | "vendor" | "windows_name" | "realtek_chip">,
 ): string {
@@ -56,7 +56,7 @@ export function adapterName(
   if (!name) {
     const chip = a.display_name
       .replace(/\s*\(0x[0-9a-f]{4}:0x[0-9a-f]{4}\)/i, "")
-      .replace(/\s*\[(unsupported|experimental)\]/i, "")
+      .replace(/\s*\[unsupported\]/i, "")
       .trim();
     if (!a.vendor || chip.toLowerCase().startsWith(a.vendor.toLowerCase())) return chip;
     return `${a.vendor} ${chip}`;
@@ -75,12 +75,6 @@ export function adapterIds(a: Pick<AdapterInfo, "address" | "vid" | "pid" | "bt_
  *  used the adapter yet (issue #86); undefined when both are known */
 export function adapterIdsHint(a: Pick<AdapterInfo, "address" | "bt_version">): string | undefined {
   return a.address && a.bt_version ? undefined : t("ui.adapter.ids_unknown");
-}
-
-/** A vendor whose loader is experimental (Intel, Broadcom): the core marks
- *  the chip "[experimental]" */
-export function adapterExperimental(a: Pick<AdapterInfo, "display_name">): boolean {
-  return /\[experimental\]/i.test(a.display_name);
 }
 
 /** BlueCaster can stream through it: not a chip whose firmware loader it lacks
@@ -264,12 +258,6 @@ export function Adapter() {
                     {/* Device Manager's name; the USB device's own on hover */}
                     <h2 title={a.device_name}>
                       {adapterName(a)}
-                      <Show when={adapterExperimental(a)}>
-                        {" "}
-                        <span class="tag st-exp" title={t("ui.adapter.experimental_hint")}>
-                          {t("ui.adapter.experimental")}
-                        </span>
-                      </Show>
                     </h2>
                     <span class="muted mono" title={adapterIdsHint(a)}>
                       {adapterIds(a)}

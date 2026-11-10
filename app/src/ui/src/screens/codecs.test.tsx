@@ -443,14 +443,10 @@ describe("the Codecs screen", () => {
     );
   });
 
-  it("offers every codec, with no Experimental tag (issue #86: the README marks them)", async () => {
+  it("offers every codec, with no Experimental tag (issue #86)", async () => {
     const { calls, core } = start("#/codecs");
     const wh = await section("WH-1000XM5");
     fireEvent.click(hideSwitch());
-    // Even with the old setting off
-    await core.request("settings.set", {
-      settings: { ...core.state.snap!.settings, experimental_codecs: false },
-    });
     const hd = await within(wh).findByRole("radio", { name: /aptX HD/ });
     for (const name of [/^aptX LL/, /^OpusUnsupported/, /FastStream/]) {
       expect(within(wh).getByRole("radio", { name })).toBeInTheDocument();

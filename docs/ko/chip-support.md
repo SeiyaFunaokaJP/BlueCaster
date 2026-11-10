@@ -7,7 +7,7 @@ nav_order: 3.5
 
 # 칩 지원 추가
 
-BlueCaster는 Bluetooth 어댑터를 직접(WinUSB로) 다루므로, 어댑터가 작동하기 전에 제조사의 Windows 드라이버가 하는 일을 대신 해야 합니다. 많은 칩에서는 시작할 때마다 펌웨어를 칩에 로드하는 일입니다. 현재 Realtek, Intel, Broadcom, CSR 어댑터는 작동하고 MediaTek MT7925, MT7922, MT7921, MT7902와 Qualcomm QCA61x4, QCA9377, WCN6855는 실험적으로 작동하지만, 그 밖의 MediaTek 칩(MT7927 및 이전 칩)과 Qualcomm 칩(QCA6290, WCN785x)은 아직 아무도 로더를 작성하지 않아 작동하지 않습니다. `app/src/crates/bt-host/src/mediatek.rs`(MT79xx용)는 실제 로더이므로 다른 MediaTek 칩을 지원할 때 출발점으로 삼을 수 있습니다.
+BlueCaster는 Bluetooth 어댑터를 직접(WinUSB로) 다루므로, 어댑터가 작동하기 전에 제조사의 Windows 드라이버가 하는 일을 대신 해야 합니다. 많은 칩에서는 시작할 때마다 펌웨어를 칩에 로드하는 일입니다. 현재 Realtek, Intel, Broadcom, CSR 어댑터와 MediaTek MT7925, MT7922, MT7921, MT7902, Qualcomm QCA61x4, QCA9377, WCN6855가 작동하지만(MT7922, MT7902와 Qualcomm 칩은 아직 실제 하드웨어에서 테스트되지 않음), 그 밖의 MediaTek 칩(MT7927 및 이전 칩)과 Qualcomm 칩(QCA6290, WCN785x)은 아직 아무도 로더를 작성하지 않아 작동하지 않습니다. `app/src/crates/bt-host/src/mediatek.rs`(MT79xx용)는 실제 로더이므로 다른 MediaTek 칩을 지원할 때 출발점으로 삼을 수 있습니다.
 
 이 페이지는 로더를 추가하는 절차를 설명합니다. 해당 칩을 쓰는 어댑터가 필요하며, 메인테이너는 이런 어댑터를 가지고 있지 않습니다. 코드를 작성하지 않더라도 도울 수 있습니다. 1단계와 2단계를 거치면 기여자에게 필요한 보고서를 만들 수 있습니다.
 
@@ -204,7 +204,7 @@ cargo test -p bt-host
 
 이미 미지원으로 등록된 벤더(MediaTek, Qualcomm)든 새 벤더든, 변경할 파일은 모두 아래와 같습니다. 새 벤더라면 컴파일러가 해당 variant가 필요한 `match`를 알려 주지만, 그 밖의 곳과 이미 등록된 벤더의 경우는 이 목록으로만 찾을 수 있습니다.
 
-**칩 하나인가, 벤더 전체인가?** 로더는 보통 벤더 칩의 일부만 다룹니다(MT7921은 되지만 MT7925는 안 되는 식). 그러면 해당 칩만 "unsupported"에서 벗어나야 합니다. 그 칩들의 VID:PID를 `app/src/crates/bt-host/src/chips.rs`의 `LOADER_CHIPS`에 넣고, 벤더의 `support_tag()`는 그대로 둡니다. 그러면 `chips::chip_supported(vendor, vid, pid)`와 `chip_support_tag()`가 어댑터별로 답하며, 어댑터의 이름 태그, 어댑터 화면의 안내 문구, 그 화면에서 WinUSB 제공 여부, "구현되지 않음" 경고가 이를 따릅니다. `support_tag()`는 로더가 벤더의 모든 칩을 다룰 때(Intel처럼)에만 바꾸십시오.
+**칩 하나인가, 벤더 전체인가?** 로더는 보통 벤더 칩의 일부만 다룹니다(MT7921은 되지만 MT7925는 안 되는 식). 그러면 해당 칩만 "unsupported"에서 벗어나야 합니다. 그 칩들의 VID:PID를 `app/src/crates/bt-host/src/chips.rs`의 `LOADER_CHIPS`에 넣고, 벤더는 `listed_chips_only()`에 그대로 둡니다. 그러면 `chips::chip_supported(vendor, vid, pid)`와 `chip_support_tag()`가 어댑터별로 답하며, 어댑터의 이름 태그, 어댑터 화면의 안내 문구, 그 화면에서 WinUSB 제공 여부, "구현되지 않음" 경고가 이를 따릅니다. 벤더를 `listed_chips_only()`에서 빼는 것은 로더가 벤더의 모든 칩을 다룰 때(Intel처럼)뿐입니다.
 
 {: .note }
 각 파일의 줄 끝 형식을 유지하십시오. 일부 소스 파일은 CRLF, 다른 파일은 LF를 씁니다. 일부 편집기와 Git Bash의 `sed -i`는 이를 조용히 바꾸며, `cargo fmt`는 되돌리지 않습니다. `git diff --stat`으로 확인할 수 있습니다. 몇 군데만 고친 파일에서 모든 줄이 변경으로 잡힙니다. 그렇다면 커밋하기 전에 파일을 원래 형식으로 되돌리십시오(예: VS Code 상태 표시줄의 줄 끝 전환).
@@ -212,7 +212,7 @@ cargo test -p bt-host
 **감지** (`app/src/crates/bt-host/src/chips.rs`):
 
 1. `ChipVendor`: 새 벤더에는 variant(문서 주석 한 줄 포함)와 `name()`의 arm을 추가합니다. 어느 벤더든 enum의 문서 주석(로더가 있는 벤더)과 variant의 문서 주석("not supported")을 최신 상태로 고칩니다
-2. 일부 칩: 해당 VID:PID를 `LOADER_CHIPS`에 넣고, 로더 모듈에 로더 자체의 칩 확인(칩 ID, 버전)이 정확히 그 항목들만 받아들이는지 확인하는 테스트를 추가합니다. 벤더 전체: `support_tag()`를 `"unsupported"`에서 `"experimental"`로 바꿉니다
+2. 일부 칩: 해당 VID:PID를 `LOADER_CHIPS`에 넣고, 로더 모듈에 로더 자체의 칩 확인(칩 ID, 버전)이 정확히 그 항목들만 받아들이는지 확인하는 테스트를 추가합니다. 벤더 전체: `listed_chips_only()`에서 뺍니다
 3. `vendor_for_usb()`: 벤더의 USB VID. 다른 제조사도 쓰는 VID는 통째로가 아니라 `VID if pid == PID`로 매칭해야 합니다. 모듈 제조사의 VID를 쓰는 노트북 모듈(AzureWave 0x13D3, Foxconn 0x0489)과 pid.codes 0x1209 같은 공유 VID가 그렇습니다. 여기 넣은 VID는 모두 `is_bluetooth_vendor_vid`가 그 제조사의 장치를 Bluetooth 어댑터로 취급하게 만듭니다. BTstack의 Realtek 표나 `OEM_TABLE`(둘 다 이 파일의 `resolve_realtek_pid`에 있음)에 있는 VID:PID는 `vendor_for_usb`보다 먼저 Realtek으로 처리됩니다. 추가할 VID:PID가 어느 쪽에도 없는지 확인하십시오
 4. `company_name()`: Read Local Version의 Bluetooth SIG company ID가 아직 없다면 추가합니다
 5. 테스트: `app/src/crates/bt-host/tests/chips.rs`(VID:PID와 태그)
@@ -229,12 +229,12 @@ cargo test -p bt-host
 **창에 표시되는 내용**:
 
 10. `app/src/core/src/state.rs`, `vendor_note()`: `MediaTek | Qualcomm` arm에서 분리한, 새 키 `firmware.vendor_<vendor>`를 쓰는 arm과 그 테스트. 이 함수는 그보다 앞서 `chip_supported`가 거부하는 칩에 `firmware.vendor_unsupported`를 돌려주므로, 벤더의 다른 칩은 그 문구를 유지합니다. 어댑터 화면은 안내 문구가 `firmware.vendor_unsupported`가 아닌 모든 어댑터에 WinUSB를 제공합니다
-11. `app/lang/*.json`(8개 언어 모두, 각 파일의 같은 줄): Intel의 키처럼("… adapter (experimental). …") 새 키를 추가합니다. 버튼이나 폴더 이름이 나오면 같은 파일에 있는 그 언어의 표현을 쓰십시오(펌웨어 폴더 버튼은 `firmware.open_folder`). 벤더 전체: `firmware.vendor_unsupported`에서 벤더 이름을 뺍니다. 일부 칩: 벤더의 다른 칩이 여전히 그 문구를 표시하므로 그대로 둡니다
+11. `app/lang/*.json`(8개 언어 모두, 각 파일의 같은 줄): Intel의 키처럼("Intel 어댑터. …") 새 키를 추가합니다. 버튼이나 폴더 이름이 나오면 같은 파일에 있는 그 언어의 표현을 쓰십시오(펌웨어 폴더 버튼은 `firmware.open_folder`). 벤더 전체: `firmware.vendor_unsupported`에서 벤더 이름을 뺍니다. 일부 칩: 벤더의 다른 칩이 여전히 그 문구를 표시하므로 그대로 둡니다
 12. `app/src/ui/src/lib/links.ts`: 어댑터 화면에 파일을 받을 곳이 표시되도록 벤더의 펌웨어 페이지(`LINKS`, `firmwareUrl()`, `vendorFirmwareUrl()`에, Intel의 linux-firmware 폴더처럼)를 추가합니다. 테스트는 `app/src/ui/src/lib/chips.test.ts`에 있습니다. 어댑터 화면은 안내 문구가 `firmware.vendor_unsupported`가 아닌 어댑터에만 이 페이지를 표시하므로, 벤더의 다른 칩에는 나타나지 않습니다
 
 **문서**:
 
-13. `docs/setup.md`와 `docs/*/setup.md`(모든 언어)의 칩 표: Intel과 같은 행으로, 다루는 칩, 펌웨어 파일과 그 위치(펌웨어 폴더 `%APPDATA%\BlueCaster\firmware` 또는 그 `<vendor>` 하위 폴더. 예전 행에는 아직 "config folder"라고 되어 있음), 그리고 *Experimental.*을 적습니다. 창의 버튼은 각 언어의 `app/lang/*.json`에 있는 대로 씁니다(어댑터 화면은 `ui.nav.adapter`, 그 폴더를 여는 버튼은 `firmware.open_folder`). 벤더 전체: "Not supported" 행에서 뺍니다. 일부 칩: 벤더를 그대로 두고 아직 지원되지 않는 칩의 이름을 적습니다. Firmware 섹션 맨 위의 문장("Intel and Broadcom adapters (experimental) may need firmware files of their own")에 벤더를 추가합니다
+13. `docs/setup.md`와 `docs/*/setup.md`(모든 언어)의 칩 표: Intel과 같은 행으로, 다루는 칩, 펌웨어 파일과 그 위치(펌웨어 폴더 `%APPDATA%\BlueCaster\firmware` 또는 그 `<vendor>` 하위 폴더. 예전 행에는 아직 "config folder"라고 되어 있음)를 적습니다. 창의 버튼은 각 언어의 `app/lang/*.json`에 있는 대로 씁니다(어댑터 화면은 `ui.nav.adapter`, 그 폴더를 여는 버튼은 `firmware.open_folder`). 벤더 전체: "Not supported" 행에서 뺍니다. 일부 칩: 벤더를 그대로 두고 아직 지원되지 않는 칩의 이름을 적습니다. Firmware 섹션 맨 위의 문장("Intel and Broadcom adapters may need firmware files of their own")에 벤더를 추가합니다
 14. 누군가 실제로 사용해 본 뒤에는 [Verified Hardware](hardware)(`docs/hardware.md`)를, 그리고 로더가 없는 벤더를 적어 둔 이 페이지의 첫머리(`docs/chip-support.md`, 모든 언어)를 고칩니다(일부 칩: "the other <vendor> chips")
 
 ## 7단계: 어댑터에서 시험
@@ -283,4 +283,3 @@ Clippy는 이름도 검사합니다. `PatchState`라는 `State` variant는 `enum
 - 현재 `develop-v*` 브랜치를 기반으로 합니다
 - 테스트한 어댑터(제품, VID:PID, 칩), 콜드 스타트와 웜 스타트 여부를 적고, 프로브 보고서와 다운로드의 HCI 캡처를 첨부합니다
 - 로더에 담긴 사실의 출처를 적습니다
-- 몇 사람이 사용해 볼 때까지 로더는 **실험적**으로 남으며, 어댑터 화면에 그 태그가 표시됩니다

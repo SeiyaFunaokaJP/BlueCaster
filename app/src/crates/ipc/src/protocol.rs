@@ -784,9 +784,10 @@ pub struct VendorInfo {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(default)]
 pub struct DevDebug {
-    /// LE Audio over the MediaTek adapter's interrupt interface
-    pub mtk_iso_interface: bool,
-    /// Outgoing ISO packets zero-padded to this length; 0: none
+    /// LE Audio on the MediaTek adapter's bulk pipe, not its interrupt
+    /// interface
+    pub mtk_iso_bulk: bool,
+    /// Outgoing ISO packets zero-padded to this length; 0: the default
     pub mtk_iso_pad: u16,
     /// One HCI command after init, in hex ("FD98 08 01"); empty: none
     pub mtk_command: String,
@@ -872,6 +873,13 @@ pub struct Settings {
     /// Off: the session ends and the adapter is released.
     #[serde(default = "yes")]
     pub auto_reconnect: bool,
+    /// The suggestion to install VB-CABLE was closed: Settings still offers it
+    #[serde(default)]
+    pub vb_cable_note_hidden: bool,
+    /// The suggestion to get the Hi-Fi Cable was closed: Settings still
+    /// offers it
+    #[serde(default)]
+    pub hifi_cable_note_hidden: bool,
     /// Windows Volume Sync for every device (on by default): the audio
     /// device's volume and the captured device's Windows volume follow each
     /// other. Off: no stream syncs. A change starts the profile in use
@@ -920,10 +928,6 @@ pub struct Settings {
     /// LE Audio stream is set up); only with le_audio_experimental
     #[serde(default)]
     pub le_audio_low_latency: bool,
-    /// Before 2.0.2: Codecs > "Enable experimental codecs". Every codec
-    /// is used now: the core reads it as on whatever is sent
-    #[serde(default = "yes")]
-    pub experimental_codecs: bool,
     /// Codecs > "Auto-select the codec with the highest quality", for every
     /// device (on by default): on, every A2DP profile streams as Auto; off,
     /// each with the codec chosen for it (read when the next stream starts)
@@ -1747,6 +1751,11 @@ pub enum Method {
     /// -> AudioApp[]
     #[serde(rename = "audio.apps")]
     AudioApps,
+    /// Downloads VB-Audio's VB-CABLE pack and installs it (UAC prompt)
+    /// -> bool: VB-CABLE is among Windows' outputs now (false: Windows may
+    /// need a restart first)
+    #[serde(rename = "audio.install_vb_cable")]
+    AudioInstallVbCable,
     /// -> MixerApp[]
     #[serde(rename = "audio.mixer")]
     AudioMixer,
@@ -1911,6 +1920,10 @@ pub struct AudioDevice {
     /// None: it has none or is not a virtual device
     #[serde(default)]
     pub capture_name: Option<String>,
+    /// The sample rate Windows runs that recording side at (None: not known
+    /// or no recording side)
+    #[serde(default)]
+    pub capture_rate: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

@@ -26,8 +26,6 @@
   --good: #34d399;
   --warn: #fbbf24;
   --bad: #f87171;
-  /* Experimental: amber, text and border (issue #86) */
-  --exp: #f59e0b;
 
   --fs-12: 0.75rem;
   --fs-14: 0.875rem;
@@ -75,7 +73,6 @@
   --disabled-text: rgb(255 255 255 / 0.36);
   --good-text: var(--good);
   --warn-text: var(--warn);
-  --exp-text: var(--warn);
   --bad-text: var(--bad);
   --focus: #eceef3;
   --overlay: rgb(0 0 0 / 0.55);
@@ -100,7 +97,6 @@
   --disabled-text: rgb(0 0 0 / 0.36);
   --good-text: #047857;
   --warn-text: #92400e;
-  --exp-text: #b45309;
   --bad-text: #b91c1c;
   --focus: #15171c;
   --overlay: rgb(20 22 28 / 0.35);
@@ -255,11 +251,6 @@ p {
 .st-running {
   --st: var(--warn);
   --st-text: var(--warn-text);
-}
-/* Experimental: amber, the border in full (issue #86) */
-.st-exp {
-  --st: var(--exp);
-  --st-text: var(--exp-text);
 }
 .st-bad,
 .st-error,
@@ -1052,9 +1043,6 @@ option {
 .tag[class*="st-"] {
   color: var(--st-text);
   border-color: color-mix(in srgb, var(--st) 55%, transparent);
-}
-.tag.st-exp {
-  border-color: var(--exp);
 }
 .tags {
   display: flex;
@@ -3490,6 +3478,26 @@ option {
   align-items: center;
   gap: var(--s4);
   color: var(--text-2);
+}
+.cable-note-text {
+  flex: 1;
+  min-width: 0;
+}
+.cable-note-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s2);
+}
+.cable-origin {
+  margin-top: var(--s1);
+}
+.source-advice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
 }
 .setup-general .field {
   flex-direction: row;
