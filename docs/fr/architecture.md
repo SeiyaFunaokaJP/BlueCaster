@@ -270,6 +270,22 @@ Le cœur ne s'exécute jamais en administrateur : pour une attribution ou une re
 démarre l'assistant avec une invite UAC (`ShellExecuteEx` "runas") et lit son résultat JSON.
 Lister les adaptateurs et leur pilote ne nécessite aucune élévation.
 
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver (élevé)
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: lancement avec une invite UAC
+    alt Attribuer
+        Drv->>Win: DeviceInterfaceGUIDs dans Device Parameters
+        Drv->>Win: installer winusb.inf (WinUsb Device)
+    else Restaurer
+        Drv->>Win: supprimer le périphérique et le réénumérer
+        Win->>Win: choisit de nouveau son meilleur pilote
+    end
+    Drv-->>Core: résultat (JSON)
+```
+
 ## Modules principaux
 
 ### Choix du codec (`codec::caps`)

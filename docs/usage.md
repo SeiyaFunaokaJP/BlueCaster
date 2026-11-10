@@ -254,6 +254,17 @@ BlueCaster supports four audio capture modes, listed as **Windows default** (fir
 | A sound device | What one output device plays (speakers, a USB headset, a TV, ...), whichever is the Windows default |
 | Application | Only what one app (and its child processes) plays, after the app's own processing. Needs Windows 11 or Windows 10 version 2004 (build 19041) or later |
 
+```mermaid
+flowchart TD
+    apps["Apps"] --> out["Output device<br>(speakers, HDMI TV, ...)"]
+    apps --> virt["Virtual device<br>(VB-CABLE, ...)"]
+    out --> there["Plays there as well"]
+    out -.->|"Windows default /<br>a sound device"| bc["BlueCaster"]
+    virt -.->|"Virtual Device"| bc
+    apps -.->|"Application:<br>one app"| bc
+    bc --> hp["Bluetooth headphones"]
+```
+
 **Audio Devices** shows the same explanation under **Output Source**. A new device captures **Windows default**, which works with nothing else installed; choose another source for it there.
 
 Capturing **Windows default** copies the audio; it does not take it away from the default output device, so the audio also plays there (speakers, wired headphones, an HDMI TV, ...). To hear it only on the Bluetooth headphones, use a virtual device such as VB-CABLE.
@@ -411,6 +422,16 @@ When you request a specific codec that the headphones do not list:
 |:------|:---------|
 | App (**Codecs**, Auto off) | Connects with the first codec in the device's order (Auto's priority order unless you dragged the cards) that the headphones offer, as Auto would (Opus chosen, headphones with aptX Adaptive, aptX, AAC and SBC: aptX Adaptive, not aptX below Opus; with SBC XQ dragged first: SBC XQ), and the codec badge says which codec is used instead and why for a few seconds. This is for a codec chosen while the headphones offered it: the **Codecs** screen shows the one used as chosen. A card chosen while they did not offer it (at their last connection) is asked for anyway, with no fallback: if they refuse it, the connection stops with an error. |
 | CLI (`-c <codec>`) | Stops with an error ("Device does not support ..."); if you requested aptX, aptX HD or aptX LL and the headphones offer only aptX Adaptive, the message says so. Add `--fallback` to fall back as the app does, or use `-c auto`. |
+
+```mermaid
+flowchart TD
+    q{"Do the headphones offer<br>the chosen codec?"}
+    q -->|"Yes"| use["Connects with it"]
+    q -->|"No"| how{"How was it chosen?"}
+    how -->|"App: card chosen<br>while they offered it"| fb["First codec in the device's<br>order that they offer, as Auto;<br>the codec badge says why"]
+    how -->|"App: card chosen<br>while they did not"| force["Asked for anyway:<br>error if they refuse"]
+    how -->|"CLI: -c"| cli["Error<br>(--fallback: as the app)"]
+```
 
 Earlier versions had the option **Use another supported codec if this one is not available** instead; the fallback is now always on. Some 2.0.2 pre-releases took the next codec below the chosen one rather than the best one.
 

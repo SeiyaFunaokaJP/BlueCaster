@@ -263,6 +263,22 @@ Windows 8 이상에는 Microsoft가 서명한 WinUSB 드라이버(`winusb.inf`)�
 함께 도우미를 시작하고(`ShellExecuteEx` "runas") 그 JSON 결과를 읽습니다.
 어댑터와 그 드라이버 목록을 가져오는 데는 권한 상승이 필요 없습니다.
 
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver (관리자 권한)
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: UAC 프롬프트로 시작
+    alt 할당
+        Drv->>Win: Device Parameters에 DeviceInterfaceGUIDs 기록
+        Drv->>Win: winusb.inf (WinUsb Device) 설치
+    else 복원
+        Drv->>Win: 장치를 제거하고 다시 열거
+        Win->>Win: 가장 알맞은 드라이버를 다시 선택
+    end
+    Drv-->>Core: 결과 (JSON)
+```
+
 ## 주요 모듈
 
 ### 코덱 선택 (`codec::caps`)

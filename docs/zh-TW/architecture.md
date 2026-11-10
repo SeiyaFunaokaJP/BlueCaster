@@ -252,6 +252,22 @@ Windows 8 以上內建由 Microsoft 簽署的 WinUSB 驅動程式（`winusb.inf`
 （`ShellExecuteEx` "runas"）啟動輔助程式，並讀取其 JSON 結果。列出介面卡及其
 驅動程式不需要提高權限。
 
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver（提高權限）
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: 透過 UAC 提示啟動
+    alt 指派
+        Drv->>Win: 在 Device Parameters 寫入 DeviceInterfaceGUIDs
+        Drv->>Win: 安裝 winusb.inf（WinUsb Device）
+    else 還原
+        Drv->>Win: 移除裝置並重新列舉
+        Win->>Win: 重新選擇最合適的驅動程式
+    end
+    Drv-->>Core: 結果（JSON）
+```
+
 ## 主要模組 {#key-modules}
 
 ### 轉碼器選擇 (`codec::caps`) {#codec-choice-codeccaps}

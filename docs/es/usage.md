@@ -254,6 +254,17 @@ BlueCaster admite cuatro modos de captura de audio, **Predeterminado de Windows*
 | Un dispositivo de sonido | Lo que reproduce un dispositivo de salida (altavoces, unos auriculares USB, un televisor, ...), sea cual sea la salida predeterminada de Windows |
 | Aplicación | Solo lo que reproduce una aplicación (y sus procesos secundarios), después del procesamiento propio de la aplicación. Requiere Windows 11 o Windows 10 versión 2004 (compilación 19041) o posterior |
 
+```mermaid
+flowchart TD
+    apps["Aplicaciones"] --> out["Dispositivo de salida<br>(altavoces, televisor HDMI, ...)"]
+    apps --> virt["Dispositivo virtual<br>(VB-CABLE, ...)"]
+    out --> there["También suena allí"]
+    out -.->|"Predeterminado<br>de Windows /<br>un dispositivo de sonido"| bc["BlueCaster"]
+    virt -.->|"Dispositivo virtual"| bc
+    apps -.->|"Aplicación:<br>una sola aplicación"| bc
+    bc --> hp["Auriculares Bluetooth"]
+```
+
 **Dispositivos de audio** muestra la misma explicación en **Origen de salida**. Un dispositivo nuevo captura **Predeterminado de Windows**, que funciona sin instalar nada más; elija allí otro origen para él.
 
 Capturar **Predeterminado de Windows** copia el audio; no se lo quita al dispositivo de salida predeterminado, así que el audio también suena allí (altavoces, auriculares con cable, un televisor HDMI, ...). Para oírlo solo en los auriculares Bluetooth, use un dispositivo virtual como VB-CABLE.
@@ -411,6 +422,16 @@ Cuando solicita un códec concreto que los auriculares no ofrecen:
 |:------|:---------|
 | Aplicación (**Códecs**, selección automática desactivada) | Se conecta con el primer códec del orden del dispositivo (el orden de prioridad de Automático, salvo que haya arrastrado las tarjetas) que ofrezcan los auriculares, como haría Automático (Opus elegido, auriculares con aptX Adaptive, aptX, AAC y SBC: aptX Adaptive, no aptX, que está por debajo de Opus; con SBC XQ arrastrado al primer puesto: SBC XQ), y la insignia del códec indica durante unos segundos qué códec se usa en su lugar y por qué. Esto es para un códec elegido mientras los auriculares lo ofrecían: la pantalla **Códecs** muestra como elegido el que se usa. Una tarjeta elegida cuando no lo ofrecían (en su última conexión) se pide de todos modos, sin recurrir a otro: si la rechazan, la conexión se detiene con un error. |
 | CLI (`-c <codec>`) | Se detiene con un error («El dispositivo no admite ...»); si solicitó aptX, aptX HD o aptX LL y los auriculares solo ofrecen aptX Adaptive, el mensaje lo indica. Añada `--fallback` para recurrir a otro como hace la aplicación, o use `-c auto`. |
+
+```mermaid
+flowchart TD
+    q{"¿Ofrecen los auriculares<br>el códec elegido?"}
+    q -->|"Sí"| use["Se conecta con él"]
+    q -->|"No"| how{"¿Cómo se eligió?"}
+    how -->|"Aplicación: tarjeta<br>elegida cuando<br>se ofrecía"| fb["Primer códec ofrecido<br>en el orden del dispositivo,<br>como Automático; la insignia<br>del códec dice por qué"]
+    how -->|"Aplicación: tarjeta<br>elegida cuando<br>no se ofrecía"| force["Se pide igualmente;<br>error si se rechaza"]
+    how -->|"CLI: -c"| cli["Error<br>(--fallback: como la aplicación)"]
+```
 
 Las versiones anteriores tenían en su lugar la opción **Usar otro códec compatible si este no está disponible**; ahora el recurso a otro códec está siempre activado. Algunas versiones preliminares de 2.0.2 tomaban el siguiente códec por debajo del elegido en lugar del mejor.
 

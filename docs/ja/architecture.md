@@ -201,6 +201,22 @@ Windows 8 以降には、Microsoft 署名済みの WinUSB ドライバー（`win
 
 コアは管理者として動きません。割り当てと復元のときは、UAC の確認付きでヘルパーを起動し（`ShellExecuteEx` の "runas"）、その JSON の結果を読みます。アダプターとそのドライバーの一覧には昇格は不要です。
 
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver（昇格）
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: UAC のプロンプトで起動
+    alt 割り当て
+        Drv->>Win: Device Parameters に DeviceInterfaceGUIDs
+        Drv->>Win: winusb.inf（WinUsb Device）をインストール
+    else 復元
+        Drv->>Win: デバイスを削除して再列挙
+        Win->>Win: 最適なドライバーを選び直す
+    end
+    Drv-->>Core: 結果（JSON）
+```
+
 ## 主要モジュール {#key-modules}
 
 ### コーデックの選択（`codec::caps`） {#codec-choice-codeccaps}

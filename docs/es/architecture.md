@@ -270,6 +270,22 @@ El núcleo nunca se ejecuta como administrador: para una asignación o una resta
 el auxiliar con una solicitud de UAC (`ShellExecuteEx` "runas") y lee su resultado
 JSON. Enumerar los adaptadores y su controlador no requiere elevación.
 
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver (elevado)
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: inicio con un aviso de UAC
+    alt Asignar
+        Drv->>Win: DeviceInterfaceGUIDs en Device Parameters
+        Drv->>Win: instalar winusb.inf (WinUsb Device)
+    else Restaurar
+        Drv->>Win: quitar el dispositivo y volver a enumerarlo
+        Win->>Win: vuelve a elegir su mejor controlador
+    end
+    Drv-->>Core: resultado (JSON)
+```
+
 ## Módulos clave {#key-modules}
 
 ### Elección del códec (`codec::caps`)

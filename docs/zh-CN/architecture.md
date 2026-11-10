@@ -202,6 +202,22 @@ Windows 8 及更高版本自带 Microsoft 签名的 WinUSB 驱动程序（`winus
 
 核心从不以管理员身份运行：分配或恢复时，它会通过 UAC 提示（`ShellExecuteEx` "runas"）启动辅助程序，并读取其 JSON 结果。列出适配器及其驱动程序不需要提升权限。
 
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver（提升权限）
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: 通过 UAC 提示启动
+    alt 分配
+        Drv->>Win: 在 Device Parameters 中写入 DeviceInterfaceGUIDs
+        Drv->>Win: 安装 winusb.inf（WinUsb Device）
+    else 恢复
+        Drv->>Win: 删除设备并重新枚举
+        Win->>Win: 重新选择最合适的驱动程序
+    end
+    Drv-->>Core: 结果（JSON）
+```
+
 ## 主要模块 {#key-modules}
 
 ### 编解码器选择（`codec::caps`）

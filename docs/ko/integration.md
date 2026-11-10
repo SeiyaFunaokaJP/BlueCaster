@@ -53,6 +53,25 @@ nav_order: 2.7
 
 프로토콜 버전은 정확히 일치해야 합니다. 버전 1을 깨뜨리지 않는 추가 사항은 대신 `features`로 알립니다([호환성](#compatibility) 참조).
 
+```mermaid
+sequenceDiagram
+    participant C as 클라이언트
+    participant B as bluecaster-core
+    C->>B: hello (protocol 1)
+    alt 프로토콜 일치
+        B-->>C: welcome (features)
+        B-->>C: snapshot (전체 상태, rev)
+        loop 연결된 동안 (순서 무관)
+            B-->>C: event (rev + 1)
+            C->>B: request (id)
+            B-->>C: response (같은 id)
+        end
+        B-->>C: bye (코어 종료 시)
+    else 프로토콜이 다르거나 5초 안에 hello가 없음
+        B-->>C: reject, 파이프 닫기
+    end
+```
+
 ## 상태와 이벤트 {#state-and-events}
 
 ```json

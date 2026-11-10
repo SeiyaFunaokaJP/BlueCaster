@@ -270,6 +270,22 @@ Der Kern läuft nie als Administrator: Für eine Zuweisung oder Wiederherstellun
 das Hilfsprogramm mit einer UAC-Abfrage (`ShellExecuteEx` "runas") und liest dessen
 JSON-Ergebnis. Das Auflisten der Adapter und ihrer Treiber benötigt keine Administratorrechte.
 
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver (mit Administratorrechten)
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: Start mit UAC-Abfrage
+    alt Zuweisen
+        Drv->>Win: DeviceInterfaceGUIDs in Device Parameters
+        Drv->>Win: winusb.inf (WinUsb Device) installieren
+    else Wiederherstellen
+        Drv->>Win: Gerät entfernen und neu aufzählen
+        Win->>Win: wählt seinen besten Treiber wieder
+    end
+    Drv-->>Core: Ergebnis (JSON)
+```
+
 ## Wichtige Module
 
 ### Codec-Wahl (`codec::caps`)

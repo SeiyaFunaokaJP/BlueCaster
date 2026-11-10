@@ -269,6 +269,22 @@ The core never runs as administrator: for an assignment or a restore it starts
 the helper with a UAC prompt (`ShellExecuteEx` "runas") and reads its JSON
 result. Listing adapters and their driver needs no elevation.
 
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver (elevated)
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: start with a UAC prompt
+    alt Assign
+        Drv->>Win: DeviceInterfaceGUIDs in Device Parameters
+        Drv->>Win: install winusb.inf (WinUsb Device)
+    else Restore
+        Drv->>Win: remove the device and re-enumerate
+        Win->>Win: picks its best driver again
+    end
+    Drv-->>Core: result (JSON)
+```
+
 ## Key Modules
 
 ### Codec choice (`codec::caps`)

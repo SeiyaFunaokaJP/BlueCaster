@@ -53,6 +53,25 @@ Cada mensaje, en ambos sentidos, es una trama: la longitud del JSON como **u32 l
 
 La versión del protocolo debe coincidir exactamente. Las ampliaciones que mantienen funcionando la versión 1 se anuncian en cambio en `features` (consulte [Compatibilidad](#compatibility)).
 
+```mermaid
+sequenceDiagram
+    participant C as Cliente
+    participant B as bluecaster-core
+    C->>B: hello (protocol 1)
+    alt el protocolo coincide
+        B-->>C: welcome (features)
+        B-->>C: snapshot (todo el estado, rev)
+        loop Mientras está conectado, en cualquier orden
+            B-->>C: event (rev + 1)
+            C->>B: request (id)
+            B-->>C: response (mismo id)
+        end
+        B-->>C: bye (el núcleo se cierra)
+    else protocolo distinto, o ningún hello en 5 s
+        B-->>C: reject, se cierra la canalización
+    end
+```
+
 ## Estado y eventos {#state-and-events}
 
 ```json
