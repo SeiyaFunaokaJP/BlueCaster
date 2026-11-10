@@ -1655,7 +1655,6 @@ impl CoreState {
                     options: v.options.iter().map(|o| o.to_string()).collect(),
                 })
                 .collect(),
-            vb_cable_bundled: crate::vb_cable::setup().is_some(),
         };
         let (events, _) = broadcast::channel(256);
         let state = Arc::new(CoreState {

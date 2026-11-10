@@ -1,10 +1,11 @@
 // VB-Audio's virtual cables, suggested where they are missing: the Hi-Fi
 // Cable for the sound (it adds the least delay), VB-CABLE for the headphones'
-// microphone. VB-CABLE ships with BlueCaster as VB-Audio's package, unmodified,
-// and installs from here; VB-Audio allows that as long as the user can tell
-// it is their donationware, so its origin is said beside the Install button
-// (https://vb-audio.com/Services/licensing.htm). The Hi-Fi Cable is only
-// linked. Each suggestion can be closed; Settings keeps both.
+// microphone. Install VB-CABLE has the core fetch VB-Audio's own pack from
+// VB-Audio and run its setup (BlueCaster ships none of it); VB-Audio asks
+// that the user can tell it is their donationware, so its origin is said
+// beside the button (https://vb-audio.com/Services/licensing.htm). Where the
+// download fails, VB-Audio's page is offered instead. The Hi-Fi Cable is
+// only linked. Each suggestion can be closed; Settings keeps both.
 
 import { createSignal, type JSX, Show } from "solid-js";
 import { useApp } from "../app/context";
@@ -35,15 +36,16 @@ function Origin(props: { text: string; url: string }) {
   );
 }
 
-/** VB-CABLE's Install button (the bundled package; a development build has
- *  none and links to VB-Audio's page instead). `onInstalled` once it is
- *  among Windows' outputs. */
+/** VB-CABLE's Install button, and VB-Audio's page once it failed.
+ *  `onInstalled` once it is among Windows' outputs. */
 export function VbCableInstall(props: { onInstalled?: () => void }) {
   const app = useApp();
   const { core } = app;
   const [busy, setBusy] = createSignal(false);
   // It installed but Windows does not list it yet
   const [restart, setRestart] = createSignal(false);
+  // It failed (no download, VB-Audio changed the pack, ...): their page
+  const [failed, setFailed] = createSignal(false);
   const install = async () => {
     setBusy(true);
     try {
@@ -53,22 +55,19 @@ export function VbCableInstall(props: { onInstalled?: () => void }) {
       });
       if (ok && found) props.onInstalled?.();
       else if (ok) setRestart(true);
+      else setFailed(true);
     } finally {
       setBusy(false);
     }
   };
   return (
     <>
-      <Show
-        when={core.state.snap!.vb_cable_bundled}
-        fallback={
-          <Button icon="open" onClick={() => core.transport.openUrl(LINKS.vbCable)}>
-            {t("vbcable.download")}
-          </Button>
-        }
-      >
-        <Button icon="arrow_download" busy={busy()} onClick={() => void install()}>
-          {t("vbcable.install")}
+      <Button icon="arrow_download" busy={busy()} onClick={() => void install()}>
+        {t("vbcable.install")}
+      </Button>
+      <Show when={failed()}>
+        <Button icon="open" onClick={() => core.transport.openUrl(LINKS.vbCable)}>
+          {t("vbcable.download")}
         </Button>
       </Show>
       <Show when={restart()}>

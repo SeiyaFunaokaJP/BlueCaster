@@ -41,7 +41,6 @@ repository. The Rust crates are pinned in `Cargo.lock`, the JavaScript packages 
 | Fluent UI System Icons | as copied into `app/src/ui/src/components/icons.ts` | MIT | Microsoft Corporation | Icons of the window | `bluecaster.exe` |
 | Microsoft Edge WebView2 Runtime | the one installed on the PC | Microsoft Software License Terms | Microsoft Corporation | Renders the window (not part of BlueCaster, §11) | — |
 | Windows SDK / Windows APIs | (build machine) | Microsoft EULA | Microsoft Corporation | System APIs (WASAPI, WinUSB, SetupAPI, ...) | all three programs |
-| VB-CABLE (VB-Audio Virtual Cable driver pack) | `VBCABLE_Driver_Pack46.zip`, unmodified | Donationware (VB-Audio's licence, `vb-cable/readme.txt`) | Vincent Burel (VB-Audio Software) | Virtual audio cable, installed only when the user asks (not part of BlueCaster, §22) | `vb-cable\` |
 
 `bluecaster-driver.exe` contains only Rust code (BlueCaster's own and the crates of §9).
 
@@ -58,7 +57,6 @@ The installer (`BlueCaster-<version>-win64-setup.exe`) installs, and the portabl
 | `bluecaster.exe` | The window (Tauri; SolidJS, `@tauri-apps/api` and the icons in its embedded page) |
 | `bluecaster-core.exe` | The resident core (BTstack and all codec libraries statically linked) |
 | `bluecaster-driver.exe` | The elevated WinUSB assignment helper |
-| `vb-cable\` | VB-Audio's VB-CABLE driver pack, unmodified, installed only when the user asks (§22) |
 | `licenses/README.txt` | What is in the `licenses` folder, and where to get the complete corresponding source: the BlueCaster commit and the exact commits of every submodule |
 | `licenses/bluecaster/LICENSE` | License notice for the BlueCaster source code (`Apache-2.0 OR MIT`) |
 | `licenses/bluecaster/LICENSE-APACHE` | Apache License 2.0 text (BlueCaster source code option 1) |
@@ -976,24 +974,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
-
----
-
-## 22. VB-CABLE (VB-Audio Virtual Cable)
-
-- **Origin**: [www.vb-cable.com](https://vb-cable.com/), VB-Audio Software (Vincent Burel)
-- **What ships**: VB-Audio's driver pack `VBCABLE_Driver_Pack46.zip`, extracted unmodified into
-  the `vb-cable\` folder (`installer/build-release.ps1` checks its SHA-256 and VB-Audio's
-  signature). BlueCaster runs its `VBCABLE_Setup_x64.exe -i -h` (as administrator) only when
-  the user presses **Install VB-CABLE**; nothing is installed by BlueCaster's own setup.
-- **Licence**: VB-CABLE is donationware: all participations are welcome. VB-Audio allows the
-  package to be distributed as is with another application and installed silently, provided the
-  user can identify it as VB-Audio's donationware
-  ([VB-Audio licensing](https://vb-audio.com/Services/licensing.htm)); BlueCaster names its origin
-  and that it is donationware beside the Install button. Where it is deployed in a professional
-  environment (companies, institutions, public administrations), VB-Audio asks for a licence per
-  installation from its webshop. VB-Audio's own terms are in `vb-cable\readme.txt`.
-- VB-CABLE is not part of BlueCaster and is not covered by BlueCaster's licence.
 
 ---
 

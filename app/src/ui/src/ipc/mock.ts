@@ -541,7 +541,6 @@ export function sampleSnapshot(scenario: MockScenario = "normal"): Snapshot {
       { id: "huawei", name: "Huawei", options: [] },
       { id: "oppo", name: "OPPO", options: ["every_connection"] },
     ],
-    vb_cable_bundled: true,
   };
 }
 
@@ -1476,6 +1475,8 @@ export class MockCore implements Transport {
       case "audio.apps":
         return AUDIO_APPS;
       case "audio.install_vb_cable":
+        if (this.vbCableDownloadFails)
+          throw errorInfo("vb_cable.download_failed", "error.vb_cable_download_failed");
         this.noVirtual = false;
         return true;
       case "audio.mixer":
@@ -1687,6 +1688,8 @@ export class MockCore implements Transport {
   /** The sample rate of the Hi-Fi Cable's recording side (its playback
    *  side runs at 48 kHz) */
   hifiCaptureRate = 48000;
+  /** audio.install_vb_cable cannot reach VB-Audio */
+  vbCableDownloadFails = false;
   /** Now and then the capture falls behind (?capturedrops): audio dropped at capture */
   captureDrops = false;
   /** Windows' default output (audio.devices), if not the speakers */

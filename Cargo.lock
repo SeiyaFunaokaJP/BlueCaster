@@ -369,6 +369,7 @@ dependencies = [
  "ipc",
  "serde",
  "serde_json",
+ "sha2",
  "tao",
  "time",
  "tokio",
@@ -376,6 +377,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "tray-icon 0.26.1",
+ "ureq",
  "win-sys",
 ]
 
