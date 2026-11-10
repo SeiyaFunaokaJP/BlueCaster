@@ -255,6 +255,12 @@ BlueCaster は 4 つのオーディオキャプチャモードに対応してお
 | アプリ | 1 つのアプリ（とその子プロセス）が再生する音だけを、アプリ自身の処理の後で取り込む。Windows 11 または Windows 10 バージョン 2004（ビルド 19041）以降が必要 |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     apps["アプリ"] --> out["出力デバイス<br>（スピーカー、HDMI のテレビなど）"]
     apps --> virt["仮想デバイス<br>（VB-CABLE など）"]
@@ -424,6 +430,12 @@ BlueCaster は [libopenaptx](https://github.com/pali/libopenaptx) でエンコ�
 | CLI（`-c <codec>`） | エラー（「デバイスは ... に対応していません」）で止まります。aptX・aptX HD・aptX LL を指定し、ヘッドホンが aptX Adaptive しか提供していない場合は、その旨を表示します。アプリと同じように切り替えるには `--fallback` を付けるか、`-c auto` にしてください。 |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     q{"選んだコーデックを<br>ヘッドホンが提供している？"}
     q -->|"はい"| use["そのコーデックで接続"]

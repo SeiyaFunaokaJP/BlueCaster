@@ -255,6 +255,12 @@ BlueCaster propose quatre modes de capture audio, listés comme **Sortie par dé
 | Application | Uniquement ce que joue une application (et ses processus enfants), après son propre traitement. Nécessite Windows 11 ou Windows 10 version 2004 (build 19041) ou ultérieure |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     apps["Applications"] --> out["Périphérique de sortie<br>(haut-parleurs, téléviseur HDMI, ...)"]
     apps --> virt["Périphérique virtuel<br>(VB-CABLE, ...)"]
@@ -424,6 +430,12 @@ Lorsque vous demandez un codec précis que le casque ne propose pas :
 | CLI (`-c <codec>`) | S'arrête sur une erreur (« Device does not support ... ») ; si vous avez demandé aptX, aptX HD ou aptX LL et que le casque ne propose que l'aptX Adaptive, le message le précise. Ajoutez `--fallback` pour vous replier comme l'application, ou utilisez `-c auto`. |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     q{"Le casque propose-t-il<br>le codec choisi ?"}
     q -->|"Oui"| use["Se connecte avec"]

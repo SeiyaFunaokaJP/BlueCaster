@@ -255,6 +255,12 @@ BlueCaster unterstützt vier Aufnahmemodi, aufgeführt als **Windows-Standard** 
 | Anwendung | Nur was eine App (und ihre untergeordneten Prozesse) wiedergibt, nach der eigenen Verarbeitung der App. Erfordert Windows 11 oder Windows 10 Version 2004 (Build 19041) oder höher |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     apps["Apps"] --> out["Ausgabegerät<br>(Lautsprecher, HDMI-Fernseher, ...)"]
     apps --> virt["Virtuelles Gerät<br>(VB-CABLE, ...)"]
@@ -424,6 +430,12 @@ Wenn Sie einen bestimmten Codec anfordern, den die Kopfhörer nicht aufführen:
 | CLI (`-c <codec>`) | Bricht mit einem Fehler ab („Das Gerät unterstützt ... nicht“); haben Sie aptX, aptX HD oder aptX LL angefordert und bieten die Kopfhörer nur aptX Adaptive an, sagt die Meldung dies. Fügen Sie `--fallback` hinzu, um wie die App auszuweichen, oder verwenden Sie `-c auto`. |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     q{"Bieten die Kopfhörer<br>den gewählten Codec an?"}
     q -->|"Ja"| use["Verbindet damit"]

@@ -255,6 +255,12 @@ BlueCaster 支持四种音频捕获模式，分别为单独列在最前面的 **
 | 应用程序 | 仅某一个应用（及其子进程）播放的内容，且是经过该应用自身处理之后的声音。需要 Windows 11 或 Windows 10 版本 2004（内部版本 19041）及更高版本 |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     apps["应用"] --> out["输出设备<br>（扬声器、HDMI 电视等）"]
     apps --> virt["虚拟设备<br>（VB-CABLE 等）"]
@@ -424,6 +430,12 @@ BlueCaster 连接时，耳机会通告一个**编解码器列表**（AVDTP 流�
 | CLI（`-c <codec>`） | 以错误停止（“设备不支持 ...”）；如果你请求的是 aptX、aptX HD 或 aptX LL，而耳机只提供 aptX Adaptive，消息中会说明这一点。添加 `--fallback` 可像应用一样回退，或使用 `-c auto`。 |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     q{"耳机是否提供<br>所选的编解码器？"}
     q -->|"是"| use["用它连接"]

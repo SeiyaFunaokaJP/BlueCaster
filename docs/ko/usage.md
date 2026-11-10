@@ -255,6 +255,12 @@ BlueCaster는 네 가지 오디오 캡처 모드를 지원하며, 맨 앞에 따
 | 응용 프로그램 | 한 앱(및 하위 프로세스)이 재생하는 소리만, 앱 자체 처리 후. Windows 11 또는 Windows 10 버전 2004(빌드 19041) 이상 필요 |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     apps["앱"] --> out["출력 장치<br>(스피커, HDMI TV 등)"]
     apps --> virt["가상 장치<br>(VB-CABLE 등)"]
@@ -424,6 +430,12 @@ BlueCaster가 연결하면 헤드폰은 **코덱 목록**(AVDTP 스트림 엔드
 | CLI (`-c <codec>`) | 오류("장치가 ...을(를) 지원하지 않습니다")와 함께 중지합니다. aptX, aptX HD 또는 aptX LL을 요청했는데 헤드폰이 aptX Adaptive만 제공하면 메시지에 그 사실이 표시됩니다. 앱처럼 대체하려면 `--fallback`을 추가하거나 `-c auto`를 사용하십시오. |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     q{"헤드폰이 선택한<br>코덱을 제공하나요?"}
     q -->|"예"| use["그 코덱으로 연결"]

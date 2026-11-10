@@ -255,6 +255,12 @@ BlueCaster supports four audio capture modes, listed as **Windows default** (fir
 | Application | Only what one app (and its child processes) plays, after the app's own processing. Needs Windows 11 or Windows 10 version 2004 (build 19041) or later |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     apps["Apps"] --> out["Output device<br>(speakers, HDMI TV, ...)"]
     apps --> virt["Virtual device<br>(VB-CABLE, ...)"]
@@ -424,6 +430,12 @@ When you request a specific codec that the headphones do not list:
 | CLI (`-c <codec>`) | Stops with an error ("Device does not support ..."); if you requested aptX, aptX HD or aptX LL and the headphones offer only aptX Adaptive, the message says so. Add `--fallback` to fall back as the app does, or use `-c auto`. |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     q{"Do the headphones offer<br>the chosen codec?"}
     q -->|"Yes"| use["Connects with it"]

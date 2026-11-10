@@ -255,6 +255,12 @@ BlueCaster admite cuatro modos de captura de audio, **Predeterminado de Windows*
 | Aplicación | Solo lo que reproduce una aplicación (y sus procesos secundarios), después del procesamiento propio de la aplicación. Requiere Windows 11 o Windows 10 versión 2004 (compilación 19041) o posterior |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     apps["Aplicaciones"] --> out["Dispositivo de salida<br>(altavoces, televisor HDMI, ...)"]
     apps --> virt["Dispositivo virtual<br>(VB-CABLE, ...)"]
@@ -424,6 +430,12 @@ Cuando solicita un códec concreto que los auriculares no ofrecen:
 | CLI (`-c <codec>`) | Se detiene con un error («El dispositivo no admite ...»); si solicitó aptX, aptX HD o aptX LL y los auriculares solo ofrecen aptX Adaptive, el mensaje lo indica. Añada `--fallback` para recurrir a otro como hace la aplicación, o use `-c auto`. |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     q{"¿Ofrecen los auriculares<br>el códec elegido?"}
     q -->|"Sí"| use["Se conecta con él"]

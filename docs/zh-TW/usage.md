@@ -255,6 +255,12 @@ BlueCaster 支援四種音訊擷取模式，分別為單獨列在最前面的 **
 | 應用程式 | 僅單一應用程式（及其子處理程序）播放的內容，經該應用程式本身處理後。需要 Windows 11 或 Windows 10 版本 2004（組建 19041）以上 |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     apps["應用程式"] --> out["輸出裝置<br>（喇叭、HDMI 電視等）"]
     apps --> virt["虛擬裝置<br>（VB-CABLE 等）"]
@@ -424,6 +430,12 @@ BlueCaster 連線時，耳機會公布一份 **轉碼器清單**（AVDTP 串流�
 | CLI（`-c <codec>`） | 以錯誤停止（「裝置不支援 ...」）；如果您指定了 aptX、aptX HD 或 aptX LL，而耳機只提供 aptX Adaptive，訊息會說明此情況。加上 `--fallback` 即可像應用程式一樣改用其他轉碼器，或使用 `-c auto`。 |
 
 ```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+    rankSpacing: 30
+---
 flowchart TD
     q{"耳機是否提供<br>所選的轉碼器？"}
     q -->|"是"| use["以它連線"]
