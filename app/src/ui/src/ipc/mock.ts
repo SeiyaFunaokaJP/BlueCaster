@@ -160,6 +160,8 @@ export function sampleProfile(over: Partial<Profile> = {}): Profile {
     mic_device_id: "",
     mic_device_name: "",
     mic_muted: false,
+    voice_codec: "",
+    mic_rate: 0,
     sbc_bitpool: 0,
     sbcxq_bitpool: 0,
     sbc_min_bitpool: 0,
@@ -475,6 +477,7 @@ export function sampleSnapshot(scenario: MockScenario = "normal"): Snapshot {
             battery: null,
             battery_refused: false,
             voice_codecs: [],
+            mic_rates: [],
           }
         : {
             state: "idle",
@@ -485,6 +488,7 @@ export function sampleSnapshot(scenario: MockScenario = "normal"): Snapshot {
             battery: null,
             battery_refused: false,
             voice_codecs: [],
+            mic_rates: [],
           },
     profiles,
     active_profile: fresh ? null : long ? LONG_NAME : "WH-1000XM5 (LDAC)",
@@ -942,6 +946,8 @@ function broadcastInfo(
 
 /** What a connection to the mock's devices learns: the codecs they offer */
 const DEVICE_CODECS = ["sbc", "aac", "ldac"];
+/** LE Audio: the microphone rates the mock headset's Source PAC allows, Auto's first */
+const MOCK_MIC_RATES = [32000, 16000];
 
 const ZERO: LinkTotals = {
   packets: 0,
@@ -1323,8 +1329,9 @@ export class MockCore implements Transport {
         this.emit({ kind: "devices", value: this.snap.devices });
         this.emitProfiles();
         // Headset mode of the classic profile streaming switches in place
+        // (LE Audio: as if set up again at once)
         const st = this.snap.stream;
-        if (st.state === "streaming" && st.profile === original && !le) {
+        if (st.state === "streaming" && st.profile === original) {
           const voice = this.voiceOf(profile.name);
           if (JSON.stringify(voice) !== JSON.stringify(st.voice ?? null)) {
             this.snap.stream = { ...st, profile: profile.name, voice };
@@ -1988,6 +1995,7 @@ export class MockCore implements Transport {
           battery: null,
           battery_refused: false,
           voice_codecs: [],
+          mic_rates: [],
         };
         this.log(
           "error",
@@ -2135,6 +2143,7 @@ export class MockCore implements Transport {
         battery: null,
         battery_refused: false,
         voice_codecs: [],
+        mic_rates: [],
       };
       this.emit({ kind: "stream", value: this.snap.stream });
       throw e;
@@ -2149,6 +2158,7 @@ export class MockCore implements Transport {
       battery: null,
       battery_refused: false,
       voice_codecs: [],
+      mic_rates: [],
     };
     this.emit({ kind: "stream", value: this.snap.stream });
     this.log(
@@ -2216,6 +2226,7 @@ export class MockCore implements Transport {
           battery: null,
           battery_refused: false,
           voice_codecs: [],
+          mic_rates: [],
         };
         this.log(
           "info",
@@ -2332,6 +2343,7 @@ export class MockCore implements Transport {
               battery: 80,
               battery_refused: false,
               voice_codecs: [],
+              mic_rates: [],
             }
           : {
               state: "streaming",
@@ -2344,6 +2356,8 @@ export class MockCore implements Transport {
                 : { battery: 80, battery_refused: false }),
               // The headphones' voice codecs (AT+BAC): a classic device lists them
               voice_codecs: this.snap.profiles.find((p) => p.name === name)?.le_audio ? [] : ["cvsd", "msbc"],
+              // LE Audio: the rates its Source PAC allows, Auto's first
+              mic_rates: this.snap.profiles.find((p) => p.name === name)?.le_audio ? [...MOCK_MIC_RATES] : [],
             };
       this.snap.stream.voice = this.voiceOf(name);
       this.log(
@@ -2396,26 +2410,28 @@ export class MockCore implements Transport {
 
   /** The voice link a stream of the profile reports: headset mode on
    *  with an output chosen (mSBC for a classic device, LC3
-   *  at 32 kHz for LE Audio), as W3/W4 report it */
+   *  at 32 kHz for LE Audio), as W3/W4 report it. With Auto-select off,
+   *  the call codec chosen or the next lower one the headphones list
+   *  (CVSD, mSBC), and the microphone rate chosen when allowed. */
   private voiceOf(name: string | null): VoiceStatus | null {
     const p = this.snap.profiles.find((x) => x.name === name);
     // Auto: no application records from the cable in the mock, so its
     // link waits; muted: no link
     if (!p || p.headset_mic !== "on" || p.mic_muted || !p.mic_device_id)
       return null;
-    return p.le_audio
-      ? {
-          codec: "lc3",
-          link: "le",
-          rate: 32000,
-          mic_device_id: p.mic_device_id,
-        }
-      : {
-          codec: "msbc",
-          link: "hfp",
-          rate: 16000,
-          mic_device_id: p.mic_device_id,
-        };
+    const chosen = !this.snap.settings.auto_codec;
+    if (p.le_audio) {
+      const rate =
+        chosen && MOCK_MIC_RATES.includes(p.mic_rate) ? p.mic_rate : MOCK_MIC_RATES[0];
+      return { codec: "lc3", link: "le", rate, mic_device_id: p.mic_device_id };
+    }
+    const cvsd = chosen && p.voice_codec === "cvsd";
+    return {
+      codec: cvsd ? "cvsd" : "msbc",
+      link: "hfp",
+      rate: cvsd ? 8000 : 16000,
+      mic_device_id: p.mic_device_id,
+    };
   }
 
   /** A connection learnt what the device offers (and saved it, as the core does) */
@@ -2454,6 +2470,7 @@ export class MockCore implements Transport {
       battery: null,
       battery_refused: false,
       voice_codecs: [],
+      mic_rates: [],
     };
     if (was !== "idle")
       this.log(
@@ -2554,6 +2571,7 @@ export class MockCore implements Transport {
             battery: null,
             battery_refused: false,
             voice_codecs: [],
+            mic_rates: [],
           };
           this.emit({ kind: "stream", value: this.snap.stream });
         }

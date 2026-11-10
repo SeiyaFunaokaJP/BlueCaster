@@ -35,6 +35,7 @@ unsafe extern "C" {
     pub fn bluecaster_hfp_ag_audio_connect(acl_handle: u16) -> u8;
     pub fn bluecaster_hfp_ag_audio_release(acl_handle: u16) -> u8;
     pub fn bluecaster_hfp_ag_remote_codecs(acl_handle: u16, out: *mut u8, max: u8) -> u8;
+    pub fn bluecaster_hfp_ag_set_codecs(acl_handle: u16, codecs: *const u8, codecs_nr: u8) -> u8;
     pub fn bluecaster_hfp_ag_set_speaker_gain(acl_handle: u16, gain: u8) -> u8;
     pub fn bluecaster_hfp_ag_set_microphone_gain(acl_handle: u16, gain: u8) -> u8;
     pub fn bluecaster_sco_send(sco_handle: u16, payload: *const u8, len: u16) -> u8;

@@ -264,7 +264,9 @@ preset (C->P) and adds a source direction (P->C) to the CIS plan
   32_1_1, 24_2_1, 24_1_1, 16_2_1, 16_1_1`; those with the sink preset's frame
   duration first) that every such device's Source PAC records allow;
   GMAP low latency with UGTs that all have the Source feature puts the `_gs`
-  presets first
+  presets first; `source_rate` (the rate chosen, `--mic-rate`) takes the
+  first of those at that rate, the first at any rate when none is;
+  `SourcePlan::rates` lists the rates that fit, Auto's first
 - source contexts: Conversational (GMAP: Game + Conversational), chosen
   from the Available Source Contexts; the sink ASEs also ask for
   Conversational next to Media where available (CCP's `add_ccids` then adds

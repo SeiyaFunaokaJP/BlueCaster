@@ -98,6 +98,8 @@ export function newProfile(): Profile {
     mic_device_id: "",
     mic_device_name: "",
     mic_muted: false,
+    voice_codec: "",
+    mic_rate: 0,
     sbc_bitpool: 0,
     sbcxq_bitpool: 0,
     sbc_min_bitpool: 0,

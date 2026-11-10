@@ -671,6 +671,9 @@ pub(crate) struct HeadsetMode {
     /// Asked for (the request, then [`crate::Service::set_headset_mic`])
     mode: HeadsetMic,
     mic_output: Option<String>,
+    /// The best call codec asked for (None: Auto); the stack is told with
+    /// [`HeadsetMode::offer_codecs`]
+    voice_codec: Option<VoiceCodec>,
     /// Given up for this request (refused, failed): tried again on the next
     /// change only (not on Auto's own on and off)
     held_off: bool,
@@ -690,10 +693,11 @@ pub(crate) struct HeadsetMode {
 }
 
 impl HeadsetMode {
-    pub fn new(mode: HeadsetMic, mic_output: Option<String>) -> HeadsetMode {
+    pub fn new(mode: HeadsetMic, mic_output: Option<String>, voice_codec: Option<VoiceCodec>) -> HeadsetMode {
         HeadsetMode {
             mode,
             mic_output,
+            voice_codec,
             held_off: false,
             auto: AutoWatch::default(),
             hung_up: false,
@@ -702,6 +706,12 @@ impl HeadsetMode {
             foreign_logged: false,
             test: false,
         }
+    }
+
+    /// Tells the stack which call codecs to offer (at the session's start
+    /// and when the choice changes): it keeps the last one it was told
+    pub fn offer_codecs(&self, host: &BtHost) {
+        host.voice_codec(self.voice_codec.map(VoiceCodec::hfp_id));
     }
 
     /// Whether the voice link should be up now: for headset mode, or for
@@ -858,6 +868,36 @@ impl HeadsetMode {
             c.mode.as_str(),
             c.mic_output.as_deref().unwrap_or("")
         );
+        // Another call codec: offered from now on; a link up with another
+        // one (or still opening) is opened again with it on a later tick
+        // (A2DP in between, as for any new link)
+        if c.voice_codec != self.voice_codec {
+            let up = self.link.as_ref().map(|l| l.codec.map(|(codec, _)| codec));
+            tracing::info!(
+                "voice: call codec {} (the link {})",
+                c.voice_codec.map_or("Auto", VoiceCodec::name),
+                match up {
+                    Some(Some(codec)) => format!("runs {}", codec.name()),
+                    Some(None) => "is opening".into(),
+                    None => "is closed".into(),
+                }
+            );
+            self.voice_codec = c.voice_codec;
+            self.offer_codecs(host);
+            self.held_off = false;
+            self.hung_up = false;
+            self.slc_deadline = None;
+            let reopen = match (up, c.voice_codec) {
+                (None, _) => false,
+                (Some(Some(running)), Some(wanted)) => running != wanted,
+                _ => true,
+            };
+            if reopen {
+                self.mode = c.mode;
+                self.mic_output = c.mic_output;
+                return self.leave(true, inner, host, a2dp, None);
+            }
+        }
         let output_changed = c.mic_output != self.mic_output;
         if c.mode != self.mode || output_changed {
             self.held_off = false;
@@ -1249,17 +1289,17 @@ mod tests {
 
     #[test]
     fn auto_wants_the_link_only_while_someone_records() {
-        let mut h = HeadsetMode::new(HeadsetMic::Auto, Some("mic.wav".into()));
+        let mut h = HeadsetMode::new(HeadsetMic::Auto, Some("mic.wav".into()), None);
         assert!(!h.wanted());
         h.poll_auto();
         assert!(h.wanted());
         // Hung up by the headphones: not again until nobody records
         h.hung_up = true;
         assert!(!h.wanted());
-        assert!(!HeadsetMode::new(HeadsetMic::Off, Some("mic.wav".into())).wanted());
-        assert!(HeadsetMode::new(HeadsetMic::On, None).wanted());
+        assert!(!HeadsetMode::new(HeadsetMic::Off, Some("mic.wav".into()), None).wanted());
+        assert!(HeadsetMode::new(HeadsetMic::On, None, None).wanted());
         // On and Off do not poll
-        let mut on = HeadsetMode::new(HeadsetMic::On, Some("mic.wav".into()));
+        let mut on = HeadsetMode::new(HeadsetMic::On, Some("mic.wav".into()), None);
         on.poll_auto();
         assert!(on.auto.polled.is_none());
     }

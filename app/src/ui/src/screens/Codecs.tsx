@@ -27,6 +27,16 @@
 // belongs to the device rather than the codec (capture source, volume sync,
 // packet size) is on Audio Devices. An LE Audio entry (experimental) has LC3
 // only.
+// The microphone's codec (issue #86): while a classic device's call link
+// is open its call codec cards replace the music ones, and while an LE Audio
+// device's microphone runs an LC3 card for it follows LC3's. Under
+// Auto-select they show what the link took (a call codec card clicked
+// offers to turn Auto-select off); off, a call codec card is chosen (the
+// profile's voice_codec: the best the link may use, the next lower one the
+// headphones list otherwise), and the LE Audio microphone's "..." chooses
+// its rate among those the headphones allow (the profile's mic_rate, 0 =
+// Auto). The choice stays in the profile while Auto-select is on. The
+// microphone stays mono.
 // Every codec is offered, the experimental ones too (issue #86: they are
 // marked in the README only; the core no longer reads
 // settings.experimental_codecs).
@@ -45,7 +55,7 @@ import { unwrap } from "solid-js/store";
 import { useApp } from "../app/context";
 import { saveSettings } from "../app/settings";
 import { CodecCard, CodecSettings, type CardSpec, type CodecChoice } from "../components/CodecCards";
-import { Banner, Button, Dialog, Field, Toggle } from "../components/controls";
+import { Banner, Button, Dialog, Field, Select, Toggle } from "../components/controls";
 import { Icon } from "../components/Icon";
 import { stateLabel } from "../components/stream";
 import { t } from "../i18n";
@@ -177,6 +187,17 @@ export async function saveHeadsetMic(
   app: ReturnType<typeof useApp>,
   entry: AudioEntry,
   patch: Partial<Pick<Profile, "headset_mic" | "mic_device_id" | "mic_device_name" | "mic_muted">>,
+): Promise<boolean> {
+  return (await saveEntry(app, entry, (base) => ({ ...base, ...patch }))) !== null;
+}
+
+/** Saves the microphone's codec chosen for a device: the call codec of a
+ *  classic one, the microphone's rate (Hz, 0 = Auto) of an LE Audio one.
+ *  The core takes it in place or sets the stream up again. True once saved. */
+export async function saveMicCodec(
+  app: ReturnType<typeof useApp>,
+  entry: AudioEntry,
+  patch: Partial<Pick<Profile, "voice_codec" | "mic_rate">>,
 ): Promise<boolean> {
   return (await saveEntry(app, entry, (base) => ({ ...base, ...patch }))) !== null;
 }
@@ -479,6 +500,18 @@ function DeviceCodecs(props: {
     const listed = ours() ? snap().stream.voice_codecs : [];
     return VOICE_CARDS.filter((c) => c.id === callCodec() || listed.includes(c.id) || !props.hide);
   };
+  // LE Audio: the microphone's rate while it runs (none: it does not)
+  const leMicRate = () => {
+    const v = ours() ? snap().stream.voice : null;
+    return e().le_audio && v?.link === "le" ? v.rate : null;
+  };
+  // The microphone's codec chosen (issue #86): the call link (or the LE
+  // stream) opens again with it
+  const saveMic = async (patch: Partial<Pick<Profile, "voice_codec" | "mic_rate">>) => {
+    setBusy(true);
+    await queued(() => saveMicCodec(app, e(), patch));
+    setBusy(false);
+  };
   const saveLowLatency = async (on: boolean) => {
     if (e().profile && shown().le_low_latency === on) return;
     setBusy(true);
@@ -676,31 +709,62 @@ function DeviceCodecs(props: {
       <Show
         when={!e().le_audio && !callOpen()}
         fallback={
-          <FixedCards
-            entry={e()}
-            cards={e().le_audio ? LE_CARDS : callCards()}
-            // LE Audio: none until the device has a profile (made by the choice)
-            picked={
-              e().le_audio
-                ? e().profile
-                  ? e().profile!.le_low_latency
-                    ? "lc3_ll"
-                    : "lc3"
-                  : ""
-                : (callCodec() ?? "")
-            }
-            disabled={locked()}
-            // LE Audio: LC3 or its low latency configuration, from the
-            // device's next connection; the call codec is the link's choice
-            onPick={e().le_audio ? (id) => void saveLowLatency(id === "lc3_ll") : undefined}
-            note={
-              <Show when={e().le_audio && leSupport() !== true}>
-                <Banner kind="warn">
-                  {leSupport() === false ? t("ui.profile.le_audio_unsupported") : t("ui.profile.le_audio_unchecked")}
-                </Banner>
-              </Show>
-            }
-          />
+          <>
+            <FixedCards
+              entry={e()}
+              cards={e().le_audio ? LE_CARDS : callCards()}
+              // LE Audio: none until the device has a profile (made by the choice)
+              picked={
+                e().le_audio
+                  ? e().profile
+                    ? e().profile!.le_low_latency
+                      ? "lc3_ll"
+                      : "lc3"
+                    : ""
+                  : (callCodec() ?? "")
+              }
+              disabled={locked()}
+              // LE Audio: LC3 or its low latency configuration, from the
+              // device's next connection, under Auto-select too; the call
+              // codec only with Auto-select off (issue #86)
+              readOnly={!e().le_audio && props.auto}
+              onPick={(id) => void (e().le_audio ? saveLowLatency(id === "lc3_ll") : saveMic({ voice_codec: id }))}
+              onLocked={(id) => props.onLocked(() => void saveMic({ voice_codec: id }))}
+              mono={!e().le_audio}
+              note={
+                <Show when={e().le_audio && leSupport() !== true}>
+                  <Banner kind="warn">
+                    {leSupport() === false ? t("ui.profile.le_audio_unsupported") : t("ui.profile.le_audio_unchecked")}
+                  </Banner>
+                </Show>
+              }
+            />
+            {/* The LE Audio microphone while it runs: its rate in its "..." */}
+            <Show when={leMicRate()}>
+              {(rate) => (
+                <>
+                  <h3 class="codecs-sub">{t("ui.diag.mic_title")}</h3>
+                  <FixedCards
+                    entry={e()}
+                    cards={[{ ...LE_MIC_CARD, rate: rate() }]}
+                    picked={LE_MIC_CARD.id}
+                    disabled={locked()}
+                    readOnly
+                    mono
+                    rateChoice={
+                      props.auto
+                        ? undefined
+                        : {
+                            value: shown().mic_rate,
+                            rates: ours() ? snap().stream.mic_rates : [],
+                            onChange: (r) => void saveMic({ mic_rate: r }),
+                          }
+                    }
+                  />
+                </>
+              )}
+            </Show>
+          </>
         }
       >
         <div
@@ -808,6 +872,8 @@ type FixedCard = CardSpec & {
   /** Sample rate (Hz) and bit rate (kbps) when fixed */
   rate?: number;
   kbps?: number;
+  /** No bit rate shown (not known) */
+  noBitRate?: boolean;
 };
 
 /** The call codecs of a classic device's microphone link (HFP), highest
@@ -818,6 +884,14 @@ export const VOICE_CARDS: readonly FixedCard[] = [
   { id: "cvsd", label: "codec.cvsd", bars: { quality: 1, latency: 4, stability: 5 }, rate: 8000, kbps: 64 },
 ];
 
+/** The LE Audio microphone: LC3, one channel, at the rate it runs at */
+export const LE_MIC_CARD: FixedCard = {
+  id: "lc3_mic",
+  label: "codec.lc3",
+  bars: { quality: 3, latency: 4, stability: 4 },
+  noBitRate: true,
+};
+
 /** LE Audio's: LC3 as the device offers it best, or its low latency
  *  configuration (the profile's le_low_latency) */
 export const LE_CARDS: readonly FixedCard[] = [
@@ -826,14 +900,21 @@ export const LE_CARDS: readonly FixedCard[] = [
 ];
 
 /** Cards like the A2DP ones whose "..." shows the codec's settings read
- *  only. `onPick`: the card can be chosen (LE Audio); without it the cards
- *  only show which one is in use (the call link's). */
+ *  only. `onPick`: the card chosen; `readOnly`: the cards only show which
+ *  one is in use (Auto-select on; `onLocked`: a card clicked then).
+ *  `rateChoice`: the sample rate is chosen in "..." (the LE Audio
+ *  microphone's, 0 = Auto, Auto's rate first in `rates`). */
 function FixedCards(props: {
   entry: AudioEntry;
   cards: readonly FixedCard[];
   picked: string;
   disabled: boolean;
+  readOnly?: boolean;
   onPick?: (id: string) => void;
+  onLocked?: (id: string) => void;
+  /** One channel: shown in "..." */
+  mono?: boolean;
+  rateChoice?: { value: number; rates: readonly number[]; onChange: (rate: number) => void };
   note?: JSX.Element;
 }) {
   const app = useApp();
@@ -846,6 +927,22 @@ function FixedCards(props: {
   };
   const rate = (c: FixedCard) => c.rate ?? (c.id === props.picked ? info()?.sample_rate : undefined);
   const kbps = (c: FixedCard) => c.kbps ?? (c.id === props.picked ? info()?.bitrate_kbps : undefined);
+  // The rates to choose between: Auto with the one it takes, then each
+  // the headphones allow (one chosen they no longer allow stays, marked);
+  // none while not known or only one
+  const rateOptions = () => {
+    const r = props.rateChoice;
+    if (!r || r.rates.length < 2) return null;
+    const label = (hz: number) => `${khz(hz)} kHz`;
+    const listed = r.value === 0 || r.rates.includes(r.value) ? [...r.rates] : [...r.rates, r.value];
+    return [
+      { value: 0, label: t("codec.auto_value", label(r.rates[0])) },
+      ...listed.map((hz) => ({
+        value: hz,
+        label: r.rates.includes(hz) ? label(hz) : t("ui.profile.sbc_not_offered", label(hz)),
+      })),
+    ];
+  };
   const value = (id: string, text: string) => (
     <output id={id} class="input readonly num">
       {text}
@@ -858,13 +955,13 @@ function FixedCards(props: {
           {(c) => (
             <CodecCard
               spec={c}
-              group={`fixed-${props.entry.key}`}
+              group={`fixed-${props.entry.key}-${props.cards[0]?.id ?? ""}`}
               selected={props.picked === c.id}
               disabled={props.disabled}
-              readOnly={!props.onPick}
+              readOnly={props.readOnly || !props.onPick}
               support={null}
               onPick={() => props.onPick?.(c.id)}
-              onReadOnly={(settings) => settings && setOpen(c)}
+              onReadOnly={(settings) => (settings ? setOpen(c) : props.onLocked?.(c.id))}
               onSettings={() => setOpen(c)}
             />
           )}
@@ -879,14 +976,35 @@ function FixedCards(props: {
         <Show when={open()}>
           {(c) => (
             <div class="codec-settings">
-              <Field label={t("connection.sample_rate")}>
-                {(id) => value(id, rate(c()) ? `${khz(rate(c())!)} kHz` : "—")}
-              </Field>
-              <Field label={t("ui.codecs.bit_rate")}>
-                {(id) => value(id, kbps(c()) ? `${kbps(c())} kbps` : "—")}
-              </Field>
-              {/* The call link is one channel */}
-              <Show when={!props.entry.le_audio}>
+              <Show
+                when={rateOptions()}
+                fallback={
+                  <Field label={t("connection.sample_rate")}>
+                    {(id) => value(id, rate(c()) ? `${khz(rate(c())!)} kHz` : "—")}
+                  </Field>
+                }
+              >
+                {(options) => (
+                  <Field label={t("connection.sample_rate")}>
+                    {(id) => (
+                      <Select
+                        id={id}
+                        value={props.rateChoice!.value}
+                        options={options()}
+                        disabled={props.disabled}
+                        onChange={(r) => props.rateChoice!.onChange(r)}
+                      />
+                    )}
+                  </Field>
+                )}
+              </Show>
+              <Show when={!c().noBitRate}>
+                <Field label={t("ui.codecs.bit_rate")}>
+                  {(id) => value(id, kbps(c()) ? `${kbps(c())} kbps` : "—")}
+                </Field>
+              </Show>
+              {/* The call link and the microphone are one channel */}
+              <Show when={props.mono}>
                 <Field label={t("ui.diag.cd_channels")}>{(id) => value(id, t("ui.diag.cd_mode.mono"))}</Field>
               </Show>
             </div>

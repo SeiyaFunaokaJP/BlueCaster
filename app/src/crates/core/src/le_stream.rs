@@ -359,6 +359,7 @@ pub(crate) fn stream_request(le: &LeRequest) -> (LeStreamRequest, bool) {
         request.preset_order = vec![p.clone()];
     }
     request.conversational = le.headset_mic.is_on();
+    request.source_rate = le.mic_rate;
     // The profile's choice (or --le-low-latency); an explicit preset wins
     let low_latency = le.low_latency && le.preset.is_none();
     (request, low_latency)
@@ -518,6 +519,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         let rate = plan.preset.sampling_hz;
         let format = audio.map(LeAudioPath::format);
         inner.set_le_stream(Some(details));
+        inner.mic_rates(plan.source.as_ref().map(|s| s.rates.clone()).unwrap_or_default());
         inner.stream_info(StreamInfo {
             codec: CODEC_NAME.into(),
             bitrate_kbps: plan.preset.kbps_per_channel() * channels,
@@ -1027,6 +1029,10 @@ mod tests {
         // Auto: the same (the conversational stream keeps the media preset)
         let (r, _) = stream_request(&LeRequest { headset_mic: bt_host::HeadsetMic::Auto, ..LeRequest::default() });
         assert!(r.conversational);
+        assert_eq!(r.source_rate, None);
+        // The microphone's rate chosen
+        let le = LeRequest { headset_mic: bt_host::HeadsetMic::On, mic_rate: Some(16000), ..LeRequest::default() };
+        assert_eq!(stream_request(&le).0.source_rate, Some(16000));
     }
 
     #[test]

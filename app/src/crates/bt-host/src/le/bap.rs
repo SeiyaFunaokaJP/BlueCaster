@@ -1980,6 +1980,7 @@ mod tests {
             preset,
             requested_contexts: CONTEXT_CONVERSATIONAL,
             contexts: CONTEXT_CONVERSATIONAL,
+            rates: vec![32000],
         });
         plan
     }

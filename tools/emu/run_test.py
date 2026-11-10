@@ -56,7 +56,7 @@ bluecaster-core.exe --cli --scan lists it:
     from a name request after the first inquiry
 Outputs go to tools/emu/out/scan-<case>/.
 
-    python tools/emu/run_test.py --voice [cvsd msbc lc3swb cvsd-roundtrip cvsd-auto]
+    python tools/emu/run_test.py --voice [cvsd msbc lc3swb cvsd-roundtrip cvsd-auto lc3swb-msbc lc3swb-cvsd]
 
 runs the HFP audio cases instead (headset mode: bluecaster-core --headset-mic
 --mic-output <out>/mic.wav): emu_sink.py --hfp <codec> adds a hands-free
@@ -79,6 +79,9 @@ cvsd-roundtrip: headset mode on 3 s after streaming starts and off at 6 s
 the test tone in the last second the sink decoded.
 cvsd-auto: --headset-mic auto; a WAV output counts as recorded from, so the
 checks are cvsd's, plus Auto's "an application records" in the log.
+lc3swb-msbc / lc3swb-cvsd: the hands-free unit offers LC3-SWB, BlueCaster is
+given --voice-codec msbc / cvsd (the call codec chosen with Auto-select off):
+the link must come up with that codec instead.
 Outputs go to tools/emu/out/voice-<case>/.
 """
 
@@ -1202,7 +1205,12 @@ VOICE_CASES = {
     'lc3swb': ('LC3-SWB', 8000 / 60),
     'cvsd-roundtrip': ('CVSD', 16000 / 60),
     'cvsd-auto': ('CVSD', 16000 / 60),
+    'lc3swb-msbc': ('mSBC', 8000 / 60),
+    'lc3swb-cvsd': ('CVSD', 16000 / 60),
 }
+# Cases that choose the call codec (--voice-codec): the hands-free unit
+# offers more, the link takes the one chosen (hfp_audio.py's name for it)
+VOICE_CHOSEN = {'lc3swb-msbc': ('msbc', 'msbc'), 'lc3swb-cvsd': ('cvsd', 'cvsd')}
 # The hands-free unit's tone (hfp_audio.py TX_TONE_HZ, voice_frames.py) as
 # BlueCaster's mic.wav must hold it: frequency and amplitude
 MIC_TONE = (1500.0, 8000 / 32768)
@@ -1273,6 +1281,10 @@ def run_voice_case(args, case, port):
     auto = case.endswith('-auto')
     headset = (['--headset-mic-toggle', ','.join(map(str, ROUNDTRIP_TOGGLE))] if roundtrip
                else ['--headset-mic', 'auto'] if auto else ['--headset-mic'])
+    # The codec the link negotiates (hfp_audio.py's name), the one chosen
+    chosen, negotiated = VOICE_CHOSEN.get(case, (None, hf_case))
+    if chosen:
+        headset += ['--voice-codec', chosen]
     sink = start_sink(port, sink_capture, os.path.join(out, 'sink.log'), extra=['--hfp', hf_case])
     try:
         env = dict(os.environ, BLUECASTER_CONFIG_DIR=os.path.join(out, 'config'), BLUECASTER_LOG='debug')
@@ -1296,8 +1308,8 @@ def run_voice_case(args, case, port):
         failures.append('bluecaster.log: no audio connection')
     elif m.group(1) != codec:
         failures.append(f'audio connection with {m.group(1)}, not {codec}')
-    if hf_case != 'cvsd' and f'HFP: codec negotiated {hf_case}' not in sink_log:
-        failures.append(f'sink.log: codec {hf_case} not negotiated')
+    if hf_case != 'cvsd' and f'HFP: codec negotiated {negotiated}' not in sink_log:
+        failures.append(f'sink.log: codec {negotiated} not negotiated')
     if not re.search(r'^Voice: \S+ at \d+ Hz', bc_log, re.M):
         failures.append('bluecaster.log: the voice link never carried audio ("Voice: ..." missing)')
     if re.search(r'Traceback|HFP-HF protocol failed', sink_log):
@@ -1323,8 +1335,8 @@ def run_voice_case(args, case, port):
         detail.append(f'sink rx {packets} tx {tx} status {status} tone {tone}')
         if int(packets) == 0:
             failures.append('the sink received no SCO packets')
-        if sink_codec != hf_case:
-            failures.append(f'sink codec {sink_codec}, not {hf_case}')
+        if sink_codec != negotiated:
+            failures.append(f'sink codec {sink_codec}, not {negotiated}')
         if not tone.startswith('ok'):
             failures.append(f'sink: what BlueCaster sent is not right ({tone})')
     if 'dropped an incoming HCI packet' in bc_log:

@@ -71,7 +71,7 @@ describe("core store", () => {
 
     f.event(12, {
       kind: "stream",
-      value: { state: "connecting", message: { key: "status.connecting", args: [] }, profile: "X", info: null, volume: null, battery: null, battery_refused: false, voice_codecs: [] },
+      value: { state: "connecting", message: { key: "status.connecting", args: [] }, profile: "X", info: null, volume: null, battery: null, battery_refused: false, voice_codecs: [], mic_rates: [] },
     });
     expect(core.state.snap?.stream.state).toBe("connecting");
 

@@ -32,6 +32,12 @@ battery_refused: boolean,
  */
 voice_codecs: Array<string>, 
 /**
+ * LE Audio: the microphone's sampling rates (Hz) the headphones allow,
+ * the one Auto takes first, for the Codecs screen; empty while unknown
+ * or without the microphone, cleared as `voice_codecs`
+ */
+mic_rates: Array<number>, 
+/**
  * The voice link (headset microphone): Some only while
  * it carries audio, cleared on Idle / Error / Reconnecting like the
  * battery

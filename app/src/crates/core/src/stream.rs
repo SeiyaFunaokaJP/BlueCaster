@@ -84,6 +84,11 @@ pub struct StreamRequest {
     /// a path ending in ".wav" (written instead of rendered). None or
     /// empty: the default output device.
     pub mic_output: Option<String>,
+    /// The best call codec the voice link may use (the profile's
+    /// `voice_codec` with Auto-select off, `--voice-codec`); None: Auto,
+    /// the best both sides have. One the headphones lack falls back to the
+    /// next lower one.
+    pub voice_codec: Option<voice_link::VoiceCodec>,
 }
 
 /// The bitpools of a request ([`crate::profiles::Profile::bitpools`]; 0 = Auto)
@@ -2016,7 +2021,8 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     }
     let mut health = StreamHealth::start(host.stats().clone(), format.sample_rate, active.health());
     // Headset mode (developer mode): the voice link instead of A2DP
-    let mut headset = crate::voice::HeadsetMode::new(req.headset_mic, req.mic_output.clone());
+    let mut headset = crate::voice::HeadsetMode::new(req.headset_mic, req.mic_output.clone(), req.voice_codec);
+    headset.offer_codecs(&host);
     while !stopped() {
         inner.wait_tick(Duration::from_millis(200));
         if stopped() {

@@ -50,7 +50,9 @@ The codec of each saved audio device, one section per device (a dot that is gree
 
 The defaults give the best sound; most devices need nothing but **Auto**. An LE Audio device (experimental) has two cards, **LC3** and **LC3 Low Latency** (see [LE Audio](#le-audio)).
 
-While the microphone of a classic device is open (see [Audio Devices](#audio-devices)), its music cards make way for the call codecs it can use: LC3 (32 kHz), mSBC (16 kHz) and CVSD (8 kHz), the one open chosen. They look like the other cards, but the call link picks the best both sides support, so they cannot be chosen, and **...** shows their settings read only. When the microphone closes, the music cards are back. With **Show only supported codecs**, the ones the headphones do not support are left out.
+While the microphone of a classic device is open (see [Audio Devices](#audio-devices)), its music cards make way for the call codecs it can use: LC3 (32 kHz), mSBC (16 kHz) and CVSD (8 kHz), the one open chosen. Under **Auto-select** the call link picks the best both sides support, and clicking a card asks whether to turn Auto-select off. With it off, click a card to choose the call codec: the microphone opens again with it, or with the next lower one if the headphones do not support it. **...** shows their settings read only. When the microphone closes, the music cards are back. The call codec chosen is kept while Auto-select is on. With **Show only supported codecs**, the ones the headphones do not support are left out.
+
+While the microphone of an LE Audio device is open, a **Microphone** card (LC3, mono) follows its music cards. With Auto-select off, its **...** chooses the microphone's sample rate among those the headphones support (**Auto** takes the first; a change connects the device again); under Auto-select it shows the rate in use.
 
 Behind the scenes BlueCaster keeps one entry per device in `profiles.json` (its codec, each codec's settings and its codec order), named "*device* | *codec*" there; the window and the tray menu show the device's name. Earlier versions let you make several profiles for one device: the first start of a version with the Codecs screen keeps the one last used (otherwise the first) and folds the others into it, keeping their codec settings (quality, sample rate, bit depth, ABR, SBC setup) for their codecs. Their own names, output sources and packet sizes are not kept; `profiles.json` as it was is saved once as `profiles-before-codecs.json` in the settings folder. The 2.0.2 pre-releases' **Auto's order…** (one order for every device, in developer mode) is no longer used: each device has its own order now.
 
@@ -224,6 +226,8 @@ Put the headphones into pairing mode first.
 | `--app <exe>` | Executable for `-m app` (e.g. `spotify.exe`) |
 | `--headset-mic` | Headset microphone (see [Audio Devices](#audio-devices)): the headphones' microphone plays into `--mic-output`; a classic device plays at call quality meanwhile. With `--le-audio`, the LE Audio setup that carries the microphone too |
 | `--mic-output <name>` | The output device the microphone plays into, by part of its name (e.g. `"CABLE Input"`; default: the Windows default output), or a `.wav` file to write |
+| `--voice-codec <cvsd\|msbc\|lc3_swb>` | With `--headset-mic`, a classic device: the best call codec to use (the next lower one if the headphones do not support it; default: the best both sides support) |
+| `--mic-rate <Hz>` | With `--headset-mic --le-audio`: the microphone's sample rate (e.g. `16000`; one the headphones do not support falls back to the first they do) |
 | `--rate <hz>` | Capture sample rate (default: 48 kHz, or another rate the device lists if it has no 48 kHz) |
 | `--bits <16\|24>` | Bit depth (default: 24 where the codec carries it) |
 | `--max-packet <bytes>` | Max media packet size, 679-1679, default 1023 (see [Max Media Packet Size](#max-packet)) |
