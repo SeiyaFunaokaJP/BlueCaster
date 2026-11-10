@@ -475,6 +475,11 @@ pub struct StreamStatus {
     /// call codecs (issue #86); empty while unknown, cleared as the battery
     #[serde(default)]
     pub voice_codecs: Vec<String>,
+    /// LE Audio: the microphone's sampling rates (Hz) the headphones allow,
+    /// the one Auto takes first, for the Codecs screen; empty while unknown
+    /// or without the microphone, cleared as `voice_codecs`
+    #[serde(default)]
+    pub mic_rates: Vec<u32>,
     /// The voice link (headset microphone): Some only while
     /// it carries audio, cleared on Idle / Error / Reconnecting like the
     /// battery
@@ -613,6 +618,17 @@ pub struct Profile {
     /// as with headset_mic "off"; headset_mic is kept for unmuting
     #[serde(default)]
     pub mic_muted: bool,
+    /// Classic devices: the call codec chosen on its card with Auto-select
+    /// off ("cvsd", "msbc", "lc3_swb"; "" = none chosen, the best both
+    /// sides have). The voice link takes it, or the next lower one the
+    /// headphones list. Kept but not used while Auto-select is on.
+    #[serde(default)]
+    pub voice_codec: String,
+    /// LE Audio: the microphone's sampling rate chosen with Auto-select off
+    /// (Hz; 0 = none chosen). One the headphones do not allow falls back
+    /// to Auto's. Kept but not used while Auto-select is on.
+    #[serde(default)]
+    pub mic_rate: u32,
     /// SBC / SBC XQ: the bitpool to encode with, within what the device
     /// allows (0 = by quality)
     #[serde(default)]

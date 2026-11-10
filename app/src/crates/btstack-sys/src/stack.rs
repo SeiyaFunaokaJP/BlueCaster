@@ -308,6 +308,19 @@ impl Stack {
         out[..usize::from(n).min(out.len())].to_vec()
     }
 
+    /// The voice codecs the AG offers from now on (HFP codec ids, best
+    /// first, at most 3); `acl`'s service level connection negotiates again
+    /// on its next audio connection. False when not applied (no voice, an
+    /// empty or too long list).
+    pub fn hfp_ag_set_codecs(&self, acl: u16, codecs: &[u8]) -> bool {
+        let Ok(n) = u8::try_from(codecs.len()) else { return false };
+        // SAFETY: on the BTstack thread after hfp_ag_init; `n` bytes read
+        // from `codecs` (the C side refuses more than it holds).
+        let status = unsafe { ffi::bluecaster_hfp_ag_set_codecs(acl, codecs.as_ptr(), n) };
+        tracing::debug!(target: "btstack", "hfp_ag_set_codecs acl 0x{acl:04X} {codecs:?}: {status}");
+        status == 0
+    }
+
     /// Sets the headphones' HFP speaker gain (+VGS, 0..15, clamped)
     pub fn hfp_ag_set_speaker_gain(&self, acl: u16, gain: u8) -> u8 {
         // SAFETY: on the BTstack thread after hfp_ag_init.

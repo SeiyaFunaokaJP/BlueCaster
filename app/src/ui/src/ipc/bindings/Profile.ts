@@ -79,6 +79,19 @@ mic_device_name: string,
  */
 mic_muted: boolean, 
 /**
+ * Classic devices: the call codec chosen on its card with Auto-select
+ * off ("cvsd", "msbc", "lc3_swb"; "" = none chosen, the best both
+ * sides have). The voice link takes it, or the next lower one the
+ * headphones list. Kept but not used while Auto-select is on.
+ */
+voice_codec: string, 
+/**
+ * LE Audio: the microphone's sampling rate chosen with Auto-select off
+ * (Hz; 0 = none chosen). One the headphones do not allow falls back
+ * to Auto's. Kept but not used while Auto-select is on.
+ */
+mic_rate: number, 
+/**
  * SBC / SBC XQ: the bitpool to encode with, within what the device
  * allows (0 = by quality)
  */

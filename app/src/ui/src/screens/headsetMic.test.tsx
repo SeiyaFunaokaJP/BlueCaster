@@ -661,8 +661,8 @@ describe("call codecs on Codecs (issue #86)", () => {
     expect(radios().map((r) => r.value)).toEqual(["msbc", "cvsd"]);
     expect(wh.querySelectorAll(".codec-card .cbar")).toHaveLength(6);
     expect(radios()[0]).toBeChecked();
-    // Chosen by the link: read only
-    expect(radios().every((r) => r.disabled)).toBe(true);
+    // Auto-select off (the mock's default): they can be chosen
+    expect(radios().every((r) => !r.disabled)).toBe(true);
     // "..." shows its settings, read only
     fireEvent.click(within(wh).getByRole("button", { name: t("ui.profile.codec_settings", "mSBC") }));
     const dialog = await screen.findByRole("dialog", { name: t("ui.profile.codec_settings", "mSBC") });
@@ -679,5 +679,90 @@ describe("call codecs on Codecs (issue #86)", () => {
     const wh = await section("WH-1000XM5");
     expect(wh.querySelector('input[value="msbc"]')).toBeNull();
     expect(wh.querySelector('input[value="ldac"]')).not.toBeNull();
+  });
+
+  it("chooses the call codec with Auto-select off, saved apart from the codec", async () => {
+    const { core, saves } = start("#/codecs", "voice");
+    await core.request("stream.start", { profile: "WH-1000XM5 (LDAC)" });
+    await waitFor(() => expect(core.state.snap?.stream.voice?.codec).toBe("msbc"));
+    const wh = await section("WH-1000XM5");
+    const cvsd = await waitFor(() => {
+      const r = wh.querySelector<HTMLInputElement>('input[value="cvsd"]');
+      expect(r).toBeTruthy();
+      return r!;
+    });
+    fireEvent.click(cvsd);
+    await waitFor(() => expect(saves().at(-1)).toMatchObject({ voice_codec: "cvsd", codec: "ldac" }));
+    // The link takes it
+    await waitFor(() => expect(core.state.snap?.stream.voice?.codec).toBe("cvsd"));
+    await waitFor(() => expect(wh.querySelector<HTMLInputElement>('input[value="cvsd"]')).toBeChecked());
+  });
+
+  it("shows the link's call codec under Auto-select and offers to turn it off", async () => {
+    const { core, saves, calls } = start("#/codecs", "voice");
+    await waitFor(() => expect(core.state.snap).toBeTruthy());
+    await core.request("settings.set", { settings: { ...core.state.snap!.settings, auto_codec: true } });
+    await core.request("stream.start", { profile: "WH-1000XM5 (LDAC)" });
+    await waitFor(() => expect(core.state.snap?.stream.voice?.codec).toBe("msbc"));
+    const wh = await section("WH-1000XM5");
+    const radio = (v: string) => wh.querySelector<HTMLInputElement>(`input[value="${v}"]`);
+    await waitFor(() => expect(radio("msbc")).toBeChecked());
+    expect(radio("cvsd")).toBeDisabled();
+    // A click on a card offers to turn Auto-select off, then chooses it
+    fireEvent.click(radio("cvsd")!.closest("label")!);
+    const dialog = await screen.findByRole("dialog", { name: t("ui.codecs.auto_dialog_title") });
+    fireEvent.click(within(dialog).getByRole("button", { name: t("ui.codecs.auto_dialog_disable") }));
+    await waitFor(() => expect(saves().at(-1)).toMatchObject({ voice_codec: "cvsd" }));
+    expect(calls.filter((c) => c.method === "settings.set").at(-1)?.params).toMatchObject({
+      settings: { auto_codec: false },
+    });
+  });
+});
+
+describe("LE Audio microphone on Codecs (issue #86)", () => {
+  const micGrid = () =>
+    waitFor(() => {
+      const le = screen.getByRole("region", { name: "Galaxy Buds2 Pro" });
+      const h = within(le).getByRole("heading", { name: t("ui.diag.mic_title") });
+      const grid = h.nextElementSibling as HTMLElement;
+      expect(grid).toHaveClass("codec-grid");
+      return grid;
+    });
+  const openMic = async () => {
+    fireEvent.click(within(await micGrid()).getByRole("button", { name: t("ui.profile.codec_settings", t("codec.lc3")) }));
+    return screen.findByRole("dialog", { name: t("ui.profile.codec_settings", t("codec.lc3")) });
+  };
+
+  it("shows the microphone's card while it runs, mono, its rate chosen with Auto-select off", async () => {
+    const { core, saves } = start("#/codecs", "voice");
+    await screen.findByRole("region", { name: "Galaxy Buds2 Pro" });
+    expect(screen.queryByRole("heading", { name: t("ui.diag.mic_title") })).toBeNull();
+    await core.request("stream.start", { profile: "Buds (LE Audio)" });
+    await waitFor(() => expect(core.state.snap?.stream.voice?.rate).toBe(32000));
+    const dialog = await openMic();
+    expect(dialog).toHaveTextContent(t("ui.diag.cd_mode.mono"));
+    // No stereo to choose, no bit rate to show
+    expect(within(dialog).queryByText(t("ui.codecs.bit_rate"))).toBeNull();
+    const select = within(dialog).getByRole("combobox") as HTMLSelectElement;
+    expect([...select.options].map((o) => o.textContent)).toEqual([
+      t("codec.auto_value", "32 kHz"),
+      "32 kHz",
+      "16 kHz",
+    ]);
+    expect(select.value).toBe("0");
+    fireEvent.change(select, { target: { value: "16000" } });
+    await waitFor(() => expect(saves().at(-1)).toMatchObject({ le_audio: true, mic_rate: 16000 }));
+    await waitFor(() => expect(core.state.snap?.stream.voice?.rate).toBe(16000));
+  });
+
+  it("shows the rate in use under Auto-select, nothing to choose", async () => {
+    const { core } = start("#/codecs", "voice");
+    await waitFor(() => expect(core.state.snap).toBeTruthy());
+    await core.request("settings.set", { settings: { ...core.state.snap!.settings, auto_codec: true } });
+    await core.request("stream.start", { profile: "Buds (LE Audio)" });
+    await waitFor(() => expect(core.state.snap?.stream.voice?.rate).toBe(32000));
+    const dialog = await openMic();
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
+    expect(dialog).toHaveTextContent("32 kHz");
   });
 });

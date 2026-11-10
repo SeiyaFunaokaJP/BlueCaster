@@ -2314,6 +2314,13 @@ option {
 .device-codecs .toggle-row {
   padding: 0;
 }
+/* The LE Audio microphone's card under the music ones */
+.device-codecs .codecs-sub {
+  font-size: var(--fs-14);
+  font-weight: 600;
+  color: var(--text-2);
+  margin: 0;
+}
 /* Headset microphone (developer mode): the switch, its output and notes */
 .headset-mic {
   display: flex;

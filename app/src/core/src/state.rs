@@ -192,6 +192,8 @@ fn to_ipc_profile(p: &CoreProfile, legacy: u16) -> Profile {
         mic_device_id: p.mic_device_id.clone(),
         mic_device_name: p.mic_device_name.clone(),
         mic_muted: p.mic_muted,
+        voice_codec: p.voice_codec.clone(),
+        mic_rate: p.mic_rate,
         sbc_bitpool: p.sbc_bitpool,
         sbcxq_bitpool: p.sbcxq_bitpool,
         sbc_min_bitpool: p.sbc_min_bitpool,
@@ -272,6 +274,9 @@ fn merge_profile(base: Option<&CoreProfile>, p: &Profile) -> CoreProfile {
     c.mic_device_id = p.mic_device_id.clone();
     c.mic_device_name = p.mic_device_name.clone();
     c.mic_muted = p.mic_muted;
+    // A call codec not known reads as none chosen
+    c.voice_codec = bluecaster_core::VoiceCodec::from_name(&p.voice_codec).map_or(String::new(), |v| v.name().into());
+    c.mic_rate = p.mic_rate;
     c.sbc_bitpool = p.sbc_bitpool;
     c.sbcxq_bitpool = p.sbcxq_bitpool;
     c.sbc_min_bitpool = p.sbc_min_bitpool;
@@ -1480,8 +1485,18 @@ fn set_headset_mic(req: &mut StreamRequest, mode: HeadsetMic, mic_device_id: &st
     }
 }
 
-/// What a save that changed only the headset mode or the microphone output
-/// of the profile in use does to its stream
+/// The microphone's codec chosen into a profile's request, with Auto-select
+/// (`auto_select`) off: the best call codec (classic), the microphone's rate
+/// (LE Audio). Auto-select on: Auto for both, the choice stays saved.
+fn set_mic_codec(req: &mut StreamRequest, p: &CoreProfile, auto_select: bool) {
+    req.voice_codec = p.voice_codec_in_force(auto_select);
+    if let Some(le) = req.le.as_mut().filter(|le| le.broadcast.is_none()) {
+        le.mic_rate = p.mic_rate_in_force(auto_select);
+    }
+}
+
+/// What a save that changed only the headset mode, the microphone output or
+/// the microphone's codec of the profile in use does to its stream
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HeadsetChange {
     /// Nothing the stream uses: the microphone output changed while
@@ -1500,8 +1515,15 @@ fn is_mic_note(key: &str) -> bool {
     matches!(key, "error.headset_mic_loop" | "status.headset_mic_failed" | "status.headset_mic_output_failed")
 }
 
-/// The save changed only `headset_mic` / `mic_device_*` (None: something else
-/// changed as well, or nothing)
+/// Whether the microphone's codec chosen on a profile matters to its stream:
+/// headset mode in force and a call codec (classic) or microphone rate (LE
+/// Audio) chosen. Auto-select turned on or off then changes what it uses.
+fn mic_choice_matters(p: &CoreProfile) -> bool {
+    headset_mic_in_force(p).is_on() && if p.le_audio { p.mic_rate != 0 } else { !p.voice_codec.is_empty() }
+}
+
+/// The save changed only `headset_mic` / `mic_device_*` / the microphone's
+/// codec (None: something else changed as well, or nothing)
 fn headset_change(stream: &StreamStatus, before: Option<&CoreProfile>, saved: &CoreProfile) -> Option<HeadsetChange> {
     let before = before.filter(|b| b.only_headset_mic_differs(saved))?;
     Some(if !before.headset_mic_mode().is_on() && !saved.headset_mic_mode().is_on() {
@@ -1903,6 +1925,7 @@ impl CoreState {
                     stream.battery_refused = false;
                     stream.voice = None;
                     stream.voice_codecs.clear();
+                    stream.mic_rates.clear();
                 }
                 if matches!(state, CoreStreamState::Idle | CoreStreamState::Error) {
                     stream.info = None;
@@ -1911,6 +1934,7 @@ impl CoreState {
                     stream.battery_refused = false;
                     stream.voice = None;
                     stream.voice_codecs.clear();
+                    stream.mic_rates.clear();
                     if state == CoreStreamState::Idle {
                         stream.profile = None;
                     }
@@ -2004,12 +2028,16 @@ impl CoreState {
             }
             // A report that arrives after the device went off (HFP still
             // closing) is not shown on a device no longer connected
-            ServiceEvent::Battery(_) | ServiceEvent::BatteryRefused | ServiceEvent::VoiceCodecs(_)
+            ServiceEvent::Battery(_)
+            | ServiceEvent::BatteryRefused
+            | ServiceEvent::VoiceCodecs(_)
+            | ServiceEvent::MicRates(_)
                 if matches!(stream.state, StreamState::Idle | StreamState::Error) =>
             {
                 tracing::debug!("battery report while not connected: ignored");
             }
             ServiceEvent::VoiceCodecs(codecs) => stream.voice_codecs = codecs,
+            ServiceEvent::MicRates(rates) => stream.mic_rates = rates,
             ServiceEvent::BatteryRefused => {
                 stream.battery = None;
                 stream.battery_refused = true;
@@ -2319,6 +2347,8 @@ impl CoreState {
         // conversational configuration and renders the microphone, with the
         // same refusal (le_stream.rs)
         set_headset_mic(&mut req, headset_mic, &p.mic_device_id);
+        // The microphone's codec chosen, as the codec: only with Auto-select off
+        set_mic_codec(&mut req, p, settings.auto_codec);
         self.set_active_profile(Some(name.to_string()));
         self.begin_stream(req, Some(name.to_string()));
         Ok(())
@@ -2369,6 +2399,7 @@ impl CoreState {
             battery: None,
             battery_refused: false,
             voice_codecs: Vec::new(),
+            mic_rates: Vec::new(),
             voice: None,
             codec_stop: None,
         }));
@@ -2964,8 +2995,11 @@ impl CoreState {
                         // capture; false (no stream, or a stack without
                         // voice): it starts again instead
                         let mode = headset_mic_in_force(&in_order);
-                        let kept =
-                            self.service.set_headset_mic(mode, mode.is_on().then(|| in_order.mic_device_id.clone()));
+                        let kept = self.service.set_headset_mic(
+                            mode,
+                            mode.is_on().then(|| in_order.mic_device_id.clone()),
+                            in_order.voice_codec_in_force(auto_select),
+                        );
                         // Another output or mode: the session tries again
                         // and says so anew if it still cannot
                         let mut stream = self.with_snapshot(|s| s.stream.clone());
@@ -3088,8 +3122,12 @@ impl CoreState {
                             }
                             restart_for_auto(&s.stream, p) && !same
                         };
+                        // An LE Audio microphone's rate chosen: set up again
+                        let mic_changes = |p: &CoreProfile| {
+                            p.le_audio && mic_choice_matters(p) && restart_after_save(&s.stream, &p.name)
+                        };
                         let restart = |p: &&CoreProfile| {
-                            (auto_toggled && auto_changes(p))
+                            (auto_toggled && (auto_changes(p) || mic_changes(p)))
                                 || (sync_toggled && restart_after_save(&s.stream, &p.name))
                         };
                         // Auto-select turned on after the codec stopped the
@@ -3112,6 +3150,23 @@ impl CoreState {
                                 bluecaster_core::diag::quoted(&p.name)
                             );
                             me.restart_profile(&p.name.clone())?;
+                        } else if let Some(p) = in_use.filter(|p| auto_toggled && !p.le_audio && mic_choice_matters(p))
+                        {
+                            // A call codec chosen: the classic stream's
+                            // voice link takes Auto's or the chosen one in
+                            // place, or the profile starts again
+                            let mode = headset_mic_in_force(p);
+                            let codec = p.voice_codec_in_force(settings.auto_codec);
+                            if !me.service.set_headset_mic(mode, Some(p.mic_device_id.clone()), codec)
+                                && restart_after_save(&s.stream, &p.name)
+                            {
+                                tracing::info!(
+                                    "Auto-select {}: the call codec of profile {} changes, it starts again",
+                                    if settings.auto_codec { "on" } else { "off" },
+                                    bluecaster_core::diag::quoted(&p.name)
+                                );
+                                me.restart_profile(&p.name.clone())?;
+                            }
                         }
                     }
                     // Developer mode off while one of its codecs streams
@@ -4058,6 +4113,37 @@ mod tests {
         assert_eq!(headset_mic_in_force(&muted), HeadsetMic::Off);
         let no_output = CoreProfile { mic_device_id: String::new(), ..auto };
         assert_eq!(headset_mic_in_force(&no_output), HeadsetMic::Off);
+    }
+
+    #[test]
+    fn the_microphone_codec_chosen_reaches_the_request_with_auto_select_off() {
+        let classic = CoreProfile {
+            name: "WH".into(),
+            device_address: "00:A2:D0:00:00:12".into(),
+            headset_mic: "on".into(),
+            mic_device_id: "{cable}".into(),
+            voice_codec: "cvsd".into(),
+            ..CoreProfile::default()
+        };
+        let mut req = classic.to_request(1000).unwrap();
+        set_mic_codec(&mut req, &classic, false);
+        assert_eq!(req.voice_codec, Some(bluecaster_core::VoiceCodec::Cvsd));
+        set_mic_codec(&mut req, &classic, true);
+        assert_eq!(req.voice_codec, None);
+        assert!(mic_choice_matters(&classic));
+        assert!(!mic_choice_matters(&CoreProfile { voice_codec: String::new(), ..classic.clone() }));
+        assert!(!mic_choice_matters(&CoreProfile { headset_mic: "off".into(), ..classic.clone() }));
+        // LE Audio: the microphone's rate
+        let le = CoreProfile { le_audio: true, mic_rate: 16000, ..classic };
+        let mut req = le.to_request(1000).unwrap();
+        set_mic_codec(&mut req, &le, false);
+        assert_eq!((req.voice_codec, req.le.as_ref().unwrap().mic_rate), (None, Some(16000)));
+        set_mic_codec(&mut req, &le, true);
+        assert_eq!(req.le.as_ref().unwrap().mic_rate, None);
+        assert!(mic_choice_matters(&le));
+        // The UI's value as saved: a call codec not known is none chosen
+        let saved = merge_profile(None, &Profile { voice_codec: "lc3".into(), ..to_ipc_profile(&le, 1000) });
+        assert_eq!(saved.voice_codec, "");
     }
 
     #[test]

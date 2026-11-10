@@ -592,6 +592,7 @@ impl HostApp {
         // (headset microphone, developer mode) also the audio connection
         if self.setup.battery || self.setup.voice {
             stack.hfp_ag_init(self.setup.voice);
+            self.voice.on_ag_init();
         }
         // LE Audio (experimental, off by default): SM, GATT client / server,
         // ISO. Nothing of it runs while the setting is off.

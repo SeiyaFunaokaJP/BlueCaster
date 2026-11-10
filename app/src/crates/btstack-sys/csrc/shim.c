@@ -405,12 +405,16 @@ static hfp_ag_indicator_t hfp_ag_indicators[] = {
 static hfp_generic_status_indicator_t hfp_hf_indicators[] = { {1, 1}, {2, 1} };
 static const char *hfp_call_hold_services[] = {"1", "2"};
 
+/* The AG was set up with voice (hfp_codecs_voice) */
+static int hfp_voice_on;
+
 /* voice: codec negotiation with LC3-SWB, mSBC and CVSD, eSCO S4 (the
  * headset microphone); otherwise CVSD only, for the battery level */
 void bluecaster_hfp_ag_init(int voice) {
     uint16_t features = (1 << HFP_AGSF_HF_INDICATORS) | (1 << HFP_AGSF_EXTENDED_ERROR_RESULT_CODES);
     uint8_t *codecs = hfp_codecs_cvsd;
     uint8_t codecs_nr = sizeof(hfp_codecs_cvsd);
+    hfp_voice_on = voice;
     if (voice) {
         features |= (1 << HFP_AGSF_CODEC_NEGOTIATION) | (1 << HFP_AGSF_ESCO_S4);
         codecs = hfp_codecs_voice;
@@ -480,6 +484,28 @@ uint8_t bluecaster_hfp_ag_remote_codecs(uint16_t acl_handle, uint8_t *out, uint8
     return n;
 }
 
+/* The voice codecs the AG offers from now on (HFP codec ids, in its
+ * preference order, at most 3). BTstack suggests the first one the
+ * headphones listed and CVSD when none is. Without voice (CVSD only, for
+ * the battery) nothing changes. A codec negotiated before on the service
+ * level connection of `acl_handle` is negotiated again on its next audio
+ * connection (BTstack would reuse it). 0 = done, 1 = not applied. */
+uint8_t bluecaster_hfp_ag_set_codecs(uint16_t acl_handle, const uint8_t *codecs, uint8_t codecs_nr) {
+    if (!hfp_voice_on || codecs_nr == 0 || codecs_nr > sizeof(hfp_codecs_voice)) return 1;
+    uint8_t list[sizeof(hfp_codecs_voice)];
+    memcpy(list, codecs, codecs_nr);
+    /* As BTstack does on each service level connection: mSBC needs eSCO
+     * (the controller's features are known once HCI works) */
+    if (hci_get_state() == HCI_STATE_WORKING) hfp_hf_drop_mSBC_if_eSCO_not_supported(list, &codecs_nr);
+    hfp_ag_init_codecs(codecs_nr, list);
+    hfp_connection_t *c = get_hfp_connection_context_for_acl_handle(acl_handle, HFP_ROLE_AG);
+    if (c != NULL && c->codecs_state == HFP_CODECS_EXCHANGED && c->state == HFP_SERVICE_LEVEL_CONNECTION_ESTABLISHED &&
+        (c->remote_supported_features & (1u << HFP_HFSF_CODEC_NEGOTIATION)) != 0 && c->remote_codecs_nr > 0) {
+        c->codecs_state = HFP_CODECS_RECEIVED_LIST;
+    }
+    return 0;
+}
+
 /* +VGS: the headphones' speaker gain (0..15) on the voice link. BTstack
  * sends it only when it differs from the last gain either side gave. */
 uint8_t bluecaster_hfp_ag_set_speaker_gain(uint16_t acl_handle, uint8_t gain) {
@@ -519,6 +545,7 @@ uint16_t bluecaster_sco_packet_length(uint16_t sco_handle) {
 
 void bluecaster_hfp_ag_deinit(void) {
     hfp_ag_deinit();
+    hfp_voice_on = 0;
 }
 
 /* ======================================================================== */

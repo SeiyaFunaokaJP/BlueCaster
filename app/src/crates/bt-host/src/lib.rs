@@ -1625,6 +1625,17 @@ impl BtHost {
         .unwrap_or(Err(HostError::NoAnswer))
     }
 
+    /// The best voice codec the next audio connections may use (HFP codec
+    /// id: 1 CVSD, 2 mSBC, 3 LC3-SWB; None: Auto, the best both sides
+    /// have). One the headphones lack falls back to the next lower one
+    /// ([`voice::ag_codecs`]); an audio connection open now keeps its codec.
+    pub fn voice_codec(&self, max: Option<u8>) {
+        self.call(JOB_TIMEOUT, move |app, s| {
+            let (enabled, acl) = (app.setup.voice, app.hfp_acl);
+            app.voice.set_max_codec(s, enabled, acl, max)
+        });
+    }
+
     /// The stack offers HFP audio ([`HostConfig::voice`])
     pub fn voice_enabled(&self) -> bool {
         self.voice_on

@@ -19,7 +19,9 @@
 //! source ASEs only gets a CIS of its own that carries P->C only. The source
 //! preset is the first of [`StreamRequest::source_preset_order`] (those with
 //! the sink preset's frame duration first) that every such device's Source
-//! PAC records allow. When none fits, or no device has a source ASE, the
+//! PAC records allow. [`StreamRequest::source_rate`] (a rate the user
+//! chose) takes the first of those at that rate instead, and the first at
+//! any rate when none is. When none fits, or no device has a source ASE, the
 //! plan has no source direction and says why in [`StreamPlan::source_note`]:
 //! playback goes on without the microphone.
 
@@ -60,6 +62,9 @@ pub struct StreamRequest {
     pub source_preset_order: Vec<String>,
     /// Streaming Audio Contexts in the Enable of source ASEs (CONTEXT_*)
     pub source_contexts: u16,
+    /// The microphone's sampling rate chosen (Hz): the first source preset
+    /// at that rate; None, or none at that rate: the first one that fits
+    pub source_rate: Option<u32>,
 }
 
 impl Default for StreamRequest {
@@ -75,6 +80,7 @@ impl Default for StreamRequest {
             conversational: false,
             source_preset_order: DEFAULT_SOURCE_PRESET_ORDER.iter().map(|s| s.to_string()).collect(),
             source_contexts: CONTEXT_CONVERSATIONAL,
+            source_rate: None,
         }
     }
 }
@@ -173,6 +179,10 @@ pub struct SourcePlan {
     pub contexts: u16,
     /// Finalized after Config Codec (clamped into every source ASE's range)
     pub presentation_delay_us: u32,
+    /// The sampling rates (Hz) of the source presets every device allows,
+    /// in the order they are tried (the first is the one taken without a
+    /// [`StreamRequest::source_rate`]): what may be chosen
+    pub rates: Vec<u32>,
 }
 
 /// The configuration of a unicast stream (v1 struct StreamPlan)
@@ -517,9 +527,22 @@ fn plan_source(
     let mut candidates: Vec<&StreamPreset> =
         request.source_preset_order.iter().filter_map(|n| presets.find(n)).collect();
     candidates.sort_by_key(|p| p.frame_us != sink.frame_us);
-    let preset = candidates
+    let fitting: Vec<&StreamPreset> = candidates
         .into_iter()
-        .find(|p| u32::from(p.octets) + 4 <= iso_len && mics.iter().all(|(d, _)| pacs_support(&d.source_pacs, p, 1)))
+        .filter(|p| u32::from(p.octets) + 4 <= iso_len && mics.iter().all(|(d, _)| pacs_support(&d.source_pacs, p, 1)))
+        .collect();
+    let mut rates: Vec<u32> = Vec::new();
+    for p in &fitting {
+        if !rates.contains(&p.sampling_hz) {
+            rates.push(p.sampling_hz);
+        }
+    }
+    let chosen = request.source_rate.and_then(|hz| fitting.iter().find(|p| p.sampling_hz == hz));
+    if let Some(hz) = request.source_rate.filter(|_| chosen.is_none()) {
+        tracing::info!("LE Audio plan: no microphone configuration at {hz} Hz (allowed: {rates:?}), taking the first");
+    }
+    let preset = *chosen
+        .or(fitting.first())
         .ok_or_else(|| "no microphone configuration supported by every device (source PAC records)".to_string())?;
 
     let mut extra = 0;
@@ -560,6 +583,7 @@ fn plan_source(
         requested_contexts: request.source_contexts,
         contexts: choose_streaming_contexts(&available, request.source_contexts),
         presentation_delay_us: preset.presentation_delay_us,
+        rates,
     })
 }
 
@@ -1069,6 +1093,23 @@ mod tests {
         // No source ASE at all
         let p = plan(&[sink(1, FL | FR, 2, 0x03)], &conversational(), EMU_ISO).unwrap();
         assert_eq!(p.source_note, "no device of the group has a source ASE");
+    }
+
+    #[test]
+    fn microphone_rate_chosen() {
+        // The emulator's microphone: 16 and 32 kHz, Auto takes 32 kHz
+        let d = with_mic(sink(1, 0, 1, 0x01), 0);
+        let s = plan(std::slice::from_ref(&d), &conversational(), EMU_ISO).unwrap().source.unwrap();
+        assert_eq!((s.preset.name.as_str(), s.rates.as_slice()), ("32_2_1", &[32000, 16000][..]));
+        // 16 kHz chosen
+        let request = StreamRequest { source_rate: Some(16000), ..conversational() };
+        let s = plan(std::slice::from_ref(&d), &request, EMU_ISO).unwrap().source.unwrap();
+        assert_eq!(s.preset.name, "16_2_1");
+        assert_eq!(s.rates, [32000, 16000]);
+        // A rate the device does not allow: the first that fits
+        let request = StreamRequest { source_rate: Some(24000), ..conversational() };
+        let s = plan(&[d], &request, EMU_ISO).unwrap().source.unwrap();
+        assert_eq!(s.preset.name, "32_2_1");
     }
 
     #[test]

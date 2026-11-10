@@ -66,6 +66,11 @@ impl VoiceCodec {
         }
     }
 
+    /// From [`VoiceCodec::name`]; None for anything else
+    pub fn from_name(name: &str) -> Option<VoiceCodec> {
+        [VoiceCodec::Cvsd, VoiceCodec::Msbc, VoiceCodec::Lc3Swb].into_iter().find(|c| c.name() == name)
+    }
+
     /// PCM samples per codec frame (CVSD: none, it is a sample stream)
     fn frame_samples(self) -> usize {
         match self {
