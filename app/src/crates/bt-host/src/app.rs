@@ -1572,7 +1572,7 @@ impl HostApp {
         // (set to go before reset, the MediaTek loader sent it already)
         self.debug_command = crate::debug_command::get()
             .filter(|_| self.controller_company == Some(0x0046) && !crate::debug_command::before_reset());
-        crate::le::iso_send::debug_depth_for_controller(self.controller_company == Some(0x0046));
+        crate::le::iso_send::depth_for_controller(self.controller_company == Some(0x0046));
         self.send_debug_command(stack);
         let le_audio_capable = stack.controller_iso() == Some(true);
         tracing::info!(

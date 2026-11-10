@@ -1044,7 +1044,7 @@ fn apply_dev_overrides(settings: &Settings) {
     // Developer > Debug, read when the adapter opens next
     let debug = if settings.debug_mode { settings.dev_debug.clone() } else { Default::default() };
     hci_transport::iso_intr::set_config(hci_transport::iso_intr::IsoInterfaceConfig {
-        enabled: debug.mtk_iso_interface,
+        bulk: debug.mtk_iso_bulk,
         pad_to: debug.mtk_iso_pad.into(),
     });
     let command = bt_host::debug_command::parse(&debug.mtk_command).unwrap_or_else(|e| {

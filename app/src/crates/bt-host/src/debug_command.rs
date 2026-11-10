@@ -93,7 +93,7 @@ pub fn parse_register(text: &str) -> Result<Option<ControlRequest>, String> {
 }
 
 /// Developer > Debug: SDUs queued per CIS on a MediaTek controller for the
-/// next streams; 0: the default (crate::le::iso_send)
+/// next streams; 0: the MediaTek default (crate::le::iso_send)
 pub fn set_iso_queue(depth: u8) {
     crate::le::iso_send::set_debug_depth(depth);
 }

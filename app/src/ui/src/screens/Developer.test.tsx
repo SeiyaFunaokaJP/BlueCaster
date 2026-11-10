@@ -87,15 +87,21 @@ describe("developer screen", () => {
     const pad = screen.getByLabelText(
       t("ui.dev.mtk_iso_pad"),
     ) as HTMLInputElement;
-    // Padding only means something with the interface on
-    expect(pad).toBeDisabled();
+    // The interrupt interface is the default: padding counts until the
+    // bulk endpoint is chosen
+    expect(pad).toBeEnabled();
+    expect(pad.placeholder).toBe("342");
     fireEvent.click(
-      screen.getByRole("switch", { name: t("ui.dev.mtk_iso_interface") }),
+      screen.getByRole("switch", { name: t("ui.dev.mtk_iso_bulk") }),
     );
     await waitFor(() =>
-      expect(core.state.snap!.settings.dev_debug.mtk_iso_interface).toBe(true),
+      expect(core.state.snap!.settings.dev_debug.mtk_iso_bulk).toBe(true),
     );
     await screen.findByText(t("ui.dev.active"));
+    await waitFor(() => expect(pad).toBeDisabled());
+    fireEvent.click(
+      screen.getByRole("switch", { name: t("ui.dev.mtk_iso_bulk") }),
+    );
     await waitFor(() => expect(pad).toBeEnabled());
     fireEvent.change(pad, { target: { value: "99999" } });
     await waitFor(() =>
@@ -157,7 +163,7 @@ describe("developer screen", () => {
     );
     await waitFor(() =>
       expect(core.state.snap!.settings.dev_debug).toEqual({
-        mtk_iso_interface: false,
+        mtk_iso_bulk: false,
         mtk_iso_pad: 0,
         mtk_command: "",
         mtk_iso_queue: 0,
