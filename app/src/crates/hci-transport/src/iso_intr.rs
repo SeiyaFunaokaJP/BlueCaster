@@ -1,20 +1,21 @@
-//! Developer mode experiment (Developer > Debug, issue #86): HCI ISO data
-//! (LE Audio) over an interrupt interface of a MediaTek adapter instead of
-//! the bulk pipes of interface 0.
+//! HCI ISO data (LE Audio) over an interrupt interface of a MediaTek
+//! adapter instead of the bulk pipes of interface 0 (issue #86).
 //!
-//! What is known: an MT7925 lost every ISO packet sent on the bulk OUT pipe
-//! (no Number Of Completed Packets for its CIS handles), and its descriptors
-//! list an interface 2 with an interrupt IN and OUT endpoint (64 bytes in
-//! alternate setting 0, 512 in 1). That the controller takes ISO data there
-//! is a guess this experiment is for; nothing else uses it.
+//! Measured on an MT7925 with LE Audio earbuds (issue #86, 2026-11-10): on
+//! the bulk OUT pipe the controller never completed an ISO packet (no
+//! Number Of Completed Packets for its CIS handles). It plays when the
+//! packets go to the interrupt OUT endpoint of interface 2, zero-padded to
+//! [`DEFAULT_PAD`] bytes, with 12 SDUs queued per CIS (bt_host's iso_send).
+//! Leaving out any of the three stalled it after the first few packets.
 //!
-//! Off unless turned on, and only for a MediaTek adapter whose descriptors
-//! have such an interface: the interface, its alternate setting and its
-//! endpoints are taken from the descriptors, nothing is assumed. Outgoing
-//! ISO packets go to its interrupt OUT endpoint, optionally zero-padded to
-//! a length set in the same place; what arrives on its interrupt IN
-//! endpoint is split into ISO packets by their length field (all-zero
-//! padding dropped). Everything else stays on interface 0 as before.
+//! Used for every MediaTek adapter whose descriptors have such an
+//! interface: the interface, its alternate setting and its endpoints are
+//! taken from the descriptors, nothing is assumed; without one ISO stays
+//! on the bulk pipe. Developer > Debug can keep it on the bulk pipe or set
+//! another padding. Outgoing ISO packets go to the interrupt OUT endpoint,
+//! zero-padded; what arrives on its interrupt IN endpoint is split into
+//! ISO packets by their length field (all-zero padding dropped).
+//! Everything else stays on interface 0 as before.
 //!
 //! The log keeps apart what USB and the controller each did: packets
 //! queued, USB transfers submitted, completed and failed here (a completed
@@ -49,18 +50,22 @@ const IN_TRANSFER_SIZE: usize = 2048;
 const IN_LOGGED: u64 = 3;
 /// Longest padding accepted (an ISO packet header and a 16-bit length)
 pub const PAD_MAX: usize = 4096;
+/// Outgoing ISO packets are zero-padded to this length (measured, see the
+/// module comment)
+pub const DEFAULT_PAD: usize = 342;
 const POLL: Duration = Duration::from_millis(100);
 
-/// The experiment's settings (Developer > Debug), read when the adapter
-/// opens
+/// Developer > Debug, read when the adapter opens
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct IsoInterfaceConfig {
-    pub enabled: bool,
-    /// Outgoing packets shorter than this are zero-padded to it; 0: none
+    /// ISO stays on the bulk pipe
+    pub bulk: bool,
+    /// Outgoing packets shorter than this are zero-padded to it; 0:
+    /// [`DEFAULT_PAD`]
     pub pad_to: usize,
 }
 
-static CONFIG: Mutex<IsoInterfaceConfig> = Mutex::new(IsoInterfaceConfig { enabled: false, pad_to: 0 });
+static CONFIG: Mutex<IsoInterfaceConfig> = Mutex::new(IsoInterfaceConfig { bulk: false, pad_to: 0 });
 
 pub fn set_config(config: IsoInterfaceConfig) {
     let config = IsoInterfaceConfig { pad_to: config.pad_to.min(PAD_MAX), ..config };
@@ -69,6 +74,13 @@ pub fn set_config(config: IsoInterfaceConfig) {
 
 fn config() -> IsoInterfaceConfig {
     *CONFIG.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn pad_to(config: IsoInterfaceConfig) -> usize {
+    match config.pad_to {
+        0 => DEFAULT_PAD,
+        n => n,
+    }
 }
 
 /// An interface's alternate setting with an interrupt IN and OUT endpoint
@@ -131,7 +143,7 @@ fn candidate(device: &Device) -> Option<Candidate> {
     pick(&settings)
 }
 
-/// What USB did with the experiment's packets (the log at close)
+/// What USB did with the interface's packets (the log at close)
 #[derive(Default)]
 struct Counters {
     queued: AtomicU64,
@@ -155,7 +167,7 @@ impl Counters {
     }
 }
 
-/// The interface in use while the experiment is on
+/// The interface in use for ISO data
 pub(crate) struct IsoInterface {
     interface: Interface,
     candidate: Candidate,
@@ -169,31 +181,32 @@ pub(crate) struct IsoInterface {
 
 impl IsoInterface {
     /// The interface claimed and its threads started; None (logged) when
-    /// the experiment is off, the adapter is not MediaTek's or it has no
-    /// such interface, or claiming it failed
+    /// the adapter is not MediaTek's or has no such interface, Debug keeps
+    /// ISO on the bulk pipe, or claiming it failed
     pub(crate) fn open(device: &Device, vid: u16, upstream: &Upstream) -> Option<IsoInterface> {
-        let config = config();
-        if !config.enabled {
+        if vid != MEDIATEK_VID {
             return None;
         }
-        if vid != MEDIATEK_VID {
-            tracing::info!(target: "hci", "USB: ISO over an interrupt interface: on, but not a MediaTek adapter; unused");
+        let config = config();
+        if config.bulk {
+            tracing::info!(target: "hci", "USB: Developer > Debug: ISO on the bulk pipe");
             return None;
         }
         let Some(c) = candidate(device) else {
-            tracing::warn!(target: "hci", "USB: ISO over an interrupt interface: no interface with interrupt IN and OUT endpoints");
+            tracing::info!(target: "hci", "USB: no interface with interrupt IN and OUT endpoints; ISO on the bulk pipe");
             return None;
         };
+        let pad_to = pad_to(config);
         tracing::info!(
             target: "hci",
-            "USB: ISO over an interrupt interface (experiment): interface {} alt {}, IN 0x{:02x}, OUT 0x{:02x}, max packet {}, interval {}, padding {}",
+            "USB: ISO over an interrupt interface: interface {} alt {}, IN 0x{:02x}, OUT 0x{:02x}, max packet {}, interval {}, padding to {} bytes",
             c.interface,
             c.alt,
             c.in_addr,
             c.out_addr,
             c.out_max_packet,
             c.interval,
-            if config.pad_to > 0 { format!("to {} bytes", config.pad_to) } else { "none".into() }
+            pad_to
         );
         let interface = match device.claim_interface(c.interface).wait() {
             Ok(i) => i,
@@ -258,7 +271,7 @@ impl IsoInterface {
         Some(IsoInterface {
             interface,
             candidate: c,
-            pad_to: config.pad_to,
+            pad_to,
             out_tx: Some(out_tx),
             writer: writer_thread,
             stop,
@@ -465,9 +478,10 @@ mod tests {
     }
 
     #[test]
-    fn padding_is_capped() {
-        set_config(IsoInterfaceConfig { enabled: true, pad_to: 100_000 });
-        assert_eq!(config().pad_to, PAD_MAX);
+    fn padding_is_capped_and_defaults_to_the_measured_length() {
+        set_config(IsoInterfaceConfig { bulk: false, pad_to: 100_000 });
+        assert_eq!(pad_to(config()), PAD_MAX);
         set_config(IsoInterfaceConfig::default());
+        assert_eq!(pad_to(config()), DEFAULT_PAD);
     }
 }

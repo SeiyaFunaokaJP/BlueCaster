@@ -357,7 +357,7 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
             health_every_interval: s.dev_log.health_every_interval,
         },
         dev_debug: ipc::DevDebug {
-            mtk_iso_interface: s.dev_debug.mtk_iso_interface,
+            mtk_iso_bulk: s.dev_debug.mtk_iso_bulk,
             mtk_iso_pad: s.dev_debug.mtk_iso_pad,
             mtk_command: s.dev_debug.mtk_command.clone(),
             mtk_iso_queue: s.dev_debug.mtk_iso_queue,
@@ -459,7 +459,7 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
     }
     .clamped();
     c.dev_debug = bluecaster_core::settings::DevDebug {
-        mtk_iso_interface: s.dev_debug.mtk_iso_interface,
+        mtk_iso_bulk: s.dev_debug.mtk_iso_bulk,
         mtk_iso_pad: s.dev_debug.mtk_iso_pad.min(hci_transport::iso_intr::PAD_MAX as u16),
         mtk_command: s.dev_debug.mtk_command.trim().to_string(),
         mtk_iso_queue: s.dev_debug.mtk_iso_queue.min(12),

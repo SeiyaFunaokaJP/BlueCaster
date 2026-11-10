@@ -81,7 +81,7 @@ const NO_OVERRIDES: DevOverrides = {
 
 /** Developer > Debug: experiments for one adapter's transport (issue #86) */
 export const NO_DEBUG: DevDebug = {
-  mtk_iso_interface: false,
+  mtk_iso_bulk: false,
   mtk_iso_pad: 0,
   mtk_command: "",
   mtk_iso_queue: 0,
@@ -423,9 +423,9 @@ function Overrides(props: {
   );
 }
 
-/** Experiments for one adapter: MediaTek LE Audio over the adapter's
- *  interrupt interface, with optional padding, and one HCI command sent
- *  after start-up (read when the adapter opens next) */
+/** Experiments for one adapter: MediaTek LE Audio kept on the bulk
+ *  endpoint, another padding or queue, and one HCI command sent after
+ *  start-up (read when the adapter opens next) */
 function Debug(props: {
   value: DevDebug;
   save: (v: DevDebug) => Promise<boolean>;
@@ -443,9 +443,9 @@ function Debug(props: {
       />
       <Section title={t("ui.dev.mtk_section")}>
         <Toggle
-          label={t("ui.dev.mtk_iso_interface")}
-          checked={props.value.mtk_iso_interface}
-          onChange={(v) => set({ mtk_iso_interface: v })}
+          label={t("ui.dev.mtk_iso_bulk")}
+          checked={props.value.mtk_iso_bulk}
+          onChange={(v) => set({ mtk_iso_bulk: v })}
         />
         <Field label={t("ui.dev.mtk_iso_pad")}>
           {(id, describedBy) => (
@@ -457,9 +457,9 @@ function Debug(props: {
               max="4096"
               step="1"
               aria-describedby={describedBy}
-              disabled={!props.value.mtk_iso_interface}
+              disabled={props.value.mtk_iso_bulk}
               value={props.value.mtk_iso_pad || ""}
-              placeholder={t("ui.dev.off")}
+              placeholder="342"
               onChange={(e) => commitPad(e.currentTarget.value)}
             />
           )}
@@ -519,7 +519,7 @@ function Debug(props: {
               step="1"
               aria-describedby={describedBy}
               value={props.value.mtk_iso_queue || ""}
-              placeholder="2"
+              placeholder="12"
               onChange={(e) =>
                 set({
                   mtk_iso_queue: clampInt(e.currentTarget.value, 0, 12, 0),

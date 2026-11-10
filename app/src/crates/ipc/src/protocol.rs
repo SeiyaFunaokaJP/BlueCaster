@@ -768,9 +768,10 @@ pub struct VendorInfo {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(default)]
 pub struct DevDebug {
-    /// LE Audio over the MediaTek adapter's interrupt interface
-    pub mtk_iso_interface: bool,
-    /// Outgoing ISO packets zero-padded to this length; 0: none
+    /// LE Audio on the MediaTek adapter's bulk pipe, not its interrupt
+    /// interface
+    pub mtk_iso_bulk: bool,
+    /// Outgoing ISO packets zero-padded to this length; 0: the default
     pub mtk_iso_pad: u16,
     /// One HCI command after init, in hex ("FD98 08 01"); empty: none
     pub mtk_command: String,

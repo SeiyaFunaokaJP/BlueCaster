@@ -39,22 +39,25 @@ pub const QUEUE_DEPTH: u8 = 2;
 /// The run loop timer of the send guard
 pub(crate) const TIMER_ISO: u32 = 4;
 
-/// Developer > Debug (issue #86): SDUs queued per CIS on a MediaTek
-/// controller instead of [`QUEUE_DEPTH`]; 0: the default. Tests whether
-/// the controller completes ISO packets only once it holds more than two
-/// per CIS (a CIS with burst number 3 takes three SDUs per event).
+/// SDUs queued per CIS on a MediaTek controller (issue #86, measured on an
+/// MT7925: with [`QUEUE_DEPTH`] it completed the first three ISO packets
+/// and then none; with 12 it played; hci_transport's iso_intr has the rest)
+pub const MEDIATEK_QUEUE_DEPTH: u8 = 12;
+
+/// Developer > Debug: SDUs queued per CIS on a MediaTek controller instead
+/// of [`MEDIATEK_QUEUE_DEPTH`]; 0: that default
 static DEBUG_DEPTH: AtomicU8 = AtomicU8::new(0);
 /// Whether the open controller is MediaTek's (set after HCI init)
-static DEBUG_DEPTH_APPLIES: AtomicBool = AtomicBool::new(false);
+static MEDIATEK: AtomicBool = AtomicBool::new(false);
 
 /// The setting, for the next streams; 0: the default
 pub fn set_debug_depth(depth: u8) {
     DEBUG_DEPTH.store(depth, Ordering::Relaxed);
 }
 
-/// After HCI init: whether the setting counts for this controller
-pub(crate) fn debug_depth_for_controller(mediatek: bool) {
-    DEBUG_DEPTH_APPLIES.store(mediatek, Ordering::Relaxed);
+/// After HCI init: whether the controller is MediaTek's
+pub(crate) fn depth_for_controller(mediatek: bool) {
+    MEDIATEK.store(mediatek, Ordering::Relaxed);
     let depth = DEBUG_DEPTH.load(Ordering::Relaxed);
     if mediatek && depth > 0 {
         tracing::info!("LE Audio: Developer > Debug: up to {depth} SDUs queued per CIS");
@@ -62,13 +65,19 @@ pub(crate) fn debug_depth_for_controller(mediatek: bool) {
 }
 
 fn depth_limit() -> u8 {
-    match DEBUG_DEPTH.load(Ordering::Relaxed) {
-        d if d > 0 && DEBUG_DEPTH_APPLIES.load(Ordering::Relaxed) => d,
-        _ => QUEUE_DEPTH,
+    depth_limit_for(MEDIATEK.load(Ordering::Relaxed), DEBUG_DEPTH.load(Ordering::Relaxed))
+}
+
+fn depth_limit_for(mediatek: bool, debug: u8) -> u8 {
+    match (mediatek, debug) {
+        (false, _) => QUEUE_DEPTH,
+        (true, 0) => MEDIATEK_QUEUE_DEPTH,
+        (true, d) => d,
     }
 }
 
-/// SDUs BTstack queues per CIS: [`QUEUE_DEPTH`] (or the Debug setting),
+/// SDUs BTstack queues per CIS: [`QUEUE_DEPTH`] ([`MEDIATEK_QUEUE_DEPTH`]
+/// or the Debug setting on MediaTek's),
 /// fewer when the controller has fewer ISO buffers than that for every
 /// CIS (queue x CIS must stay within Total_Num_ISO_Data_Packets, which
 /// Number Of Completed Packets frees again); 0: not even one per CIS
@@ -615,6 +624,14 @@ mod tests {
         assert_eq!(queue_depth_within(64, 2, QUEUE_DEPTH), 2);
         assert_eq!(queue_depth_within(3, 2, QUEUE_DEPTH), 1);
         assert_eq!(queue_depth_within(1, 2, QUEUE_DEPTH), 0);
+    }
+
+    #[test]
+    fn mediatek_queues_more_unless_debug_says_otherwise() {
+        assert_eq!(depth_limit_for(false, 0), QUEUE_DEPTH);
+        assert_eq!(depth_limit_for(false, 6), QUEUE_DEPTH);
+        assert_eq!(depth_limit_for(true, 0), MEDIATEK_QUEUE_DEPTH);
+        assert_eq!(depth_limit_for(true, 2), 2);
     }
 
     #[test]

@@ -217,7 +217,7 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
       health_every_interval: false,
     },
     dev_debug: {
-      mtk_iso_interface: false,
+      mtk_iso_bulk: false,
       mtk_iso_pad: 0,
       mtk_command: "",
       mtk_iso_queue: 0,

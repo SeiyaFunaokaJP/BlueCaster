@@ -521,8 +521,8 @@ struct Opened {
     threads: Vec<JoinHandle<()>>,
     /// Interface 1 (SCO), when the adapter has it and it could be claimed
     sco: Option<Sco>,
-    /// Developer > Debug: ISO data over a MediaTek adapter's interrupt
-    /// interface (crate::iso_intr); None normally
+    /// ISO data over a MediaTek adapter's interrupt interface
+    /// (crate::iso_intr); None on other adapters
     iso: Option<crate::iso_intr::IsoInterface>,
 }
 
