@@ -5,16 +5,19 @@
 // label and the device below, always there (disabled while Off) so that
 // switching does not move the page. The list names each device by the side
 // apps pick ("CABLE Output", not "CABLE Input"; an output whose recording
-// side another one already names, with its own name added); the 16-channel
-// cable and outputs without a recording side (under Monitoring) only in
-// developer mode. The output source's cable is listed but disabled, saying
-// so. A classic device that has no profile yet shows what its first one
-// gets: Auto with VB-CABLE, else the Hi-Fi Cable (the core's
-// default_mic_output). The Hi-Fi Cable with its two sides at different
-// sample rates is said (it may pass nothing then; on one PC it still did).
+// side another one already names, with its own name added). Only the cables
+// a microphone can use: not the 16-channel one, outputs without a recording
+// side (under Monitoring) or the output source's cable, unless chosen or
+// Developer > Show every audio device is on (the source's cable then listed
+// but disabled, saying so; issue #86: the list read as chaos). A classic
+// device that has no profile yet shows what its first one gets: Auto with
+// VB-CABLE, else the Hi-Fi Cable (the core's default_mic_output). The
+// Hi-Fi Cable with its two sides at different sample rates is said (it may
+// pass nothing then; on one PC it still did).
 
 import { createSignal, Show } from "solid-js";
 import { useApp } from "../app/context";
+import { allAudioDevices } from "../app/settings";
 import { t } from "../i18n";
 import type { AudioDevice, Device, Profile } from "../ipc/types";
 import {
@@ -56,7 +59,7 @@ export function InputSource(props: {
   const snap = () => app.core.state.snap!;
   const entry = () =>
     audioEntries(snap()).find((e) => e.key === deviceKey(props.device)) ?? null;
-  const developer = () => snap().settings.developer_mode;
+  const all = () => allAudioDevices(snap().settings);
   const looped = () => sourceDevice(props.source, props.devices);
   /** The profile shown: a classic device without one, its first one's defaults */
   const shown = (): Profile | null => {
@@ -131,8 +134,8 @@ export function InputSource(props: {
       .filter(
         (d) =>
           d.id === chosen() ||
-          developer() ||
-          (d.is_virtual && d.capture_name && !multichannelCable(d)),
+          all() ||
+          (d.is_virtual && d.capture_name && !multichannelCable(d) && !usedBySource(d.id)),
       )
       .sort((a, b) => rank(a) - rank(b));
     // Outputs sharing a recording side ("CABLE Input" and "CABLE In 16ch" both
@@ -151,9 +154,9 @@ export function InputSource(props: {
         ? t("capture.mic_used_by_source", label(d))
         : label(d),
       disabled: usedBySource(d.id),
-      // Developer mode lists every output: those with no recording side only
-      // play the microphone (issue #86: they read as microphones)
-      group: developer()
+      // Every output listed: those with no recording side only play the
+      // microphone (issue #86: they read as microphones)
+      group: all()
         ? d.capture_name || d.is_virtual
           ? t("capture.virtual")
           : t("capture.mic_monitoring")

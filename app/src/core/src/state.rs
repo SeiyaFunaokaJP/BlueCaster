@@ -321,6 +321,7 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
         volume_sync: s.volume_sync,
         mute_output: s.mute_output,
         volume_mixer: s.volume_mixer,
+        all_audio_devices: s.all_audio_devices,
         developer_mode: s.debug_mode,
         dev_overrides: DevOverrides {
             rtp_marker: s.dev_overrides.rtp_marker,
@@ -412,6 +413,7 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
     c.volume_sync = s.volume_sync;
     c.mute_output = s.mute_output;
     c.volume_mixer = s.volume_mixer;
+    c.all_audio_devices = s.all_audio_devices;
     c.debug_mode = s.developer_mode;
     c.dev_overrides = codec::dev::DevOverrides {
         rtp_marker: s.dev_overrides.rtp_marker,
