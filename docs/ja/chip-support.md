@@ -7,7 +7,7 @@ nav_order: 3.5
 
 # チップ対応の追加
 
-BlueCaster は Bluetooth アダプターを自分で（WinUSB を通して）動かすため、アダプターが使えるようになるまでにメーカーの Windows ドライバーがしていることを、自分で行う必要があります。多くのチップでは、起動のたびにファームウェアを読み込ませることです。Realtek、Intel、Broadcom、CSR のアダプターはすでに使え、MediaTek の MT7925、MT7922、MT7921、MT7902 と Qualcomm の QCA61x4、QCA9377、WCN6855 も試験的に使えますが、ほかの MediaTek チップ（MT7927 や古いもの）と Qualcomm チップ（QCA6290、WCN785x）は、そのローダーをまだ誰も書いていないため使えません。`app/src/crates/bt-host/src/mediatek.rs`（MT79xx のもの）は実際に動くローダーで、ほかの MediaTek チップに取りかかる土台になります。
+BlueCaster は Bluetooth アダプターを自分で（WinUSB を通して）動かすため、アダプターが使えるようになるまでにメーカーの Windows ドライバーがしていることを、自分で行う必要があります。多くのチップでは、起動のたびにファームウェアを読み込ませることです。Realtek、Intel、Broadcom、CSR のアダプターと MediaTek の MT7925、MT7921 はすでに使え、MediaTek の MT7922、MT7902 と Qualcomm の QCA61x4、QCA9377、WCN6855 も試験的に使えますが、ほかの MediaTek チップ（MT7927 や古いもの）と Qualcomm チップ（QCA6290、WCN785x）は、そのローダーをまだ誰も書いていないため使えません。`app/src/crates/bt-host/src/mediatek.rs`（MT79xx のもの）は実際に動くローダーで、ほかの MediaTek チップに取りかかる土台になります。
 
 このページは、それを追加する手順です。そのチップのアダプターが必要です（メンテナーは持っていません）。コードを書かなくても協力できます。手順 1 と 2 で、コントリビューターに必要なレポートが作れます。
 
@@ -229,13 +229,13 @@ cargo test -p bt-host
 **ウィンドウに出る内容**:
 
 10. `app/src/core/src/state.rs` の `vendor_note()`: `MediaTek | Qualcomm` のアームから外して、新しいキー `firmware.vendor_<vendor>` のアームを作り、そのテストも追加します。この関数は、`chip_supported` が受け入れないチップにはその前で `firmware.vendor_unsupported` を返すので、ベンダーのほかのチップはそのままです。アダプタ画面は、説明が `firmware.vendor_unsupported` でないすべてのアダプターに WinUSB を勧めます
-11. `app/lang/*.json`（全 8 言語、それぞれ同じ行）: 新しいキー。Intel のもの（"… adapter (experimental). …"）にならいます。ボタンやフォルダーの名前を書くときは、同じファイルにあるその言語の言葉を使います（ファームウェアのフォルダーを開くボタンは `firmware.open_folder`）。ベンダー全体: `firmware.vendor_unsupported` からそのベンダー名を外します。一部のチップ: ベンダーのほかのチップがまだその文を表示するので、そのまま残します
+11. `app/lang/*.json`（全 8 言語、それぞれ同じ行）: 新しいキー。Intel のもの（「Intel アダプタ。…」）にならいます。ボタンやフォルダーの名前を書くときは、同じファイルにあるその言語の言葉を使います（ファームウェアのフォルダーを開くボタンは `firmware.open_folder`）。ベンダー全体: `firmware.vendor_unsupported` からそのベンダー名を外します。一部のチップ: ベンダーのほかのチップがまだその文を表示するので、そのまま残します
 12. `app/src/ui/src/lib/links.ts`: ベンダーのファームウェアのページ（`LINKS`、`firmwareUrl()`、`vendorFirmwareUrl()` に。Intel の linux-firmware のフォルダーと同じように）。これでアダプタ画面がファイルの入手先を示します。テストは `app/src/ui/src/lib/chips.test.ts` に書きます。アダプタ画面がそのページを示すのは説明が `firmware.vendor_unsupported` でないアダプターだけなので、ベンダーのほかのチップには出ません
 
 **ドキュメント**:
 
 13. `docs/setup.md` と `docs/*/setup.md`（全言語）のチップの表: Intel と同じような行に、対応するチップ、ファームウェアのファイルとその置き場所（ファームウェアのフォルダー `%APPDATA%\BlueCaster\firmware`、またはその `<vendor>` サブフォルダー。古い行にはまだ "config folder" とあります）と *Experimental.*（日本語のページでは *試験的。*）を書きます。ウィンドウのボタンは、各言語の `app/lang/*.json` にあるとおりの名前で書きます（アダプタ画面は `ui.nav.adapter`、そのフォルダーを開くボタンは `firmware.open_folder`）。ベンダー全体: "Not supported" の行から外します。一部のチップ: ベンダーはそこに残し、まだ対応していないチップを書きます。Firmware の節の最初の文（"Intel and Broadcom adapters (experimental) may need firmware files of their own"）にそのベンダーを加えます
-14. 誰かが使ったら [動作確認済みハードウェア](hardware)（`docs/hardware.md`）に載せます。またこのページの冒頭（`docs/chip-support.md`、全言語）も直します。ここではローダーのないベンダーを挙げています（一部のチップなら "the other <vendor> chips"）
+14. 誰かが使ったら [動作確認済みハードウェア](hardware)（`docs/hardware.md`）に載せ、その VID:PID を `CONFIRMED_CHIPS`（`chips.rs`）に加えます。これで Experimental のタグが外れます。またこのページの冒頭（`docs/chip-support.md`、全言語）も直します。ここではローダーのないベンダーを挙げています（一部のチップなら "the other <vendor> chips"）
 
 ## 手順 7: アダプターで試す
 
@@ -283,4 +283,4 @@ Clippy は名前も確かめます。`PatchState` という `State` のバリア
 - 現在の `develop-v*` ブランチをベースにします
 - テストしたアダプター（製品、VID:PID、チップ）と、コールドスタートとウォームスタートの結果を書き、プローブのレポートとダウンロードの HCI キャプチャを添付します
 - ローダーの事実の出どころを書きます
-- ローダーは何人かが使うまで **実験的** のままです。アダプタ画面にそのタグが出ます
+- ローダーは何人かが使うまで **実験的** のままです。アダプターが `CONFIRMED_CHIPS` に入るまで、アダプタ画面にそのタグが出ます

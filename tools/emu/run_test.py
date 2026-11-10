@@ -216,11 +216,6 @@ NEGOTIATION = {
     # Opus 05: 48 kHz from a 44.1 kHz request; Auto never takes it (AAC here)
     'opus05-from-44k': ('opus05', [], 'opus05', ['--rate', '44100']),
     'auto-not-opus05': ('auto', ['--codecs', 'sbc', 'aac', 'opus05'], 'aac', []),
-    # Codecs > Enable experimental codecs off (issue #86): Auto passes over
-    # Opus, and a chosen aptX HD falls back past aptX LL (experimental too)
-    'auto-no-experimental': ('auto', ['--codecs', 'sbc', 'aac', 'opus'], 'aac', ['--no-experimental']),
-    'noexp-aptxhd-to-aac': ('aptxhd', ['--codecs', 'sbc', 'aac', 'aptxhd', 'aptxll'], 'aac',
-                            ['--fallback', '--no-experimental']),
     # aptX Adaptive (offered by the sink only when named, with SBC, AAC and
     # aptX as aptX Adaptive headsets list them: emu_sink.py): HQ, low latency
     # (SSRC 0xA1, 348-byte packets), an R2 sink in HQ and LL (frame types 3 /

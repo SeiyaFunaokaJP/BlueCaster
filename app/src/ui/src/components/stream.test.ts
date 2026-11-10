@@ -132,7 +132,6 @@ describe("codec summary", () => {
     const opus: StreamInfo = { ...SBC_INFO, requested_codec: "Opus" };
     expect(fallbackNoteKey(opus, "status.connected_fallback")).toBe("ui.codec.fallback_unsupported");
     expect(fallbackNoteKey({ ...opus, requested_in_use: true }, "status.connected_fallback_in_use")).toBe("ui.codec.fallback_in_use");
-    expect(fallbackNoteKey(opus, "status.connected_fallback_experimental")).toBe("ui.codec.fallback_experimental");
     // Opus 05 outside developer mode
     const opus05: StreamInfo = { ...SBC_INFO, requested_codec: "Opus 05" };
     expect(fallbackNoteKey(opus05, "status.connected_fallback_developer")).toBe("ui.codec.fallback_developer");

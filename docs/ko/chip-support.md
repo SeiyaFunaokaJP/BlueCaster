@@ -7,7 +7,7 @@ nav_order: 3.5
 
 # 칩 지원 추가
 
-BlueCaster는 Bluetooth 어댑터를 직접(WinUSB로) 다루므로, 어댑터가 작동하기 전에 제조사의 Windows 드라이버가 하는 일을 대신 해야 합니다. 많은 칩에서는 시작할 때마다 펌웨어를 칩에 로드하는 일입니다. 현재 Realtek, Intel, Broadcom, CSR 어댑터는 작동하고 MediaTek MT7925, MT7922, MT7921, MT7902와 Qualcomm QCA61x4, QCA9377, WCN6855는 실험적으로 작동하지만, 그 밖의 MediaTek 칩(MT7927 및 이전 칩)과 Qualcomm 칩(QCA6290, WCN785x)은 아직 아무도 로더를 작성하지 않아 작동하지 않습니다. `app/src/crates/bt-host/src/mediatek.rs`(MT79xx용)는 실제 로더이므로 다른 MediaTek 칩을 지원할 때 출발점으로 삼을 수 있습니다.
+BlueCaster는 Bluetooth 어댑터를 직접(WinUSB로) 다루므로, 어댑터가 작동하기 전에 제조사의 Windows 드라이버가 하는 일을 대신 해야 합니다. 많은 칩에서는 시작할 때마다 펌웨어를 칩에 로드하는 일입니다. 현재 Realtek, Intel, Broadcom, CSR 어댑터와 MediaTek MT7925, MT7921은 작동하고 MediaTek MT7922, MT7902와 Qualcomm QCA61x4, QCA9377, WCN6855는 실험적으로 작동하지만, 그 밖의 MediaTek 칩(MT7927 및 이전 칩)과 Qualcomm 칩(QCA6290, WCN785x)은 아직 아무도 로더를 작성하지 않아 작동하지 않습니다. `app/src/crates/bt-host/src/mediatek.rs`(MT79xx용)는 실제 로더이므로 다른 MediaTek 칩을 지원할 때 출발점으로 삼을 수 있습니다.
 
 이 페이지는 로더를 추가하는 절차를 설명합니다. 해당 칩을 쓰는 어댑터가 필요하며, 메인테이너는 이런 어댑터를 가지고 있지 않습니다. 코드를 작성하지 않더라도 도울 수 있습니다. 1단계와 2단계를 거치면 기여자에게 필요한 보고서를 만들 수 있습니다.
 
@@ -229,13 +229,13 @@ cargo test -p bt-host
 **창에 표시되는 내용**:
 
 10. `app/src/core/src/state.rs`, `vendor_note()`: `MediaTek | Qualcomm` arm에서 분리한, 새 키 `firmware.vendor_<vendor>`를 쓰는 arm과 그 테스트. 이 함수는 그보다 앞서 `chip_supported`가 거부하는 칩에 `firmware.vendor_unsupported`를 돌려주므로, 벤더의 다른 칩은 그 문구를 유지합니다. 어댑터 화면은 안내 문구가 `firmware.vendor_unsupported`가 아닌 모든 어댑터에 WinUSB를 제공합니다
-11. `app/lang/*.json`(8개 언어 모두, 각 파일의 같은 줄): Intel의 키처럼("… adapter (experimental). …") 새 키를 추가합니다. 버튼이나 폴더 이름이 나오면 같은 파일에 있는 그 언어의 표현을 쓰십시오(펌웨어 폴더 버튼은 `firmware.open_folder`). 벤더 전체: `firmware.vendor_unsupported`에서 벤더 이름을 뺍니다. 일부 칩: 벤더의 다른 칩이 여전히 그 문구를 표시하므로 그대로 둡니다
+11. `app/lang/*.json`(8개 언어 모두, 각 파일의 같은 줄): Intel의 키처럼("Intel 어댑터. …") 새 키를 추가합니다. 버튼이나 폴더 이름이 나오면 같은 파일에 있는 그 언어의 표현을 쓰십시오(펌웨어 폴더 버튼은 `firmware.open_folder`). 벤더 전체: `firmware.vendor_unsupported`에서 벤더 이름을 뺍니다. 일부 칩: 벤더의 다른 칩이 여전히 그 문구를 표시하므로 그대로 둡니다
 12. `app/src/ui/src/lib/links.ts`: 어댑터 화면에 파일을 받을 곳이 표시되도록 벤더의 펌웨어 페이지(`LINKS`, `firmwareUrl()`, `vendorFirmwareUrl()`에, Intel의 linux-firmware 폴더처럼)를 추가합니다. 테스트는 `app/src/ui/src/lib/chips.test.ts`에 있습니다. 어댑터 화면은 안내 문구가 `firmware.vendor_unsupported`가 아닌 어댑터에만 이 페이지를 표시하므로, 벤더의 다른 칩에는 나타나지 않습니다
 
 **문서**:
 
 13. `docs/setup.md`와 `docs/*/setup.md`(모든 언어)의 칩 표: Intel과 같은 행으로, 다루는 칩, 펌웨어 파일과 그 위치(펌웨어 폴더 `%APPDATA%\BlueCaster\firmware` 또는 그 `<vendor>` 하위 폴더. 예전 행에는 아직 "config folder"라고 되어 있음), 그리고 *Experimental.*을 적습니다. 창의 버튼은 각 언어의 `app/lang/*.json`에 있는 대로 씁니다(어댑터 화면은 `ui.nav.adapter`, 그 폴더를 여는 버튼은 `firmware.open_folder`). 벤더 전체: "Not supported" 행에서 뺍니다. 일부 칩: 벤더를 그대로 두고 아직 지원되지 않는 칩의 이름을 적습니다. Firmware 섹션 맨 위의 문장("Intel and Broadcom adapters (experimental) may need firmware files of their own")에 벤더를 추가합니다
-14. 누군가 실제로 사용해 본 뒤에는 [Verified Hardware](hardware)(`docs/hardware.md`)를, 그리고 로더가 없는 벤더를 적어 둔 이 페이지의 첫머리(`docs/chip-support.md`, 모든 언어)를 고칩니다(일부 칩: "the other <vendor> chips")
+14. 누군가 실제로 사용해 본 뒤에는 [Verified Hardware](hardware)(`docs/hardware.md`)와 `CONFIRMED_CHIPS`(`chips.rs`)의 VID:PID(이것으로 Experimental 태그가 빠짐)를, 그리고 로더가 없는 벤더를 적어 둔 이 페이지의 첫머리(`docs/chip-support.md`, 모든 언어)를 고칩니다(일부 칩: "the other <vendor> chips")
 
 ## 7단계: 어댑터에서 시험
 
@@ -283,4 +283,4 @@ Clippy는 이름도 검사합니다. `PatchState`라는 `State` variant는 `enum
 - 현재 `develop-v*` 브랜치를 기반으로 합니다
 - 테스트한 어댑터(제품, VID:PID, 칩), 콜드 스타트와 웜 스타트 여부를 적고, 프로브 보고서와 다운로드의 HCI 캡처를 첨부합니다
 - 로더에 담긴 사실의 출처를 적습니다
-- 몇 사람이 사용해 볼 때까지 로더는 **실험적**으로 남으며, 어댑터 화면에 그 태그가 표시됩니다
+- 몇 사람이 사용해 볼 때까지 로더는 **실험적**으로 남으며, 어댑터가 `CONFIRMED_CHIPS`에 들어갈 때까지 어댑터 화면에 그 태그가 표시됩니다

@@ -285,10 +285,6 @@ result. Listing adapters and their driver needs no elevation.
   `codec_forced`) is asked for anyway with no fallback (`RemoteCaps::forcing`),
   and a codec whose card offers more than the remote lists
   (`unlisted_options`) is configured from `RemoteCaps::unlisted`
-- Leaves the experimental codecs (aptX HD, aptX LL, Opus, Opus 05,
-  FastStream) out of Auto and the fallback with the command line's
-  `--no-experimental`; the app always uses them (the `experimental_codecs`
-  setting, from 2.0.2-beta.7's Codecs page, is read as on since issue #86)
 - Streams every A2DP profile as Auto, with Auto's default settings, while
   the `auto_codec` setting is on (Codecs > Auto-select the codec with the
   highest quality, one setting for every device since schema 5); the codec

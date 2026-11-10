@@ -372,7 +372,6 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
         remote_sink: s.remote_sink.clone(),
         le_audio_experimental: s.le_audio_experimental,
         le_audio_low_latency: s.le_audio_low_latency,
-        experimental_codecs: s.experimental_codecs,
         auto_codec: s.auto_codec,
     }
 }
@@ -474,7 +473,6 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
     c.remote_sink = s.remote_sink.clone();
     c.le_audio_experimental = s.le_audio_experimental;
     c.le_audio_low_latency = s.le_audio_low_latency;
-    // experimental_codecs: always on (issue #86), as loaded
     c.auto_codec = s.auto_codec;
     c
 }
@@ -1232,9 +1230,7 @@ fn connected_balloon(lang: &str, device: Option<&str>, stream: &StreamStatus) ->
     lines.push(i.codec.clone());
     lines.push(codec_params(&i.codec, i.bitrate_kbps, i.sample_rate, i.bits, i.abr));
     if let Some(req) = &i.requested_codec {
-        let (key, default) = if stream.message.key == "status.connected_fallback_experimental" {
-            ("ui.codec.fallback_experimental", "(%s is experimental)")
-        } else if stream.message.key == "status.connected_fallback_developer" {
+        let (key, default) = if stream.message.key == "status.connected_fallback_developer" {
             ("ui.codec.fallback_developer", "(%s needs developer mode)")
         } else if i.requested_in_use {
             ("ui.codec.fallback_in_use", "(%s is in use)")
@@ -2277,7 +2273,6 @@ impl CoreState {
             .unwrap_or(p)
             .to_request(settings.legacy_max_media_payload())
             .map_err(|_| err("profile.invalid_address", "error.invalid_address"))?;
-        req.experimental_codecs = settings.experimental_codecs;
         req.developer_codecs = settings.debug_mode;
         req.volume_sync = effective_volume_sync(settings.volume_sync, req.volume_sync);
         req.mute_output = settings.mutes_output();
@@ -2310,7 +2305,6 @@ impl CoreState {
     pub fn start_custom(&self, c: &CustomStream) -> Result<(), ErrorInfo> {
         let settings = self.service.settings();
         let mut req = custom_request(c, settings.legacy_max_media_payload())?;
-        req.experimental_codecs = settings.experimental_codecs;
         req.developer_codecs = settings.debug_mode;
         req.mute_output = settings.mutes_output();
         tracing::info!("custom stream to {}: codec {}, source {}", c.device, c.codec, req.source);
@@ -3189,7 +3183,6 @@ impl CoreState {
                     // stack, with the same profile (issue #86)
                     if let Some(mut req) = again {
                         let settings = me.service.settings();
-                        req.experimental_codecs = settings.experimental_codecs;
                         req.developer_codecs = settings.debug_mode;
                         let profile = me.starting_profile.lock().unwrap_or_else(|e| e.into_inner()).clone();
                         me.begin_stream(req, profile);

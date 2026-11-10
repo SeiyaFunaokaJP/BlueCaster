@@ -7,7 +7,7 @@ nav_order: 3.5
 
 # 添加芯片支持
 
-BlueCaster 自己驱动 Bluetooth 适配器（WinUSB），因此在适配器能工作之前，它必须完成厂商的 Windows 驱动程序所做的事：许多芯片需要在每次启动时加载固件。Realtek、Intel、Broadcom 和 CSR 适配器目前已可使用，MediaTek MT7925、MT7922、MT7921、MT7902 和 Qualcomm QCA61x4、QCA9377、WCN6855 为实验性支持；其他 MediaTek 芯片（MT7927 及更早的芯片）和 Qualcomm 芯片（QCA6290、WCN785x）还不行，因为还没有人为它们编写加载程序。`app/src/crates/bt-host/src/mediatek.rs`（MT79xx 的加载程序）是一个实际的加载程序，可作为支持其他 MediaTek 芯片的起点。
+BlueCaster 自己驱动 Bluetooth 适配器（WinUSB），因此在适配器能工作之前，它必须完成厂商的 Windows 驱动程序所做的事：许多芯片需要在每次启动时加载固件。Realtek、Intel、Broadcom 和 CSR 适配器以及 MediaTek MT7925 和 MT7921 目前已可使用，MediaTek MT7922、MT7902 和 Qualcomm QCA61x4、QCA9377、WCN6855 为实验性支持；其他 MediaTek 芯片（MT7927 及更早的芯片）和 Qualcomm 芯片（QCA6290、WCN785x）还不行，因为还没有人为它们编写加载程序。`app/src/crates/bt-host/src/mediatek.rs`（MT79xx 的加载程序）是一个实际的加载程序，可作为支持其他 MediaTek 芯片的起点。
 
 本页介绍添加加载程序的步骤。你需要一个使用该芯片的适配器；维护者手上没有这些适配器。即使不写代码也能帮忙：第 1 步和第 2 步就能得到贡献者所需的报告。
 
@@ -229,13 +229,13 @@ cargo test -p bt-host
 **窗口中显示的内容**：
 
 10. `app/src/core/src/state.rs` 的 `vendor_note()`：从 `MediaTek | Qualcomm` 分支中拆出一个使用新键 `firmware.vendor_<vendor>` 的分支，并添加测试。对于 `chip_supported` 拒绝的芯片，该函数会先返回 `firmware.vendor_unsupported`，因此该厂商的其他芯片仍保持原样。适配器页面会为说明不是 `firmware.vendor_unsupported` 的每个适配器提供 WinUSB
-11. `app/lang/*.json`（全部 8 种语言，每个文件中位于同一行）：新键，写法参照 Intel 的那条（"… adapter (experimental). …"）。其中提到按钮或文件夹时，使用同一文件中该语言自己的措辞（固件文件夹的按钮是 `firmware.open_folder`）。整个厂商：把它的名称从 `firmware.vendor_unsupported` 中去掉。部分芯片：保留在那里，因为该厂商的其他芯片仍会显示这段文字
+11. `app/lang/*.json`（全部 8 种语言，每个文件中位于同一行）：新键，写法参照 Intel 的那条（“Intel 适配器。…”）。其中提到按钮或文件夹时，使用同一文件中该语言自己的措辞（固件文件夹的按钮是 `firmware.open_folder`）。整个厂商：把它的名称从 `firmware.vendor_unsupported` 中去掉。部分芯片：保留在那里，因为该厂商的其他芯片仍会显示这段文字
 12. `app/src/ui/src/lib/links.ts`：该厂商的固件页面（在 `LINKS`、`firmwareUrl()` 和 `vendorFirmwareUrl()` 中，参照 Intel 的 linux-firmware 文件夹），让适配器页面显示从哪里获取文件；测试位于 `app/src/ui/src/lib/chips.test.ts`。适配器页面只为说明不是 `firmware.vendor_unsupported` 的适配器显示该页面，因此该厂商的其他芯片不会显示
 
 **文档**：
 
 13. `docs/setup.md` 和 `docs/*/setup.md`（所有语言）中的芯片表：参照 Intel 的那一行添加一行，写明覆盖的芯片、固件文件及其存放位置（固件文件夹：`%APPDATA%\BlueCaster\firmware`，或其中的 `<vendor>` 子文件夹；较旧的行仍写着“config folder”），以及 *Experimental.*。窗口中的按钮名称按各语言的 `app/lang/*.json` 书写（适配器页面为 `ui.nav.adapter`，打开该文件夹的按钮为 `firmware.open_folder`）。整个厂商：把它从“Not supported”一行中去掉。部分芯片：保留该厂商，并写明仍不支持的芯片。在“固件”一节开头的句子中加上该厂商（"Intel and Broadcom adapters (experimental) may need firmware files of their own"）
-14. 有人实际用过之后更新[已验证硬件](hardware)（`docs/hardware.md`），以及本页开头（`docs/chip-support.md`，所有语言）中列出尚无加载程序的厂商的那句话（部分芯片时写成“the other <vendor> chips”）
+14. 有人实际用过之后更新[已验证硬件](hardware)（`docs/hardware.md`）及其在 `CONFIRMED_CHIPS`（`chips.rs`）中的 VID:PID（这会去掉它的 Experimental 标签），以及本页开头（`docs/chip-support.md`，所有语言）中列出尚无加载程序的厂商的那句话（部分芯片时写成“the other <vendor> chips”）
 
 ## 第 7 步：在适配器上试用
 
@@ -283,4 +283,4 @@ Clippy 也会检查命名：名为 `PatchState` 的 `State` 变体会触发 `enu
 - 基于当前的 `develop-v*` 分支
 - 说明测试过哪些适配器（产品、VID:PID、芯片），包括冷启动和热启动，并附上一份探测报告和一次下载的 HCI 抓包
 - 说明加载程序中各项事实的来源
-- 在有几个人用过之前，加载程序保持**实验性**；适配器页面会显示该标签
+- 在有几个人用过之前，加载程序保持**实验性**；在该适配器加入 `CONFIRMED_CHIPS` 之前，适配器页面会显示该标签

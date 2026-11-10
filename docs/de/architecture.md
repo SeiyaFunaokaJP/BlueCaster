@@ -282,10 +282,6 @@ JSON-Ergebnis. Das Auflisten der Adapter und ihrer Treiber benötigt keine Admin
   Gegenseite anbietet; ein angeforderter Codec, den die Gegenseite nicht anbietet, wird durch
   denselben Codec ersetzt, den Automatisch nehmen würde (bei einem Profil immer, seit Issue #86; die
   Kommandozeile nur mit `--fallback`), und ist andernfalls ein Fehler
-- Lässt die experimentellen Codecs (aptX HD, aptX LL, Opus, Opus 05,
-  FastStream) mit `--no-experimental` der Kommandozeile aus der Automatik und dem Ausweichen
-  heraus; die App verwendet sie immer (die Einstellung `experimental_codecs`
-  von der Codecs-Seite aus 2.0.2-beta.7 wird seit Issue #86 als eingeschaltet gelesen)
 - Streamt jedes A2DP-Profil wie Automatisch, mit den Standardeinstellungen der Automatik, solange
   die Einstellung `auto_codec` eingeschaltet ist (Codecs > Automatisch den unterstützten Codec mit der
   höchsten Qualität wählen, seit Schema 5 eine Einstellung für alle Geräte); der für das Gerät

@@ -282,10 +282,6 @@ Lister les adaptateurs et leur pilote ne nécessite aucune élévation.
   distant ; un codec demandé que l'appareil distant ne propose pas est remplacé par le
   codec que prendrait Auto (toujours pour un profil, depuis l'issue #86 ; en ligne de
   commande seulement avec `--fallback`), et provoque une erreur sinon
-- Exclut les codecs expérimentaux (aptX HD, aptX LL, Opus, Opus 05,
-  FastStream) d'Auto et du repli avec l'option `--no-experimental` de la ligne de commande ;
-  l'application les utilise toujours (le réglage `experimental_codecs`, de la page Codecs de
-  la 2.0.2-beta.7, est lu comme activé depuis l'issue #86)
 - Diffuse chaque profil A2DP en Auto, avec les réglages par défaut d'Auto, tant que
   le réglage `auto_codec` est activé (Codecs > Sélectionner automatiquement le codec pris en charge
   de meilleure qualité, un seul réglage pour tous les appareils depuis le schéma 5) ; le codec

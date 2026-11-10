@@ -904,10 +904,6 @@ pub struct Settings {
     /// LE Audio stream is set up); only with le_audio_experimental
     #[serde(default)]
     pub le_audio_low_latency: bool,
-    /// Before 2.0.2: Codecs > "Enable experimental codecs". Every codec
-    /// is used now: the core reads it as on whatever is sent
-    #[serde(default = "yes")]
-    pub experimental_codecs: bool,
     /// Codecs > "Auto-select the codec with the highest quality", for every
     /// device (on by default): on, every A2DP profile streams as Auto; off,
     /// each with the codec chosen for it (read when the next stream starts)

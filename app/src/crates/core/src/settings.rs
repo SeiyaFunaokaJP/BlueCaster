@@ -215,13 +215,6 @@ pub struct Settings {
     /// profile option (`le_low_latency`); kept only so the file round-trips.
     pub le_audio_low_latency: bool,
 
-    /// Before 2.0.2: Codecs > "Enable experimental codecs" (issue #86);
-    /// off, the experimental codecs ([`codec::CodecKind::experimental`])
-    /// were never used. The app offers every codec now (the experimental
-    /// ones are marked in the README only): always on once loaded, kept so
-    /// the file round-trips and for the CLI's --no-experimental
-    pub experimental_codecs: bool,
-
     /// Codecs > "Auto-select the codec with the highest quality", for every
     /// device (issue #86; each device had its own before schema 5): on,
     /// every profile streams as Auto with Auto's defaults; off, each one
@@ -378,7 +371,6 @@ impl Default for Settings {
             last_profile: String::new(),
             le_audio_experimental: false,
             le_audio_low_latency: false,
-            experimental_codecs: true,
             auto_codec: true,
             max_media_payload: None,
             other: BTreeMap::new(),
@@ -420,9 +412,10 @@ impl Settings {
                 s.other.remove("mute_output");
                 // No longer a choice (issue #86)
                 s.other.remove("remember_volume");
-                // No longer a choice (issue #86): a file with it off uses
-                // every codec too
-                s.experimental_codecs = true;
+                // Before 2.0.2: "Enable experimental codecs". No codec is
+                // experimental any more (issue #86): a file with it off
+                // uses every codec too
+                s.other.remove("experimental_codecs");
                 tracing::debug!(
                     "settings: loaded {} (schema {}, {} unknown key(s))",
                     path.display(),
@@ -658,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn experimental_codecs_off_loads_as_on() {
+    fn dropped_settings_do_not_carry_over() {
         let dir = std::env::temp_dir().join(format!("bluecaster-experimental-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -673,7 +666,7 @@ mod tests {
         assert!(s.other.is_empty());
 
         std::fs::write(Settings::path(&dir), r#"{"schema_version":5,"experimental_codecs":false}"#).unwrap();
-        assert!(Settings::load(&dir).experimental_codecs);
+        assert!(Settings::load(&dir).other.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

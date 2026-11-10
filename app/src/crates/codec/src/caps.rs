@@ -1222,23 +1222,16 @@ impl RemoteCaps {
 
     /// The best codec both sides have (Auto)
     pub fn best(&self) -> Option<CodecKind> {
-        self.best_of(true)
+        self.best_in(&AutoOrder::default())
     }
 
-    /// The best codec both sides have, leaving out the experimental ones
-    /// unless `experimental`
-    pub fn best_of(&self, experimental: bool) -> Option<CodecKind> {
-        self.best_in(&AutoOrder::default(), experimental)
+    /// The first codec in `order` both sides have
+    pub fn best_in(&self, order: &AutoOrder) -> Option<CodecKind> {
+        order.codecs().into_iter().find(|&k| self.usable(k))
     }
 
-    /// The first codec in `order` both sides have, leaving out the
-    /// experimental ones unless `experimental`
-    pub fn best_in(&self, order: &AutoOrder, experimental: bool) -> Option<CodecKind> {
-        order.codecs().into_iter().find(|&k| self.usable(k, experimental))
-    }
-
-    fn usable(&self, kind: CodecKind, experimental: bool) -> bool {
-        kind.available() && self.has(kind) && (experimental || !kind.experimental())
+    fn usable(&self, kind: CodecKind) -> bool {
+        kind.available() && self.has(kind)
     }
 
     /// Capture rate for the aptX family: 44.1 or 48 kHz as the remote lists
@@ -1652,8 +1645,6 @@ pub enum Unavailable {
     /// The sink offers only aptX Adaptive, which has no open encoder
     AdaptiveOnly,
     NotSupported,
-    /// An experimental codec while experimental codecs are turned off
-    Experimental,
     /// A codec of developer mode ([`CodecKind::developer_only`]) while it
     /// is off
     DeveloperMode,
@@ -1671,15 +1662,12 @@ pub struct Choice {
 /// device does not offer is replaced, with `fallback`, by the best one it
 /// offers (the first in [`CodecKind::AUTO_PRIORITY`], issue #86 round 8:
 /// not the next one below the codec asked for); without, it is an error.
-/// Unless `experimental`, the experimental codecs are never used: a
-/// requested one is replaced the same way.
 pub fn choose(
     caps: &RemoteCaps,
     requested: Option<CodecKind>,
     fallback: bool,
-    experimental: bool,
 ) -> Result<Choice, Option<(CodecKind, Unavailable)>> {
-    choose_in(caps, requested, fallback, experimental, &AutoOrder::default())
+    choose_in(caps, requested, fallback, &AutoOrder::default())
 }
 
 /// [`choose`] in the device's codec order as the user set it (the profile's
@@ -1689,25 +1677,22 @@ pub fn choose_in(
     caps: &RemoteCaps,
     requested: Option<CodecKind>,
     fallback: bool,
-    experimental: bool,
     order: &AutoOrder,
 ) -> Result<Choice, Option<(CodecKind, Unavailable)>> {
     let Some(wanted) = requested else {
-        return caps.best_in(order, experimental).map(|kind| Choice { kind, replaced: None }).ok_or(None);
+        return caps.best_in(order).map(|kind| Choice { kind, replaced: None }).ok_or(None);
     };
-    if caps.usable(wanted, experimental) {
+    if caps.usable(wanted) {
         return Ok(Choice { kind: wanted, replaced: None });
     }
-    let why = if wanted.experimental() && !experimental {
-        Unavailable::Experimental
-    } else if caps.audio_sinks_in_use > 0 {
+    let why = if caps.audio_sinks_in_use > 0 {
         Unavailable::SepInUse { in_use: caps.audio_sinks_in_use, total: caps.audio_sinks }
     } else if matches!(wanted, CodecKind::Aptx | CodecKind::AptxHd | CodecKind::AptxLl) && caps.aptx_adaptive {
         Unavailable::AdaptiveOnly
     } else {
         Unavailable::NotSupported
     };
-    if fallback && let Some(kind) = caps.best_in(order, experimental) {
+    if fallback && let Some(kind) = caps.best_in(order) {
         return Ok(Choice { kind, replaced: Some((wanted, why)) });
     }
     Err(Some((wanted, why)))
@@ -1872,16 +1857,16 @@ mod tests {
             return;
         }
         let aac_first = AutoOrder::from_keys(&["aac"]);
-        assert_eq!(choose_in(&caps, None, true, true, &aac_first).unwrap().kind, Aac);
-        assert_eq!(choose(&caps, None, true, true).unwrap().kind, Ldac);
+        assert_eq!(choose_in(&caps, None, true, &aac_first).unwrap().kind, Aac);
+        assert_eq!(choose(&caps, None, true).unwrap().kind, Ldac);
         // aptX HD not offered: the first codec in the order set the device
         // offers (issue #86 round 8), SBC here, not LDAC below aptX HD
         let order = AutoOrder::from_keys(&["aptxhd", "sbc", "ldac"]);
-        let c = choose_in(&caps, Some(AptxHd), true, true, &order).unwrap();
+        let c = choose_in(&caps, Some(AptxHd), true, &order).unwrap();
         assert_eq!(c.kind, Sbc);
         assert_eq!(c.replaced.map(|r| r.0), Some(AptxHd));
         // An offered codec is taken whatever the order
-        assert_eq!(choose_in(&caps, Some(Ldac), true, true, &aac_first).unwrap().kind, Ldac);
+        assert_eq!(choose_in(&caps, Some(Ldac), true, &aac_first).unwrap().kind, Ldac);
     }
 
     #[test]
@@ -1893,7 +1878,7 @@ mod tests {
         caps.add_aac(2);
         caps.add_vendor(3, &[0x4F, 0, 0, 0, 0x01, 0x00, 0x22]);
         caps.add_vendor(4, &[0x2D, 0x01, 0, 0, 0xAA, 0x00, 0x3C, 0x07]);
-        let fell = |want| choose(&caps, Some(want), true, true).unwrap().kind;
+        let fell = |want| choose(&caps, Some(want), true).unwrap().kind;
         let best = caps.best().unwrap();
         // Whatever is missing: the best the device offers (issue #86 round
         // 8: not the next one below the codec asked for)
@@ -1905,13 +1890,13 @@ mod tests {
         }
         // An offered codec is taken as it is
         assert_eq!(fell(Sbc), Sbc);
-        let r = choose(&caps, Some(SbcXq), true, true).unwrap();
+        let r = choose(&caps, Some(SbcXq), true).unwrap();
         assert_eq!(r.replaced, Some((SbcXq, Unavailable::NotSupported)));
         // Only SBC: whatever was asked for ends there
         let mut sbc = RemoteCaps::default();
         sbc.add_sbc(1);
         for k in CodecKind::ALL {
-            assert_eq!(choose(&sbc, Some(k), true, true).unwrap().kind, Sbc, "{k}");
+            assert_eq!(choose(&sbc, Some(k), true).unwrap().kind, Sbc, "{k}");
         }
     }
 
@@ -1928,12 +1913,12 @@ mod tests {
         if !AptxAdaptive.available() || !Aptx.available() || !Aac.available() {
             return;
         }
-        let c = choose(&caps, Some(Opus), true, true).unwrap();
+        let c = choose(&caps, Some(Opus), true).unwrap();
         assert_eq!(c.kind, AptxAdaptive);
         assert_eq!(c.replaced.map(|r| r.0), Some(Opus));
         // The device's own order, AAC first: AAC
         let aac_first = AutoOrder::from_keys(&["aac", "sbc"]);
-        assert_eq!(choose_in(&caps, Some(Opus), true, true, &aac_first).unwrap().kind, Aac);
+        assert_eq!(choose_in(&caps, Some(Opus), true, &aac_first).unwrap().kind, Aac);
     }
 
     #[test]
@@ -1942,10 +1927,10 @@ mod tests {
         caps.add_sbc(1);
         caps.audio_sinks = 2;
         caps.audio_sinks_in_use = 1;
-        let c = choose(&caps, Some(CodecKind::Ldac), true, true).unwrap();
+        let c = choose(&caps, Some(CodecKind::Ldac), true).unwrap();
         assert_eq!(c.kind, CodecKind::Sbc);
         assert_eq!(c.replaced, Some((CodecKind::Ldac, Unavailable::SepInUse { in_use: 1, total: 2 })));
-        assert!(choose(&caps, Some(CodecKind::Ldac), false, true).is_err());
+        assert!(choose(&caps, Some(CodecKind::Ldac), false).is_err());
     }
 
     #[test]
@@ -2454,10 +2439,10 @@ mod tests {
                 caps.configuration(CodecKind::SbcXq, 48000, 2, 16),
                 Err(ConfigError::NotOffered(CodecKind::SbcXq))
             );
-            let c = choose(&caps, Some(CodecKind::SbcXq), true, true).unwrap();
+            let c = choose(&caps, Some(CodecKind::SbcXq), true).unwrap();
             assert_eq!(c.kind, CodecKind::Sbc);
             assert_eq!(c.replaced, Some((CodecKind::SbcXq, Unavailable::NotSupported)));
-            assert!(choose(&caps, Some(CodecKind::SbcXq), false, true).is_err());
+            assert!(choose(&caps, Some(CodecKind::SbcXq), false).is_err());
         }
         // Capabilities not known: SBC only
         let mut caps = RemoteCaps::default();
@@ -2483,7 +2468,7 @@ mod tests {
         let mut only = RemoteCaps::default();
         only.add_vendor(5, &info);
         assert_eq!(only.best(), None);
-        assert_eq!(choose(&only, Some(CodecKind::FastStream), false, true).unwrap().kind, CodecKind::FastStream);
+        assert_eq!(choose(&only, Some(CodecKind::FastStream), false).unwrap().kind, CodecKind::FastStream);
 
         let c = caps.configuration(CodecKind::FastStream, 48000, 2, 16).unwrap();
         assert_eq!(c.remote_seid, 5);
@@ -2520,7 +2505,7 @@ mod tests {
         // Fallback from FastStream goes to the best codec
         let mut caps = RemoteCaps::default();
         caps.add_sbc(1);
-        let c = choose(&caps, Some(CodecKind::FastStream), true, true).unwrap();
+        let c = choose(&caps, Some(CodecKind::FastStream), true).unwrap();
         assert_eq!((c.kind, c.replaced), (CodecKind::Sbc, Some((CodecKind::FastStream, Unavailable::NotSupported))));
 
         // The local SEP: vendor header, music direction, 44.1 + 48 kHz
@@ -2622,7 +2607,7 @@ mod tests {
         only.add_vendor(6, &pipewire_opus05(2, 0x1F, 0, 0));
         assert_eq!(only.best(), None);
         if CodecKind::Opus05.available() {
-            assert_eq!(choose(&only, Some(CodecKind::Opus05), false, true).unwrap().kind, CodecKind::Opus05);
+            assert_eq!(choose(&only, Some(CodecKind::Opus05), false).unwrap().kind, CodecKind::Opus05);
         }
 
         // 10 ms, stereo (mono input too), 312 * 1024 bps, no return channel
@@ -2866,10 +2851,10 @@ mod tests {
         only.add_sbc(1);
         only.add_vendor(9, &PX7_S2E_APTXAD);
         assert_eq!(
-            choose(&only, Some(CodecKind::Aptx), false, true),
+            choose(&only, Some(CodecKind::Aptx), false),
             Err(Some((CodecKind::Aptx, Unavailable::AdaptiveOnly)))
         );
-        assert_eq!(choose(&only, Some(CodecKind::AptxAdaptive), false, true).unwrap().kind, CodecKind::AptxAdaptive);
+        assert_eq!(choose(&only, Some(CodecKind::AptxAdaptive), false).unwrap().kind, CodecKind::AptxAdaptive);
         assert_eq!(CodecKind::from_key("aptxad"), Some(CodecKind::AptxAdaptive));
     }
 
@@ -2885,37 +2870,7 @@ mod tests {
         let without = ignored.without_developer_codecs();
         assert!(!without.has(Opus05) && without.has(Sbc));
         assert!(without.ignored.is_empty());
-        assert_eq!(choose(&without, None, true, true).unwrap().kind, Sbc);
-    }
-
-    #[test]
-    fn experimental_codecs_off_are_never_used() {
-        use CodecKind::*;
-        let experimental: Vec<_> = CodecKind::ALL.into_iter().filter(|k| k.experimental()).collect();
-        assert_eq!(experimental, [AptxHd, AptxLl, Opus, Opus05, FastStream]);
-        if !Opus.available() {
-            return;
-        }
-        // Opus (experimental) above AAC and SBC
-        let mut caps = RemoteCaps::default();
-        caps.add_sbc(1);
-        caps.add_aac(2);
-        caps.add_vendor(5, &[0xE0, 0, 0, 0, 0x01, 0x00, 0x92]);
-        let fallback = if Aac.available() { Aac } else { Sbc };
-        // Auto: Opus while on, the next one down while off
-        assert_eq!(choose(&caps, None, true, true).unwrap().kind, Opus);
-        assert_eq!(choose(&caps, None, true, false).unwrap(), Choice { kind: fallback, replaced: None });
-        // Chosen: falls back, saying why; an error without fallback
-        assert_eq!(
-            choose(&caps, Some(Opus), true, false).unwrap(),
-            Choice { kind: fallback, replaced: Some((Opus, Unavailable::Experimental)) }
-        );
-        assert_eq!(choose(&caps, Some(Opus), false, false), Err(Some((Opus, Unavailable::Experimental))));
-        // Never a fallback for another codec either (LDAC not offered)
-        assert_eq!(choose(&caps, Some(Ldac), true, true).unwrap().kind, Opus);
-        assert_eq!(choose(&caps, Some(Ldac), true, false).unwrap().kind, fallback);
-        // What the device offers is recorded as it is
-        assert!(caps.has(Opus));
+        assert_eq!(choose(&without, None, true).unwrap().kind, Sbc);
     }
 
     #[test]

@@ -22,7 +22,7 @@ nav_order: 2
 
 ### 主页
 
-- 每个已保存的音频设备一张卡片，并排显示：其状态、电量，以及已连接的设备所用的编解码器（以列表代替其名称，见下文）和比特率。如果使用的编解码器与所选的不同，编解码器一行会在几秒内于其名称旁说明原因，例如 **aptX Adaptive（不支持 Opus）**（或*被占用*、*为实验性*），之后只保留其警告标记（将鼠标悬停其上可查看原因）；状态行只显示**已连接**
+- 每个已保存的音频设备一张卡片，并排显示：其状态、电量，以及已连接的设备所用的编解码器（以列表代替其名称，见下文）和比特率。如果使用的编解码器与所选的不同，编解码器一行会在几秒内于其名称旁说明原因，例如 **aptX Adaptive（不支持 Opus）**（或*被占用*），之后只保留其警告标记（将鼠标悬停其上可查看原因）；状态行只显示**已连接**
 - 每张卡片下方的**连接** / **断开连接**。同一时间只连接一台设备：在另一台设备上单击**连接**，会断开当前使用的设备并连接那台设备
 - **音量**：耳机的音量（请参阅[音量](#volume)）；单击扬声器图标即可静音（发送静音），再次单击取消静音。其他设备的卡片也保留该滑块，但处于禁用状态
 - 当前使用设备的编解码器，可在其卡片上的列表中选择以快速切换（例如游戏用一种、音乐用一种）：列出设备支持的编解码器（与[编解码器](#codecs)页面相同的选项），只显示名称。**自动选择**开启时也显示正在使用的编解码器；选择某个编解码器会关闭自动选择（可在编解码器页面重新开启）。选择后立即生效（设备会用它重新连接；与编解码器页面一样，下一次选择会等到设备连接完成）
@@ -34,8 +34,7 @@ nav_order: 2
 
 ### 编解码器 {#codecs}
 
-每个已保存音频设备的编解码器，每台设备一个分区（设备连接期间为绿色的圆点、名称、**已配对** / **音频**标记；地址位于**音频设备**中），其下是该设备的编解码器卡片，按音质从高到低排列（除非你自行调整了顺序），各带三个指标条（音质、低延迟、稳定性），并显示设备上次连接时是否提供了它：**支持**（绿色标记）或**不支持**（红色标记）。开启**仅显示支持的编解码器**（默认）时，显示的卡片无需也不带**支持**标记。从未连接过的设备（例如从 Windows 导入的设备）此时只显示 **SBC** 卡片（每台蓝牙音频设备都有的编解码器），以及为它选择的编解码器；其他卡片在首次连接后出现，或在关闭此开关后显示。华为和荣耀耳机会保留其 **LDAC** 卡片（显示为**未确认**），直到它们列出 LDAC：它们可能只在选择了 LDAC 之后才会列出。对于为 LHDC V5 列出峰值比特率的 OPPO 耳塞，当 LHDC V5 串流时（无论是手动选择还是由“自动”选择；音质为**低**或开启 ABR 时除外），会请求一次 Hi-Res：耳塞会为此重新连接一次，如果比特率因此提高，主页会显示这一点；之后 Hi-Res 会在耳塞中保持开启（没有获得任何提升的耳塞会被恢复原状）。在开发者模式下，LHDC V5 设置中的**重新请求 Hi-Res**会清除设备列出的内容及已请求过的记录，因此下次连接时会再次请求。所有编解码器都会提供；实验性编解码器（README 编解码器表中的 🧪）只在文档中标注。
-
+每个已保存音频设备的编解码器，每台设备一个分区（设备连接期间为绿色的圆点、名称、**已配对** / **音频**标记；地址位于**音频设备**中），其下是该设备的编解码器卡片，按音质从高到低排列（除非你自行调整了顺序），各带三个指标条（音质、低延迟、稳定性），并显示设备上次连接时是否提供了它：**支持**（绿色标记）或**不支持**（红色标记）。开启**仅显示支持的编解码器**（默认）时，显示的卡片无需也不带**支持**标记。从未连接过的设备（例如从 Windows 导入的设备）此时只显示 **SBC** 卡片（每台蓝牙音频设备都有的编解码器），以及为它选择的编解码器；其他卡片在首次连接后出现，或在关闭此开关后显示。华为和荣耀耳机会保留其 **LDAC** 卡片（显示为**未确认**），直到它们列出 LDAC：它们可能只在选择了 LDAC 之后才会列出。对于为 LHDC V5 列出峰值比特率的 OPPO 耳塞，当 LHDC V5 串流时（无论是手动选择还是由“自动”选择；音质为**低**或开启 ABR 时除外），会请求一次 Hi-Res：耳塞会为此重新连接一次，如果比特率因此提高，主页会显示这一点；之后 Hi-Res 会在耳塞中保持开启（没有获得任何提升的耳塞会被恢复原状）。在开发者模式下，LHDC V5 设置中的**重新请求 Hi-Res**会清除设备列出的内容及已请求过的记录，因此下次连接时会再次请求。
 - **自动选择支持的音质最高的编解码器**（页面顶部，适用于所有设备的设置；默认开启）：每个设备使用其支持的音质最高的编解码器，顺序为：LHDC V5 > LDAC > aptX Adaptive > Opus > aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC，并采用其默认设置：高音质、编解码器支持时为 24-bit，以及 48 kHz（设备未列出 48 kHz 时使用其列出的其他采样率，优先 44.1 kHz；Windows 自身的采样率会被重采样），与编解码器设置中的**自动**相同。除顺序外卡片为只读（按下文拖动；“自动”选择设备支持的第一张卡片），正在使用（或将由“自动”选择）的编解码器会突出显示；单击卡片或其 **...** 会询问是否关闭自动选择（**关闭自动选择** / **取消**）；关闭后，所单击的卡片即被选中（其 **...** 会打开其设置）。关闭后可为每个设备自行选择编解码器及其设置；尚未选择的设备沿用“自动”的选择。开启期间，为各设备选择的编解码器会被保留。如果 2.0.2 之前的设置为某个设备选择过编解码器，则初始为关闭
 - 关闭时，单击卡片即可选择该设备的编解码器；选择会立即保存，正在串流的设备会用它重新连接。设备不支持的卡片（关闭**仅显示支持的编解码器**时显示）也会被选中：BlueCaster 仍会向设备请求该编解码器，如果设备拒绝，连接会停止并显示相应的错误（请选择其他卡片或开启自动选择）。主页、侧边栏、托盘浮出面板和托盘图标的提示随后会用几个字说明原因（例如 *不支持 LDAC*），编解码器导致的其他停止（设备不支持、拒绝或被其他音源占用的编解码器）也一样；为该设备选择其他卡片或其他设置，或开启自动选择，即会重新连接。在设备提供时选择、之后设备不再提供的编解码器（耳机切换到了其他编解码器），会回退到该设备顺序中第一个受支持的卡片：除非你更改了顺序，否则就是它支持的最佳编解码器（请参阅[明确指定的编解码器不可用](#codec-fallback)）
 - 拖动设备的卡片（按住按钮时显示手形；自动选择关闭时也可在卡片上按 Alt 加方向键），即可按自己的顺序排列其编解码器；每台设备保留各自的顺序。自动选择和尚未选择编解码器的设备使用它支持的第一张卡片，所选编解码器不受支持时也是如此。FastStream 和 Opus 05（即 **Opus (PipeWire)** 卡片，仅在开发者模式下显示；关闭时即使已选择也不使用）无论排在哪里，除非被选择，否则从不使用。**重置编解码器顺序**可还原顺序；它只在显示的卡片不是默认顺序时出现（移回原位后即恢复为默认顺序）。如果正在串流的设备的编解码器因此改变，设备会重新连接
@@ -103,7 +102,7 @@ BlueCaster 还会一直记录一些内容，这样即使问题只发生过一次
 
 ### 适配器
 
-- 检测到的 USB Bluetooth 适配器及其芯片、地址、USB ID、Bluetooth 版本、**驱动程序**和**固件**；插入或拔出适配器时列表会自动更新。驱动程序为**原始驱动程序**（Windows 或制造商安装的驱动程序；将鼠标悬停其上可查看其名称）或 **WinUSB 驱动程序**（BlueCaster 使用的驱动程序）。Realtek 适配器即使尚未使用过，也会显示其地址（来自其 USB 序列号）；其他适配器的地址和 Bluetooth 版本要在 Windows 的 Bluetooth 或 BlueCaster 使用过该适配器后才会显示（将鼠标悬停在该行上可查看原因）。BlueCaster 无法使用的适配器（部分 MediaTek 和 Qualcomm）保留其驱动程序：其 WinUSB 和固件按钮处于禁用状态。Intel、MediaTek MT79xx、Qualcomm ROME / WCN6855 和 Broadcom 适配器带有**实验性**标记。在开发者模式下仍可为其分配 WinUSB；在使用 WinUSB 的适配器上点 **读取芯片信息**，会把芯片对几条读取命令的应答保存到 `logs\probe\`，供想为它添加支持的人使用（期间蓝牙会停止，下次使用时重新启动）；之后**在 GitHub 上报告**会新建一个已填好这些信息的 issue。由 BlueCaster 自行加载固件的适配器（Intel、MediaTek、Qualcomm）启动期间，此页面会显示加载情况以及是否失败
+- 检测到的 USB Bluetooth 适配器及其芯片、地址、USB ID、Bluetooth 版本、**驱动程序**和**固件**；插入或拔出适配器时列表会自动更新。驱动程序为**原始驱动程序**（Windows 或制造商安装的驱动程序；将鼠标悬停其上可查看其名称）或 **WinUSB 驱动程序**（BlueCaster 使用的驱动程序）。Realtek 适配器即使尚未使用过，也会显示其地址（来自其 USB 序列号）；其他适配器的地址和 Bluetooth 版本要在 Windows 的 Bluetooth 或 BlueCaster 使用过该适配器后才会显示（将鼠标悬停在该行上可查看原因）。BlueCaster 无法使用的适配器（部分 MediaTek 和 Qualcomm）保留其驱动程序：其 WinUSB 和固件按钮处于禁用状态。Intel、MediaTek MT79xx、Qualcomm ROME / WCN6855 和 Broadcom 适配器带有**实验性**标记，[已验证的硬件](hardware)中列出的除外。在开发者模式下仍可为其分配 WinUSB；在使用 WinUSB 的适配器上点 **读取芯片信息**，会把芯片对几条读取命令的应答保存到 `logs\probe\`，供想为它添加支持的人使用（期间蓝牙会停止，下次使用时重新启动）；之后**在 GitHub 上报告**会新建一个已填好这些信息的 issue。由 BlueCaster 自行加载固件的适配器（Intel、MediaTek、Qualcomm）启动期间，此页面会显示加载情况以及是否失败
 - **替换为 WinUSB 驱动程序** / **恢复原始驱动程序**（请参阅[安装与设置](setup#winusb)）；每次操作 Windows 都会请求管理员权限（带盾牌图标的按钮都是如此）。恢复时，对于 Windows 也通过此适配器配对过的设备，BlueCaster 会把较新的配对交给 Windows，因此无需在 Windows 中重新配对即可连接。**限制：**不会交出 LE 密钥，因此 Windows 通过 LE（LE Audio）使用的设备需要在 Windows 中重新配对（开发者模式下可以试用：**开发者 > Debug**）
 - 用于固件的 **Bluetooth 芯片**，以及**下载固件**、**打开下载页面**和**打开固件文件夹**（请参阅[固件](setup#firmware)）。其他厂商的适配器则显示固件的来源，例如**来自 MediaTek 的驱动程序**、**来自固件文件夹**或**不需要**，BlueCaster 加载后显示**已加载**
 - **避开 Wi-Fi 信道**：自动、关或手动，旁边显示 Wi-Fi 信道：自动时为当前避开的信道，关时不显示（两者均为只读），手动时为您输入的信道（请参阅[链路质量与 AFH](#link-quality)）
@@ -163,14 +162,14 @@ bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c aptx      # aptX
 bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c aac       # AAC
 bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c sbc       # SBC
 bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c lhdcv5    # LHDC V5
-bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c opus      # Opus (experimental; 48 kHz, 256 kbps)
-bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c opus05    # PipeWire's Opus 05 (experimental; to PipeWire sinks)
+bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c opus      # Opus (48 kHz, 256 kbps)
+bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c opus05    # PipeWire's Opus 05 (to PipeWire sinks)
 bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c aptxad    # aptX Adaptive (48 kHz; --rate 96000 for 96 kHz)
 ```
 
-自动选择的优先级：LHDC V5 > LDAC > aptX Adaptive > Opus（实验性）> aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC（FastStream 和 Opus 05 均为实验性，仅在明确选择时使用）
+自动选择的优先级：LHDC V5 > LDAC > aptX Adaptive > Opus > aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC（FastStream 和 Opus 05 仅在明确选择时使用）
 
-如果耳机不提供所请求的编解码器，CLI 会停止并显示说明原因的错误；使用 `-c auto`（默认）即可采用耳机提供的最佳编解码器，或使用 `--fallback` 像应用那样改用耳机提供的最佳编解码器，而不是所请求的编解码器——请参阅 [aptX 系列与 aptX Adaptive](#aptx-compatibility)。`--no-experimental` 从不使用实验性编解码器（aptX HD、aptX LL、Opus、Opus 05、FastStream）；应用则始终使用它们。
+如果耳机不提供所请求的编解码器，CLI 会停止并显示说明原因的错误；使用 `-c auto`（默认）即可采用耳机提供的最佳编解码器，或使用 `--fallback` 像应用那样改用耳机提供的最佳编解码器，而不是所请求的编解码器——请参阅 [aptX 系列与 aptX Adaptive](#aptx-compatibility)。
 
 ### 音质
 
@@ -219,7 +218,6 @@ bluecaster-core.exe --cli --scan
 | `-q <mode>` | 音质：`hq`（高，默认）；LDAC 和 LHDC V5 另有 `sq`（中）和 `mq`（低），LHDC V5 另有 `mhq`（中高）；aptX Adaptive 另有 `ll`（低延迟）。其他编解码器的任何级别都以 `hq` 运行 |
 | `-a` | ABR（LDAC、LHDC V5 和 aptX Adaptive；SBC / SBC XQ：自适应 bitpool） |
 | `--fallback` | 耳机不提供 `-c` 指定的编解码器时，像应用那样回退到耳机提供的最佳编解码器，而不是报错 |
-| `--no-experimental` | 从不使用实验性编解码器（aptX HD、aptX LL、Opus、Opus 05、FastStream） |
 | `-m <mode>` | 捕获模式：`loopback`（默认）、`virtual`、`app` |
 | `--audio-device <id>` | 用于 `-m virtual` 的渲染设备 |
 | `--app <exe>` | 用于 `-m app` 的可执行文件（如 `spotify.exe`） |
@@ -344,7 +342,7 @@ BlueCaster 会保存每台音频设备自己的音量，并在其连接后、发
 | LDAC (HQ) | 许多 Sony 和面向 Android 的设备上的最高音质 | 延迟较高，需要稳定的连接 |
 | LDAC (ABR) | 音质 + 稳定性 | 比特率随连接状况波动 |
 | aptX Adaptive | 高音质并带低延迟模式，适用于基于 Qualcomm 的设备 | 比特率随链路变化 |
-| Opus 🧪 | 高效，256 kbps 下音质良好 | 接收端很少（Android 的 A2DP Opus、PipeWire） |
+| Opus | 高效，256 kbps 下音质良好 | 接收端很少（Android 的 A2DP Opus、PipeWire） |
 | aptX HD | 高音质，设备支持更广 | 固定 576 kbps |
 | aptX | aptX 设备支持最广 | 16-bit，352/384 kbps |
 | aptX LL | 游戏、视频（低延迟） | 音质较低（16-bit） |
@@ -359,7 +357,7 @@ BlueCaster 会保存每台音频设备自己的音量，并在其连接后、发
 BlueCaster 支持三种使用 [libopenaptx](https://github.com/pali/libopenaptx) 编码的 aptX 编解码器，以及使用 [AKS-Logic/aptx-adaptive-linux](https://github.com/AKS-Logic/aptx-adaptive-linux) 编码器编码的 aptX Adaptive。
 
 {: .warning }
-**aptX HD 和 aptX Low Latency 为实验性功能。** 它们参照 Android / PipeWire 的实现，并通过了编码/解码往返测试，但尚未在真实耳机上验证。
+**aptX HD 和 aptX Low Latency** 参照 Android / PipeWire 的实现，并通过了编码/解码往返测试，但尚未在真实耳机上验证。
 
 {: .note }
 **只需要经典 aptX？** Windows 10 的内置 Bluetooth 堆栈已经支持经典 aptX（不含 aptX HD、aptX LL 和 aptX Adaptive），因此无需 BlueCaster。BlueCaster 主要用于 LDAC、aptX HD 和 aptX Low Latency。
@@ -398,7 +396,7 @@ BlueCaster 连接时，耳机会通告一个**编解码器列表**（AVDTP 流�
 - **耳机同时列出了经典 aptX**——许多 aptX Adaptive 耳机都是如此，因为 Qualcomm 宣传 aptX Adaptive 向下兼容 aptX / aptX HD。“自动”会选择 aptX Adaptive（高于 aptX HD 和 aptX）；经典 aptX 在您选择它时使用，它是耳机列表中独立的一种编解码器，而不是 aptX Adaptive 的降级模式。
 - **耳机只列出了 aptX Adaptive**（没有经典 aptX、aptX HD 或 aptX LL）——选择 aptX 时会回退到耳机提供的最佳编解码器（按**编解码器**页面上该设备的顺序），通常就是 aptX Adaptive 本身。
 
-自动选择的优先级：LHDC V5 > LDAC > aptX Adaptive > Opus（实验性）> aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC（FastStream 和 Opus 05 均为实验性，仅在明确选择时使用）
+自动选择的优先级：LHDC V5 > LDAC > aptX Adaptive > Opus > aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC（FastStream 和 Opus 05 仅在明确选择时使用）
 
 ### 明确指定的编解码器不可用 {#codec-fallback}
 

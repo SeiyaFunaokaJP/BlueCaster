@@ -7,7 +7,7 @@ nav_order: 3.5
 
 # 加入晶片支援
 
-BlueCaster 會自行驅動藍牙介面卡（WinUSB），因此介面卡能運作之前，它必須做到廠商的 Windows 驅動程式所做的事：許多晶片每次啟動時都需要載入韌體。Realtek、Intel、Broadcom 與 CSR 介面卡目前可以使用，MediaTek MT7925、MT7922、MT7921、MT7902 與 Qualcomm QCA61x4、QCA9377、WCN6855 則為實驗性支援；其他 MediaTek 晶片（MT7927 及較舊的晶片）與 Qualcomm 晶片（QCA6290、WCN785x）則不行，因為還沒有人為它們寫出載入程式。`app/src/crates/bt-host/src/mediatek.rs`（MT79xx 的載入程式）是實際可用的載入程式，可作為支援其他 MediaTek 晶片的起點。
+BlueCaster 會自行驅動藍牙介面卡（WinUSB），因此介面卡能運作之前，它必須做到廠商的 Windows 驅動程式所做的事：許多晶片每次啟動時都需要載入韌體。Realtek、Intel、Broadcom 與 CSR 介面卡以及 MediaTek MT7925 與 MT7921 目前可以使用，MediaTek MT7922、MT7902 與 Qualcomm QCA61x4、QCA9377、WCN6855 則為實驗性支援；其他 MediaTek 晶片（MT7927 及較舊的晶片）與 Qualcomm 晶片（QCA6290、WCN785x）則不行，因為還沒有人為它們寫出載入程式。`app/src/crates/bt-host/src/mediatek.rs`（MT79xx 的載入程式）是實際可用的載入程式，可作為支援其他 MediaTek 晶片的起點。
 
 本頁說明如何加入一個載入程式。您需要一張採用該晶片的介面卡；維護者手上沒有這些介面卡。即使不寫程式碼也能幫忙：步驟 1 與 2 可產生其他貢獻者所需的回報。
 
@@ -229,13 +229,13 @@ cargo test -p bt-host
 **視窗顯示的內容**：
 
 10. `app/src/core/src/state.rs` 的 `vendor_note()`：從 `MediaTek | Qualcomm` 分支中拆出一個使用新鍵 `firmware.vendor_<vendor>` 的分支，並加入其測試。對於 `chip_supported` 拒絕的晶片，此函式會先回傳 `firmware.vendor_unsupported`，因此該廠商的其他晶片仍維持原樣。**介面卡** 畫面會為說明不是 `firmware.vendor_unsupported` 的每張介面卡提供 WinUSB
-11. `app/lang/*.json`（全部 8 種語言，每個檔案的同一行）：新的鍵，比照 Intel 的（"… adapter (experimental). …"）。提到按鈕或資料夾時，使用同一檔案中該語言自己的用語（韌體資料夾的按鈕是 `firmware.open_folder`）。整個廠商：將其名稱從 `firmware.vendor_unsupported` 中移除。部分晶片：保留在那裡，因為該廠商的其他晶片仍會顯示該文字
+11. `app/lang/*.json`（全部 8 種語言，每個檔案的同一行）：新的鍵，比照 Intel 的（「Intel 介面卡。…」）。提到按鈕或資料夾時，使用同一檔案中該語言自己的用語（韌體資料夾的按鈕是 `firmware.open_folder`）。整個廠商：將其名稱從 `firmware.vendor_unsupported` 中移除。部分晶片：保留在那裡，因為該廠商的其他晶片仍會顯示該文字
 12. `app/src/ui/src/lib/links.ts`：該廠商的韌體頁面（在 `LINKS`、`firmwareUrl()` 與 `vendorFirmwareUrl()` 中，比照 Intel 的 linux-firmware 資料夾），讓 **介面卡** 畫面顯示檔案的取得位置；測試位於 `app/src/ui/src/lib/chips.test.ts`。**介面卡** 畫面只為說明不是 `firmware.vendor_unsupported` 的介面卡顯示此頁面，因此該廠商的其他晶片不會看到
 
 **文件**：
 
 13. `docs/setup.md` 與 `docs/*/setup.md`（所有語言）中的晶片表格：比照 Intel 新增一列，寫出涵蓋的晶片、韌體檔案及其存放位置（韌體資料夾：`%APPDATA%\BlueCaster\firmware`，或其中的 `<vendor>` 子資料夾；較舊的列仍寫著「config folder」）以及 *Experimental.*。視窗的按鈕名稱請依各語言的 `app/lang/*.json`（**介面卡** 畫面為 `ui.nav.adapter`，開啟該資料夾的按鈕為 `firmware.open_folder`）。整個廠商：從「Not supported」那一列中移除。部分晶片：保留該廠商，並寫出仍不支援的晶片。將該廠商加入 Firmware 一節開頭的句子（"Intel and Broadcom adapters (experimental) may need firmware files of their own"）
-14. 有人實際使用過後，更新 [已驗證的硬體](hardware)（`docs/hardware.md`），以及本頁的開頭（`docs/chip-support.md`，所有語言），其中列出尚無載入程式的廠商（部分晶片時寫成「the other <vendor> chips」）
+14. 有人實際使用過後，更新 [已驗證的硬體](hardware)（`docs/hardware.md`）及其在 `CONFIRMED_CHIPS`（`chips.rs`）中的 VID:PID（這會移除它的 Experimental 標籤），以及本頁的開頭（`docs/chip-support.md`，所有語言），其中列出尚無載入程式的廠商（部分晶片時寫成「the other <vendor> chips」）
 
 ## 步驟 7：在介面卡上實測
 
@@ -283,4 +283,4 @@ Clippy 也會檢查命名：名為 `PatchState` 的 `State` 變體會觸發 `enu
 - 以目前的 `develop-v*` 分支為基礎
 - 說明您測試了哪些介面卡（產品、VID:PID、晶片）、冷啟動與暖啟動的情況，並附上一份探測報告與一次下載的 HCI 擷取
 - 說明載入程式中的資訊來自何處
-- 在有幾個人使用過之前，載入程式維持 **實驗性**；**介面卡** 畫面會顯示該標籤
+- 在有幾個人使用過之前，載入程式維持 **實驗性**；在該介面卡加入 `CONFIRMED_CHIPS` 之前，**介面卡** 畫面會顯示該標籤

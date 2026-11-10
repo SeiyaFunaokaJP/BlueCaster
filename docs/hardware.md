@@ -24,15 +24,17 @@ Tried BlueCaster with other hardware? Please tell us in an [issue](https://githu
 | TP-Link UB500 | Realtek RTL8761BU | 2357:0604 | USB dongle | ✅ Best tested | Firmware `rtl8761bu`. No LE Audio (no isochronous channels) | Maintainer; [#84](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/84), [#87](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/87) |
 | Generic RTL8761B dongle | Realtek RTL8761BU | 0BDA:A729 | USB dongle | ✅ | Firmware `rtl8761bu`. Detected automatically since 2.0.2 (before: choose RTL8761BU as the chip). No LE Audio | [#66](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/66), [#86](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/86) |
 | Laptop's built-in Realtek RTL8852BE | Realtek RTL8852BU | 0BDA:4853 | Built in | ✅ | Firmware `rtl8852bu`, recognized since 2.0.2-beta.1. Windows has no Bluetooth of its own while BlueCaster uses it | [#81](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/81) |
-| ASUS BT400 | Broadcom BCM20702 | 0B05:17CB | USB dongle | ✅ Experimental | Runs on its ROM firmware, no files needed. Reported on v1 (1.0.12–1.0.17) | [#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18), [#27](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/27), [#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30) |
+| ASUS BT400 | Broadcom BCM20702 | 0B05:17CB | USB dongle | ✅ | Runs on its ROM firmware, no files needed. Reported on v1 (1.0.12–1.0.17) | [#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18), [#27](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/27), [#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30) |
 | "Realtek Bluetooth 6.0" dongle | Realtek RTL8761B | 0BDA:A760 | USB dongle | ✅ | Not detected automatically yet (LMP subversion 0x8761). No LE Audio | [#208](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/208) |
 | CSR8510 A10 dongle | CSR8510 | 0A12:0001 | USB dongle | ✅ | No firmware files needed | [#32](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/32) |
-| Intel AX211 (built-in Wi-Fi / Bluetooth card) | Intel AX211 (TLV bootloader) | 8087:0033 | Built in | ✅ Experimental | Firmware from linux-firmware `intel/`, loaded from the bootloader in 1.5–1.7 s: `ibt-0180-0041` (variant 0x1B) or `ibt-1040-0041` (variant 0x19), the log names the file. Pairing, AAC and LDAC work. Windows has no Bluetooth of its own while BlueCaster uses it | [#261](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/261), [#237](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/237) |
-| Intel AX200 (built-in Wi-Fi / Bluetooth card) | Intel AX200 | 8087:0029 | Built in | ✅ Experimental | Its firmware was already running in the report, so no file was loaded. LHDC V5 1000 kbps / 192 kHz works. Windows has no Bluetooth of its own while BlueCaster uses it | [#237](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/237) |
+| Intel AX211 (built-in Wi-Fi / Bluetooth card) | Intel AX211 (TLV bootloader) | 8087:0033 | Built in | ✅ | Firmware from linux-firmware `intel/`, loaded from the bootloader in 1.5–1.7 s: `ibt-0180-0041` (variant 0x1B) or `ibt-1040-0041` (variant 0x19), the log names the file. Pairing, AAC and LDAC work. Windows has no Bluetooth of its own while BlueCaster uses it | [#261](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/261), [#237](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/237) |
+| Intel AX200 (built-in Wi-Fi / Bluetooth card) | Intel AX200 | 8087:0029 | Built in | ✅ | Its firmware was already running in the report, so no file was loaded. LHDC V5 1000 kbps / 192 kHz works. Windows has no Bluetooth of its own while BlueCaster uses it | [#237](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/237) |
+| MediaTek MT7925 (built-in Wi-Fi / Bluetooth card) | MediaTek MT7925 | 0E8D:7925 | Built in | ✅ | Firmware read from MediaTek's Windows driver. A2DP works; LE Audio played with a Developer > Debug setting | [#86](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/86) |
+| MediaTek MT7921 (built-in Wi-Fi / Bluetooth card) | MediaTek MT7921 | 13D3:3606 | Built in | ✅ | – | [#432](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/432) |
 | "MA530" adapter | Not given | – | USB dongle | ✅ | Reported on v1.0.9 | [#3](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/3), [#9](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/9) |
 | UGREEN Bluetooth 5.4 and 6.0 dongles | Not given | – | USB dongle | ✅ | Reported on 2.0.1 | [#11](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/11#issuecomment-6563908711) |
 
-MediaTek and Qualcomm adapters have no reports yet: see [Recommended Adapters](setup#adapters) for what is expected of them.
+Qualcomm adapters have no reports yet: see [Recommended Adapters](setup#adapters) for what is expected of them.
 
 ## Headphones
 
@@ -63,5 +65,5 @@ MediaTek and Qualcomm adapters have no reports yet: see [Recommended Adapters](s
 ## Not verified yet
 
 - **Codecs on real headphones**: aptX HD, aptX Low Latency, Opus, Opus 05, FastStream
-- **LE Audio**: tested only against the emulator; none of the adapters above has isochronous channels
+- **LE Audio**: tested against the emulator and on the MediaTek MT7925 only
 - **Windows on ARM64**, and **Windows 10 with v2** (v1 ran on Windows 10 22H2: [#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18), [#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30))

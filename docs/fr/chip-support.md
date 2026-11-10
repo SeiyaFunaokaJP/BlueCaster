@@ -7,7 +7,7 @@ nav_order: 3.5
 
 # Ajouter la prise en charge d'une puce
 
-BlueCaster pilote lui-même l'adaptateur Bluetooth (WinUSB) : il doit donc faire ce que fait le pilote Windows du fabricant avant que l'adaptateur fonctionne, c'est-à-dire, pour de nombreuses puces, y charger un firmware à chaque démarrage. Les adaptateurs Realtek, Intel, Broadcom et CSR fonctionnent déjà, et les MediaTek MT7925, MT7922, MT7921 et MT7902 ainsi que les Qualcomm QCA61x4, QCA9377 et WCN6855 à titre expérimental ; les autres puces MediaTek (MT7927 et de plus anciennes) et Qualcomm (QCA6290, WCN785x) non, car personne n'a encore écrit leur chargeur. `app/src/crates/bt-host/src/mediatek.rs` (celui des MT79xx) est un vrai chargeur sur lequel s'appuyer pour une autre puce MediaTek.
+BlueCaster pilote lui-même l'adaptateur Bluetooth (WinUSB) : il doit donc faire ce que fait le pilote Windows du fabricant avant que l'adaptateur fonctionne, c'est-à-dire, pour de nombreuses puces, y charger un firmware à chaque démarrage. Les adaptateurs Realtek, Intel, Broadcom et CSR et les MediaTek MT7925 et MT7921 fonctionnent déjà, et les MediaTek MT7922 et MT7902 ainsi que les Qualcomm QCA61x4, QCA9377 et WCN6855 à titre expérimental ; les autres puces MediaTek (MT7927 et de plus anciennes) et Qualcomm (QCA6290, WCN785x) non, car personne n'a encore écrit leur chargeur. `app/src/crates/bt-host/src/mediatek.rs` (celui des MT79xx) est un vrai chargeur sur lequel s'appuyer pour une autre puce MediaTek.
 
 Cette page décrit la marche à suivre pour en ajouter un. Il vous faut un adaptateur équipé de cette puce ; les mainteneurs n'en ont pas. Même sans écrire de code, vous pouvez aider : les étapes 1 et 2 produisent le rapport dont un contributeur a besoin.
 
@@ -229,13 +229,13 @@ Conservez les fins de ligne de chaque fichier : certains fichiers source utilise
 **Ce qu'affiche la fenêtre** :
 
 10. `app/src/core/src/state.rs`, `vendor_note()` : une branche avec une nouvelle clé `firmware.vendor_<vendor>`, sortie de la branche `MediaTek | Qualcomm`, et son test. La fonction répond auparavant `firmware.vendor_unsupported` pour les puces que `chip_supported` refuse, si bien que les autres puces du fabricant la conservent. L'écran **Adaptateur** propose WinUSB à tout adaptateur dont la note n'est pas `firmware.vendor_unsupported`
-11. `app/lang/*.json` (les 8 langues, à la même ligne dans chacune) : la nouvelle clé, sur le modèle de celle d'Intel ("… adapter (experimental). …"). Quand elle nomme un bouton ou un dossier, utilisez les mots de la langue tirés du même fichier (le bouton du dossier du firmware est `firmware.open_folder`). Tout le fabricant : retirez son nom de `firmware.vendor_unsupported`. Certaines puces : laissez-le, car les autres puces du fabricant affichent encore ce texte
+11. `app/lang/*.json` (les 8 langues, à la même ligne dans chacune) : la nouvelle clé, sur le modèle de celle d'Intel ("Intel adapter. …"). Quand elle nomme un bouton ou un dossier, utilisez les mots de la langue tirés du même fichier (le bouton du dossier du firmware est `firmware.open_folder`). Tout le fabricant : retirez son nom de `firmware.vendor_unsupported`. Certaines puces : laissez-le, car les autres puces du fabricant affichent encore ce texte
 12. `app/src/ui/src/lib/links.ts` : la page de firmware du fabricant (dans `LINKS`, `firmwareUrl()` et `vendorFirmwareUrl()`, comme le dossier linux-firmware d'Intel), pour que l'écran **Adaptateur** indique où trouver les fichiers ; tests dans `app/src/ui/src/lib/chips.test.ts`. L'écran **Adaptateur** n'affiche la page que pour les adaptateurs dont la note n'est pas `firmware.vendor_unsupported`, de sorte que les autres puces du fabricant ne la reçoivent pas
 
 **Documentation** :
 
 13. Le tableau des puces de `docs/setup.md` et `docs/*/setup.md` (toutes les langues) : une ligne comme celle d'Intel, avec les puces couvertes, les fichiers de firmware et leur emplacement (le dossier du firmware : `%APPDATA%\BlueCaster\firmware`, ou son sous-dossier `<vendor>` ; les lignes plus anciennes disent encore « config folder ») et *Experimental.* Nommez les boutons de la fenêtre comme les nomme le `app/lang/*.json` de chaque langue (`ui.nav.adapter` pour l'écran **Adaptateur**, `firmware.open_folder` pour le bouton qui ouvre ce dossier). Tout le fabricant : retirez-le de la ligne « Not supported ». Certaines puces : gardez-y le fabricant et nommez les puces toujours non prises en charge. Ajoutez le fabricant à la phrase en tête de la section Firmware ("Intel and Broadcom adapters (experimental) may need firmware files of their own")
-14. [Verified Hardware](hardware) (`docs/hardware.md`) une fois que quelqu'un l'a utilisé, et l'introduction de cette page (`docs/chip-support.md`, toutes les langues), qui nomme les fabricants sans chargeur (certaines puces : « the other <vendor> chips »)
+14. [Verified Hardware](hardware) (`docs/hardware.md`) une fois que quelqu'un l'a utilisé, et son VID:PID dans `CONFIRMED_CHIPS` (`chips.rs`), ce qui lui retire l'étiquette Expérimental, et l'introduction de cette page (`docs/chip-support.md`, toutes les langues), qui nomme les fabricants sans chargeur (certaines puces : « the other <vendor> chips »)
 
 ## Étape 7 : l'essayer sur l'adaptateur
 
@@ -283,4 +283,4 @@ Dans la pull request :
 - Basez-la sur la branche `develop-v*` actuelle
 - Indiquez les adaptateurs testés (produit, VID:PID, puce), à froid et à chaud, et joignez un rapport de sonde et la capture HCI d'un téléchargement
 - Indiquez d'où viennent les informations du chargeur
-- Le chargeur reste expérimental tant que quelques personnes ne l'ont pas utilisé ; l'écran **Adaptateur** affiche l'étiquette **Expérimental**
+- Le chargeur reste expérimental tant que quelques personnes ne l'ont pas utilisé ; l'écran **Adaptateur** affiche l'étiquette **Expérimental** tant que l'adaptateur n'est pas dans `CONFIRMED_CHIPS`

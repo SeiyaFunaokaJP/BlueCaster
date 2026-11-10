@@ -111,11 +111,6 @@ le_audio_experimental: boolean,
  */
 le_audio_low_latency: boolean, 
 /**
- * Before 2.0.2: Codecs > "Enable experimental codecs". Every codec
- * is used now: the core reads it as on whatever is sent
- */
-experimental_codecs: boolean, 
-/**
  * Codecs > "Auto-select the codec with the highest quality", for every
  * device (on by default): on, every A2DP profile streams as Auto; off,
  * each with the codec chosen for it (read when the next stream starts)

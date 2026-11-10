@@ -22,7 +22,7 @@ nav_order: 2
 
 ### 홈
 
-- 저장된 오디오 장치마다 카드가 나란히 표시됩니다. 상태, 배터리, 그리고 연결된 장치에는 사용 중인 코덱(이름 대신 목록. 아래 참조)과 비트레이트가 표시됩니다. 선택한 코덱과 다른 코덱이 사용되면 코덱 줄의 이름 옆에 그 이유가 몇 초 동안 표시되고(예: **aptX Adaptive (Opus 미지원)**, 또는 *사용 중*, *실험적*), 그 후에는 경고 표시만 남습니다(마우스를 올리면 이유가 표시됨). 상태 줄에는 **연결됨**만 표시됩니다
+- 저장된 오디오 장치마다 카드가 나란히 표시됩니다. 상태, 배터리, 그리고 연결된 장치에는 사용 중인 코덱(이름 대신 목록. 아래 참조)과 비트레이트가 표시됩니다. 선택한 코덱과 다른 코덱이 사용되면 코덱 줄의 이름 옆에 그 이유가 몇 초 동안 표시되고(예: **aptX Adaptive (Opus 미지원)**, 또는 *사용 중*), 그 후에는 경고 표시만 남습니다(마우스를 올리면 이유가 표시됨). 상태 줄에는 **연결됨**만 표시됩니다
 - 각 카드 아래의 **연결** / **연결 끊기**. 한 번에 한 장치만 연결됩니다. 다른 장치에서 **연결**을 누르면 사용 중인 장치의 연결을 끊고 그 장치에 연결합니다
 - **볼륨**: 헤드폰의 볼륨([볼륨](#volume) 참조). 스피커를 클릭하면 음소거(무음을 보냄), 다시 클릭하면 음소거 해제됩니다. 다른 장치의 카드에도 슬라이더가 비활성화된 채로 남습니다
 - 사용 중인 장치의 코덱은 그 카드의 목록에서 골라 게임용과 음악용처럼 빠르게 바꿀 수 있습니다: 장치가 지원하는 코덱([코덱](#codecs)과 같은 선택)이 이름만으로 표시됩니다. **자동 선택** 중에도 사용 중인 코덱을 표시하며, 코덱을 고르면 자동 선택이 꺼집니다(다시 켜려면 코덱 화면에서). 고르면 바로 적용됩니다(장치가 그 코덱으로 다시 연결합니다. 코덱 화면과 같이 다음 선택은 다시 연결될 때까지 기다립니다)
@@ -34,8 +34,7 @@ nav_order: 2
 
 ### 코덱 {#codecs}
 
-저장된 각 오디오 장치의 코덱을 장치마다 한 구역(장치가 연결되어 있는 동안 초록색인 점, 이름, **페어링됨** / **오디오** 태그. 주소는 **오디오 장치**에 있음)으로 나누어 코덱 카드와 함께 보여 줍니다. 카드는 직접 순서를 바꾸지 않는 한 음질이 높은 순으로 표시되며, 각각 세 개의 막대(음질, 낮은 지연, 안정성)와 장치가 마지막으로 연결했을 때 그 코덱을 제공했는지가 표시됩니다: **지원**(초록색 표시) 또는 **미지원**(빨간색 표시). **지원되는 코덱만 표시**가 켜져 있으면(기본값) 표시되는 카드에는 **지원** 태그가 필요 없으므로 붙지 않습니다. 한 번도 연결하지 않은 장치(예: Windows에서 가져온 장치)에는 모든 Bluetooth 오디오 장치에 있는 코덱인 **SBC** 카드(와 그 장치에 선택한 코덱)만 표시됩니다. 다른 카드는 처음 연결한 뒤나 이 스위치를 끄면 표시됩니다. Huawei와 Honor 이어폰은 LDAC을 목록에 올릴 때까지 **LDAC** 카드를 **미확인**으로 유지합니다. 이 이어폰들은 LDAC을 선택한 뒤에야 목록에 올릴 수 있기 때문입니다. LHDC V5의 최대 비트레이트를 알리는 OPPO 이어폰에는 LHDC V5로 스트리밍할 때(직접 선택했든 자동이 골랐든. 음질 **낮음**이나 ABR에서는 제외) Hi-Res를 한 번 요청합니다. 이어폰은 이를 위해 한 번 다시 연결하며, 이로써 비트레이트가 올라가면 홈에 그렇게 표시됩니다. 그 후 Hi-Res는 이어폰에서 켜진 상태로 유지됩니다(효과가 없었던 이어폰은 원래대로 되돌립니다). 개발자 모드에서는 LHDC V5 설정의 **Hi-Res 다시 요청**이 장치가 알린 내용과 요청했다는 사실을 잊으므로, 다음 연결에서 다시 요청합니다. 모든 코덱이 제공되며, 실험적 코덱(README 코덱 표의 🧪)은 문서에만 표시됩니다.
-
+저장된 각 오디오 장치의 코덱을 장치마다 한 구역(장치가 연결되어 있는 동안 초록색인 점, 이름, **페어링됨** / **오디오** 태그. 주소는 **오디오 장치**에 있음)으로 나누어 코덱 카드와 함께 보여 줍니다. 카드는 직접 순서를 바꾸지 않는 한 음질이 높은 순으로 표시되며, 각각 세 개의 막대(음질, 낮은 지연, 안정성)와 장치가 마지막으로 연결했을 때 그 코덱을 제공했는지가 표시됩니다: **지원**(초록색 표시) 또는 **미지원**(빨간색 표시). **지원되는 코덱만 표시**가 켜져 있으면(기본값) 표시되는 카드에는 **지원** 태그가 필요 없으므로 붙지 않습니다. 한 번도 연결하지 않은 장치(예: Windows에서 가져온 장치)에는 모든 Bluetooth 오디오 장치에 있는 코덱인 **SBC** 카드(와 그 장치에 선택한 코덱)만 표시됩니다. 다른 카드는 처음 연결한 뒤나 이 스위치를 끄면 표시됩니다. Huawei와 Honor 이어폰은 LDAC을 목록에 올릴 때까지 **LDAC** 카드를 **미확인**으로 유지합니다. 이 이어폰들은 LDAC을 선택한 뒤에야 목록에 올릴 수 있기 때문입니다. LHDC V5의 최대 비트레이트를 알리는 OPPO 이어폰에는 LHDC V5로 스트리밍할 때(직접 선택했든 자동이 골랐든. 음질 **낮음**이나 ABR에서는 제외) Hi-Res를 한 번 요청합니다. 이어폰은 이를 위해 한 번 다시 연결하며, 이로써 비트레이트가 올라가면 홈에 그렇게 표시됩니다. 그 후 Hi-Res는 이어폰에서 켜진 상태로 유지됩니다(효과가 없었던 이어폰은 원래대로 되돌립니다). 개발자 모드에서는 LHDC V5 설정의 **Hi-Res 다시 요청**이 장치가 알린 내용과 요청했다는 사실을 잊으므로, 다음 연결에서 다시 요청합니다.
 - **지원하는 코덱 중 음질이 가장 높은 코덱 자동 선택**(페이지 위쪽, 모든 장치에 공통인 설정. 기본적으로 켜짐): 각 장치는 지원하는 코덱 중 음질이 가장 높은 코덱을 LHDC V5 > LDAC > aptX Adaptive > Opus > aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC 순으로, 기본 설정(고음질, 코덱이 지원하면 24비트, 48 kHz. 장치가 48 kHz를 알리지 않으면 알린 다른 속도이며 44.1 kHz가 우선. Windows 쪽 속도는 리샘플링함)으로 사용합니다. 코덱 설정의 **자동**과 같습니다. 카드는 순서(아래처럼 끌어서 바꿈. 자동은 장치가 지원하는 첫 카드를 선택) 외에는 읽기 전용이며, 사용 중인(또는 자동이 선택할) 코덱이 강조됩니다. 카드나 그 **...**를 클릭하면 자동 선택을 끌지 묻고(**자동 선택 끄기** / **취소**), 끄면 클릭한 카드가 선택됩니다(그 **...**는 설정을 엽니다). 끄면 장치마다 코덱과 그 설정을 직접 선택합니다(아직 선택하지 않은 장치는 자동이 고른 코덱 그대로). 켜져 있는 동안에도 장치별로 선택한 코덱은 유지됩니다. 2.0.2 이전 설정에서 어떤 장치의 코덱을 선택했다면 꺼진 상태로 시작합니다
 - 꺼져 있으면 카드를 클릭해 그 장치의 코덱을 선택합니다. 즉시 저장되며, 스트리밍 중인 장치는 그 코덱으로 다시 연결합니다. 장치가 지원하지 않는 카드(**지원되는 코덱만 표시**를 끄면 표시됨)도 선택됩니다. BlueCaster는 그래도 장치에 그 코덱을 요청하며, 장치가 거부하면 그 사실을 알리는 오류와 함께 연결이 중지됩니다(다른 카드를 선택하거나 자동 선택을 켜세요). 홈, 사이드바, 트레이 플라이아웃과 아이콘 도구 설명에는 원인이 짧게 표시됩니다(예: *LDAC 미지원*). 코덱 때문에 멈춘 경우(장치가 지원하지 않거나 거부하거나 다른 소스에서 사용 중인 코덱)는 모두 같습니다. 그 장치에서 다른 카드나 다른 설정을 선택하거나 자동 선택을 켜면 다시 연결됩니다. 장치가 제공할 때 선택한 코덱을 나중에 장치가 더 이상 제공하지 않으면(이어버드가 다른 코덱으로 바꾼 경우), 장치의 순서에서 지원하는 첫 카드로 대체됩니다. 순서를 바꾸지 않았다면 지원하는 최적의 코덱입니다([명시적으로 선택한 코덱을 제공하지 않는 경우](#codec-fallback) 참조)
 - 장치의 카드를 끌어서(버튼을 누르고 있는 동안 손 모양이 표시됨. 자동 선택이 꺼져 있으면 카드에서 Alt와 화살표 키로도) 코덱을 원하는 순서로 바꿀 수 있습니다. 장치마다 각자의 순서를 유지합니다. 자동 선택과 아직 코덱을 선택하지 않은 장치는 지원하는 첫 카드를 사용하며, 선택한 코덱을 지원하지 않을 때도 마찬가지입니다. FastStream과 Opus 05(**Opus (PipeWire)** 카드, 개발자 모드에서만 표시되며 꺼져 있으면 선택했어도 사용되지 않음)는 어디에 있든 직접 선택하지 않으면 사용되지 않습니다. **코덱 순서 초기화**로 되돌리며, 이 버튼은 표시된 카드가 기본 순서가 아닐 때만 표시됩니다(다시 옮겨 놓으면 다시 기본 순서가 됩니다). 이 변경으로 코덱이 바뀌는 스트리밍 중인 장치는 다시 연결합니다
@@ -103,7 +102,7 @@ BlueCaster는 한 번 일어난 문제도 나중에 살펴볼 수 있도록 몇 
 
 ### 어댑터
 
-- 감지된 USB Bluetooth 어댑터와 그 칩, 주소, USB ID, Bluetooth 버전, **드라이버**, **펌웨어**. 어댑터를 꽂거나 뽑으면 목록이 자동으로 업데이트됩니다. 드라이버는 **원래 드라이버**(Windows나 제조사가 설치한 드라이버. 마우스를 올리면 이름이 표시됨) 또는 **WinUSB 드라이버**(BlueCaster가 사용하는 드라이버)입니다. Realtek 어댑터는 사용하기 전에도 USB 일련번호에서 얻은 주소를 표시합니다. 그 밖의 어댑터는 Windows의 Bluetooth나 BlueCaster가 어댑터를 사용한 뒤에 주소와 Bluetooth 버전이 표시됩니다(그 줄에 마우스를 올리면 이유가 표시됨). BlueCaster가 사용할 수 없는 어댑터(일부 MediaTek 및 Qualcomm)는 드라이버를 그대로 두며 WinUSB와 펌웨어 버튼은 비활성화됩니다. Intel, MediaTek MT79xx, Qualcomm ROME / WCN6855 및 Broadcom 어댑터에는 **실험적** 태그가 붙습니다. 개발자 모드에서는 그래도 WinUSB를 할당할 수 있고, WinUSB 어댑터에서 **칩 정보 읽기**를 누르면 몇 가지 읽기 명령에 대한 칩의 응답을 `logs\probe\`에 저장합니다. 그 칩의 지원을 추가하려는 사람을 위한 기능입니다(그동안 Bluetooth가 멈추고 다음에 사용할 때 다시 시작됩니다). 그다음 **GitHub에 보고**를 누르면 그 내용이 채워진 이슈가 열립니다. BlueCaster가 직접 펌웨어를 로드하는 어댑터(Intel, MediaTek, Qualcomm)가 시작하는 동안에는 로드 진행 상황과 실패 여부가 화면에 표시됩니다
+- 감지된 USB Bluetooth 어댑터와 그 칩, 주소, USB ID, Bluetooth 버전, **드라이버**, **펌웨어**. 어댑터를 꽂거나 뽑으면 목록이 자동으로 업데이트됩니다. 드라이버는 **원래 드라이버**(Windows나 제조사가 설치한 드라이버. 마우스를 올리면 이름이 표시됨) 또는 **WinUSB 드라이버**(BlueCaster가 사용하는 드라이버)입니다. Realtek 어댑터는 사용하기 전에도 USB 일련번호에서 얻은 주소를 표시합니다. 그 밖의 어댑터는 Windows의 Bluetooth나 BlueCaster가 어댑터를 사용한 뒤에 주소와 Bluetooth 버전이 표시됩니다(그 줄에 마우스를 올리면 이유가 표시됨). BlueCaster가 사용할 수 없는 어댑터(일부 MediaTek 및 Qualcomm)는 드라이버를 그대로 두며 WinUSB와 펌웨어 버튼은 비활성화됩니다. Intel, MediaTek MT79xx, Qualcomm ROME / WCN6855 및 Broadcom 어댑터에는 [검증된 하드웨어](hardware)에 있는 것을 제외하고 **실험적** 태그가 붙습니다. 개발자 모드에서는 그래도 WinUSB를 할당할 수 있고, WinUSB 어댑터에서 **칩 정보 읽기**를 누르면 몇 가지 읽기 명령에 대한 칩의 응답을 `logs\probe\`에 저장합니다. 그 칩의 지원을 추가하려는 사람을 위한 기능입니다(그동안 Bluetooth가 멈추고 다음에 사용할 때 다시 시작됩니다). 그다음 **GitHub에 보고**를 누르면 그 내용이 채워진 이슈가 열립니다. BlueCaster가 직접 펌웨어를 로드하는 어댑터(Intel, MediaTek, Qualcomm)가 시작하는 동안에는 로드 진행 상황과 실패 여부가 화면에 표시됩니다
 - **WinUSB 드라이버로 교체** / **원래 드라이버 복원**([설치](setup#winusb) 참조). 매번 Windows가 관리자 권한을 요청합니다(방패 아이콘이 있는 버튼은 모두 마찬가지). 복원할 때 Windows도 이 어댑터로 페어링한 장치에 대해서는 BlueCaster의 새 페어링을 Windows에 넘겨주므로, Windows에서 다시 페어링하지 않아도 연결됩니다. **제한 사항:** LE 키는 넘겨주지 않으므로 Windows가 LE(LE Audio)로 사용하는 장치는 Windows에서 다시 페어링해야 합니다(개발자 모드에서 시험할 수 있습니다: **개발자 > Debug**)
 - 펌웨어용 **Bluetooth 칩**과 **펌웨어 다운로드**, **다운로드 페이지 열기**, **펌웨어 폴더 열기**([펌웨어](setup#firmware) 참조). 다른 제조사의 어댑터는 대신 펌웨어를 어디서 가져오는지 표시하며(**MediaTek 드라이버에서**, **펌웨어 폴더에서**, **필요 없음** 등), BlueCaster가 불러온 뒤에는 **로드됨**이 됩니다
 - **Wi-Fi 채널 피하기**: 자동, 끄기 또는 수동. 옆에 Wi-Fi 채널이 표시됩니다. 자동은 지금 피하고 있는 채널, 끄기는 아무것도 표시하지 않으며(둘 다 읽기 전용), 수동은 입력한 채널입니다([연결 품질과 AFH](#link-quality) 참조)
@@ -163,14 +162,14 @@ bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c aptx      # aptX
 bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c aac       # AAC
 bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c sbc       # SBC
 bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c lhdcv5    # LHDC V5
-bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c opus      # Opus (experimental; 48 kHz, 256 kbps)
-bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c opus05    # PipeWire's Opus 05 (experimental; to PipeWire sinks)
+bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c opus      # Opus (48 kHz, 256 kbps)
+bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c opus05    # PipeWire's Opus 05 (to PipeWire sinks)
 bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c aptxad    # aptX Adaptive (48 kHz; --rate 96000 for 96 kHz)
 ```
 
-자동 선택 우선순위: LHDC V5 > LDAC > aptX Adaptive > Opus (실험적) > aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC (FastStream, Opus 05는 모두 실험적이며 직접 선택한 경우에만)
+자동 선택 우선순위: LHDC V5 > LDAC > aptX Adaptive > Opus > aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC (FastStream, Opus 05는 직접 선택한 경우에만)
 
-요청한 코덱을 헤드폰이 제공하지 않으면 CLI는 그 이유를 알려 주는 오류와 함께 중지합니다. 헤드폰이 제공하는 최적의 코덱을 사용하려면 `-c auto`(기본값)를, 앱처럼 요청한 코덱 대신 헤드폰이 제공하는 최적의 코덱을 사용하려면 `--fallback`을 사용하십시오. [aptX 계열과 aptX Adaptive](#aptx-compatibility)를 참조하십시오. `--no-experimental`은 실험적 코덱(aptX HD, aptX LL, Opus, Opus 05, FastStream)을 사용하지 않습니다. 앱은 항상 사용합니다.
+요청한 코덱을 헤드폰이 제공하지 않으면 CLI는 그 이유를 알려 주는 오류와 함께 중지합니다. 헤드폰이 제공하는 최적의 코덱을 사용하려면 `-c auto`(기본값)를, 앱처럼 요청한 코덱 대신 헤드폰이 제공하는 최적의 코덱을 사용하려면 `--fallback`을 사용하십시오. [aptX 계열과 aptX Adaptive](#aptx-compatibility)를 참조하십시오.
 
 ### 음질
 
@@ -219,7 +218,6 @@ bluecaster-core.exe --cli --scan
 | `-q <mode>` | 음질: `hq` (높음, 기본값). LDAC와 LHDC V5는 `sq` (중간)와 `mq` (낮음)도, LHDC V5는 `mhq` (중상)도, aptX Adaptive는 `ll` (저지연)도 가능. 다른 코덱은 모든 단계를 `hq`로 처리 |
 | `-a` | ABR (LDAC, LHDC V5, aptX Adaptive. SBC / SBC XQ: 적응형 비트풀) |
 | `--fallback` | 헤드폰이 제공하지 않는 `-c` 코덱은 오류 대신 앱처럼 헤드폰이 제공하는 최적의 코덱으로 대체 |
-| `--no-experimental` | 실험적 코덱(aptX HD, aptX LL, Opus, Opus 05, FastStream)을 사용하지 않음 |
 | `-m <mode>` | 캡처 모드: `loopback` (기본값), `virtual`, `app` |
 | `--audio-device <id>` | `-m virtual`에 사용할 렌더링 장치 |
 | `--app <exe>` | `-m app`에 사용할 실행 파일 (예: `spotify.exe`) |
@@ -344,7 +342,7 @@ BlueCaster는 각 오디오 기기의 볼륨을 따로 저장하고, 연결되�
 | LDAC (HQ) | 많은 Sony 및 Android 지향 장치에서 최고 음질 | 지연 시간이 길고 안정적인 연결 필요 |
 | LDAC (ABR) | 음질 + 안정성 | 연결 상태에 따라 비트레이트 변동 |
 | aptX Adaptive | Qualcomm 기반 장치에서 저지연 모드를 갖춘 고음질 | 링크에 따라 비트레이트 변동 |
-| Opus 🧪 | 효율적, 256 kbps에서 좋은 음질 | 지원 싱크가 적음 (Android의 A2DP Opus, PipeWire) |
+| Opus | 효율적, 256 kbps에서 좋은 음질 | 지원 싱크가 적음 (Android의 A2DP Opus, PipeWire) |
 | aptX HD | 고음질, 더 넓은 장치 지원 | 576 kbps 고정 |
 | aptX | 가장 넓은 aptX 장치 지원 | 16비트, 352/384 kbps |
 | aptX LL | 게임, 동영상 (저지연) | 음질이 낮음 (16비트) |
@@ -359,7 +357,7 @@ BlueCaster는 각 오디오 기기의 볼륨을 따로 저장하고, 연결되�
 BlueCaster는 [libopenaptx](https://github.com/pali/libopenaptx)로 인코딩하는 세 가지 aptX 코덱과, [AKS-Logic/aptx-adaptive-linux](https://github.com/AKS-Logic/aptx-adaptive-linux)의 인코더로 인코딩하는 aptX Adaptive를 지원합니다.
 
 {: .warning }
-**aptX HD와 aptX Low Latency는 실험적 기능입니다.** Android / PipeWire 구현을 따르며 인코딩/디코딩 왕복 테스트를 통과했지만, 실제 헤드폰에서는 아직 검증되지 않았습니다.
+**aptX HD와 aptX Low Latency**는 Android / PipeWire 구현을 따르며 인코딩/디코딩 왕복 테스트를 통과했지만, 실제 헤드폰에서는 아직 검증되지 않았습니다.
 
 {: .note }
 **기본 aptX만 필요하십니까?** Windows 10의 기본 Bluetooth 스택은 이미 기본 aptX를 지원하므로(aptX HD, aptX LL, aptX Adaptive는 미지원) 이 경우 BlueCaster가 필요하지 않습니다. BlueCaster는 주로 LDAC, aptX HD, aptX Low Latency에 유용합니다.
@@ -398,7 +396,7 @@ BlueCaster가 연결하면 헤드폰은 **코덱 목록**(AVDTP 스트림 엔드
 - **헤드폰이 기본 aptX도 제공하는 경우** -- Qualcomm이 aptX Adaptive를 aptX / aptX HD와 하위 호환된다고 홍보하기 때문에 많은 aptX Adaptive 헤드폰이 그렇습니다. 자동은 aptX Adaptive를 선택합니다(aptX HD와 aptX보다 위). 기본 aptX는 직접 선택했을 때 사용되며, 헤드폰 목록에 있는 별도 코덱이지 aptX Adaptive의 축소 모드가 아닙니다.
 - **헤드폰이 aptX Adaptive만 제공하는 경우** (기본 aptX, aptX HD, aptX LL 없음) -- aptX를 선택하면 헤드폰이 제공하는 최적의 코덱(**코덱** 화면의 장치 순서에 따름), 보통 aptX Adaptive 자체로 대체됩니다.
 
-자동 선택 우선순위: LHDC V5 > LDAC > aptX Adaptive > Opus (실험적) > aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC (FastStream, Opus 05는 모두 실험적이며 직접 선택한 경우에만)
+자동 선택 우선순위: LHDC V5 > LDAC > aptX Adaptive > Opus > aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC (FastStream, Opus 05는 직접 선택한 경우에만)
 
 ### 명시적으로 선택한 코덱을 제공하지 않는 경우 {#codec-fallback}
 

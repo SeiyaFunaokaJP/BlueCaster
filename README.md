@@ -13,18 +13,18 @@ Bluetooth audio transmitter for Windows. It turns an ordinary Bluetooth adapter,
 | LHDC V5 | 400–1000 kbps, ABR 160–400 | 44.1–192 kHz | 16/24 bit | ❌ | ✅ |
 | LDAC | 330/660/990 kbps | 44.1–96 kHz | 16/24/32 bit | ❌ | ✅ |
 | aptX Adaptive | 265/427 kbps (96 kHz: 646) | 48/96 kHz | 24 bit | ❌ | ✅ |
-| Opus (Android) | 256 kbps | 48 kHz | 16 bit | ❌ | 🧪 |
-| aptX HD | 576 kbps | 44.1/48 kHz | 24 bit | ❌ | 🧪 |
+| Opus (Android) | 256 kbps | 48 kHz | 16 bit | ❌ | ✅ |
+| aptX HD | 576 kbps | 44.1/48 kHz | 24 bit | ❌ | ✅ |
 | aptX | 352/384 kbps | 44.1/48 kHz | 16 bit | ✅ | ✅ |
-| aptX Low Latency | 352 kbps | 44.1/48 kHz | 16 bit | ❌ | 🧪 |
+| aptX Low Latency | 352 kbps | 44.1/48 kHz | 16 bit | ❌ | ✅ |
 | AAC | up to 256 kbps | 44.1/48 kHz | 16 bit | Windows 11 | ✅ |
 | SBC XQ | up to 552 kbps | 44.1/48 kHz | 16 bit | ❌ | ✅ |
 | SBC | up to ~345 kbps | 44.1/48 kHz | 16 bit | ✅ | ✅ |
-| FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | ❌ | 🧪 |
-| Opus 05 (PipeWire) | 256 kbps | 48 kHz | 16 bit | ❌ | 🧪 🔧 |
-| LC3 (LE Audio) | 32–124 kbps per channel | 16–48 kHz | 16 bit | Windows 11 | 🧪 |
+| FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | ❌ | ✅ |
+| Opus 05 (PipeWire) | 256 kbps | 48 kHz | 16 bit | ❌ | ✅ 🔧 |
+| LC3 (LE Audio) | 32–124 kbps per channel | 16–48 kHz | 16 bit | Windows 11 | ✅ |
 
-✅ supported · 🧪 experimental: works against a virtual Bluetooth sink, not yet confirmed with real headphones ([reports welcome](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/11)) · 🔧 developer mode only · ❌ not supported
+✅ supported · 🔧 developer mode only · ❌ not supported
 
 ## Requirements
 

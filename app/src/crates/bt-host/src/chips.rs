@@ -155,7 +155,8 @@ pub const LOADER_CHIPS: &[(ChipVendor, u16, u16)] = &[
     // of MediaTek's Windows driver 1.1147.0.616 (MT7902, MT7920, MT7921,
     // MT7922, MT7925) and the MT7925 section of 26.40.3.69. The loader reads
     // the chip ID itself and refuses another chip before sending anything.
-    // Only the MT7925 (0E8D:7925) has been seen (#86). Left out: the other IDs
+    // The MT7925 (0E8D:7925, #86) and an MT7921 (13D3:3606, PR #432) have
+    // been seen ([`CONFIRMED_CHIPS`]). Left out: the other IDs
     // of 26.40.3.69, which also covers the MT6639 (MT7927)
     (ChipVendor::MediaTek, 0x0489, 0xE0C8),
     (ChipVendor::MediaTek, 0x0489, 0xE0CD),
@@ -368,10 +369,29 @@ pub fn chip_supported(vendor: ChipVendor, vid: u16, pid: u16) -> bool {
     supported_in(LOADER_CHIPS, vendor, vid, pid)
 }
 
+/// Adapters of an experimental loader that work on real hardware, by the
+/// reports (vendor, VID, PID): no "experimental" tag (issue #86). A bug
+/// report on one that the loader causes puts it back.
+pub const CONFIRMED_CHIPS: &[(ChipVendor, u16, u16)] = &[
+    // MediaTek MT7925, A2DP and LE Audio (#86)
+    (ChipVendor::MediaTek, 0x0E8D, 0x7925),
+    // MediaTek MT7921 module (PR #432)
+    (ChipVendor::MediaTek, 0x13D3, 0x3606),
+    // Intel AX211 (PR #261, #237) and AX200 (#237)
+    (ChipVendor::Intel, 0x8087, 0x0033),
+    (ChipVendor::Intel, 0x8087, 0x0029),
+    // ASUS BT400, Broadcom BCM20702 on its ROM firmware (#18, #27, #30)
+    (ChipVendor::Broadcom, 0x0B05, 0x17CB),
+];
+
 /// Tag shown after one adapter's name: its vendor's, except "experimental"
 /// for a chip in [`LOADER_CHIPS`] and a Realtek chip whose firmware comes
-/// from Realtek's Windows driver (crate::realtek_btnic)
+/// from Realtek's Windows driver (crate::realtek_btnic), and none for a
+/// chip in [`CONFIRMED_CHIPS`]
 pub fn chip_support_tag(vendor: ChipVendor, vid: u16, pid: u16) -> Option<&'static str> {
+    if CONFIRMED_CHIPS.contains(&(vendor, vid, pid)) {
+        return None;
+    }
     if vendor == ChipVendor::Realtek && crate::realtek_btnic::chip(vid, pid).is_some() {
         return Some("experimental");
     }
@@ -555,7 +575,7 @@ pub fn company_name(company_id: u16) -> Option<&'static str> {
 }
 
 /// The adapter's name in the list: "RTL8761BU (0x2357:0x0604)" for a known
-/// Realtek chip, "Intel (0x8087:0x0033) [experimental]" for another known
+/// Realtek chip, "Intel (0x8087:0x0032) [experimental]" for another known
 /// vendor, else "0x1234:0x5678"
 pub fn display_name(vid: u16, pid: u16, realtek_pid: Option<u16>, vendor: ChipVendor) -> String {
     if let Some(chip) = realtek_pid.and_then(realtek_chip_name) {

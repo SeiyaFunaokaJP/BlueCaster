@@ -22,7 +22,7 @@ nav_order: 2
 
 ### 首頁
 
-- 每個已儲存的音訊裝置各有一張卡片，並排顯示：其狀態、電量，以及已連線的裝置所用的轉碼器（以清單取代其名稱，見下文）與位元率。若使用的轉碼器與所選的不同，轉碼器那一行會在幾秒內於其名稱旁說明原因，例如 **aptX Adaptive (不支援 Opus)**（或 *使用中*、*為實驗性*），之後只保留其警告標記（將滑鼠游標停在上方可查看原因）；狀態行只會顯示 **已連線**
+- 每個已儲存的音訊裝置各有一張卡片，並排顯示：其狀態、電量，以及已連線的裝置所用的轉碼器（以清單取代其名稱，見下文）與位元率。若使用的轉碼器與所選的不同，轉碼器那一行會在幾秒內於其名稱旁說明原因，例如 **aptX Adaptive (不支援 Opus)**（或 *使用中*），之後只保留其警告標記（將滑鼠游標停在上方可查看原因）；狀態行只會顯示 **已連線**
 - 每張卡片下方的 **連線** / **中斷連線**。同一時間只會連線一個裝置：在另一個裝置上按 **連線**，會中斷使用中裝置的連線並連線到該裝置
 - **音量**：耳機的音量（請參閱 [音量](#volume)）；按一下喇叭圖示即可靜音（傳送無聲），再按一下取消靜音。其他裝置的卡片也保留此滑桿，但處於停用狀態
 - 使用中裝置的轉碼器，可從其卡片上的清單選擇以快速切換（例如遊戲用一個、音樂用一個）：列出裝置支援的轉碼器（與 [編解碼器](#codecs) 頁面相同的選項），只顯示名稱。**自動選擇** 開啟時也會顯示使用中的轉碼器；選擇某個轉碼器會關閉自動選擇（可在編解碼器頁面重新開啟）。選擇後立即套用（裝置會以它重新連線；與編解碼器頁面一樣，下一次選擇會等到裝置連線完成）
@@ -34,8 +34,7 @@ nav_order: 2
 
 ### 編解碼器 {#codecs}
 
-每個已儲存音訊裝置的轉碼器，每個裝置一個區段（裝置連線期間呈綠色的圓點、名稱、**已配對** / **音訊** 標籤；位址位於 **音訊裝置** 中），其下是該裝置的轉碼器卡片，除非您自訂了順序，否則依音質由高到低排列，各附三條橫條（音質、低延遲、穩定性），並標示裝置上次連線時是否提供該轉碼器：**支援**（綠色標記）或 **不支援**（紅色標記）。開啟 **僅顯示支援的編解碼器**（預設）時，顯示的卡片不需要也不會有 **支援** 標籤。從未連線過的裝置（例如從 Windows 匯入的裝置）此時只顯示 **SBC** 卡片（每個藍牙音訊裝置都有的轉碼器），以及為它選擇的轉碼器；其他卡片會在第一次連線後出現，或在關閉此開關後顯示。華為與榮耀耳機會保留其 **LDAC** 卡片並標示為 **未確認**，直到耳機列出它為止：它們可能要在選擇 LDAC 之後才會列出。為 LHDC V5 列出峰值位元率的 OPPO 耳機，會在 LHDC V5 串流時（無論是手動選擇或由自動選擇，但品質為 **低** 或開啟 ABR 時除外）被要求一次 Hi-Res：耳機會為此重新連線一次，若因此提高了位元率，首頁會顯示提示；之後 Hi-Res 會在耳機中保持開啟（沒有因此獲益的耳機會被還原）。在開發者模式下，LHDC V5 設定中的 **重新要求 Hi-Res** 會清除裝置列出的內容與已要求過的紀錄，讓下次連線時再次要求。所有轉碼器都會提供；實驗性轉碼器（README 轉碼器表格中標示 🧪 者）只在文件中標示。
-
+每個已儲存音訊裝置的轉碼器，每個裝置一個區段（裝置連線期間呈綠色的圓點、名稱、**已配對** / **音訊** 標籤；位址位於 **音訊裝置** 中），其下是該裝置的轉碼器卡片，除非您自訂了順序，否則依音質由高到低排列，各附三條橫條（音質、低延遲、穩定性），並標示裝置上次連線時是否提供該轉碼器：**支援**（綠色標記）或 **不支援**（紅色標記）。開啟 **僅顯示支援的編解碼器**（預設）時，顯示的卡片不需要也不會有 **支援** 標籤。從未連線過的裝置（例如從 Windows 匯入的裝置）此時只顯示 **SBC** 卡片（每個藍牙音訊裝置都有的轉碼器），以及為它選擇的轉碼器；其他卡片會在第一次連線後出現，或在關閉此開關後顯示。華為與榮耀耳機會保留其 **LDAC** 卡片並標示為 **未確認**，直到耳機列出它為止：它們可能要在選擇 LDAC 之後才會列出。為 LHDC V5 列出峰值位元率的 OPPO 耳機，會在 LHDC V5 串流時（無論是手動選擇或由自動選擇，但品質為 **低** 或開啟 ABR 時除外）被要求一次 Hi-Res：耳機會為此重新連線一次，若因此提高了位元率，首頁會顯示提示；之後 Hi-Res 會在耳機中保持開啟（沒有因此獲益的耳機會被還原）。在開發者模式下，LHDC V5 設定中的 **重新要求 Hi-Res** 會清除裝置列出的內容與已要求過的紀錄，讓下次連線時再次要求。
 - **自動選擇支援的音質最高的編解碼器**（頁面頂端，適用於所有裝置的設定；預設開啟）：每個裝置使用其支援的音質最高的編解碼器，順序為 LHDC V5 > LDAC > aptX Adaptive > Opus > aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC，並採用其預設設定：高音質、編解碼器支援時為 24 位元，以及 48 kHz（裝置未列出 48 kHz 時，使用其列出的其他取樣率，以 44.1 kHz 優先；Windows 本身的取樣率會重新取樣），與轉碼器設定中的 **自動** 相同。除順序外卡片為唯讀（依下文拖曳；「自動」選擇裝置支援的第一張卡片），正在使用（或將自動選擇）的編解碼器會醒目顯示；按一下卡片或其 **...** 會詢問是否關閉自動選擇（**關閉自動選擇** / **取消**）；關閉後即選擇所按的卡片（其 **...** 會開啟其設定）。關閉後可為每個裝置自行選擇編解碼器及其設定；尚未選擇的裝置沿用自動選擇的結果。開啟期間，為各裝置選擇的編解碼器會被保留。如果 2.0.2 之前的設定曾為某個裝置選擇編解碼器，則初始為關閉
 - 關閉時，按一下卡片即可選擇該裝置的轉碼器；選擇會立即儲存，正在串流的裝置會以它重新連線。裝置不支援的卡片（**僅顯示支援的編解碼器** 關閉時才會顯示）也會被選擇：BlueCaster 仍會向裝置要求使用該轉碼器，若裝置拒絕，連線會停止並顯示相應的錯誤（請選擇其他卡片或開啟自動選擇）。首頁、側邊欄、系統匣快顯視窗與系統匣圖示的提示隨後會以幾個字說明原因（例如 *不支援 LDAC*），轉碼器造成的其他停止（裝置不支援、拒絕或被其他音源使用的轉碼器）也一樣；為該裝置選擇其他卡片或其他設定，或開啟自動選擇，即會重新連線。在裝置提供時選擇、之後裝置不再提供的轉碼器（耳機改用了其他轉碼器），會改用裝置順序中其支援的第一張卡片：除非您變更了順序，否則就是它支援的最佳轉碼器（請參閱 [明確指定的轉碼器不在清單中](#codec-fallback)）
 - 拖曳裝置的卡片（按住按鈕時會顯示手形游標；自動選擇關閉時也可在卡片上按 Alt 加方向鍵），即可自訂其轉碼器的順序；每個裝置各自保留自己的順序。自動選擇與尚未選擇轉碼器的裝置會使用其支援的第一張卡片，所選轉碼器不受支援時也是如此。FastStream 與 Opus 05（**Opus (PipeWire)** 卡片，僅在開發人員模式下顯示；關閉時即使已選擇也不會使用）無論排在哪裡，都只在明確選擇時使用。**重設編解碼器順序** 可還原順序；它只在顯示的卡片不是預設順序時出現（移回原位後即恢復為預設順序）。如果正在串流的轉碼器因此改變，裝置會重新連線
@@ -103,7 +102,7 @@ BlueCaster 也會隨時記錄一些內容，讓只發生過一次的問題仍可
 
 ### 介面卡
 
-- 偵測到的 USB 藍牙介面卡，以及其晶片、位址、USB ID、藍牙版本、**驅動程式** 與 **韌體**；插入或拔除介面卡時清單會自動更新。驅動程式為 **原始驅動程式**（Windows 或製造商安裝的驅動程式；將滑鼠游標停在上方可查看其名稱）或 **WinUSB 驅動程式**（BlueCaster 使用的驅動程式）。Realtek 介面卡即使尚未使用過，也會顯示取自其 USB 序號的位址；其他介面卡的位址與藍牙版本，要等 Windows 的藍牙或 BlueCaster 使用過該介面卡後才會顯示（將滑鼠游標停在該行上可查看原因）。BlueCaster 無法使用的介面卡（部分 MediaTek 與 Qualcomm）會保留其驅動程式：其 WinUSB 與韌體按鈕會停用。Intel、MediaTek MT79xx、Qualcomm ROME / WCN6855 與 Broadcom 介面卡會標示 **實驗性**。在開發者模式下仍可為其指派 WinUSB；在使用 WinUSB 的介面卡上按 **讀取晶片資訊**，會將晶片對幾個讀取命令的回應儲存到 `logs\probe\`，供想為它加入支援的人使用（期間藍牙會停止，下次使用時重新啟動）；接著按 **在 GitHub 回報**，會開啟一個已填入這些資訊的 issue。由 BlueCaster 自行載入韌體的介面卡（Intel、MediaTek、Qualcomm）啟動期間，畫面會顯示載入進度，以及是否失敗
+- 偵測到的 USB 藍牙介面卡，以及其晶片、位址、USB ID、藍牙版本、**驅動程式** 與 **韌體**；插入或拔除介面卡時清單會自動更新。驅動程式為 **原始驅動程式**（Windows 或製造商安裝的驅動程式；將滑鼠游標停在上方可查看其名稱）或 **WinUSB 驅動程式**（BlueCaster 使用的驅動程式）。Realtek 介面卡即使尚未使用過，也會顯示取自其 USB 序號的位址；其他介面卡的位址與藍牙版本，要等 Windows 的藍牙或 BlueCaster 使用過該介面卡後才會顯示（將滑鼠游標停在該行上可查看原因）。BlueCaster 無法使用的介面卡（部分 MediaTek 與 Qualcomm）會保留其驅動程式：其 WinUSB 與韌體按鈕會停用。Intel、MediaTek MT79xx、Qualcomm ROME / WCN6855 與 Broadcom 介面卡會標示 **實驗性**，[已驗證的硬體](hardware)中列出的除外。在開發者模式下仍可為其指派 WinUSB；在使用 WinUSB 的介面卡上按 **讀取晶片資訊**，會將晶片對幾個讀取命令的回應儲存到 `logs\probe\`，供想為它加入支援的人使用（期間藍牙會停止，下次使用時重新啟動）；接著按 **在 GitHub 回報**，會開啟一個已填入這些資訊的 issue。由 BlueCaster 自行載入韌體的介面卡（Intel、MediaTek、Qualcomm）啟動期間，畫面會顯示載入進度，以及是否失敗
 - **替換為 WinUSB 驅動程式** / **還原原始驅動程式**（請參閱 [安裝設定](setup#winusb)）；每次 Windows 都會要求系統管理員權限（帶有盾牌圖示的按鈕皆是如此）。還原時，對於 Windows 也透過此介面卡配對過的裝置，BlueCaster 會將較新的配對交給 Windows，因此不必在 Windows 中重新配對即可連線。**限制：**不會交出 LE 金鑰，因此 Windows 透過 LE（LE Audio）使用的裝置需要在 Windows 中重新配對（開發者模式下可以試用：**開發者 > Debug**）
 - 韌體用的 **藍牙晶片**，以及 **下載韌體**、**開啟下載頁面** 與 **開啟韌體資料夾**（請參閱 [韌體](setup#firmware)）。其他廠商的介面卡則顯示韌體的來源，例如 **來自 MediaTek 的驅動程式**、**來自韌體資料夾** 或 **不需要**，BlueCaster 載入後顯示 **已載入**
 - **避開 Wi-Fi 通道**：自動、關閉或手動，旁邊顯示 Wi-Fi 通道：自動時為目前避開的通道，關閉時不顯示（兩者皆為唯讀），手動時為您輸入的通道（請參閱 [連線品質與 AFH](#link-quality)）
@@ -163,14 +162,14 @@ bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c aptx      # aptX
 bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c aac       # AAC
 bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c sbc       # SBC
 bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c lhdcv5    # LHDC V5
-bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c opus      # Opus (experimental; 48 kHz, 256 kbps)
-bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c opus05    # PipeWire's Opus 05 (experimental; to PipeWire sinks)
+bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c opus      # Opus (48 kHz, 256 kbps)
+bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c opus05    # PipeWire's Opus 05 (to PipeWire sinks)
 bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c aptxad    # aptX Adaptive (48 kHz; --rate 96000 for 96 kHz)
 ```
 
-自動選擇的優先順序：LHDC V5 > LDAC > aptX Adaptive > Opus（實驗性） > aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC（FastStream 與 Opus 05 皆為實驗性，僅在明確選擇時使用）
+自動選擇的優先順序：LHDC V5 > LDAC > aptX Adaptive > Opus > aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC（FastStream 與 Opus 05 僅在明確選擇時使用）
 
-如果耳機不提供所要求的轉碼器，CLI 會以說明原因的錯誤停止；請使用 `-c auto`（預設）來選用耳機提供的最佳轉碼器，或使用 `--fallback`，像應用程式一樣改用耳機提供的最佳轉碼器，而不是所要求的轉碼器 -- 請參閱 [aptX 系列與 aptX Adaptive](#aptx-compatibility)。`--no-experimental` 一律不使用實驗性轉碼器（aptX HD、aptX LL、Opus、Opus 05、FastStream）；應用程式則一律會使用它們。
+如果耳機不提供所要求的轉碼器，CLI 會以說明原因的錯誤停止；請使用 `-c auto`（預設）來選用耳機提供的最佳轉碼器，或使用 `--fallback`，像應用程式一樣改用耳機提供的最佳轉碼器，而不是所要求的轉碼器 -- 請參閱 [aptX 系列與 aptX Adaptive](#aptx-compatibility)。
 
 ### 品質
 
@@ -219,7 +218,6 @@ bluecaster-core.exe --cli --scan
 | `-q <mode>` | 品質：`hq`（高，預設）；LDAC 與 LHDC V5 另有 `sq`（中）與 `mq`（低），LHDC V5 另有 `mhq`（中高）；aptX Adaptive 另有 `ll`（低延遲）。其他轉碼器的任何等級都以 `hq` 執行 |
 | `-a` | ABR（LDAC、LHDC V5 與 aptX Adaptive；SBC / SBC XQ：自適應 bitpool） |
 | `--fallback` | 耳機不提供 `-c` 指定的轉碼器時，像應用程式一樣改用耳機提供的最佳轉碼器，而不是顯示錯誤 |
-| `--no-experimental` | 一律不使用實驗性轉碼器（aptX HD、aptX LL、Opus、Opus 05、FastStream） |
 | `-m <mode>` | 擷取模式：`loopback`（預設）、`virtual`、`app` |
 | `--audio-device <id>` | `-m virtual` 使用的播放裝置 |
 | `--app <exe>` | `-m app` 使用的執行檔（例如 `spotify.exe`） |
@@ -344,7 +342,7 @@ BlueCaster 會儲存每個音訊裝置自己的音量，並在其連線後、傳
 | LDAC (HQ) | 在許多 Sony 與 Android 取向的裝置上提供最高音質 | 延遲較高，需要穩定的連線 |
 | LDAC (ABR) | 音質 + 穩定性 | 位元率隨連線狀況變動 |
 | aptX Adaptive | 高音質並有低延遲模式，適用於採用 Qualcomm 晶片的裝置 | 位元率隨連結狀況變動 |
-| Opus 🧪 | 效率高，256 kbps 下音質良好 | 支援的接收端少（Android 的 A2DP Opus、PipeWire） |
+| Opus | 效率高，256 kbps 下音質良好 | 支援的接收端少（Android 的 A2DP Opus、PipeWire） |
 | aptX HD | 高音質，支援的裝置較多 | 固定 576 kbps |
 | aptX | 支援的 aptX 裝置最多 | 16 位元，352/384 kbps |
 | aptX LL | 遊戲、影片（低延遲） | 音質較低（16 位元） |
@@ -359,7 +357,7 @@ BlueCaster 會儲存每個音訊裝置自己的音量，並在其連線後、傳
 BlueCaster 支援三種使用 [libopenaptx](https://github.com/pali/libopenaptx) 編碼的 aptX 轉碼器，以及使用 [AKS-Logic/aptx-adaptive-linux](https://github.com/AKS-Logic/aptx-adaptive-linux) 編碼器編碼的 aptX Adaptive。
 
 {: .warning }
-**aptX HD 與 aptX Low Latency 為實驗性功能。** 兩者依照 Android / PipeWire 的實作，並通過編碼/解碼往返測試，但尚未在實際耳機上驗證。
+**aptX HD 與 aptX Low Latency** 依照 Android / PipeWire 的實作，並通過編碼/解碼往返測試，但尚未在實際耳機上驗證。
 
 {: .note }
 **只需要傳統 aptX？** Windows 10 的內建藍牙堆疊已支援傳統 aptX（不含 aptX HD、aptX LL 或 aptX Adaptive），因此不需要 BlueCaster。BlueCaster 主要適用於 LDAC、aptX HD 與 aptX Low Latency。
@@ -398,7 +396,7 @@ BlueCaster 連線時，耳機會公布一份 **轉碼器清單**（AVDTP 串流�
 - **耳機同時列出傳統 aptX** -- 許多 aptX Adaptive 耳機都會如此，因為 Qualcomm 宣傳 aptX Adaptive 向下相容 aptX / aptX HD。「自動」會選擇 aptX Adaptive（高於 aptX HD 與 aptX）；傳統 aptX 在您選擇它時使用，它是耳機清單中的另一個轉碼器，而不是 aptX Adaptive 的降級模式。
 - **耳機只列出 aptX Adaptive**（沒有傳統 aptX、aptX HD 或 aptX LL）-- 選擇 aptX 時會改用耳機提供的最佳轉碼器（依 **編解碼器** 畫面上該裝置的順序），通常就是 aptX Adaptive 本身。
 
-自動選擇的優先順序：LHDC V5 > LDAC > aptX Adaptive > Opus（實驗性） > aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC（FastStream 與 Opus 05 皆為實驗性，僅在明確選擇時使用）
+自動選擇的優先順序：LHDC V5 > LDAC > aptX Adaptive > Opus > aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC（FastStream 與 Opus 05 僅在明確選擇時使用）
 
 ### 明確指定的轉碼器不在清單中 {#codec-fallback}
 

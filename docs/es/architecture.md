@@ -282,10 +282,6 @@ JSON. Enumerar los adaptadores y su controlador no requiere elevación.
   remoto; un códec solicitado que el remoto no ofrece se sustituye por el mismo códec
   que tomaría Automático (siempre para un perfil, desde el issue #86; en la
   línea de comandos solo con `--fallback`), y en caso contrario es un error
-- Deja los códecs experimentales (aptX HD, aptX LL, Opus, Opus 05,
-  FastStream) fuera de Automático y de la alternativa con la opción
-  `--no-experimental` de la línea de comandos; la aplicación siempre los usa (el ajuste
-  `experimental_codecs`, de la página Códecs de la 2.0.2-beta.7, se lee como activado desde el issue #86)
 - Transmite cada perfil A2DP como Automático, con los ajustes predeterminados de Automático, mientras
   el ajuste `auto_codec` está activado (Códecs > Seleccionar automáticamente el códec compatible de mayor
   calidad, un único ajuste para todos los dispositivos desde el esquema 5); el códec

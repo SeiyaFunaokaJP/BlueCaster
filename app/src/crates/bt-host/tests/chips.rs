@@ -109,13 +109,23 @@ fn vendors_and_names() {
 #[test]
 fn display_names_like_v1() {
     assert_eq!(display_name(0x2357, 0x0604, Some(0x8771), ChipVendor::Realtek), "RTL8761BU (0x2357:0x0604)");
-    assert_eq!(display_name(0x8087, 0x0033, None, ChipVendor::Intel), "Intel (0x8087:0x0033) [experimental]");
+    assert_eq!(display_name(0x8087, 0x0032, None, ChipVendor::Intel), "Intel (0x8087:0x0032) [experimental]");
     assert_eq!(display_name(0x0E8D, 0x6639, None, ChipVendor::MediaTek), "MediaTek (0x0E8D:0x6639) [unsupported]");
     assert_eq!(display_name(0x0E8D, 0x0608, None, ChipVendor::MediaTek), "MediaTek (0x0E8D:0x0608) [experimental]");
     // An MT7921 module under AzureWave's VID
     assert_eq!(vendor_for_usb(0x13D3, 0x3563, None), ChipVendor::MediaTek);
     assert_eq!(vendor_for_usb(0x13D3, 0x1234, None), ChipVendor::Unknown);
-    assert_eq!(display_name(0x0E8D, 0x7925, None, ChipVendor::MediaTek), "MediaTek (0x0E8D:0x7925) [experimental]");
+    // Confirmed on real hardware (issue #86): no tag
+    assert_eq!(display_name(0x0E8D, 0x7925, None, ChipVendor::MediaTek), "MediaTek (0x0E8D:0x7925)");
+    assert_eq!(display_name(0x13D3, 0x3606, None, ChipVendor::MediaTek), "MediaTek (0x13D3:0x3606)");
+    assert_eq!(display_name(0x8087, 0x0033, None, ChipVendor::Intel), "Intel (0x8087:0x0033)");
+    assert_eq!(display_name(0x8087, 0x0029, None, ChipVendor::Intel), "Intel (0x8087:0x0029)");
+    assert_eq!(display_name(0x0B05, 0x17CB, None, ChipVendor::Broadcom), "Broadcom (0x0B05:0x17CB)");
+    // Each one is a chip BlueCaster brings up
+    for &(vendor, vid, pid) in bt_host::chips::CONFIRMED_CHIPS {
+        assert_eq!(vendor_for_usb(vid, pid, None), vendor, "{vid:04X}:{pid:04X}");
+        assert!(chip_supported(vendor, vid, pid), "{vid:04X}:{pid:04X}");
+    }
     // Qualcomm ROME and WCN6855, also under a module maker's VID; not the QCA6290
     assert_eq!(display_name(0x0CF3, 0xE300, None, ChipVendor::Qualcomm), "Qualcomm (0x0CF3:0xE300) [experimental]");
     assert_eq!(vendor_for_usb(0x0489, 0xE0C7, None), ChipVendor::Qualcomm);

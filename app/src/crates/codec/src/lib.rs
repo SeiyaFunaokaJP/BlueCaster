@@ -239,17 +239,6 @@ impl CodecKind {
         }
     }
 
-    /// Experimental: passes the encoder and emulator tests but is not yet
-    /// confirmed with real headphones (the README's 🧪). The app uses them
-    /// as any other codec (issue #86); the CLI's --no-experimental leaves
-    /// them out, by Auto and as a fallback.
-    pub fn experimental(self) -> bool {
-        matches!(
-            self,
-            CodecKind::AptxHd | CodecKind::AptxLl | CodecKind::FastStream | CodecKind::Opus | CodecKind::Opus05
-        )
-    }
-
     /// Only in developer mode (issue #86): PipeWire's Opus 05, which only
     /// PipeWire implements and which is not verified with one. Otherwise
     /// the app neither shows it nor uses it: a device's is left out as if

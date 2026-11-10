@@ -32,9 +32,6 @@ pub struct StreamRequest {
     /// `codec`'s settings are not held to what the device lists (the
     /// profile's `unlisted_options`)
     pub unlisted_options: bool,
-    /// Experimental codecs may be used (settings `experimental_codecs`):
-    /// off, Auto and a fallback never pick them and a chosen one falls back
-    pub experimental_codecs: bool,
     /// The codecs of developer mode ([`CodecKind::developer_only`]) may be
     /// used (developer mode, settings `debug_mode`): off, the device's are left out as
     /// if it did not offer them and a chosen one falls back
@@ -1524,7 +1521,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     let mut hi_res_set = false;
     let lhdc_streams = match req.codec {
         Some(k) => k == CodecKind::LhdcV5,
-        None => remote.best_in(&req.auto_order, req.experimental_codecs) == Some(CodecKind::LhdcV5),
+        None => remote.best_in(&req.auto_order) == Some(CodecKind::LhdcV5),
     };
     let oppo_blocked = if !lhdc_streams {
         Some("LHDC V5 does not stream")
@@ -1613,15 +1610,14 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     if !req.auto_order.is_default() {
         tracing::info!("codec: the device's order set by the user: {}", req.auto_order.names());
     }
-    let chosen = caps::choose_in(&remote, req.codec, fallback, req.experimental_codecs, &req.auto_order);
+    let chosen = caps::choose_in(&remote, req.codec, fallback, &req.auto_order);
     let choice = match developer_reason(chosen, blocked) {
         Ok(c) => c,
         Err(why) => {
             tracing::debug!(
-                "codec: no codec for request {:?} (fallback {}, experimental {}): {why:?}",
+                "codec: no codec for request {:?} (fallback {}): {why:?}",
                 req.codec.map(CodecKind::name),
-                fallback,
-                req.experimental_codecs
+                fallback
             );
             host.disconnect();
             let msg = match why {
@@ -1635,7 +1631,6 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
                 Some((codec, Unavailable::NotSupported)) => {
                     Msg::codec_stop("error.codec_not_supported", codec, CodecStopKind::Unsupported)
                 }
-                Some((codec, Unavailable::Experimental)) => Msg::with("error.codec_experimental_off", &[&codec.name()]),
                 Some((codec, Unavailable::DeveloperMode)) => Msg::with("error.codec_developer_only", &[&codec.name()]),
             };
             return inner.notify(StreamState::Error, msg);
@@ -1880,7 +1875,6 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     let fallback_text = replaced.as_ref().map(|(wanted, why)| {
         let key = match why {
             Unavailable::SepInUse { .. } => "status.connected_fallback_in_use",
-            Unavailable::Experimental => "status.connected_fallback_experimental",
             Unavailable::DeveloperMode => "status.connected_fallback_developer",
             _ => "status.connected_fallback",
         };
@@ -2794,7 +2788,7 @@ mod tests {
         };
         let choose = |req: &StreamRequest| {
             let (remote, blocked) = without_developer_codecs(req, pipewire.clone());
-            let chosen = caps::choose_in(&remote, req.codec, true, true, &req.auto_order);
+            let chosen = caps::choose_in(&remote, req.codec, true, &req.auto_order);
             (remote.has(CodecKind::Opus05), developer_reason(chosen, blocked))
         };
         // Developer mode: offered and used as chosen

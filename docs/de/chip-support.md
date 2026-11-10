@@ -7,7 +7,7 @@ nav_order: 3.5
 
 # Unterstützung für Chips hinzufügen
 
-BlueCaster steuert den Bluetooth-Adapter selbst (WinUSB) und muss daher erledigen, was sonst der Windows-Treiber des Herstellers tut, bevor der Adapter funktioniert: Bei vielen Chips heißt das, bei jedem Start eine Firmware in den Chip zu laden. Adapter von Realtek, Intel, Broadcom und CSR funktionieren bereits, die MediaTek-Chips MT7925, MT7922, MT7921 und MT7902 sowie die Qualcomm-Chips QCA61x4, QCA9377 und WCN6855 experimentell; die übrigen MediaTek-Chips (MT7927 und ältere) und Qualcomm-Chips (QCA6290, WCN785x) nicht, weil noch niemand ihren Loader geschrieben hat. `app/src/crates/bt-host/src/mediatek.rs` (der der MT79xx) ist ein echter Loader, auf dem sich für einen weiteren MediaTek-Chip aufbauen lässt.
+BlueCaster steuert den Bluetooth-Adapter selbst (WinUSB) und muss daher erledigen, was sonst der Windows-Treiber des Herstellers tut, bevor der Adapter funktioniert: Bei vielen Chips heißt das, bei jedem Start eine Firmware in den Chip zu laden. Adapter von Realtek, Intel, Broadcom und CSR sowie die MediaTek-Chips MT7925 und MT7921 funktionieren bereits, die MediaTek-Chips MT7922 und MT7902 sowie die Qualcomm-Chips QCA61x4, QCA9377 und WCN6855 experimentell; die übrigen MediaTek-Chips (MT7927 und ältere) und Qualcomm-Chips (QCA6290, WCN785x) nicht, weil noch niemand ihren Loader geschrieben hat. `app/src/crates/bt-host/src/mediatek.rs` (der der MT79xx) ist ein echter Loader, auf dem sich für einen weiteren MediaTek-Chip aufbauen lässt.
 
 Diese Seite beschreibt, wie man einen solchen Loader hinzufügt. Sie brauchen dafür einen Adapter mit dem betreffenden Chip; die Maintainer haben keinen. Auch ohne selbst Code zu schreiben, können Sie helfen: Die Schritte 1 und 2 liefern den Bericht, den ein Entwickler braucht.
 
@@ -229,13 +229,13 @@ Behalten Sie die Zeilenenden jeder Datei bei: Manche Quelldateien verwenden CRLF
 **Was das Fenster zeigt**:
 
 10. `app/src/core/src/state.rs`, `vendor_note()`: ein Zweig mit einem neuen Schlüssel `firmware.vendor_<vendor>`, herausgelöst aus dem Zweig `MediaTek | Qualcomm`, und sein Test. Die Funktion antwortet davor mit `firmware.vendor_unsupported` für Chips, die `chip_supported` ablehnt, sodass die anderen Chips des Herstellers diesen Hinweis behalten. Die Seite Adapter bietet WinUSB jedem Adapter an, dessen Hinweis nicht `firmware.vendor_unsupported` ist
-11. `app/lang/*.json` (alle 8 Sprachen, dieselbe Zeile in jeder): der neue Schlüssel, wie der von Intel („… adapter (experimental). …“). Wo er eine Schaltfläche oder einen Ordner nennt, verwenden Sie die Wörter der jeweiligen Sprache aus derselben Datei (die Schaltfläche des Firmware-Ordners ist `firmware.open_folder`). Ganzer Hersteller: seinen Namen aus `firmware.vendor_unsupported` entfernen. Einige Chips: dort stehen lassen, da die anderen Chips des Herstellers diesen Text weiterhin zeigen
+11. `app/lang/*.json` (alle 8 Sprachen, dieselbe Zeile in jeder): der neue Schlüssel, wie der von Intel („Intel adapter. …“). Wo er eine Schaltfläche oder einen Ordner nennt, verwenden Sie die Wörter der jeweiligen Sprache aus derselben Datei (die Schaltfläche des Firmware-Ordners ist `firmware.open_folder`). Ganzer Hersteller: seinen Namen aus `firmware.vendor_unsupported` entfernen. Einige Chips: dort stehen lassen, da die anderen Chips des Herstellers diesen Text weiterhin zeigen
 12. `app/src/ui/src/lib/links.ts`: die Firmware-Seite des Herstellers (in `LINKS`, `firmwareUrl()` und `vendorFirmwareUrl()`, wie Intels Ordner in linux-firmware), damit die Seite Adapter zeigt, woher die Dateien kommen; Tests in `app/src/ui/src/lib/chips.test.ts`. Die Seite Adapter zeigt den Link nur für Adapter, deren Hinweis nicht `firmware.vendor_unsupported` ist, sodass die anderen Chips des Herstellers ihn nicht bekommen
 
 **Dokumentation**:
 
 13. Die Chiptabelle in `docs/setup.md` und `docs/*/setup.md` (alle Sprachen): eine Zeile wie die von Intel, mit den abgedeckten Chips, den Firmwaredateien und wohin sie gehören (der Firmware-Ordner: `%APPDATA%\BlueCaster\firmware` oder sein Unterordner `<vendor>`; ältere Zeilen sagen noch „config folder“) und *Experimental.* Nennen Sie die Schaltflächen des Fensters so, wie die jeweilige `app/lang/*.json` sie hat (`ui.nav.adapter` für die Seite Adapter, `firmware.open_folder` für die Schaltfläche, die diesen Ordner öffnet). Ganzer Hersteller: aus der Zeile „Not supported“ entfernen. Einige Chips: den Hersteller dort lassen und die weiterhin nicht unterstützten Chips nennen. Ergänzen Sie den Hersteller im Satz am Anfang des Abschnitts Firmware („Intel and Broadcom adapters (experimental) may need firmware files of their own“)
-14. [Getestete Hardware](hardware) (`docs/hardware.md`), sobald jemand ihn verwendet hat, und die Einleitung dieser Seite (`docs/chip-support.md`, alle Sprachen), die die Hersteller ohne Loader nennt (einige Chips: „the other <vendor> chips“)
+14. [Getestete Hardware](hardware) (`docs/hardware.md`), sobald jemand ihn verwendet hat, und seine VID:PID in `CONFIRMED_CHIPS` (`chips.rs`), womit sein Etikett Experimentell entfällt, und die Einleitung dieser Seite (`docs/chip-support.md`, alle Sprachen), die die Hersteller ohne Loader nennt (einige Chips: „the other <vendor> chips“)
 
 ## Schritt 7: Am Adapter ausprobieren
 
@@ -283,4 +283,4 @@ Im Pull Request:
 - Basieren Sie ihn auf dem aktuellen Branch `develop-v*`
 - Nennen Sie die getesteten Adapter (Produkt, VID:PID, Chip), Kalt- und Warmstart, und hängen Sie einen Abfragebericht und die HCI-Aufzeichnung eines Downloads an
 - Nennen Sie, woher die Angaben im Loader stammen
-- Der Loader bleibt **Experimentell**, bis ihn einige Leute verwendet haben; die Seite Adapter zeigt dieses Etikett
+- Der Loader bleibt **Experimentell**, bis ihn einige Leute verwendet haben; die Seite Adapter zeigt dieses Etikett, bis der Adapter in `CONFIRMED_CHIPS` steht
