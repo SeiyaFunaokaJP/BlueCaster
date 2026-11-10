@@ -11,6 +11,9 @@ BlueCaster pilote lui-même l'adaptateur Bluetooth (WinUSB) : il doit donc faire
 
 Cette page décrit la marche à suivre pour en ajouter un. Il vous faut un adaptateur équipé de cette puce ; les mainteneurs n'en ont pas. Même sans écrire de code, vous pouvez aider : les étapes 1 et 2 produisent le rapport dont un contributeur a besoin.
 
+{: .note }
+La conception qui sous-tend tout cela, et ce qui reste ouvert, se trouvent dans la [note pour les développeurs](../chip-bringup-dev).
+
 ## Table des matières
 {: .no_toc .text-delta }
 

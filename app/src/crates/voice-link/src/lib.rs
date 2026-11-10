@@ -1,4 +1,4 @@
-//! Headset microphone audio.
+//! Headset microphone audio (docs/headset-mic-dev.md, "Voice audio plumbing").
 //!
 //! - [`Renderer`] / [`PcmProducer`]: the microphone audio from the headphones
 //!   goes to a Windows render endpoint (a virtual cable), mono 16-bit at the

@@ -71,7 +71,7 @@ pub struct StreamRequest {
     /// LE Audio (experimental) instead of A2DP: the le_stream session
     /// streams to `device` and these extra devices. None: A2DP.
     pub le: Option<bt_host::LeRequest>,
-    /// Headset mode (developer mode): the
+    /// Headset mode (developer mode, docs/headset-mic-dev.md): the
     /// headphones' microphone goes to `mic_output`. Classic devices switch
     /// to the HFP voice link once streaming ([`crate::voice`]); Auto: only
     /// while an application records from the output's capture side.

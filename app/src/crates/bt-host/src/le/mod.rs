@@ -1,6 +1,6 @@
 //! LE Audio (experimental): BAP unicast client (audio source to sink ASEs)
 //! on the same BTstack session as A2DP, ported from v1's app/src/le_audio
-//! (branch feat/le-audio, commit b819893).
+//! (branch feat/le-audio, commit b819893; docs/le-audio-dev.md).
 //!
 //! Off unless [`crate::HostConfig::le_audio`] is Some: then none of this
 //! runs and HCI init is that of a build without LE.

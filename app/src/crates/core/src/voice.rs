@@ -1,4 +1,4 @@
-//! Headset mode of a classic stream: the A2DP
+//! Headset mode of a classic stream (docs/headset-mic-dev.md): the A2DP
 //! stream is suspended (the link kept), the HFP audio connection carries the
 //! PC's audio to the headphones and their microphone back, which is
 //! rendered to the output the user chose (a virtual cable) or written to a
