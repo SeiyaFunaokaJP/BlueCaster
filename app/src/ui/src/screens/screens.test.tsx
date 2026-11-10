@@ -447,11 +447,11 @@ describe("every screen renders", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Next" }));
     fireEvent.click(await screen.findByRole("button", { name: t("ui.setup.auto_button") }));
     let dialog = await screen.findByRole("dialog", { name: t("ui.adapter.paired_title") });
-    // A warning: the first three by name, one per line (the address of one
-    // without), then how many more; the confirm button in the danger style
+    // A warning: every device but the audio ones (the setup's import and
+    // pairing take those), one per line; the confirm button in the danger style
     expect(dialog.querySelector(".dialog-warn")).not.toBeNull();
     const rows = [...dialog.querySelectorAll(".paired-list li")].map((li) => li.textContent);
-    expect(rows).toEqual(["Logitech K380", "MX Master 3", "00:11:22:33:44:03", t("ui.adapter.paired_more", 2)]);
+    expect(rows).toEqual(["Logitech K380", "MX Master 3", "Pixel 8"]);
     expect(dialog.querySelectorAll(".paired-list li .icon")).toHaveLength(3);
     expect(dialog).toHaveTextContent(t("ui.adapter.paired_text"));
     expect(dialog).toHaveTextContent(t("ui.adapter.paired_keep"));

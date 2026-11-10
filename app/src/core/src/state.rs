@@ -1303,7 +1303,7 @@ fn voice_line(lang: &str, codec: &str) -> String {
     let name = match codec {
         "cvsd" => tr("codec.cvsd", "CVSD"),
         "msbc" => tr("codec.msbc", "mSBC"),
-        "lc3_swb" => tr("codec.lc3_swb", "LC3-SWB"),
+        "lc3_swb" => tr("codec.lc3_swb", "LC3"),
         "lc3" => "LC3".to_string(),
         other => other.to_string(),
     };
@@ -1312,12 +1312,55 @@ fn voice_line(lang: &str, codec: &str) -> String {
 
 /// A tray menu item: the device, its LE Audio entry tagged as in the
 /// flyout ("WF-1000XM5 (LE Audio)")
+/// The profiles the tray offers, one per device as the window lists it
+/// (issue #86): with LE Audio on, a device with an LE Audio profile by that
+/// one alone; off, no LE Audio profile
+fn tray_profiles(profiles: &[Profile], le_on: bool) -> Vec<&Profile> {
+    profiles
+        .iter()
+        .filter(|p| {
+            if !le_on {
+                return !p.le_audio;
+            }
+            p.le_audio
+                || !profiles.iter().any(|o| o.le_audio && o.device_address.eq_ignore_ascii_case(&p.device_address))
+        })
+        .collect()
+}
+
 fn tray_label(device: &str, le_audio: bool, le_tag: &str) -> String {
     if le_audio { format!("{device} ({le_tag})") } else { device.to_string() }
 }
 
 /// A saved profile is the one streaming or connecting (under its name before
 /// the save): it is started again with the new settings
+/// The profile that connects after LE Audio was turned on or off while
+/// `in_use` streamed (issue #86): the same device's LE Audio profile when it
+/// is on, its classic one when it is off; `in_use` when the device has no
+/// such profile (one that cannot stream says why)
+fn le_switched_profile(list: &[CoreProfile], in_use: &CoreProfile, le_on: bool) -> String {
+    if in_use.le_audio == le_on {
+        return in_use.name.clone();
+    }
+    list.iter()
+        .find(|p| p.le_audio == le_on && p.device_address.eq_ignore_ascii_case(&in_use.device_address))
+        .map_or_else(|| in_use.name.clone(), |p| p.name.clone())
+}
+
+/// The LE Audio side's profile of a device made from its classic profile
+/// `classic` (its capture and device settings), named "<device> LE Audio"
+fn le_side_profile(list: &[CoreProfile], classic: &CoreProfile) -> CoreProfile {
+    let device = if classic.device_name.is_empty() { &classic.device_address } else { &classic.device_name };
+    let base = format!("{device} LE Audio");
+    let mut name = base.clone();
+    let mut n = 2;
+    while list.iter().any(|p| p.name == name) {
+        name = format!("{base} ({n})");
+        n += 1;
+    }
+    CoreProfile { name, le_audio: true, ..classic.clone() }
+}
+
 fn restart_after_save(stream: &StreamStatus, saved: &str) -> bool {
     matches!(stream.state, StreamState::Connecting | StreamState::Streaming | StreamState::Reconnecting)
         && stream.profile.as_deref() == Some(saved)
@@ -1765,11 +1808,12 @@ impl CoreState {
             base
         };
         let le = bluecaster_core::messages::translate(&lang, "device.tag_le_audio", "LE Audio");
-        let labels = s.profiles.iter().map(|p| tray_label(device_name(&s.devices, p), p.le_audio, &le)).collect();
+        let shown = tray_profiles(&s.profiles, s.settings.le_audio_experimental);
+        let labels = shown.iter().map(|p| tray_label(device_name(&s.devices, p), p.le_audio, &le)).collect();
         (self.tray)(TrayView {
             streaming,
             tooltip,
-            profiles: s.profiles.iter().map(|p| p.name.clone()).collect(),
+            profiles: shown.iter().map(|p| p.name.clone()).collect(),
             labels,
             active_profile: s.active_profile.clone(),
             language: lang,
@@ -2333,6 +2377,17 @@ impl CoreState {
     /// and a second save right behind it (Home turns Auto-select off, then
     /// saves the codec) is one restart, not two (issue #86: a second restart
     /// broke off the first one's connection)
+    /// The adapter's state after the stack was shut down to start again
+    fn publish_adapter_stopped(&self) {
+        let (_, s) = self.snapshot();
+        self.publish(Event::Adapter(AdapterState {
+            status: AdapterStatus::Stopped,
+            error: None,
+            rom_firmware: false,
+            ..s.adapter
+        }));
+    }
+
     fn restart_profile(&self, name: &str) -> Result<(), ErrorInfo> {
         self.restarting.store(true, Ordering::Release);
         let r = self.start_profile(name);
@@ -3054,8 +3109,47 @@ impl CoreState {
                             me.restart_profile(&name)?;
                         }
                     }
+                    // LE Audio on / off while a device is connected (issue
+                    // #86): the stack starts again at once, and the device
+                    // connects again over what is now on (its LE Audio
+                    // profile, or its classic one)
+                    if le_toggled {
+                        let (_, s) = me.snapshot();
+                        let list = profiles::load(&me.config_dir());
+                        let in_use = s
+                            .stream
+                            .profile
+                            .as_deref()
+                            .filter(|n| restart_after_save(&s.stream, n))
+                            .and_then(|n| list.iter().find(|p| p.name == n));
+                        if let Some(p) = in_use {
+                            let le_on = me.service.settings().le_audio_experimental;
+                            let mut next = le_switched_profile(&list, p, le_on);
+                            // An LE Audio side saved (a scan found it) without
+                            // its profile yet: one from the classic one
+                            let le_saved = bluecaster_core::devices::load_le(&me.config_dir())
+                                .iter()
+                                .any(|d| d.address.eq_ignore_ascii_case(&p.device_address));
+                            if le_on && next == p.name && !p.le_audio && le_saved {
+                                let made = le_side_profile(&list, p);
+                                next = made.name.clone();
+                                let mut all = list.clone();
+                                all.push(made);
+                                let active = s.active_profile.clone();
+                                me.save_profiles(&all, active)?;
+                            }
+                            tracing::info!(
+                                "LE Audio {}: Bluetooth starts again, profile {} connects",
+                                if le_on { "on" } else { "off" },
+                                bluecaster_core::diag::quoted(&next)
+                            );
+                            me.service.restart_adapter();
+                            me.publish_adapter_stopped();
+                            me.restart_profile(&next)?;
+                        }
+                    }
                     // LE Audio on / off waits for the next scan or connection
-                    // while the stack is in use (v1's deferred text)
+                    // while the stack is in use otherwise (v1's deferred text)
                     let le_audio_deferred = le_toggled && me.service.le_audio_deferred();
                     Ok(json(&SettingsApplied { le_audio_deferred }))
                 }))
@@ -3090,13 +3184,7 @@ impl CoreState {
             Method::AdapterRestart => {
                 blocking(Box::new(|me| {
                     let again = me.service.restart_adapter();
-                    let (_, s) = me.snapshot();
-                    me.publish(Event::Adapter(AdapterState {
-                        status: AdapterStatus::Stopped,
-                        error: None,
-                        rom_firmware: false,
-                        ..s.adapter
-                    }));
+                    me.publish_adapter_stopped();
                     // The device streamed before connects again on the new
                     // stack, with the same profile (issue #86)
                     if let Some(mut req) = again {
@@ -3841,6 +3929,17 @@ mod tests {
         assert_eq!(device_name(&[], &unnamed), "AA:BB:CC:DD:EE:FF");
         assert_eq!(tray_label("Air Pro 4+", true, "LE Audio"), "Air Pro 4+ (LE Audio)");
         assert_eq!(tray_label("Air Pro 4+", false, "LE Audio"), "Air Pro 4+");
+        // One per device (issue #86)
+        let p = |name: &str, addr: &str, le_audio| Profile {
+            name: name.into(),
+            device_address: addr.into(),
+            le_audio,
+            ..to_ipc_profile(&CoreProfile::default(), 0)
+        };
+        let list = [p("Buds", "AA:01", false), p("Buds LE Audio", "aa:01", true), p("XM4", "AA:02", false)];
+        let names = |le| tray_profiles(&list, le).iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(true), ["Buds LE Audio", "XM4"]);
+        assert_eq!(names(false), ["Buds", "XM4"]);
     }
 
     #[test]
@@ -3933,10 +4032,35 @@ mod tests {
     }
 
     #[test]
+    fn le_audio_switched_connects_the_same_device_over_the_other_stack() {
+        let mk = |name: &str, addr: &str, le: bool| CoreProfile {
+            name: name.into(),
+            device_address: addr.into(),
+            le_audio: le,
+            ..CoreProfile::default()
+        };
+        let list = vec![
+            mk("Buds", "AA:BB:CC:DD:EE:01", false),
+            mk("Buds LE Audio", "aa:bb:cc:dd:ee:01", true),
+            mk("Other", "AA:BB:CC:DD:EE:02", false),
+        ];
+        assert_eq!(le_switched_profile(&list, &list[0], true), "Buds LE Audio");
+        assert_eq!(le_switched_profile(&list, &list[1], false), "Buds");
+        // Nothing to switch to: the same one
+        assert_eq!(le_switched_profile(&list, &list[2], true), "Other");
+        assert_eq!(le_switched_profile(&list, &list[0], false), "Buds");
+        // The LE Audio side's profile made from the classic one
+        let other = CoreProfile { device_name: "Other".into(), ..list[2].clone() };
+        let made = le_side_profile(&list, &other);
+        assert_eq!((made.name.as_str(), made.le_audio), ("Other LE Audio", true));
+        assert_eq!(made.device_address, "AA:BB:CC:DD:EE:02");
+    }
+
+    #[test]
     fn the_tray_names_the_voice_codec() {
         assert_eq!(voice_line("en", "msbc"), "Voice: mSBC");
         assert_eq!(voice_line("en", "cvsd"), "Voice: CVSD");
-        assert_eq!(voice_line("en", "lc3_swb"), "Voice: LC3-SWB");
+        assert_eq!(voice_line("en", "lc3_swb"), "Voice: LC3");
         assert_eq!(voice_line("en", "lc3"), "Voice: LC3");
     }
 

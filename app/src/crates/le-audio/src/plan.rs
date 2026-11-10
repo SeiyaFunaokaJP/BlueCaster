@@ -466,14 +466,19 @@ pub fn plan_stream(
 
     // Streaming context: checked again right before Enable (BAP), as the
     // available contexts may change until then. A conversational stream
-    // also names Conversational for the sink ASEs (where available).
-    let requested = request.contexts | if source.is_some() { CONTEXT_CONVERSATIONAL } else { 0 };
+    // names the microphone's contexts for the sink ASEs too, alone, as a
+    // phone in a call does: EarFun earbuds reject Media | Conversational
+    // ("Rejected Metadata", issue #86). Only where every sink has them:
+    // otherwise the usual contexts, so playback still starts.
     let available: Vec<u16> = devices
         .iter()
         .zip(&sink_ases)
         .filter(|(_, ids)| !ids.is_empty())
         .map(|(d, _)| d.available_sink_contexts)
         .collect();
+    let mic_contexts_everywhere = available.iter().fold(request.source_contexts, |c, a| c & a) != 0;
+    let requested =
+        if source.is_some() && mic_contexts_everywhere { request.source_contexts } else { request.contexts };
     Ok(StreamPlan {
         preset: preset.clone(),
         cig_id: 1,
@@ -1000,8 +1005,9 @@ mod tests {
         assert_eq!(s.presentation_delay_us, 40000);
         assert_eq!(p.cis[0].source_ase, Some(SourceDir { ase_id: 3, channels: 1, allocation: FL, octets: 80 }));
         assert_eq!(p.cis[0].source_ase.unwrap().sdu_len(), 80);
-        // Conversational added to the sink contexts (the device has it)
-        assert_eq!((p.requested_contexts, p.contexts), (CONTEXT_MEDIA | CONTEXT_CONVERSATIONAL, 0x0006));
+        // The sink ASEs name Conversational alone (issue #86: Media |
+        // Conversational rejected by EarFun earbuds)
+        assert_eq!((p.requested_contexts, p.contexts), (CONTEXT_CONVERSATIONAL, CONTEXT_CONVERSATIONAL));
         assert_eq!(
             p.ases(),
             [
@@ -1073,11 +1079,13 @@ mod tests {
         assert_eq!(layout(&p), vec![(1, 1, 0, vec![(FL, Left)]), (2, 1, 1, vec![(FR, Right)])]);
         assert_eq!(p.cis[0].source_ase.map(|s| s.ase_id), Some(3));
         assert_eq!(p.cis[1].source_ase, None);
-        // Sink contexts: Conversational only where every sink has it
+        // Sink contexts: Conversational only where every sink has it,
+        // else the usual ones, so playback still starts
         let mut right = sink(2, FR, 1, 0x01);
         right.available_sink_contexts = CONTEXT_MEDIA;
         let p = plan(&[devices[0].clone(), right], &conversational(), EMU_ISO).unwrap();
         assert_eq!(p.contexts, CONTEXT_MEDIA);
+        assert_ne!(p.requested_contexts & CONTEXT_MEDIA, 0);
         // Both with a microphone: one source per earbud
         let devices = [with_mic(sink(1, FL, 1, 0x01), FL), with_mic(sink(2, FR, 1, 0x01), FR)];
         let p = plan(&devices, &conversational(), EMU_ISO).unwrap();

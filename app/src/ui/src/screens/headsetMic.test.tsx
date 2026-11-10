@@ -585,29 +585,34 @@ describe("call codecs on Codecs (issue #86)", () => {
       return s!;
     });
 
-  it("lists the headphones' voice codecs, read only, the open one in use", async () => {
+  it("shows the call codecs instead of the music ones while the call link is open (issue #86)", async () => {
     const { core } = start("#/codecs", "voice");
     await core.request("stream.start", { profile: "WH-1000XM5 (LDAC)" });
     await waitFor(() => expect(core.state.snap?.stream.voice?.codec).toBe("msbc"));
     const wh = await section("WH-1000XM5");
-    const list = await within(wh).findByRole("list", { name: t("ui.codecs.voice_title") });
-    const cards = within(list).getAllByRole("listitem");
-    // Only the supported ones (the toggle is on): CVSD and mSBC
-    expect(cards.map((c) => c.querySelector(".codec-card-name")?.textContent)).toEqual(["CVSD", "mSBC"]);
-    expect(cards[1].querySelector(".codec-card")).toHaveClass("on");
-    expect(cards[1]).toHaveTextContent(t("ui.codecs.voice_in_use"));
-    expect(cards[1]).toHaveTextContent("16 kHz");
-    // Nothing to choose
-    expect(within(list).queryByRole("radio")).toBeNull();
-    // All three with the toggle off, LC3-SWB not supported
+    await waitFor(() => expect(wh.querySelector('input[value="ldac"]')).toBeNull());
+    const radios = () => [...wh.querySelectorAll<HTMLInputElement>("input[type=radio]")];
+    // Only the supported ones (the toggle is on), like the A2DP cards
+    expect(radios().map((r) => r.value)).toEqual(["msbc", "cvsd"]);
+    expect(wh.querySelectorAll(".codec-card .cbar")).toHaveLength(6);
+    expect(radios()[0]).toBeChecked();
+    // Chosen by the link: read only
+    expect(radios().every((r) => r.disabled)).toBe(true);
+    // "..." shows its settings, read only
+    fireEvent.click(within(wh).getByRole("button", { name: t("ui.profile.codec_settings", "mSBC") }));
+    const dialog = await screen.findByRole("dialog", { name: t("ui.profile.codec_settings", "mSBC") });
+    expect(dialog).toHaveTextContent("16 kHz");
+    expect(dialog).toHaveTextContent("64 kbps");
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    // All three with the toggle off
     fireEvent.click(screen.getByRole("switch", { name: t("ui.profile.codecs_hide") }));
-    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(3));
-    expect(within(list).getAllByRole("listitem")[2]).toHaveTextContent(t("ui.profile.codec_not_supported"));
+    await waitFor(() => expect(radios().map((r) => r.value)).toEqual(["lc3_swb", "msbc", "cvsd"]));
   });
 
   it("is not there for a device not connected", async () => {
     start("#/codecs", "voice");
     const wh = await section("WH-1000XM5");
-    expect(within(wh).queryByRole("list", { name: t("ui.codecs.voice_title") })).toBeNull();
+    expect(wh.querySelector('input[value="msbc"]')).toBeNull();
+    expect(wh.querySelector('input[value="ldac"]')).not.toBeNull();
   });
 });

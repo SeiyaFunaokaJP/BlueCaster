@@ -1,7 +1,8 @@
 // What Windows paired through an adapter about to go to WinUSB (issue #86:
 // a built-in adapter takes the keyboard and mouse with it). The setup asks
 // first when there are any; the Adapters screen's dialog names them. A list
-// that cannot be read asks nothing.
+// that cannot be read asks nothing. Every device is named (issue #86: not
+// "and N more").
 
 import { For, Show } from "solid-js";
 import type { AppContext } from "../app/context";
@@ -19,21 +20,16 @@ export function windowsDevices(app: AppContext, a: AdapterInfo): Promise<Windows
     .catch(() => []);
 }
 
-/** Devices named before "and N more" */
-export const NAMES_SHOWN = 3;
-
 /** The warning (issue #86): the devices first, one per line with what kind
  *  they are (headphones or another Bluetooth device; Windows' name, else
  *  the address), in a box in the warning colour with what happens to them;
  *  then what keeps them */
 export function PairedDevicesNote(props: { devices: readonly WindowsPairedDevice[] }) {
-  const shown = () => props.devices.slice(0, NAMES_SHOWN);
-  const rest = () => props.devices.length - shown().length;
   return (
     <Show when={props.devices.length > 0}>
       <div class="paired-warn">
         <ul class="paired-list">
-          <For each={shown()}>
+          <For each={props.devices}>
             {(d) => (
               <li>
                 <Icon name={d.audio ? "headphones" : "bluetooth"} />
@@ -41,9 +37,6 @@ export function PairedDevicesNote(props: { devices: readonly WindowsPairedDevice
               </li>
             )}
           </For>
-          <Show when={rest() > 0}>
-            <li class="muted">{t("ui.adapter.paired_more", rest())}</li>
-          </Show>
         </ul>
         <p>{t("ui.adapter.paired_text")}</p>
       </div>

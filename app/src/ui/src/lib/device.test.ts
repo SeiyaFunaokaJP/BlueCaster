@@ -107,6 +107,16 @@ describe("LE Audio entries", () => {
     expect(listedDevices(list, true)).toHaveLength(2);
   });
 
+  it("list a dual-mode device once, its LE Audio entry, saved when either side is (issue #86)", () => {
+    const classic = { ...dev("F4:4E:FD:00:11:22", []), name: "Buds", saved: true };
+    const list = [classic, { ...le("f4:4e:fd:00:11:22"), name: "" }];
+    expect(listedDevices(list, false)).toEqual([classic]);
+    const [one, ...rest] = listedDevices(list, true);
+    expect(rest).toHaveLength(0);
+    expect(deviceKey(one)).toBe("F4:4E:FD:00:11:22/le");
+    expect(one).toMatchObject({ name: "Buds", saved: true, le_audio: true });
+  });
+
   it("name a new profile \"<device> LE Audio\" (v1)", () => {
     expect(defaultProfileName("Galaxy Buds2 Pro", "F4:4E:FD:00:11:22", true)).toBe("Galaxy Buds2 Pro LE Audio");
     expect(defaultProfileName("", "F4:4E:FD:00:11:22", true)).toBe("F4:4E:FD:00:11:22 LE Audio");

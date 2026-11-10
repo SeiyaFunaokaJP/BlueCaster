@@ -293,7 +293,9 @@ function StepDriver(props: { adapter: AdapterInfo | null }) {
   const start = async (a: AdapterInfo) => {
     if (a.driver === "winusb") return setUp(a);
     setChecking(true);
-    const list = await windowsDevices(app, a);
+    // Not the audio devices: the setup's import and pairing take them over
+    // (issue #86)
+    const list = (await windowsDevices(app, a)).filter((d) => !d.audio);
     setChecking(false);
     if (list.length > 0) setLosing(list);
     else void setUp(a);

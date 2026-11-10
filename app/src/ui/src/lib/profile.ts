@@ -141,17 +141,16 @@ export function deviceProfile(
 /** The saved devices with their profiles, in the saved list's order; LE
  *  Audio entries only with LE Audio (experimental) on. */
 export function audioEntries(snap: Pick<Snapshot, "profiles" | "active_profile" | "stream" | "devices" | "settings">): AudioEntry[] {
-  return listedDevices(
-    snap.devices.filter((d) => d.saved),
-    snap.settings.le_audio_experimental,
-  ).map((d) => ({
-    key: deviceKey(d),
-    address: d.address.toUpperCase(),
-    name: d.name,
-    le_audio: d.le_audio,
-    device: d,
-    profile: deviceProfile(snap, d.address, d.le_audio),
-  }));
+  return listedDevices(snap.devices, snap.settings.le_audio_experimental)
+    .filter((d) => d.saved)
+    .map((d) => ({
+      key: deviceKey(d),
+      address: d.address.toUpperCase(),
+      name: d.name,
+      le_audio: d.le_audio,
+      device: d,
+      profile: deviceProfile(snap, d.address, d.le_audio),
+    }));
 }
 
 /** A list's entry by its key, kept for a moment after it left the list
@@ -295,7 +294,7 @@ export function deviceKey(d: Pick<Device, "address" | "le_audio">): string {
   return `${d.address.toUpperCase()}${d.le_audio ? "/le" : ""}`;
 }
 
-/** The entries to offer: LE Audio ones only with LE Audio (experimental) on, as v1 */
+
 /** VB-Cable's playback device among Windows' outputs */
 export function vbCable(devices: readonly AudioDevice[]): AudioDevice | null {
   const cables = devices.filter((d) => d.is_virtual && /cable/i.test(d.name) && !isHifiCable(d));
@@ -320,8 +319,33 @@ export function multichannelCable(d: Pick<AudioDevice, "name">): boolean {
   return /16\s*ch/i.test(d.name);
 }
 
+/**
+ * The entries to offer (issue #86: one device, not an "Audio" and an "LE
+ * Audio" one). LE Audio off: the classic entries. On: a device with both
+ * is its LE Audio entry alone, saved when either is, under the classic
+ * name when it has none; "Use LE Audio when available" decides which of
+ * the two connects.
+ */
 export function listedDevices(devices: readonly Device[], leAudio: boolean): Device[] {
-  return leAudio ? [...devices] : devices.filter((d) => !d.le_audio);
+  if (!leAudio) return devices.filter((d) => !d.le_audio);
+  const out: Device[] = [];
+  for (const d of devices) {
+    const other = twinOf(devices, d);
+    if (!d.le_audio && other) continue;
+    out.push(
+      other ? { ...d, name: d.name || other.name, saved: d.saved || other.saved, audio: true, rssi: d.rssi ?? other.rssi } : d,
+    );
+  }
+  return out;
+}
+
+/** The device's entry of the other kind (classic / LE Audio), same address */
+export function twinOf(
+  devices: readonly Device[],
+  d: Pick<Device, "address" | "le_audio">,
+): Device | undefined {
+  const a = d.address.toUpperCase();
+  return devices.find((x) => x.le_audio !== d.le_audio && x.address.toUpperCase() === a);
 }
 
 /** A profile's name until the user types one: the device, "<device> LE Audio" for LE Audio (v1) */
