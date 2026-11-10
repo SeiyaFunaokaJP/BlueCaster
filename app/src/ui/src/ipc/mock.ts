@@ -224,6 +224,7 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
       mtk_command_before_reset: false,
       mtk_register: "",
       le_keys_to_windows: false,
+      realtek_driver_firmware: false,
     },
     bt_chip_pid: 0,
     bt_chip_fw_stem: "",

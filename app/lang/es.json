@@ -472,6 +472,8 @@
   "ui.dev.mtk_register": "Escritura de registro tras cargar el firmware (hex)",
   "ui.dev.mtk_register_hint": "Tipo de solicitud, solicitud, registro, valor, separados por espacios.",
   "ui.dev.mtk_iso_queue": "Paquetes ISO en cola por CIS",
+  "ui.dev.realtek_section": "Realtek",
+  "ui.dev.realtek_driver_firmware": "Cargar el firmware del RTL8761B desde el controlador de Windows de Realtek de este PC",
   "ui.dev.keys_section": "Claves de emparejamiento y Windows",
   "ui.dev.le_keys_to_windows": "Pasar también las claves LE a Windows al restaurar el controlador original",
   "ui.dev.keys_adapter": "Adaptador",

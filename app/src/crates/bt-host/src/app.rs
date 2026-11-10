@@ -68,6 +68,8 @@ pub(crate) struct Setup {
     pub realtek_pid: u16,
     /// Realtek firmware / config file stems (no extension) of the chip
     pub realtek_files: Option<(String, String)>,
+    /// HostConfig::realtek_firmware_file
+    pub realtek_firmware_file: Option<PathBuf>,
     pub broadcom_ids: Vec<(u16, u16)>,
     /// HFP audio gateway for the headphones' battery level
     pub battery: bool,
@@ -544,7 +546,15 @@ impl HostApp {
                 remove_alias(&self.setup.firmware_dir, &fw);
                 remove_alias(&self.setup.firmware_dir, &cfg);
             }
-            stack.realtek_setup(pid, &self.setup.firmware_dir.to_string_lossy());
+            let driver_fw = self.setup.realtek_firmware_file.as_ref().map(|p| p.to_string_lossy().into_owned());
+            if let Some(p) = &self.setup.realtek_firmware_file {
+                tracing::info!(
+                    "Realtek firmware from Realtek's Windows driver ({}, {} bytes)",
+                    p.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
+                    std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+                );
+            }
+            stack.realtek_setup(pid, &self.setup.firmware_dir.to_string_lossy(), driver_fw.as_deref());
             stack.set_chipset_realtek();
         } else {
             tracing::info!("no Realtek PID configured, skipping the Realtek chipset init");
@@ -603,6 +613,7 @@ impl HostApp {
         self.shared.update(|s| {
             s.power_on_at = Some(Instant::now());
             s.realtek_rom = false;
+            s.hci_version_settled = false;
         });
         tracing::info!("hci_init done, powering on");
         if stack.power_on().is_err() {
@@ -629,7 +640,9 @@ impl HostApp {
             return Vec::new();
         };
         let dir = &self.setup.firmware_dir;
-        [Some(fw), with_config.then_some(cfg)]
+        // Realtek's Windows driver's file stands in for the firmware
+        let fw = self.setup.realtek_firmware_file.is_none().then_some(fw);
+        [fw, with_config.then_some(cfg)]
             .into_iter()
             .flatten()
             // The driver also takes the extension-less file alone
@@ -653,6 +666,7 @@ impl HostApp {
                 "Realtek firmware download ran (ROM LMP subversion 0x{:04X}); not verified",
                 self.rtk_lmp_first
             );
+            self.shared.update(|s| s.hci_version_settled = true);
         }
     }
 
@@ -1505,6 +1519,8 @@ impl HostApp {
     fn on_working(&mut self, stack: &Stack) {
         let elapsed = self.init_started.elapsed().as_millis();
         tracing::info!("HCI ready (took {elapsed} ms)");
+        // A Realtek download read back below settles the HCI version later
+        let mut verifying = false;
         tracing::debug!(
             "realtek check: pid 0x{:04X}, version seen {}, first LMP subversion 0x{:04X} (ROM {})",
             self.setup.realtek_pid,
@@ -1534,6 +1550,7 @@ impl HostApp {
                 } else {
                     // HCI init read the version only before the download
                     self.rtk_verify_tries = RTK_VERIFY_TRIES;
+                    verifying = true;
                     self.verify_realtek_download(stack);
                 }
             } else if let Some(company) = self.controller_company.filter(|&c| c != COMPANY_ID_REALTEK) {
@@ -1567,6 +1584,9 @@ impl HostApp {
             s.hci_off = false;
             s.le_audio_capable = le_audio_capable;
             s.init_done = Some(Ok(()));
+            if !verifying {
+                s.hci_version_settled = true;
+            }
         });
         self.afh_ticks = 0;
         self.afh_policy_version_seen = None;
@@ -1610,6 +1630,7 @@ impl HostApp {
             self.rtk_version_seen = true;
             if self.rtk_verify_pending {
                 self.rtk_verify_pending = false;
+                self.shared.update(|s| s.hci_version_settled = true);
                 if is_realtek_rom_lmp(lmp_subver) {
                     tracing::warn!(
                         "Realtek firmware NOT loaded (LMP subversion 0x{lmp_subver:04X} is the ROM code); check the firmware files"

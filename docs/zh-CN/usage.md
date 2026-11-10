@@ -99,7 +99,7 @@ BlueCaster 还会一直记录一些内容，这样即使问题只发生过一次
 - **日志**：日志文件的保留时间（默认 7 天）、每日大小上限（默认 100 MB）、保持开启的详细日志（没有 24 小时或 1 小时的限制，并且从核心启动时就开始）、每 10 秒一次的串流健康状况行，以及**添加标记**（在日志中写入一行带编号的标记，便于再次找到某个时刻）。关闭开发者模式后会恢复为默认值
 - **对端接收器测试**：向另一台 PC 上的测量用接收器串流，并比较发送的内容和到达的内容（请参阅[对端接收器测试](#receiver)）
 - **芯片**：在使用 WinUSB 的适配器上运行芯片脚本，即输入或从文件打开的对芯片的请求，供想为某个芯片添加支持的人使用（请参阅[添加芯片支持](chip-support#chip-scripts)）。可能更改芯片的行只有在单击**允许运行**后才会运行；期间蓝牙会停止，下次使用时重新启动
-- **Debug**：实验功能，默认全部关闭。**配对密钥与 Windows**：开启 **恢复原始驱动程序时，也把 LE 密钥交给 Windows** 后，**恢复原始驱动程序** 时会把 BlueCaster 的 LE 密钥（Long Term Key、EDIV、Rand、密钥长度、Identity Resolving Key）写入 Windows，只针对 Windows 已通过该适配器保存了 LE 密钥的设备；Windows 原有的密钥保留在 `pairing\replaced_windows_keys.json` 中（只有您的 Windows 用户能读取）。**与 Windows 比较**（需要管理员权限）针对一个适配器，统计链接密钥和 LE 密钥在 BlueCaster 与 Windows 中相同、不同或只存在于一方的设备数量。显示和日志中只有数字，不含地址或密钥，因此可以直接分享结果。还会列出 Windows 为该适配器及其 LE 设备保存的值的名称、类型和大小（从不显示其内容）
+- **Debug**：实验功能，默认全部关闭。**Realtek**：开启 **从此电脑上的 Realtek Windows 驱动程序加载 RTL8761B 固件** 后，会加载 Realtek Windows 驱动程序安装的固件（适配器改用 WinUSB 后仍会保留），而不是固件文件夹中的固件；配置文件仍来自该文件夹，没有该驱动程序时则加载文件夹中的固件。适配器可能因此报告更新的蓝牙版本；其他方面是否有改善尚未验证。**配对密钥与 Windows**：开启 **恢复原始驱动程序时，也把 LE 密钥交给 Windows** 后，**恢复原始驱动程序** 时会把 BlueCaster 的 LE 密钥（Long Term Key、EDIV、Rand、密钥长度、Identity Resolving Key）写入 Windows，只针对 Windows 已通过该适配器保存了 LE 密钥的设备；Windows 原有的密钥保留在 `pairing\replaced_windows_keys.json` 中（只有您的 Windows 用户能读取）。**与 Windows 比较**（需要管理员权限）针对一个适配器，统计链接密钥和 LE 密钥在 BlueCaster 与 Windows 中相同、不同或只存在于一方的设备数量。显示和日志中只有数字，不含地址或密钥，因此可以直接分享结果。还会列出 Windows 为该适配器及其 LE 设备保存的值的名称、类型和大小（从不显示其内容）
 
 ### 适配器
 

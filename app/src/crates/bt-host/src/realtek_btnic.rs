@@ -446,9 +446,43 @@ pub fn from_windows_driver(name: &str) -> Option<Vec<u8>> {
     })
 }
 
+/// The RTL8761B's firmware in Realtek's Windows driver (RtkBtfilter): the
+/// same "Realtech" patch format as rtl8761bu_fw.bin, under its own name, and
+/// no config file beside it
+const RTL8761B_DRIVER_FILE: &str = "rtl8761b_mp_chip_bt40_fw_asic_rom_patch_new.dat";
+const EPATCH_MAGIC: &[u8; 8] = b"Realtech";
+
+/// The driver's file that stands in for `fw_stem` of the firmware folder
+fn driver_firmware_name(fw_stem: &str) -> Option<&'static str> {
+    match fw_stem {
+        "rtl8761bu_fw" => Some(RTL8761B_DRIVER_FILE),
+        _ => None,
+    }
+}
+
+/// Realtek's Windows driver's firmware for a chip BTstack's Realtek download
+/// loads (Developer > Debug, issue #427): the newest one on this PC in the
+/// patch format that download reads; None for another chip or none there
+pub fn driver_firmware(fw_stem: &str) -> Option<PathBuf> {
+    use std::io::Read;
+    let name = driver_firmware_name(fw_stem)?;
+    let windows = std::env::var_os("SystemRoot").map(PathBuf::from)?;
+    driver_files(&windows, name).into_iter().find(|p| {
+        let mut head = [0u8; 8];
+        std::fs::File::open(p).and_then(|mut f| f.read_exact(&mut head)).is_ok() && &head == EPATCH_MAGIC
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn driver_firmware_only_for_the_rtl8761b() {
+        assert_eq!(driver_firmware_name("rtl8761bu_fw"), Some(RTL8761B_DRIVER_FILE));
+        assert_eq!(driver_firmware_name("rtl8852bu_fw"), None);
+        assert_eq!(driver_firmware_name(""), None);
+    }
     use crate::bringup::sim::{self, SimController, command_complete};
 
     /// A test section: opcode, eco, key ID, order, register write, payload

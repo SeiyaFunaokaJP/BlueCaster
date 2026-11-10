@@ -34,4 +34,9 @@ mtk_register: string,
  * Restore original driver hands Windows BlueCaster's LE keys too, for
  * the devices Windows keeps LE keys of (issue #86)
  */
-le_keys_to_windows: boolean, };
+le_keys_to_windows: boolean, 
+/**
+ * A Realtek chip's firmware from Realtek's Windows driver on this PC
+ * instead of the firmware folder's (the RTL8761B, issue #427)
+ */
+realtek_driver_firmware: boolean, };

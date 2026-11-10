@@ -364,6 +364,7 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
             mtk_command_before_reset: s.dev_debug.mtk_command_before_reset,
             mtk_register: s.dev_debug.mtk_register.clone(),
             le_keys_to_windows: s.dev_debug.le_keys_to_windows,
+            realtek_driver_firmware: s.dev_debug.realtek_driver_firmware,
         },
         bt_chip_pid: s.bt_chip_pid,
         bt_chip_fw_stem: s.bt_chip_fw_stem.clone(),
@@ -465,6 +466,7 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
         mtk_command_before_reset: s.dev_debug.mtk_command_before_reset,
         mtk_register: s.dev_debug.mtk_register.trim().to_string(),
         le_keys_to_windows: s.dev_debug.le_keys_to_windows,
+        realtek_driver_firmware: s.dev_debug.realtek_driver_firmware,
     };
     c.bt_chip_pid = s.bt_chip_pid;
     c.bt_chip_fw_stem = s.bt_chip_fw_stem.clone();
@@ -620,12 +622,16 @@ fn adapter_infos(config_dir: &Path, settings: &CoreSettings) -> Vec<AdapterInfo>
                     .and_then(|r| r.address.clone())
                     .or_else(|| bluecaster_core::adapter::address(config_dir, a.device.vid, a.device.pid))
                     .or_else(|| bluecaster_core::adapter::serial_address(a.vendor, &a.device.instance_id)),
-                bt_version: radio
-                    .as_ref()
-                    .and_then(|r| r.hci_version)
-                    .or_else(|| bluecaster_core::adapter::hci_version(config_dir, a.device.vid, a.device.pid))
-                    .and_then(bluecaster_core::adapter::bt_core_version)
-                    .map(str::to_owned),
+                // The running firmware's: on WinUSB BlueCaster's own read
+                // (issue #427: the firmware it loaded, not Windows' driver's)
+                bt_version: bluecaster_core::adapter::shown_hci_version(
+                    driver == DriverKind::Winusb,
+                    radio.as_ref().and_then(|r| r.hci_version),
+                    bluecaster_core::adapter::hci_version(config_dir, a.device.vid, a.device.pid),
+                    bluecaster_core::adapter::windows_hci_version(config_dir, a.device.vid, a.device.pid),
+                )
+                .and_then(bluecaster_core::adapter::bt_core_version)
+                .map(str::to_owned),
                 // An adapter already on WinUSB when BlueCaster came to know
                 // radios: the device's own product string, as Device
                 // Manager shows it (the WinUSB INF only names it "WinUSB

@@ -472,6 +472,8 @@
   "ui.dev.mtk_register": "Écriture de registre après chargement du firmware (hex)",
   "ui.dev.mtk_register_hint": "Type de requête, requête, registre, valeur, séparés par des espaces.",
   "ui.dev.mtk_iso_queue": "Paquets ISO en file par CIS",
+  "ui.dev.realtek_section": "Realtek",
+  "ui.dev.realtek_driver_firmware": "Charger le firmware du RTL8761B depuis le pilote Windows de Realtek de ce PC",
   "ui.dev.keys_section": "Clés d'association et Windows",
   "ui.dev.le_keys_to_windows": "Donner aussi les clés LE à Windows lors de la restauration du pilote d'origine",
   "ui.dev.keys_adapter": "Adaptateur",

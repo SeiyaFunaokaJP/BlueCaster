@@ -472,6 +472,8 @@
   "ui.dev.mtk_register": "펌웨어 로드 후 레지스터 쓰기 (16진수)",
   "ui.dev.mtk_register_hint": "요청 유형, 요청, 레지스터, 값을 공백으로 구분.",
   "ui.dev.mtk_iso_queue": "CIS당 대기 ISO 패킷 수",
+  "ui.dev.realtek_section": "Realtek",
+  "ui.dev.realtek_driver_firmware": "이 PC에 있는 Realtek Windows 드라이버에서 RTL8761B 펌웨어 불러오기",
   "ui.dev.keys_section": "페어링 키와 Windows",
   "ui.dev.le_keys_to_windows": "원래 드라이버로 복원할 때 LE 키도 Windows에 넘겨주기",
   "ui.dev.keys_adapter": "어댑터",

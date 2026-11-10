@@ -472,6 +472,8 @@
   "ui.dev.mtk_register": "韌體載入後寫入暫存器（十六進位）",
   "ui.dev.mtk_register_hint": "請求類型、請求、暫存器、值，以空格分隔。",
   "ui.dev.mtk_iso_queue": "每個 CIS 排隊的 ISO 封包",
+  "ui.dev.realtek_section": "Realtek",
+  "ui.dev.realtek_driver_firmware": "從此電腦上的 Realtek Windows 驅動程式載入 RTL8761B 韌體",
   "ui.dev.keys_section": "配對金鑰與 Windows",
   "ui.dev.le_keys_to_windows": "還原原始驅動程式時，也將 LE 金鑰交給 Windows",
   "ui.dev.keys_adapter": "介面卡",

@@ -588,23 +588,25 @@ impl Inner {
             && let Some((vid, pid)) = hci_transport::usb::last_opened()
         {
             crate::adapter::save_le_audio(&self.opts.config_dir, vid, pid, capable);
-            // The address comes with the controller's answer, a moment after init
+            // The address comes with the controller's answer, a moment after
+            // init; a Realtek adapter's version once its download was read
+            // back (issue #427: the first read is the ROM code's)
             let dir = self.opts.config_dir.clone();
             let host = host.clone();
             let _ = std::thread::Builder::new().name("adapter-address".into()).spawn(move || {
-                for _ in 0..20 {
-                    if let Some(a) = host.local_address() {
+                let mut address_saved = false;
+                for _ in 0..40 {
+                    if !address_saved && let Some(a) = host.local_address() {
                         crate::adapter::save_address(&dir, vid, pid, &a);
-                        // Read Local Version is answered before Read BD_ADDR
-                        match host.hci_version() {
-                            Some(v) => crate::adapter::save_hci_version(&dir, vid, pid, v),
-                            None => tracing::debug!("adapter: no HCI version, not saved"),
-                        }
+                        address_saved = true;
+                    }
+                    if address_saved && let Some(v) = host.hci_version() {
+                        crate::adapter::save_hci_version(&dir, vid, pid, v);
                         return;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(250));
                 }
-                tracing::debug!("adapter: no local address after 5 s, not saved");
+                tracing::debug!("adapter: address saved {address_saved}, no HCI version after 10 s, not saved");
             });
         }
     }

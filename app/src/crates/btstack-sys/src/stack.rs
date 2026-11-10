@@ -414,15 +414,25 @@ impl Stack {
         unsafe { ffi::hci_enable_custom_pre_init() };
     }
 
-    pub fn realtek_setup(&self, product_id: u16, folder: &str) {
-        tracing::debug!(target: "btstack", "realtek setup: product ID 0x{product_id:04X}, folder {folder}");
+    /// The Realtek download's product ID and folder; `firmware_file` loads
+    /// that file instead of the folder's firmware (the config stays the
+    /// folder's)
+    pub fn realtek_setup(&self, product_id: u16, folder: &str, firmware_file: Option<&str>) {
+        tracing::debug!(
+            target: "btstack",
+            "realtek setup: product ID 0x{product_id:04X}, folder {folder}, firmware file of its own {}",
+            firmware_file.is_some()
+        );
         let p = keep_path(folder);
-        // SAFETY: on the BTstack thread; the path outlives BTstack (PATHS,
-        // cleared only after deinit); BTstack copies nothing and keeps p.
+        let f = firmware_file.map_or(std::ptr::null(), keep_path);
+        // SAFETY: on the BTstack thread; the paths outlive BTstack (PATHS,
+        // cleared only after deinit); BTstack copies nothing and keeps p,
+        // csrc/realtek.c keeps f (or NULL, clearing an earlier one).
         unsafe {
             ffi::btstack_chipset_realtek_set_product_id(product_id);
             ffi::btstack_chipset_realtek_set_firmware_folder_path(p);
             ffi::btstack_chipset_realtek_set_config_folder_path(p);
+            ffi::bluecaster_realtek_set_firmware_file(f);
         }
     }
 

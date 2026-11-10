@@ -274,6 +274,10 @@ pub struct DevDebug {
     /// Restore original driver writes BlueCaster's LE keys to Windows too
     /// (core driver.rs; only where Windows keeps LE keys of the device)
     pub le_keys_to_windows: bool,
+    /// A Realtek chip's firmware from Realtek's Windows driver on this PC
+    /// instead of the firmware folder's, where the driver has it (the
+    /// RTL8761B, issue #427; adapter::configure)
+    pub realtek_driver_firmware: bool,
 }
 
 impl DevDebug {
