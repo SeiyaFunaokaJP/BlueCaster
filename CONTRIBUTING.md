@@ -43,11 +43,18 @@ cargo build --release -p bluecaster-ui
 
 ## Pull Requests
 
+Development happens on the latest `develop-v*` branch (currently `develop-v3.x`), not on `main`.
+
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
+2. Create a feature branch from the latest `develop-v*` branch:
+   ```bash
+   git remote add upstream https://github.com/SeiyaFunaokaJP/BlueCaster.git
+   git fetch upstream
+   git checkout -b feature/my-feature upstream/develop-v3.x
+   ```
 3. Commit your changes (`git commit -m "Add my feature"`)
 4. Push to the branch (`git push origin feature/my-feature`)
-5. Open a [Pull Request](https://github.com/SeiyaFunaokaJP/BlueCaster/pulls)
+5. Open a [Pull Request](https://github.com/SeiyaFunaokaJP/BlueCaster/pulls) against that same `develop-v*` branch
 
 Learning from GPL-licensed sources follows the
 [clean-room policy](docs/clean-room.md).
