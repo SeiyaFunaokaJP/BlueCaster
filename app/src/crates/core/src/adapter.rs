@@ -194,6 +194,16 @@ pub fn configure(config: &mut HostConfig, settings: &Settings, _config_dir: &Pat
         (stem(fw), stem(cfg))
     });
     tracing::debug!("adapter: realtek pid {pid:04X}, firmware files {:?}", config.realtek_files);
+    // Developer > Debug (issue #427): Realtek's Windows driver's firmware
+    // instead of the folder's, where it has the chip's in a format BTstack's
+    // download reads (the RTL8761B)
+    if pid != 0 && settings.debug_mode && settings.dev_debug.realtek_driver_firmware {
+        config.realtek_firmware_file =
+            config.realtek_files.as_ref().and_then(|(fw, _)| bt_host::realtek_btnic::driver_firmware(fw));
+        if config.realtek_firmware_file.is_none() {
+            tracing::info!("no firmware for this chip in Realtek's Windows driver: the firmware folder's is loaded");
+        }
+    }
     if pid == 0 {
         // Other vendors (experimental): Intel needs its bootloader
         // firmware, Broadcom may take a PatchRAM
@@ -407,8 +417,13 @@ struct AdapterCaps {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     address: Option<String>,
     /// The HCI version the controller reports (Bluetooth core version)
+    /// under a stack of BlueCaster, with the firmware it loaded
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hci_version: Option<u8>,
+    /// The HCI version Windows' Bluetooth read, with the firmware its
+    /// driver loaded (issue #427: a Realtek driver's may be newer)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    windows_hci_version: Option<u8>,
     /// Device Manager's name while Windows' Bluetooth ran it
     #[serde(default, skip_serializing_if = "Option::is_none")]
     windows_name: Option<String>,
@@ -460,8 +475,8 @@ pub fn save_address(dir: &Path, vid: u16, pid: u16, address: &str) {
     write_caps(dir, &caps);
 }
 
-/// The HCI version the controller on this VID:PID reported, as a stack
-/// running on it read it
+/// The HCI version the controller on this VID:PID reported, as a stack of
+/// BlueCaster running on it read it
 pub fn hci_version(dir: &Path, vid: u16, pid: u16) -> Option<u8> {
     load_caps(dir).get(&caps_key(vid, pid)).and_then(|c| c.hci_version)
 }
@@ -484,8 +499,14 @@ pub fn windows_name(dir: &Path, vid: u16, pid: u16) -> Option<String> {
     load_caps(dir).get(&caps_key(vid, pid)).and_then(|c| c.windows_name.clone())
 }
 
+/// The HCI version Windows' Bluetooth read when it last ran the adapter
+pub fn windows_hci_version(dir: &Path, vid: u16, pid: u16) -> Option<u8> {
+    load_caps(dir).get(&caps_key(vid, pid)).and_then(|c| c.windows_hci_version)
+}
+
 /// What Windows' Bluetooth tells about the adapter while it runs it: its
-/// name, and the address and version a stack of BlueCaster would read
+/// name, the address a stack of BlueCaster would read, and the version of
+/// the firmware Windows' driver loaded (kept apart from BlueCaster's own)
 pub fn save_windows_radio(dir: &Path, vid: u16, pid: u16, name: &str, address: Option<&str>, hci_version: Option<u8>) {
     let mut caps = load_caps(dir);
     let entry = caps.entry(caps_key(vid, pid)).or_default();
@@ -497,7 +518,7 @@ pub fn save_windows_radio(dir: &Path, vid: u16, pid: u16, name: &str, address: O
         entry.address = Some(a.to_owned());
     }
     if hci_version.is_some() {
-        entry.hci_version = hci_version;
+        entry.windows_hci_version = hci_version;
     }
     if *entry == before {
         return;
@@ -507,6 +528,16 @@ pub fn save_windows_radio(dir: &Path, vid: u16, pid: u16, name: &str, address: O
         caps_key(vid, pid)
     );
     write_caps(dir, &caps);
+}
+
+/// The HCI version the Adapters screen shows: the one of the firmware that
+/// runs the adapter. On WinUSB that is what BlueCaster's stack read after
+/// loading its firmware; under Windows' Bluetooth what Windows reads now.
+/// `radio` is Windows' radio of the device, or what Windows stored on the
+/// device node (issue #427: it stays after the move to WinUSB, with the
+/// version of the firmware Windows' driver had loaded).
+pub fn shown_hci_version(winusb: bool, radio: Option<u8>, ours: Option<u8>, windows_saved: Option<u8>) -> Option<u8> {
+    if winusb { ours.or(radio).or(windows_saved) } else { radio.or(windows_saved).or(ours) }
 }
 
 /// The Bluetooth address a Realtek adapter reports as its USB serial number
@@ -584,6 +615,10 @@ mod tests {
         save_hci_version(&dir, 0x0BDA, 0xA729, 10);
         assert_eq!(hci_version(&dir, 0x0BDA, 0xA729), Some(10));
         assert_eq!(hci_version(&dir, 0x8087, 0x0032), None);
+        // Windows' read, with its driver's firmware, is kept apart (#427)
+        save_windows_radio(&dir, 0x0BDA, 0xA729, "Realtek Bluetooth 5.4 Adapter", None, Some(13));
+        assert_eq!(hci_version(&dir, 0x0BDA, 0xA729), Some(10));
+        assert_eq!(windows_hci_version(&dir, 0x0BDA, 0xA729), Some(13));
         // The other values stay
         assert_eq!(address(&dir, 0x0BDA, 0xA729).as_deref(), Some("00:11:22:33:44:55"));
         assert_eq!(le_audio(&dir, 0x0BDA, 0xA729), Some(false));
@@ -611,6 +646,21 @@ mod tests {
         // Other vendors' serials are not addresses
         assert_eq!(serial_address(ChipVendor::MediaTek, r"USB\VID_0E8D&PID_7925\C0E3502E0009"), None);
         assert_eq!(serial_address(ChipVendor::Intel, r"USB\VID_8087&PID_0033\5&3B72E4CF&0&14"), None);
+    }
+
+    #[test]
+    fn shown_version_is_the_running_firmwares() {
+        // WinUSB: BlueCaster's read (linux-firmware 5.1) over the 5.4 Windows'
+        // driver left on the device node, and the other way round
+        assert_eq!(shown_hci_version(true, Some(13), Some(10), Some(13)), Some(10));
+        assert_eq!(shown_hci_version(true, Some(10), Some(13), None), Some(13));
+        // No stack of BlueCaster ran it yet
+        assert_eq!(shown_hci_version(true, None, None, Some(13)), Some(13));
+        // Windows' Bluetooth runs it
+        assert_eq!(shown_hci_version(false, Some(13), Some(10), None), Some(13));
+        assert_eq!(shown_hci_version(false, None, Some(10), Some(13)), Some(13));
+        assert_eq!(shown_hci_version(false, None, Some(10), None), Some(10));
+        assert_eq!(shown_hci_version(false, None, None, None), None);
     }
 
     #[test]

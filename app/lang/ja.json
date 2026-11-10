@@ -472,6 +472,8 @@
   "ui.dev.mtk_register": "ファームウェア読み込み後のレジスタ書き込み (16 進)",
   "ui.dev.mtk_register_hint": "リクエスト種別、リクエスト、レジスタ、値をスペース区切りで。",
   "ui.dev.mtk_iso_queue": "CIS ごとのキュー ISO パケット数",
+  "ui.dev.realtek_section": "Realtek",
+  "ui.dev.realtek_driver_firmware": "RTL8761B のファームウェアをこの PC の Realtek 製 Windows ドライバから読み込む",
   "ui.dev.keys_section": "ペアリングキーと Windows",
   "ui.dev.le_keys_to_windows": "元のドライバに戻すとき、LE のキーも Windows に渡す",
   "ui.dev.keys_adapter": "アダプター",

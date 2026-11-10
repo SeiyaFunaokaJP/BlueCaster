@@ -88,6 +88,7 @@ export const NO_DEBUG: DevDebug = {
   mtk_command_before_reset: false,
   mtk_register: "",
   le_keys_to_windows: false,
+  realtek_driver_firmware: false,
 };
 
 export function Developer() {
@@ -527,6 +528,13 @@ function Debug(props: {
             />
           )}
         </Field>
+      </Section>
+      <Section title={t("ui.dev.realtek_section")}>
+        <Toggle
+          label={t("ui.dev.realtek_driver_firmware")}
+          checked={props.value.realtek_driver_firmware}
+          onChange={(v) => set({ realtek_driver_firmware: v })}
+        />
       </Section>
       <Section title={t("ui.dev.keys_section")}>
         <Toggle

@@ -472,6 +472,8 @@
   "ui.dev.mtk_register": "Registerschreibvorgang nach dem Firmware-Laden (hex)",
   "ui.dev.mtk_register_hint": "Anfragetyp, Anfrage, Register, Wert, durch Leerzeichen getrennt.",
   "ui.dev.mtk_iso_queue": "ISO-Pakete in der Warteschlange pro CIS",
+  "ui.dev.realtek_section": "Realtek",
+  "ui.dev.realtek_driver_firmware": "RTL8761B-Firmware aus Realteks Windows-Treiber auf diesem PC laden",
   "ui.dev.keys_section": "Kopplungsschlüssel und Windows",
   "ui.dev.le_keys_to_windows": "Beim Wiederherstellen des Originaltreibers auch die LE-Schlüssel an Windows übergeben",
   "ui.dev.keys_adapter": "Adapter",

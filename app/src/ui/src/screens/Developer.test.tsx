@@ -164,6 +164,7 @@ describe("developer screen", () => {
         mtk_command_before_reset: false,
         mtk_register: "",
         le_keys_to_windows: false,
+        realtek_driver_firmware: false,
       }),
     );
   });

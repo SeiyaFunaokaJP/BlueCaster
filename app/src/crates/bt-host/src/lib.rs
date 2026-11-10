@@ -165,6 +165,9 @@ pub struct HostConfig {
     /// Realtek firmware / config file stems (no extension), e.g.
     /// ("rtl8761bu_fw", "rtl8761bu_config")
     pub realtek_files: Option<(String, String)>,
+    /// A Realtek firmware file loaded instead of the folder's (Realtek's
+    /// Windows driver's, Developer > Debug: issue #427)
+    pub realtek_firmware_file: Option<PathBuf>,
     /// Run the Intel bootloader firmware download first (experimental)
     pub intel_loader: bool,
     /// Run the MediaTek MT79xx firmware download first (experimental)
@@ -228,6 +231,7 @@ impl HostConfig {
             firmware_dir: None,
             realtek_pid: 0,
             realtek_files: None,
+            realtek_firmware_file: None,
             intel_loader: false,
             mediatek_loader: false,
             qualcomm_loader: false,
@@ -567,6 +571,7 @@ impl BtHost {
                         firmware_dir,
                         realtek_pid,
                         realtek_files,
+                        realtek_firmware_file,
                         intel_loader,
                         mediatek_loader,
                         qualcomm_loader,
@@ -617,6 +622,7 @@ impl BtHost {
                             firmware_dir: firmware_dir.unwrap_or_else(exe_dir),
                             realtek_pid: if tcp { 0 } else { realtek_pid },
                             realtek_files,
+                            realtek_firmware_file,
                             broadcom_ids,
                             battery,
                             voice,
@@ -818,9 +824,11 @@ impl BtHost {
     }
 
     /// The HCI version the controller reports (the Bluetooth core version:
-    /// 12 = 5.3), once it has answered Read Local Version
+    /// 12 = 5.3), once it is the running firmware's: after init, and on a
+    /// Realtek adapter after the download was read back (issue #427)
     pub fn hci_version(&self) -> Option<u8> {
-        self.shared.lock().hci_version
+        let s = self.shared.lock();
+        s.hci_version.filter(|_| s.hci_version_settled)
     }
 
     /// The controller has LE Audio's isochronous channels (its supported

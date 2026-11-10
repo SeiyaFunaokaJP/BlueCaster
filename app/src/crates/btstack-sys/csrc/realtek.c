@@ -35,12 +35,24 @@ static void bluecaster_append_bin(char *path, size_t size) {
     path[len] = '\0';
 }
 
+/* A firmware file of another name and folder (Realtek's Windows driver's,
+ * issue #427); NULL: the folder's. The config file stays the folder's. */
+static const char *bluecaster_firmware_override;
+
+void bluecaster_realtek_set_firmware_file(const char *path) {
+    bluecaster_firmware_override = path;
+}
+
 static void bluecaster_realtek_init(const void *config) {
     chipset_init(config);
     /* The USB lookup by product ID: it only names the files here, loading
      * them later (the UART lookup has loaded them already) */
     if (product_id != 0 && patch_usb != NULL) {
-        bluecaster_append_bin(firmware_file, sizeof(firmware_file));
+        if (bluecaster_firmware_override != NULL && strlen(bluecaster_firmware_override) < sizeof(firmware_file)) {
+            strcpy(firmware_file, bluecaster_firmware_override);
+        } else {
+            bluecaster_append_bin(firmware_file, sizeof(firmware_file));
+        }
         bluecaster_append_bin(config_file, sizeof(config_file));
     }
 }
