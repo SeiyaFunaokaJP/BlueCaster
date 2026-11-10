@@ -781,8 +781,6 @@
   "ui.adapter.firmware_keep_wifi": "Lass WLAN eingeschaltet.",
   "ui.adapter.firmware_unsupported": "Nicht unterstützt",
   "ui.adapter.firmware_download_unavailable": "Kein Download verfügbar",
-  "ui.adapter.experimental": "Experimentell",
-  "ui.adapter.experimental_hint": "Bisher nur mit wenigen Adaptern getestet.",
   "ui.adapter.firmware_choose_chip": "Chip unten auswählen",
   "ui.adapter.assign_winusb": "Durch WinUSB-Treiber ersetzen",
   "ui.adapter.assign_title": "BlueCaster diesen Adapter verwenden lassen",

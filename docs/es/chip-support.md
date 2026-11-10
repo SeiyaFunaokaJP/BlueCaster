@@ -7,7 +7,7 @@ nav_order: 3.5
 
 # Añadir compatibilidad con chips
 
-BlueCaster controla por sí mismo el adaptador Bluetooth (WinUSB), así que tiene que hacer lo que hace el controlador de Windows del fabricante antes de que el adaptador funcione: en muchos chips, cargarle el firmware en cada inicio. Los adaptadores Realtek, Intel, Broadcom y CSR y los MediaTek MT7925 y MT7921 ya funcionan, y los MediaTek MT7922 y MT7902 y los Qualcomm QCA61x4, QCA9377 y WCN6855 de forma experimental; los demás chips de MediaTek (MT7927 y otros más antiguos) y de Qualcomm (QCA6290, WCN785x) no, porque nadie ha escrito todavía su cargador. `app/src/crates/bt-host/src/mediatek.rs` (el de los MT79xx) es un cargador real del que partir para otro chip de MediaTek.
+BlueCaster controla por sí mismo el adaptador Bluetooth (WinUSB), así que tiene que hacer lo que hace el controlador de Windows del fabricante antes de que el adaptador funcione: en muchos chips, cargarle el firmware en cada inicio. Los adaptadores Realtek, Intel, Broadcom y CSR ya funcionan, y también los MediaTek MT7925, MT7922, MT7921 y MT7902 y los Qualcomm QCA61x4, QCA9377 y WCN6855 (el MT7922, el MT7902 y los chips Qualcomm aún no se han probado en el hardware); los demás chips de MediaTek (MT7927 y otros más antiguos) y de Qualcomm (QCA6290, WCN785x) no, porque nadie ha escrito todavía su cargador. `app/src/crates/bt-host/src/mediatek.rs` (el de los MT79xx) es un cargador real del que partir para otro chip de MediaTek.
 
 Esta página describe cómo añadir uno. Necesita un adaptador con ese chip; los mantenedores no lo tienen. Aunque no escriba código, puede ayudar: los pasos 1 y 2 dan el informe que necesita quien lo escriba.
 
@@ -204,7 +204,7 @@ cargo test -p bt-host
 
 Todos los archivos que hay que cambiar, para un fabricante ya listado como no compatible (MediaTek, Qualcomm) o para uno nuevo. Para un fabricante nuevo, el compilador señala los `match` que necesitan su variante; el resto, y todo lo de un fabricante ya listado, solo lo encuentra esta lista.
 
-**¿Un chip o todo el fabricante?** Un cargador suele cubrir solo algunos chips de un fabricante (el MT7921, pero no el MT7925). Entonces solo esos chips pueden dejar de ser "unsupported": añada sus VID:PID a `LOADER_CHIPS` en `app/src/crates/bt-host/src/chips.rs` y deje el `support_tag()` del fabricante como está. `chips::chip_supported(vendor, vid, pid)` y `chip_support_tag()` responden entonces por adaptador, y la etiqueta del nombre del adaptador, su nota en la pantalla **Adaptador**, que se ofrezca WinUSB allí y la advertencia de «no implementado» siguen lo que respondan. Cambie `support_tag()` solo para un cargador que cubra todos los chips del fabricante (como el de Intel).
+**¿Un chip o todo el fabricante?** Un cargador suele cubrir solo algunos chips de un fabricante (el MT7921, pero no el MT7925). Entonces solo esos chips pueden dejar de ser "unsupported": añada sus VID:PID a `LOADER_CHIPS` en `app/src/crates/bt-host/src/chips.rs` y deje el fabricante en `listed_chips_only()`. `chips::chip_supported(vendor, vid, pid)` y `chip_support_tag()` responden entonces por adaptador, y la etiqueta del nombre del adaptador, su nota en la pantalla **Adaptador**, que se ofrezca WinUSB allí y la advertencia de «no implementado» siguen lo que respondan. Quite un fabricante de `listed_chips_only()` solo para un cargador que cubra todos sus chips (como el de Intel).
 
 {: .note }
 Mantenga los finales de línea de cada archivo: algunos archivos fuente usan CRLF y otros LF. Algunos editores y `sed -i` en Git Bash los reescriben sin avisar, y `cargo fmt` no los restaura. `git diff --stat` lo delata: un archivo que cambió en pocos sitios cuenta todas sus líneas. En ese caso, vuelva a convertir el archivo (por ejemplo con el selector de final de línea de la barra de estado de VS Code) antes de hacer el commit.
@@ -212,7 +212,7 @@ Mantenga los finales de línea de cada archivo: algunos archivos fuente usan CRL
 **Detección** (`app/src/crates/bt-host/src/chips.rs`):
 
 1. `ChipVendor`: un fabricante nuevo recibe una variante (con una línea de documentación) y un brazo en `name()`. Para cualquier fabricante, actualice el comentario de documentación del enum (qué fabricantes tienen cargador) y la línea de documentación de la variante ("not supported")
-2. Algunos chips: sus VID:PID en `LOADER_CHIPS`, y una prueba en el módulo del cargador de que su propia comprobación de chip (ID de chip, versión) acepta exactamente lo que dicen esas entradas. Todo el fabricante: `support_tag()` pasa de `"unsupported"` a `"experimental"`
+2. Algunos chips: sus VID:PID en `LOADER_CHIPS`, y una prueba en el módulo del cargador de que su propia comprobación de chip (ID de chip, versión) acepta exactamente lo que dicen esas entradas. Todo el fabricante: quítelo de `listed_chips_only()`
 3. `vendor_for_usb()`: los VID USB del fabricante. Un VID que también usan otros fabricantes debe comprobarse como `VID if pid == PID`, nunca entero: módulos de portátil con el VID del fabricante del módulo (AzureWave 0x13D3, Foxconn 0x0489), y VID compartidos como pid.codes 0x1209. Cada VID listado aquí también hace que `is_bluetooth_vendor_vid` trate los dispositivos de ese fabricante como adaptadores Bluetooth. Un VID:PID de la tabla Realtek de BTstack o de `OEM_TABLE` (ambas en `resolve_realtek_pid` de este archivo) se toma como Realtek antes de consultar a `vendor_for_usb`: compruebe que el suyo no está en ninguna de las dos
 4. `company_name()`: el ID de empresa del Bluetooth SIG que devuelve Read Local Version, si aún no está
 5. Pruebas: `app/src/crates/bt-host/tests/chips.rs` (los VID:PID y la etiqueta)
@@ -234,8 +234,8 @@ Mantenga los finales de línea de cada archivo: algunos archivos fuente usan CRL
 
 **Documentación**:
 
-13. La tabla de chips de `docs/setup.md` y `docs/*/setup.md` (todos los idiomas): una fila como la de Intel, con los chips que cubre, los archivos de firmware y dónde van (la carpeta de firmware: `%APPDATA%\BlueCaster\firmware`, o su subcarpeta `<vendor>`; las filas más antiguas todavía dicen "config folder") y *Experimental.* Nombre los botones de la ventana como los tiene el `app/lang/*.json` de cada idioma (`ui.nav.adapter` para la pantalla Adaptador, `firmware.open_folder` para el botón que abre esa carpeta). Todo el fabricante: quítelo de la fila "Not supported". Algunos chips: deje ahí el fabricante y nombre los chips que siguen sin ser compatibles. Añada el fabricante a la frase al principio de la sección Firmware ("Intel and Broadcom adapters (experimental) may need firmware files of their own")
-14. [Hardware verificado](hardware) (`docs/hardware.md`) cuando alguien lo haya usado, y su VID:PID en `CONFIRMED_CHIPS` (`chips.rs`), con lo que pierde la etiqueta Experimental, y la introducción de esta página (`docs/chip-support.md`, todos los idiomas), que nombra los fabricantes sin cargador (algunos chips: "the other <vendor> chips")
+13. La tabla de chips de `docs/setup.md` y `docs/*/setup.md` (todos los idiomas): una fila como la de Intel, con los chips que cubre, los archivos de firmware y dónde van (la carpeta de firmware: `%APPDATA%\BlueCaster\firmware`, o su subcarpeta `<vendor>`; las filas más antiguas todavía dicen "config folder"). Nombre los botones de la ventana como los tiene el `app/lang/*.json` de cada idioma (`ui.nav.adapter` para la pantalla Adaptador, `firmware.open_folder` para el botón que abre esa carpeta). Todo el fabricante: quítelo de la fila "Not supported". Algunos chips: deje ahí el fabricante y nombre los chips que siguen sin ser compatibles. Añada el fabricante a la frase al principio de la sección Firmware ("Intel and Broadcom adapters may need firmware files of their own")
+14. [Hardware verificado](hardware) (`docs/hardware.md`) cuando alguien lo haya usado, y la introducción de esta página (`docs/chip-support.md`, todos los idiomas), que nombra los fabricantes sin cargador (algunos chips: "the other <vendor> chips")
 
 ## Paso 7: Probarlo en el adaptador
 
@@ -283,4 +283,3 @@ En el pull request:
 - Basado en la rama `develop-v*` actual
 - Indique qué adaptadores probó (producto, VID:PID, chip), en frío y en caliente, y adjunte un informe de sondeo y la captura HCI de una descarga
 - Indique de dónde salen los datos del cargador
-- El cargador sigue siendo **experimental** hasta que lo hayan usado algunas personas; la pantalla **Adaptador** muestra esa etiqueta hasta que el adaptador está en `CONFIRMED_CHIPS`

@@ -781,8 +781,6 @@
   "ui.adapter.firmware_keep_wifi": "Wi-Fi はオンのままにしてください。",
   "ui.adapter.firmware_unsupported": "非対応",
   "ui.adapter.firmware_download_unavailable": "ダウンロードできません",
-  "ui.adapter.experimental": "実験的",
-  "ui.adapter.experimental_hint": "まだ少数のアダプタでしか試されていません。",
   "ui.adapter.firmware_choose_chip": "下でチップを選んでください",
   "ui.adapter.assign_winusb": "WinUSB ドライバに置き換える",
   "ui.adapter.assign_title": "このアダプタを BlueCaster で使う",

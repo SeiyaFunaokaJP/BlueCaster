@@ -7,7 +7,7 @@ nav_order: 3.5
 
 # 添加芯片支持
 
-BlueCaster 自己驱动 Bluetooth 适配器（WinUSB），因此在适配器能工作之前，它必须完成厂商的 Windows 驱动程序所做的事：许多芯片需要在每次启动时加载固件。Realtek、Intel、Broadcom 和 CSR 适配器以及 MediaTek MT7925 和 MT7921 目前已可使用，MediaTek MT7922、MT7902 和 Qualcomm QCA61x4、QCA9377、WCN6855 为实验性支持；其他 MediaTek 芯片（MT7927 及更早的芯片）和 Qualcomm 芯片（QCA6290、WCN785x）还不行，因为还没有人为它们编写加载程序。`app/src/crates/bt-host/src/mediatek.rs`（MT79xx 的加载程序）是一个实际的加载程序，可作为支持其他 MediaTek 芯片的起点。
+BlueCaster 自己驱动 Bluetooth 适配器（WinUSB），因此在适配器能工作之前，它必须完成厂商的 Windows 驱动程序所做的事：许多芯片需要在每次启动时加载固件。Realtek、Intel、Broadcom 和 CSR 适配器目前已可使用，MediaTek MT7925、MT7922、MT7921、MT7902 和 Qualcomm QCA61x4、QCA9377、WCN6855 也可以（MT7922、MT7902 和 Qualcomm 芯片尚未在实际硬件上测试）；其他 MediaTek 芯片（MT7927 及更早的芯片）和 Qualcomm 芯片（QCA6290、WCN785x）还不行，因为还没有人为它们编写加载程序。`app/src/crates/bt-host/src/mediatek.rs`（MT79xx 的加载程序）是一个实际的加载程序，可作为支持其他 MediaTek 芯片的起点。
 
 本页介绍添加加载程序的步骤。你需要一个使用该芯片的适配器；维护者手上没有这些适配器。即使不写代码也能帮忙：第 1 步和第 2 步就能得到贡献者所需的报告。
 
@@ -204,7 +204,7 @@ cargo test -p bt-host
 
 以下列出所有需要修改的文件，适用于已列为不支持的厂商（MediaTek、Qualcomm）或新厂商。对于新厂商，编译器会指出哪些 `match` 需要加上它的变体；其余部分，以及已列出厂商的全部修改，只有这份清单能找到。
 
-**一部分芯片还是整个厂商？** 加载程序通常只覆盖某厂商的部分芯片（支持 MT7921 但不支持 MT7925）。这时只有这些芯片可以脱离“不支持”：在 `app/src/crates/bt-host/src/chips.rs` 的 `LOADER_CHIPS` 中列出它们的 VID:PID，厂商的 `support_tag()` 保持不变。`chips::chip_supported(vendor, vid, pid)` 和 `chip_support_tag()` 随后会按适配器给出结果，适配器的名称标签、它在适配器页面上的说明、该页面是否提供 WinUSB 以及“not implemented”警告都以此为准。只有当加载程序覆盖该厂商的所有芯片时（如 Intel），才修改 `support_tag()`。
+**一部分芯片还是整个厂商？** 加载程序通常只覆盖某厂商的部分芯片（支持 MT7921 但不支持 MT7925）。这时只有这些芯片可以脱离“不支持”：在 `app/src/crates/bt-host/src/chips.rs` 的 `LOADER_CHIPS` 中列出它们的 VID:PID，厂商保留在 `listed_chips_only()` 中。`chips::chip_supported(vendor, vid, pid)` 和 `chip_support_tag()` 随后会按适配器给出结果，适配器的名称标签、它在适配器页面上的说明、该页面是否提供 WinUSB 以及“not implemented”警告都以此为准。只有当加载程序覆盖该厂商的所有芯片时（如 Intel），才把该厂商从 `listed_chips_only()` 中去掉。
 
 {: .note }
 保持每个文件原有的换行符：有些源文件使用 CRLF，有些使用 LF。部分编辑器以及 Git Bash 中的 `sed -i` 会悄悄改写换行符，而 `cargo fmt` 不会改回来。`git diff --stat` 可以看出来：只改了几处的文件，却统计了每一行。这时请在提交前把文件转换回去（例如使用 VS Code 状态栏中的换行符切换）。
@@ -212,7 +212,7 @@ cargo test -p bt-host
 **检测**（`app/src/crates/bt-host/src/chips.rs`）：
 
 1. `ChipVendor`：新厂商需要一个变体（带一行文档注释）以及 `name()` 中的一个分支。无论哪个厂商，都要更新该枚举的文档注释（哪些厂商有加载程序）和变体的文档注释（"not supported"）
-2. 部分芯片：在 `LOADER_CHIPS` 中列出它们的 VID:PID，并在加载程序的模块中添加测试，确认它自身的芯片检查（芯片 ID、版本）恰好接受这些条目。整个厂商：`support_tag()` 从 `"unsupported"` 改为 `"experimental"`
+2. 部分芯片：在 `LOADER_CHIPS` 中列出它们的 VID:PID，并在加载程序的模块中添加测试，确认它自身的芯片检查（芯片 ID、版本）恰好接受这些条目。整个厂商：把它从 `listed_chips_only()` 中去掉
 3. `vendor_for_usb()`：该厂商的 USB VID。其他制造商也使用的 VID 必须写成 `VID if pid == PID` 来匹配，绝不能整体匹配：例如使用模块制造商 VID 的笔记本电脑模块（AzureWave 0x13D3、Foxconn 0x0489），以及 pid.codes 0x1209 这类共享 VID。这里列出的每个 VID 还会让 `is_bluetooth_vendor_vid` 把该制造商的设备视为 Bluetooth 适配器。位于 BTstack 的 Realtek 表或 `OEM_TABLE`（两者都在本文件的 `resolve_realtek_pid` 中）中的 VID:PID，会在询问 `vendor_for_usb` 之前被认定为 Realtek：请确认你的 VID:PID 不在其中
 4. `company_name()`：Read Local Version 中的 Bluetooth SIG company ID（如果还没有的话）
 5. 测试：`app/src/crates/bt-host/tests/chips.rs`（VID:PID 和标签）
@@ -234,8 +234,8 @@ cargo test -p bt-host
 
 **文档**：
 
-13. `docs/setup.md` 和 `docs/*/setup.md`（所有语言）中的芯片表：参照 Intel 的那一行添加一行，写明覆盖的芯片、固件文件及其存放位置（固件文件夹：`%APPDATA%\BlueCaster\firmware`，或其中的 `<vendor>` 子文件夹；较旧的行仍写着“config folder”），以及 *Experimental.*。窗口中的按钮名称按各语言的 `app/lang/*.json` 书写（适配器页面为 `ui.nav.adapter`，打开该文件夹的按钮为 `firmware.open_folder`）。整个厂商：把它从“Not supported”一行中去掉。部分芯片：保留该厂商，并写明仍不支持的芯片。在“固件”一节开头的句子中加上该厂商（"Intel and Broadcom adapters (experimental) may need firmware files of their own"）
-14. 有人实际用过之后更新[已验证硬件](hardware)（`docs/hardware.md`）及其在 `CONFIRMED_CHIPS`（`chips.rs`）中的 VID:PID（这会去掉它的 Experimental 标签），以及本页开头（`docs/chip-support.md`，所有语言）中列出尚无加载程序的厂商的那句话（部分芯片时写成“the other <vendor> chips”）
+13. `docs/setup.md` 和 `docs/*/setup.md`（所有语言）中的芯片表：参照 Intel 的那一行添加一行，写明覆盖的芯片、固件文件及其存放位置（固件文件夹：`%APPDATA%\BlueCaster\firmware`，或其中的 `<vendor>` 子文件夹；较旧的行仍写着“config folder”）。窗口中的按钮名称按各语言的 `app/lang/*.json` 书写（适配器页面为 `ui.nav.adapter`，打开该文件夹的按钮为 `firmware.open_folder`）。整个厂商：把它从“Not supported”一行中去掉。部分芯片：保留该厂商，并写明仍不支持的芯片。在“固件”一节开头的句子中加上该厂商（"Intel and Broadcom adapters may need firmware files of their own"）
+14. 有人实际用过之后更新[已验证硬件](hardware)（`docs/hardware.md`），以及本页开头（`docs/chip-support.md`，所有语言）中列出尚无加载程序的厂商的那句话（部分芯片时写成“the other <vendor> chips”）
 
 ## 第 7 步：在适配器上试用
 
@@ -283,4 +283,3 @@ Clippy 也会检查命名：名为 `PatchState` 的 `State` 变体会触发 `enu
 - 基于当前的 `develop-v*` 分支
 - 说明测试过哪些适配器（产品、VID:PID、芯片），包括冷启动和热启动，并附上一份探测报告和一次下载的 HCI 抓包
 - 说明加载程序中各项事实的来源
-- 在有几个人用过之前，加载程序保持**实验性**；在该适配器加入 `CONFIRMED_CHIPS` 之前，适配器页面会显示该标签

@@ -1,4 +1,4 @@
-//! MediaTek MT79xx firmware download over USB (experimental, issue #86)
+//! MediaTek MT79xx firmware download over USB (issue #86)
 //!
 //! A MediaTek combo chip (MT7925, the Bluetooth half of a Wi-Fi card) starts
 //! with its ROM: it answers standard HCI commands with "Command Disallowed"

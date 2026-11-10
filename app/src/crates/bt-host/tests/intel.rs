@@ -772,10 +772,10 @@ fn rom_patch_file_that_does_not_parse() {
 fn rom_and_first_bootloader_adapters_are_intel() {
     use bt_host::chips::{ChipVendor, chip_support_tag, chip_supported, vendor_for_usb};
     // 7260 / 3160, 7265 / 3165, 8260 / 8265, 3168: the Intel loader runs
-    // for them, tagged experimental
+    // for them, with no tag
     for pid in [0x07DC, 0x0A2A, 0x0A2B, 0x0AA7] {
         assert_eq!(vendor_for_usb(0x8087, pid, None), ChipVendor::Intel, "8087:{pid:04X}");
         assert!(chip_supported(ChipVendor::Intel, 0x8087, pid));
-        assert_eq!(chip_support_tag(ChipVendor::Intel, 0x8087, pid), Some("experimental"));
+        assert_eq!(chip_support_tag(ChipVendor::Intel, 0x8087, pid), None);
     }
 }

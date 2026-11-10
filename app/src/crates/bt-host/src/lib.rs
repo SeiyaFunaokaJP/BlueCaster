@@ -168,14 +168,14 @@ pub struct HostConfig {
     /// A Realtek firmware file loaded instead of the folder's (Realtek's
     /// Windows driver's, Developer > Debug: issue #427)
     pub realtek_firmware_file: Option<PathBuf>,
-    /// Run the Intel bootloader firmware download first (experimental)
+    /// Run the Intel bootloader firmware download first
     pub intel_loader: bool,
-    /// Run the MediaTek MT79xx firmware download first (experimental)
+    /// Run the MediaTek MT79xx firmware download first
     pub mediatek_loader: bool,
-    /// Run the Qualcomm rampatch and NVM download first (experimental)
+    /// Run the Qualcomm rampatch and NVM download first
     pub qualcomm_loader: bool,
     /// Run the download of a Realtek chip whose firmware comes from
-    /// Realtek's Windows driver first (crate::realtek_btnic, experimental):
+    /// Realtek's Windows driver first (crate::realtek_btnic):
     /// its VID:PID
     pub realtek_driver_chip: Option<(u16, u16)>,
     /// VID:PID of present Broadcom adapters (PatchRAM file names)

@@ -28,7 +28,6 @@ import type { AdapterInfo, AudioDevice, Device, Snapshot, WindowsPairedDevice } 
 import { firmwareUrl, LINKS } from "../lib/links";
 import { audioEntries, deviceKey, hifiCable, vbCable } from "../lib/profile";
 import {
-  adapterExperimental,
   adapterIds,
   adapterIdsHint,
   adapterName,
@@ -66,16 +65,7 @@ function AdapterLine(props: { adapter: AdapterInfo }) {
           {adapterIds(props.adapter)} · {driverText(props.adapter.driver).text}
         </span>
       </span>
-      <Show
-        when={!ok() || !adapterExperimental(props.adapter)}
-        fallback={
-          <span class="tag st-exp" title={t("ui.adapter.experimental_hint")}>
-            {t("ui.adapter.experimental")}
-          </span>
-        }
-      >
-        <span class={`tag st-${ok() ? "good" : "bad"}`}>{t(ok() ? "ui.setup.supported" : "ui.adapter.firmware_unsupported")}</span>
-      </Show>
+      <span class={`tag st-${ok() ? "good" : "bad"}`}>{t(ok() ? "ui.setup.supported" : "ui.adapter.firmware_unsupported")}</span>
     </>
   );
 }

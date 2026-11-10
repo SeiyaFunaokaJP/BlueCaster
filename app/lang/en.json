@@ -781,8 +781,6 @@
   "ui.adapter.firmware_keep_wifi": "Keep Wi-Fi on.",
   "ui.adapter.firmware_unsupported": "Unsupported",
   "ui.adapter.firmware_download_unavailable": "Download not available",
-  "ui.adapter.experimental": "Experimental",
-  "ui.adapter.experimental_hint": "Tried on only a few adapters so far.",
   "ui.adapter.firmware_choose_chip": "Choose the chip below",
   "ui.adapter.assign_winusb": "Replace with WinUSB driver",
   "ui.adapter.assign_title": "Let BlueCaster use this adapter",

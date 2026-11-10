@@ -50,7 +50,7 @@ BlueCaster 3.0.0 是 A2DP Windows Bridge 的新名称。直接在已安装的 2.
 
 插入 USB Bluetooth 适配器并启动 BlueCaster。首次启动时（还没有任何音频设备，或者没有任何适配器使用 WinUSB），BlueCaster 会打开**设置向导**，共四步。完成或跳过一次后，它不会再自动打开：请在**主页**或**音频设备**页面添加设备。
 
-1. **选择适配器**：列出找到的 USB Bluetooth 适配器。如果没有你的适配器，请插入后单击**刷新**。绿色的**支持**、橙色的**实验性**或红色的**不支持**表示 BlueCaster 能否使用该适配器；不支持的适配器会列出，但无法选择
+1. **选择适配器**：列出找到的 USB Bluetooth 适配器。如果没有你的适配器，请插入后单击**刷新**。绿色的**支持**或红色的**不支持**表示 BlueCaster 能否使用该适配器；不支持的适配器会列出，但无法选择
 2. **驱动程序和固件**：此步骤会列出将要执行的操作，单击**准备此适配器**即可完成：将适配器的驱动程序替换为 WinUSB（Windows 会请求管理员权限，请参阅[第 2 步](#winusb)），并下载该适配器所需的 Realtek 固件文件（请参阅[固件](#firmware)）。BlueCaster 无法下载的固件需要手动放入固件文件夹。如果 Windows 有通过此适配器配对的设备（例如内置适配器上的键盘或鼠标），该按钮会先列出它们：BlueCaster 使用该适配器期间，它们无法再配合 Windows 使用，单击**取消**可保留它们。使用自带 USB 接收器的设备不受影响；若要保留其他设备，请为 BlueCaster 使用单独的 USB 适配器。**适配器**页面的**替换为 WinUSB 驱动程序**也会列出它们
 3. **查找音频设备**：扫描会自动开始。让音频设备进入配对模式，然后单击旁边的**连接**（或输入其地址后单击**使用**）：BlueCaster 会以设备支持的最佳编解码器（自动）保存它并连接。该设备随后显示在**已配对的设备**下，并带有表示其状态的圆点，扫描随之停止。单击**添加设备**会断开它并继续扫描，以添加另一台设备；它仍会保留，选错的设备可在此删除。Windows 曾通过此适配器配对设备时，会显示**导入 Windows 的配对**：其**导入**按钮会列出这些设备，并全部勾选（请参阅[第 3 步](#headphones)）。没有设备也可以单击**下一步**；音频设备可以之后在**音频设备**页面添加。已安装 VB-Cable 时，新设备会捕获它；未安装时，此步骤会说明为何需要它，并提供**下载 VB-Cable**；之后 BlueCaster 首次发现它时，使用**默认设备**的设备会切换到它。装好 VB-Cable 后，此步骤会推荐再用一条音频线来接耳机的麦克风，即 VB-Audio 免费的 **Hi-Fi Cable**（**下载 Hi-Fi Cable**），让麦克风与声音分开。其编解码器之后可在**编解码器**页面更改
 4. **常规设置**：主题、**启动**、**通知**和更新检查，与“设置”中的控件相同，会立即保存。首次设置会开启**随 Windows 启动**和**在托盘中启动**
@@ -167,15 +167,15 @@ BlueCaster 会检测适配器的芯片组，并显示需要哪些固件文件。
 | 芯片组 | 产品示例 | 说明 |
 |:--------|:-----------------|:------|
 | Realtek | TP-Link UB500、RTL8761BU | 需要下载固件（见上文）。测试最充分 |
-| Realtek | 笔记本电脑内置的 RTL8852BD（`0BDA:B853`） | *实验性。* linux-firmware 中没有它的固件：BlueCaster 从 Realtek 的 Windows 蓝牙驱动程序中读取 `rtl8852bd_mp_chip_new.dat`，因此请勿卸载该驱动程序（或将该文件放入固件文件夹）。尚未在实际硬件上测试 |
+| Realtek | 笔记本电脑内置的 RTL8852BD（`0BDA:B853`） | linux-firmware 中没有它的固件：BlueCaster 从 Realtek 的 Windows 蓝牙驱动程序中读取 `rtl8852bd_mp_chip_new.dat`，因此请勿卸载该驱动程序（或将该文件放入固件文件夹）。尚未在实际硬件上测试 |
 | CSR | 通用 CSR8510 适配器 | 开箱即用，无需固件 |
 | Barrot | Bluetooth 5.4 / 6.0 适配器（`33FA:0010`、`33FA:0012`） | 使用 ROM 固件运行，无需固件。目前仅有一份用户报告 |
-| Marvell | Microsoft Surface Pro / Surface Book 内置（88W8897） | *实验性。* 无需固件文件：Wi-Fi 驱动也会加载蓝牙固件，请保持 Wi-Fi 开启。尚未在实际硬件上测试 |
-| Actions | ATS2851 适配器（`10D7:B012`） | *实验性。* 使用 ROM 固件运行，无需固件。它声称支持一些实际无法执行的命令，BlueCaster 会将其隐藏。尚未在实际硬件上测试 |
-| Broadcom | ASUS BT400 (BCM20702) | 除 BT400 外均为*实验性*。报告厂商类 `FF/01/01` 而非 Bluetooth 类 `E0/01/01` 的适配器（BCM20702 OEM 适配器）也能被检测到。使用 ROM 固件运行；如果固件文件夹中有可选的 PatchRAM `.hcd` 文件（如 `BCM20702A1-0b05-17cb.hcd`），会在启动时上传 |
-| Intel | Intel 7260 / 3160 / 7265 / 3165 / 3168 / 8260 / 8265 / 9260 / AX200 / AX201 / AX210 / AX211 | 除 AX200 和 AX211 外均为*实验性*。处于 bootloader 模式时（如冷启动后），需要将 linux-firmware `intel/` 中对应的 `ibt-*.sfi` + `ibt-*.ddc` 放入固件文件夹，所需文件名会写在日志里（例如 `ibt-0180-0041.sfi`）。7260 / 3160 / 7265 / 3165 / 3168 由 ROM 运行，无需文件；同一文件夹中有对应的 `ibt-hw-*.bseq` 补丁时会加载 |
-| MediaTek | MT7925、MT7922、MT7921、MT7902（AMD RZ717、RZ616、RZ608 等 Wi-Fi 网卡） | 除 MT7925 和 MT7921 外均为*实验性*。需要该芯片的 `BT_RAM_CODE_MT*_hdr.bin`（例如 `BT_RAM_CODE_MT7925_1_1_hdr.bin`）：如果装有 MediaTek 的 Windows Bluetooth 驱动程序，BlueCaster 会从中读取；否则请将 linux-firmware `mediatek/` 中的该文件放入固件文件夹，所需文件名会写在日志里 |
-| Qualcomm | QCA61x4、QCA9377（ROME）、WCN6855（FastConnect 6900） | *实验性。* 需要该芯片的 rampatch 和 NVM（例如 `AthrBT_0x00000302.dfu` 和 `ramps_0x00000302_48.dfu`）：如果装有 Qualcomm 的 Windows Bluetooth 驱动程序，BlueCaster 会从中读取；否则请将 linux-firmware `qca/` 中的文件（`rampatch_usb_*.bin`、`nvm_usb_*.bin`）放入固件文件夹，所需文件名会写在日志里。尚未在实际硬件上测试 |
+| Marvell | Microsoft Surface Pro / Surface Book 内置（88W8897） | 无需固件文件：Wi-Fi 驱动也会加载蓝牙固件，请保持 Wi-Fi 开启。尚未在实际硬件上测试 |
+| Actions | ATS2851 适配器（`10D7:B012`） | 使用 ROM 固件运行，无需固件。它声称支持一些实际无法执行的命令，BlueCaster 会将其隐藏。尚未在实际硬件上测试 |
+| Broadcom | ASUS BT400 (BCM20702) | 报告厂商类 `FF/01/01` 而非 Bluetooth 类 `E0/01/01` 的适配器（BCM20702 OEM 适配器）也能被检测到。使用 ROM 固件运行；如果固件文件夹中有可选的 PatchRAM `.hcd` 文件（如 `BCM20702A1-0b05-17cb.hcd`），会在启动时上传 |
+| Intel | Intel 7260 / 3160 / 7265 / 3165 / 3168 / 8260 / 8265 / 9260 / AX200 / AX201 / AX210 / AX211 | 处于 bootloader 模式时（如冷启动后），需要将 linux-firmware `intel/` 中对应的 `ibt-*.sfi` + `ibt-*.ddc` 放入固件文件夹，所需文件名会写在日志里（例如 `ibt-0180-0041.sfi`）。7260 / 3160 / 7265 / 3165 / 3168 由 ROM 运行，无需文件；同一文件夹中有对应的 `ibt-hw-*.bseq` 补丁时会加载 |
+| MediaTek | MT7925、MT7922、MT7921、MT7902（AMD RZ717、RZ616、RZ608 等 Wi-Fi 网卡） | 需要该芯片的 `BT_RAM_CODE_MT*_hdr.bin`（例如 `BT_RAM_CODE_MT7925_1_1_hdr.bin`）：如果装有 MediaTek 的 Windows Bluetooth 驱动程序，BlueCaster 会从中读取；否则请将 linux-firmware `mediatek/` 中的该文件放入固件文件夹，所需文件名会写在日志里 |
+| Qualcomm | QCA61x4、QCA9377（ROME）、WCN6855（FastConnect 6900） | 需要该芯片的 rampatch 和 NVM（例如 `AthrBT_0x00000302.dfu` 和 `ramps_0x00000302_48.dfu`）：如果装有 Qualcomm 的 Windows Bluetooth 驱动程序，BlueCaster 会从中读取；否则请将 linux-firmware `qca/` 中的文件（`rampatch_usb_*.bin`、`nvm_usb_*.bin`）放入固件文件夹，所需文件名会写在日志里。尚未在实际硬件上测试 |
 | MediaTek、Qualcomm | 其他 MediaTek 芯片（MT7927）、其他 Qualcomm 芯片（QCA6290、WCN785x） | 不支持：需要 BlueCaster 所没有的固件加载程序（[帮助添加支持](chip-support)） |
 
 对于 LDAC 等高比特率编解码器，USB Bluetooth 5.0+ 适配器通常效果最好。

@@ -328,7 +328,7 @@ impl HostApp {
     /// firmware running the loader is done after one command.
     pub fn start_intel_loader(&mut self, stack: &Stack) {
         let dir = self.setup.firmware_dir.clone();
-        tracing::info!("Intel adapter: checking bootloader firmware (experimental), folder {}", dir.display());
+        tracing::info!("Intel adapter: checking bootloader firmware, folder {}", dir.display());
         let loader = intel::Loader::new(Box::new(move |name| read_firmware_file(&dir, "intel", name)));
         self.start_loader(stack, Box::new(loader));
     }
@@ -337,7 +337,7 @@ impl HostApp {
     /// init: the firmware folder first, then MediaTek's Windows driver
     pub fn start_mediatek_loader(&mut self, stack: &Stack) {
         let dir = self.setup.firmware_dir.clone();
-        tracing::info!("MediaTek adapter: checking its firmware (experimental), folder {}", dir.display());
+        tracing::info!("MediaTek adapter: checking its firmware, folder {}", dir.display());
         let loader = mediatek::Loader::new(Box::new(move |name| {
             read_firmware_file(&dir, "mediatek", name).or_else(|| mediatek::from_windows_driver(name))
         }));
@@ -352,7 +352,7 @@ impl HostApp {
     /// init: the firmware folder first, then Qualcomm's Windows driver
     pub fn start_qualcomm_loader(&mut self, stack: &Stack) {
         let dir = self.setup.firmware_dir.clone();
-        tracing::info!("Qualcomm adapter: checking its firmware (experimental), folder {}", dir.display());
+        tracing::info!("Qualcomm adapter: checking its firmware, folder {}", dir.display());
         let loader = qualcomm::Loader::new(Box::new(move |name| {
             read_firmware_file(&dir, "qca", name).or_else(|| qualcomm::from_windows_driver(name))
         }));
@@ -364,7 +364,7 @@ impl HostApp {
     /// first, then the driver
     pub fn start_realtek_driver_loader(&mut self, stack: &Stack, chip: &'static str, file: &'static str) {
         let dir = self.setup.firmware_dir.clone();
-        tracing::info!("Realtek {chip}: checking its firmware (experimental), folder {}", dir.display());
+        tracing::info!("Realtek {chip}: checking its firmware, folder {}", dir.display());
         let loader = realtek_btnic::Loader::new(
             Box::new(move |name| {
                 read_firmware_file(&dir, "realtek", name).or_else(|| realtek_btnic::from_windows_driver(name))
@@ -1664,7 +1664,7 @@ impl HostApp {
         );
         match find_bcm_hcd(&self.setup.firmware_dir, &self.setup.broadcom_ids) {
             Some(path) => {
-                tracing::info!("Broadcom PatchRAM {} (experimental)", path.display());
+                tracing::info!("Broadcom PatchRAM {}", path.display());
                 stack.set_chipset_bcm(&path.to_string_lossy());
             }
             None => tracing::info!(

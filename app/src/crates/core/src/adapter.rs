@@ -1,6 +1,6 @@
 //! Which controller to open and how to bring it up: the Realtek chip for the
 //! firmware download (setting, or the detected adapter as v1's "Auto"), the
-//! Intel bootloader download and Broadcom PatchRAM (experimental), and the
+//! Intel bootloader download and Broadcom PatchRAM, and the
 //! AFH classification from the PC's Wi-Fi.
 
 use std::collections::BTreeMap;
@@ -205,7 +205,7 @@ pub fn configure(config: &mut HostConfig, settings: &Settings, _config_dir: &Pat
         }
     }
     if pid == 0 {
-        // Other vendors (experimental): Intel needs its bootloader
+        // Other vendors: Intel needs its bootloader
         // firmware, Broadcom may take a PatchRAM
         // One held by another program cannot be loaded either (v1 skipped
         // it too)

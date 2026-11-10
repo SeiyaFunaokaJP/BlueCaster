@@ -781,8 +781,6 @@
   "ui.adapter.firmware_keep_wifi": "Laissez le Wi-Fi activé.",
   "ui.adapter.firmware_unsupported": "Non pris en charge",
   "ui.adapter.firmware_download_unavailable": "Téléchargement indisponible",
-  "ui.adapter.experimental": "Expérimental",
-  "ui.adapter.experimental_hint": "Essayé sur peu d'adaptateurs jusqu'ici.",
   "ui.adapter.firmware_choose_chip": "Choisissez la puce ci-dessous",
   "ui.adapter.assign_winusb": "Remplacer par le pilote WinUSB",
   "ui.adapter.assign_title": "Laisser BlueCaster utiliser cet adaptateur",

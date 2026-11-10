@@ -781,8 +781,6 @@
   "ui.adapter.firmware_keep_wifi": "请保持 Wi-Fi 开启。",
   "ui.adapter.firmware_unsupported": "不支持",
   "ui.adapter.firmware_download_unavailable": "无可用下载",
-  "ui.adapter.experimental": "实验性",
-  "ui.adapter.experimental_hint": "目前只在少数适配器上试过。",
   "ui.adapter.firmware_choose_chip": "请在下方选择芯片",
   "ui.adapter.assign_winusb": "替换为 WinUSB 驱动程序",
   "ui.adapter.assign_title": "让 BlueCaster 使用此适配器",
