@@ -169,9 +169,9 @@ config:
     rankSpacing: 30
 ---
 flowchart TD
-    out["시스템 오디오 출력 (루프백 / 가상 장치 / 한 응용 프로그램)"]
-    out --> cap["capture 스레드: WASAPI, 이벤트 기반 (보통 float32, 44.1–96 kHz)"]
-    cap -->|"lock-free 링 (PCM)"| enc["encode 스레드: 변환, 다운믹스, 인코더, 미디어 페이로드 + RTP 헤더, ABR"]
+    out["시스템 오디오 출력<br>(루프백 / 가상 장치 / 한 응용 프로그램)"]
+    out --> cap["capture 스레드:<br>WASAPI, 이벤트 기반 (보통 float32, 44.1–96 kHz)"]
+    cap -->|"lock-free 링 (PCM)"| enc["encode 스레드:<br>변환, 다운믹스, 인코더, 미디어 페이로드 + RTP 헤더, ABR"]
     enc -->|"lock-free 링 (패킷)"| stack["bt-runloop 스레드: BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → USB Bluetooth 어댑터 → 무선"]
     usb -.-> hp["헤드폰 / 스피커"]
@@ -226,7 +226,7 @@ stateDiagram-v2
     Idle --> Connecting: 시작
     Connecting --> Streaming: 스트림 시작됨
     Connecting --> Idle: 중지됨
-    Connecting --> Error: 초기화 / 연결 / 코덱 실패
+    Connecting --> Error: 초기화 / 연결 /<br>코덱 실패
     Streaming --> Reconnecting: 연결 끊김
     Reconnecting --> Streaming: 다시 연결됨
     Reconnecting --> Error: 다시 연결 실패

@@ -141,10 +141,10 @@ config:
     rankSpacing: 30
 ---
 flowchart TD
-    out["システムの音声出力（ループバック / 仮想デバイス / アプリ単位）"]
-    out --> cap["capture スレッド: WASAPI、イベント駆動（通常 float32、44.1–96 kHz）"]
-    cap -->|"ロックフリーのリング（PCM）"| enc["encode スレッド: 形式変換、ダウンミックス、エンコーダー、メディアペイロード + RTP ヘッダー、ABR"]
-    enc -->|"ロックフリーのリング（パケット）"| stack["bt-runloop スレッド: BTstack → AVDTP → L2CAP → HCI"]
+    out["システムの音声出力<br>（ループバック / 仮想デバイス / アプリ単位）"]
+    out --> cap["capture スレッド:<br>WASAPI、イベント駆動（通常 float32、44.1–96 kHz）"]
+    cap -->|"ロックフリーのリング<br>（PCM）"| enc["encode スレッド:<br>形式変換、ダウンミックス、エンコーダー、<br>メディアペイロード + RTP ヘッダー、ABR"]
+    enc -->|"ロックフリーのリング<br>（パケット）"| stack["bt-runloop スレッド: BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → USB Bluetooth アダプター → 無線"]
     usb -.-> hp["ヘッドホン / スピーカー"]
 ```
@@ -180,7 +180,7 @@ stateDiagram-v2
     Idle --> Connecting: 開始
     Connecting --> Streaming: ストリーム開始
     Connecting --> Idle: 停止
-    Connecting --> Error: 初期化 / 接続 / コーデックの失敗
+    Connecting --> Error: 初期化 / 接続 /<br>コーデックの失敗
     Streaming --> Reconnecting: 接続断
     Reconnecting --> Streaming: 再接続成功
     Reconnecting --> Error: 再接続失敗

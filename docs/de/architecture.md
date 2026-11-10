@@ -174,10 +174,10 @@ config:
     rankSpacing: 30
 ---
 flowchart TD
-    out["Systemaudio-Ausgabe (Loopback / virtuelles Gerät / eine App)"]
-    out --> cap["Thread capture: WASAPI, ereignisgesteuert (meist float32, 44,1–96 kHz)"]
-    cap -->|"sperrfreier Ringpuffer (PCM)"| enc["Thread encode: Umwandlung, Downmix, Encoder, Mediennutzdaten + RTP-Header, ABR"]
-    enc -->|"sperrfreier Ringpuffer (Pakete)"| stack["Thread bt-runloop: BTstack → AVDTP → L2CAP → HCI"]
+    out["Systemaudio-Ausgabe<br>(Loopback / virtuelles Gerät / eine App)"]
+    out --> cap["Thread capture:<br>WASAPI, ereignisgesteuert (meist float32, 44,1–96 kHz)"]
+    cap -->|"sperrfreier<br>Ringpuffer (PCM)"| enc["Thread encode:<br>Umwandlung, Downmix, Encoder,<br>Mediennutzdaten + RTP-Header, ABR"]
+    enc -->|"sperrfreier<br>Ringpuffer (Pakete)"| stack["Thread bt-runloop: BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → USB-Bluetooth-Adapter → Funk"]
     usb -.-> hp["Kopfhörer / Lautsprecher"]
 ```
@@ -233,10 +233,10 @@ stateDiagram-v2
     Idle --> Connecting: Start
     Connecting --> Streaming: Stream gestartet
     Connecting --> Idle: gestoppt
-    Connecting --> Error: Fehler bei Init / Verbindung / Codec
+    Connecting --> Error: Fehler bei Init /<br>Verbindung / Codec
     Streaming --> Reconnecting: Verbindung verloren
     Reconnecting --> Streaming: wieder verbunden
-    Reconnecting --> Error: Neuverbindung fehlgeschlagen
+    Reconnecting --> Error: Neuverbindung<br>fehlgeschlagen
     Streaming --> Idle: Stopp
     Error --> Connecting: erneut starten
 ```

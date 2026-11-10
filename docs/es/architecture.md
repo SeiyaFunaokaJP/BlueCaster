@@ -174,10 +174,10 @@ config:
     rankSpacing: 30
 ---
 flowchart TD
-    out["Salida de audio del sistema (loopback / dispositivo virtual / una aplicación)"]
-    out --> cap["hilo capture: WASAPI, controlado por eventos (normalmente float32, 44.1–96 kHz)"]
-    cap -->|"búfer circular sin bloqueos (PCM)"| enc["hilo encode: conversión, mezcla descendente, codificador, carga útil multimedia + encabezado RTP, ABR"]
-    enc -->|"búfer circular sin bloqueos (paquetes)"| stack["hilo bt-runloop: BTstack → AVDTP → L2CAP → HCI"]
+    out["Salida de audio del sistema<br>(loopback / dispositivo virtual / una aplicación)"]
+    out --> cap["hilo capture:<br>WASAPI, controlado por eventos<br>(normalmente float32, 44.1–96 kHz)"]
+    cap -->|"búfer circular<br>sin bloqueos (PCM)"| enc["hilo encode:<br>conversión, mezcla descendente, codificador,<br>carga útil multimedia + encabezado RTP, ABR"]
+    enc -->|"búfer circular sin<br>bloqueos (paquetes)"| stack["hilo bt-runloop: BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → adaptador Bluetooth USB → radio"]
     usb -.-> hp["Auriculares / altavoces"]
 ```
@@ -233,7 +233,7 @@ stateDiagram-v2
     Idle --> Connecting: Iniciar
     Connecting --> Streaming: transmisión iniciada
     Connecting --> Idle: detenido
-    Connecting --> Error: fallo de inicialización / conexión / códec
+    Connecting --> Error: fallo de inicialización /<br>conexión / códec
     Streaming --> Reconnecting: conexión perdida
     Reconnecting --> Streaming: reconectado
     Reconnecting --> Error: fallo de reconexión

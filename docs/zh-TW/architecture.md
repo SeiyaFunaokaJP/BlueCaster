@@ -165,8 +165,8 @@ config:
 ---
 flowchart TD
     out["系統音訊輸出 (回送 / 虛擬裝置 / 單一應用程式)"]
-    out --> cap["capture 執行緒: WASAPI，事件驅動 (通常為 float32，44.1–96 kHz)"]
-    cap -->|"無鎖環形緩衝區 (PCM)"| enc["encode 執行緒: 轉換、降混、編碼器、媒體酬載 + RTP 標頭、ABR"]
+    out --> cap["capture 執行緒:<br>WASAPI，事件驅動 (通常為 float32，44.1–96 kHz)"]
+    cap -->|"無鎖環形緩衝區 (PCM)"| enc["encode 執行緒:<br>轉換、降混、編碼器、媒體酬載 + RTP 標頭、ABR"]
     enc -->|"無鎖環形緩衝區 (封包)"| stack["bt-runloop 執行緒: BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → USB 藍牙介面卡 → 無線電"]
     usb -.-> hp["耳機 / 喇叭"]
@@ -218,7 +218,7 @@ stateDiagram-v2
     Idle --> Connecting: 開始
     Connecting --> Streaming: 串流已開始
     Connecting --> Idle: 已停止
-    Connecting --> Error: 初始化 / 連線 / 轉碼器失敗
+    Connecting --> Error: 初始化 / 連線 /<br>轉碼器失敗
     Streaming --> Reconnecting: 連線中斷
     Reconnecting --> Streaming: 已重新連線
     Reconnecting --> Error: 重新連線失敗

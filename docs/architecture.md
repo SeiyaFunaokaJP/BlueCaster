@@ -174,8 +174,8 @@ config:
 ---
 flowchart TD
     out["System audio output (loopback / virtual device / one app)"]
-    out --> cap["capture thread: WASAPI, event-driven (usually float32, 44.1–96 kHz)"]
-    cap -->|"lock-free ring (PCM)"| enc["encode thread: conversion, downmix, encoder, media payload + RTP header, ABR"]
+    out --> cap["capture thread:<br>WASAPI, event-driven (usually float32, 44.1–96 kHz)"]
+    cap -->|"lock-free ring (PCM)"| enc["encode thread:<br>conversion, downmix, encoder,<br>media payload + RTP header, ABR"]
     enc -->|"lock-free ring (packets)"| stack["bt-runloop thread: BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → USB Bluetooth adapter → radio"]
     usb -.-> hp["Headphones / speakers"]
@@ -232,7 +232,7 @@ stateDiagram-v2
     Idle --> Connecting: Start
     Connecting --> Streaming: stream started
     Connecting --> Idle: stopped
-    Connecting --> Error: init / connect / codec failure
+    Connecting --> Error: init / connect /<br>codec failure
     Streaming --> Reconnecting: connection lost
     Reconnecting --> Streaming: reconnected
     Reconnecting --> Error: reconnect failed

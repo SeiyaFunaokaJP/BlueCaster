@@ -142,9 +142,9 @@ config:
 ---
 flowchart TD
     out["系统音频输出（环回 / 虚拟设备 / 单个应用）"]
-    out --> cap["capture 线程：WASAPI，事件驱动（通常为 float32，44.1–96 kHz）"]
-    cap -->|"无锁环形缓冲区（PCM）"| enc["encode 线程：转换、缩混、编码器、媒体负载 + RTP 标头、ABR"]
-    enc -->|"无锁环形缓冲区（数据包）"| stack["bt-runloop 线程：BTstack → AVDTP → L2CAP → HCI"]
+    out --> cap["capture 线程：<br>WASAPI，事件驱动（通常为 float32，44.1–96 kHz）"]
+    cap -->|"无锁环形缓冲区（PCM）"| enc["encode 线程：<br>转换、缩混、编码器、媒体负载 + RTP 标头、ABR"]
+    enc -->|"无锁环形缓冲区<br>（数据包）"| stack["bt-runloop 线程：BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → USB Bluetooth 适配器 → 无线电"]
     usb -.-> hp["耳机 / 音箱"]
 ```
@@ -181,7 +181,7 @@ stateDiagram-v2
     Idle --> Connecting: 开始
     Connecting --> Streaming: 流已开始
     Connecting --> Idle: 已停止
-    Connecting --> Error: 初始化 / 连接 / 编解码器失败
+    Connecting --> Error: 初始化 / 连接 /<br>编解码器失败
     Streaming --> Reconnecting: 连接断开
     Reconnecting --> Streaming: 已重新连接
     Reconnecting --> Error: 重新连接失败

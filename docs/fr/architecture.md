@@ -174,10 +174,10 @@ config:
     rankSpacing: 30
 ---
 flowchart TD
-    out["Sortie audio du système (bouclage / périphérique virtuel / une application)"]
-    out --> cap["thread capture : WASAPI, piloté par événements (généralement float32, 44.1–96 kHz)"]
-    cap -->|"anneau sans verrou (PCM)"| enc["thread encode : conversion, downmix, encodeur, charge utile média + en-tête RTP, ABR"]
-    enc -->|"anneau sans verrou (paquets)"| stack["thread bt-runloop : BTstack → AVDTP → L2CAP → HCI"]
+    out["Sortie audio du système<br>(bouclage / périphérique virtuel / une application)"]
+    out --> cap["thread capture :<br>WASAPI, piloté par événements<br>(généralement float32, 44.1–96 kHz)"]
+    cap -->|"anneau sans verrou (PCM)"| enc["thread encode :<br>conversion, downmix, encodeur,<br>charge utile média + en-tête RTP, ABR"]
+    enc -->|"anneau sans<br>verrou (paquets)"| stack["thread bt-runloop : BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → adaptateur Bluetooth USB → radio"]
     usb -.-> hp["Casque / enceintes"]
 ```
@@ -233,7 +233,7 @@ stateDiagram-v2
     Idle --> Connecting: Démarrer
     Connecting --> Streaming: flux démarré
     Connecting --> Idle: arrêté
-    Connecting --> Error: échec init / connexion / codec
+    Connecting --> Error: échec init /<br>connexion / codec
     Streaming --> Reconnecting: connexion perdue
     Reconnecting --> Streaming: reconnecté
     Reconnecting --> Error: échec de la reconnexion
