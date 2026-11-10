@@ -996,10 +996,6 @@ pub struct Snapshot {
     /// The vendors with protocols of their own (developer mode's overrides)
     #[serde(default)]
     pub vendors: Vec<VendorInfo>,
-    /// The VB-CABLE package is beside the core (release builds), so
-    /// audio.install_vb_cable can install it
-    #[serde(default)]
-    pub vb_cable_bundled: bool,
 }
 
 /// A crash report (logs\crash\<process>-<stamp>.txt): a panic or a crash
@@ -1743,7 +1739,7 @@ pub enum Method {
     /// -> AudioApp[]
     #[serde(rename = "audio.apps")]
     AudioApps,
-    /// Installs the VB-CABLE package shipped with BlueCaster (UAC prompt)
+    /// Downloads VB-Audio's VB-CABLE pack and installs it (UAC prompt)
     /// -> bool: VB-CABLE is among Windows' outputs now (false: Windows may
     /// need a restart first)
     #[serde(rename = "audio.install_vb_cable")]
@@ -2591,7 +2587,6 @@ mod tests {
             verbose: None,
             crashes: Vec::new(),
             vendors: Vec::new(),
-            vb_cable_bundled: false,
         })
         .unwrap();
         snap.as_object_mut().unwrap().remove("le_scanning");

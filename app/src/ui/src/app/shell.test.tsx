@@ -357,6 +357,18 @@ describe("Audio Devices without a virtual device (issue #86)", () => {
     expect(core.state.snap!.settings.hifi_cable_note_hidden).toBe(true);
   });
 
+  it("offers VB-Audio's page when VB-CABLE cannot be downloaded", async () => {
+    location.hash = "#/devices";
+    const m = new MockCore({ speed: 0 });
+    m.noVirtual = true;
+    m.vbCableDownloadFails = true;
+    mock = m;
+    render(() => <App core={createCore(m)} />);
+    fireEvent.click(await screen.findByRole("button", { name: t("vbcable.install") }));
+    expect(await screen.findByRole("button", { name: t("vbcable.download") })).toBeInTheDocument();
+    expect(screen.getByText(t("ui.setup.vbcable_note"))).toBeInTheDocument();
+  });
+
   it("keeps the cables on Settings after their notes were closed", async () => {
     location.hash = "#/settings";
     const m = new MockCore({ speed: 0 });

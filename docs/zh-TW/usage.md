@@ -263,7 +263,7 @@ BlueCaster 支援四種音訊擷取模式，分別為單獨列在最前面的 **
 在虛擬裝置模式下，**連線時設為 Windows 預設輸出** 會在串流期間將所選裝置設為 Windows 預設輸出，讓應用程式不需變更 Windows 設定即可播放到該裝置。停止串流時，BlueCaster 會切換回先前的預設裝置。
 
 - **輸出來源** 清單的虛擬裝置之下，只會提供 BlueCaster 偵測為虛擬音訊裝置的裝置。
-- **虛擬線材**：推薦聲音使用 VB-Audio 的 **Hi-Fi Cable**（增加的延遲最小），耳機的麥克風使用 **VB-CABLE**。缺少其中之一時，**音訊裝置** 畫面和設定精靈會推薦它；× 可關閉該推薦，**設定** > **虛擬線材** 中兩者都會保留。**安裝 VB-CABLE** 會安裝 BlueCaster 未經修改地隨附的 VB-CABLE 安裝套件（會要求系統管理員權限；若沒有出現，請重新啟動 Windows）；**下載 Hi-Fi Cable** 會開啟 VB-Audio 的頁面。兩者都是 VB-Audio 的捐贈軟體（[vb-cable.com](https://vb-cable.com/)），捐款歸 VB-Audio 所有；在公司或其他組織中，VB-Audio 要求每次安裝都有授權（[授權](https://vb-audio.com/Services/licensing.htm)）。VB-CABLE 作為輸出來源時，會有提示推薦 Hi-Fi Cable：**使用 Hi-Fi Cable** 會將它設為輸出來源，並把原本播放到它或沒有輸出的麥克風改到 VB-CABLE。在您選擇之前，不會有任何變更。
+- **虛擬線材**：推薦聲音使用 VB-Audio 的 **Hi-Fi Cable**（增加的延遲最小），耳機的麥克風使用 **VB-CABLE**。缺少其中之一時，**音訊裝置** 畫面和設定精靈會推薦它；× 可關閉該推薦，**設定** > **虛擬線材** 中兩者都會保留。**安裝 VB-CABLE** 會從 VB-Audio 下載其 VB-CABLE 安裝套件（1.3 MB）並原樣安裝（會要求系統管理員權限；下載失敗時，**下載 VB-Cable** 會改為開啟 VB-Audio 的頁面；若沒有出現權限要求，請重新啟動 Windows）；**下載 Hi-Fi Cable** 會開啟 VB-Audio 的頁面。兩者都是 VB-Audio 的捐贈軟體（[vb-cable.com](https://vb-cable.com/)），捐款歸 VB-Audio 所有；在公司或其他組織中，VB-Audio 要求每次安裝都有授權（[授權](https://vb-audio.com/Services/licensing.htm)）。VB-CABLE 作為輸出來源時，會有提示推薦 Hi-Fi Cable：**使用 Hi-Fi Cable** 會將它設為輸出來源，並把原本播放到它或沒有輸出的麥克風改到 VB-CABLE。在您選擇之前，不會有任何變更。
 - 不會變更預設通訊裝置（通話應用程式使用的裝置）。
 - 部分應用程式在重新啟動前，仍會在先前的裝置上播放。
 - 如果 BlueCaster 意外結束，預設裝置不會切換回來。請在 Windows 音效設定中變更。
