@@ -879,6 +879,11 @@ pub struct Settings {
     /// flyout's app list and mute_output take effect only with it on
     #[serde(default)]
     pub volume_mixer: bool,
+    /// Developer > Show every audio device (off by default): the Output and
+    /// Input Source lists offer every device, in force while developer_mode
+    /// is on
+    #[serde(default)]
+    pub all_audio_devices: bool,
     /// Developer mode: receiver test, HCI capture, debug details
     pub developer_mode: bool,
     /// Developer mode: overrides of the codec and media path, in force

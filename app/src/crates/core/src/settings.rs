@@ -179,6 +179,10 @@ pub struct Settings {
     /// screen, the flyout's app list and the output mute above are there
     /// only with this on as well as debug_mode
     pub volume_mixer: bool,
+    /// Developer > "Show every audio device" (off by default, issue #86):
+    /// the Output and Input Source lists offer every output, the 16-channel
+    /// cable and the other side's cable too (only with debug_mode on)
+    pub all_audio_devices: bool,
 
     pub debug_mode: bool,
     /// Developer mode: overrides of the codec and media path (in force only
@@ -376,6 +380,7 @@ impl Default for Settings {
             volume_sync: true,
             mute_output: false,
             volume_mixer: false,
+            all_audio_devices: false,
             debug_mode: false,
             dev_overrides: codec::dev::DevOverrides::default(),
             dev_vendors: Default::default(),
