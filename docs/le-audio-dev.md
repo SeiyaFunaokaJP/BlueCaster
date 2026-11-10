@@ -567,7 +567,20 @@ Users with the setting off get the behaviour of a build without LE:
   Audio is off still advertise over LE for their app). Emulator scan case
   `le-audio` (`run_test.py --scan le-audio`).
 - **Devices and profiles.** A dual-mode device has two entries (classic and
-  LE Audio, same address); an LE scan never marks a classic entry. LE Audio
+  LE Audio, same address) in the core; an LE scan never marks a classic
+  entry. The UI shows them as one (issue #86, `lib/profile.ts`
+  `listedDevices`): with the setting on, the LE Audio entry stands for
+  both, Add / Rename / Forget act on both and Add makes both profiles; a
+  scan that finds the other side of a saved device saves it too
+  (`service.rs` `save_twins`). Turning the setting on or off while a device
+  streams restarts the stack and starts the device's profile of the other
+  kind (`state.rs` `le_switched_profile`, an LE profile made from the
+  classic one when missing). CTKD runs whenever SM is up, not only in
+  developer mode, so a classic pairing brings the LE keys.
+- **Conversational contexts.** With the microphone, the sink ASEs name the
+  source contexts alone (Conversational), not Media | Conversational: EarFun
+  earbuds answered that Enable with Rejected Metadata. A conversational
+  start that fails is retried once without the microphone. LE Audio
   entries are saved in `le_audio_devices.txt` so that `devices.txt` stays
   readable by older versions; `addr|name|le` lines of earlier prototypes are
   still read and moved. With the setting off the UI does not list LE Audio

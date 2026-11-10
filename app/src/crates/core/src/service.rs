@@ -93,6 +93,40 @@ pub struct ScannedDevice {
     pub le_audio_set: bool,
 }
 
+/// One device, not two (issue #86): a scan that finds the other side
+/// (classic / LE Audio, the same address) of a saved device saves that side
+/// too, under the saved name, so the device stays one entry that "Use LE
+/// Audio when available" connects either way. The sides saved.
+fn save_twins(dir: &std::path::Path, found: &[ScannedDevice]) -> usize {
+    let saved = crate::devices::load_all(dir);
+    let mut n = 0;
+    for d in found {
+        let has = |le: bool| saved.iter().find(|s| s.le_audio == le && s.address.eq_ignore_ascii_case(&d.address));
+        if has(d.le_audio).is_some() {
+            continue;
+        }
+        // The other side saved, and this side found by the scan
+        let Some(other) = has(!d.le_audio) else { continue };
+        let name = if other.name.is_empty() { d.name.as_str() } else { other.name.as_str() };
+        let r = if d.le_audio {
+            crate::devices::save_le(dir, &d.address, name)
+        } else {
+            crate::devices::save(dir, &d.address, name)
+        };
+        match r {
+            Ok(()) => {
+                n += 1;
+                tracing::info!(
+                    "scan: the {} side of a saved device saved with it",
+                    if d.le_audio { "LE Audio" } else { "classic" }
+                );
+            }
+            Err(e) => tracing::warn!("scan: saving the other side of a saved device: {e}"),
+        }
+    }
+    n
+}
+
 impl ScannedDevice {
     fn classic(d: &DiscoveredDevice) -> ScannedDevice {
         ScannedDevice {
@@ -997,10 +1031,11 @@ fn afh_policy(settings: &Settings) -> &str {
 }
 
 /// The developer overrides (and the health log's interval) count only while
-/// developer mode is on; so does asking classic devices for their LE keys
-/// (issue #86, for the Services popup; it needs LE Audio on as well)
+/// developer mode is on. Classic devices are asked for their LE keys always
+/// (issue #86: one pairing for both, as Windows does; it runs only with LE
+/// Audio on, where SM is set up).
 fn apply_dev_overrides(settings: &Settings) {
-    bt_host::set_ctkd(settings.debug_mode);
+    bt_host::set_ctkd(true);
     codec::dev::set_overrides(if settings.debug_mode { settings.dev_overrides } else { Default::default() });
     crate::vendor::set_overrides(if settings.debug_mode { settings.dev_vendors.clone() } else { Default::default() });
     crate::health::set_every_interval(settings.log().health_every_interval);
@@ -1805,6 +1840,7 @@ impl Service {
             }
             le_found = found;
             list.extend(entries);
+            save_twins(&self.inner.opts.config_dir, &list);
         }
         self.inner.notify(StreamState::Idle, Msg::with("status.scan_complete", &[&(classic.len() + le_found)]));
         Ok(list)
@@ -1919,6 +1955,34 @@ mod tests {
         assert_eq!(reconnect_after_restart(true, false, last()), None);
         assert_eq!(reconnect_after_restart(false, true, last()), None);
         assert_eq!(reconnect_after_restart(false, false, None), None);
+    }
+
+    #[test]
+    fn a_scan_saves_the_other_side_of_a_saved_device() {
+        let dir = std::env::temp_dir().join(format!("bluecaster-twins-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(crate::paths::devices_dir(&dir)).unwrap();
+        crate::devices::save(&dir, "AA:BB:CC:DD:EE:01", "Buds").unwrap();
+        let found = |address: &str, le_audio| ScannedDevice {
+            address: address.into(),
+            name: String::new(),
+            rssi: -50,
+            class_of_device: 0,
+            audio: true,
+            le_audio,
+            le_audio_set: false,
+        };
+        let list =
+            [found("AA:BB:CC:DD:EE:01", false), found("aa:bb:cc:dd:ee:01", true), found("AA:BB:CC:DD:EE:02", true)];
+        // The LE Audio side of the saved one, under its name; not the stranger
+        assert_eq!(save_twins(&dir, &list), 1);
+        let le = crate::devices::load_le(&dir);
+        assert_eq!(le.len(), 1);
+        assert!(le[0].address.eq_ignore_ascii_case("AA:BB:CC:DD:EE:01"));
+        assert_eq!(le[0].name, "Buds");
+        // Once
+        assert_eq!(save_twins(&dir, &list), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn service() -> Service {

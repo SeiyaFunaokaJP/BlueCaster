@@ -1325,6 +1325,20 @@ fn le_switched_profile(list: &[CoreProfile], in_use: &CoreProfile, le_on: bool) 
         .map_or_else(|| in_use.name.clone(), |p| p.name.clone())
 }
 
+/// The LE Audio side's profile of a device made from its classic profile
+/// `classic` (its capture and device settings), named "<device> LE Audio"
+fn le_side_profile(list: &[CoreProfile], classic: &CoreProfile) -> CoreProfile {
+    let device = if classic.device_name.is_empty() { &classic.device_address } else { &classic.device_name };
+    let base = format!("{device} LE Audio");
+    let mut name = base.clone();
+    let mut n = 2;
+    while list.iter().any(|p| p.name == name) {
+        name = format!("{base} ({n})");
+        n += 1;
+    }
+    CoreProfile { name, le_audio: true, ..classic.clone() }
+}
+
 fn restart_after_save(stream: &StreamStatus, saved: &str) -> bool {
     matches!(stream.state, StreamState::Connecting | StreamState::Streaming | StreamState::Reconnecting)
         && stream.profile.as_deref() == Some(saved)
@@ -3087,7 +3101,20 @@ impl CoreState {
                             .and_then(|n| list.iter().find(|p| p.name == n));
                         if let Some(p) = in_use {
                             let le_on = me.service.settings().le_audio_experimental;
-                            let next = le_switched_profile(&list, p, le_on);
+                            let mut next = le_switched_profile(&list, p, le_on);
+                            // An LE Audio side saved (a scan found it) without
+                            // its profile yet: one from the classic one
+                            let le_saved = bluecaster_core::devices::load_le(&me.config_dir())
+                                .iter()
+                                .any(|d| d.address.eq_ignore_ascii_case(&p.device_address));
+                            if le_on && next == p.name && !p.le_audio && le_saved {
+                                let made = le_side_profile(&list, p);
+                                next = made.name.clone();
+                                let mut all = list.clone();
+                                all.push(made);
+                                let active = s.active_profile.clone();
+                                me.save_profiles(&all, active)?;
+                            }
                             tracing::info!(
                                 "LE Audio {}: Bluetooth starts again, profile {} connects",
                                 if le_on { "on" } else { "off" },
@@ -3988,6 +4015,11 @@ mod tests {
         // Nothing to switch to: the same one
         assert_eq!(le_switched_profile(&list, &list[2], true), "Other");
         assert_eq!(le_switched_profile(&list, &list[0], false), "Buds");
+        // The LE Audio side's profile made from the classic one
+        let other = CoreProfile { device_name: "Other".into(), ..list[2].clone() };
+        let made = le_side_profile(&list, &other);
+        assert_eq!((made.name.as_str(), made.le_audio), ("Other LE Audio", true));
+        assert_eq!(made.device_address, "AA:BB:CC:DD:EE:02");
     }
 
     #[test]

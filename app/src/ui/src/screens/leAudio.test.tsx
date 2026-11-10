@@ -120,23 +120,45 @@ describe("Codecs screen", () => {
 });
 
 describe("device list", () => {
-  it("lists a dual-mode device twice with LE Audio on, with its tags", async () => {
+  it("lists a dual-mode device once with LE Audio on, as its LE Audio entry (issue #86)", async () => {
     start("#/devices", "le");
     fireEvent.click(await screen.findByRole("button", { name: t("connection.scan") }));
     await screen.findByText(/LE Audio Speaker/);
     const rows = within(screen.getByRole("main"))
       .getAllByText(/Galaxy Buds2 Pro/)
       .map((r) => r.closest(".device-row") as HTMLElement);
-    expect(rows).toHaveLength(2);
-    expect(rows.map((r) => r.dataset.key).sort()).toEqual(["F4:4E:FD:00:11:22", "F4:4E:FD:00:11:22/le"]);
-    const le = rows.find((r) => r.dataset.key!.endsWith("/le"))!;
-    const classic = rows.find((r) => !r.dataset.key!.endsWith("/le"))!;
-    expect(le).toHaveTextContent(t("device.tag_le_audio_set"));
-    expect(classic).toHaveTextContent(t("device.tag_audio"));
-    expect(classic).not.toHaveTextContent(t("device.tag_le_audio"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].dataset.key).toBe("F4:4E:FD:00:11:22/le");
+    expect(rows[0]).toHaveTextContent(t("device.tag_le_audio_set"));
+    const tags = [...rows[0].querySelectorAll(".tag")].map((x) => x.textContent);
+    expect(tags).not.toContain(t("device.tag_audio"));
     const speaker = screen.getByText(/LE Audio Speaker/).closest(".device-row")!;
     expect(speaker).toHaveTextContent(t("device.tag_le_audio"));
     expect(speaker).not.toHaveTextContent(t("device.tag_le_audio_set"));
+  });
+
+  it("adds both sides of a dual-mode device with one Add, and connects it over LE Audio (issue #86)", async () => {
+    const { calls } = start("#/devices", "le");
+    // Neither side saved yet
+    await mock!.call("device.forget", { address: "F4:4E:FD:00:11:22", le_audio: true });
+    await mock!.call("device.forget", { address: "F4:4E:FD:00:11:22" });
+    calls.length = 0;
+    fireEvent.click(await screen.findByRole("button", { name: t("connection.scan") }));
+    await screen.findByText(/LE Audio Speaker/);
+    const row = within(screen.getByRole("main"))
+      .getAllByText(/Galaxy Buds2 Pro/)
+      .map((r) => r.closest(".device-row") as HTMLElement)[0];
+    fireEvent.click(within(row).getByRole("button", { name: t("ui.devices.add") }));
+    await waitFor(() => expect(calls.some((c) => c.method === "stream.start")).toBe(true));
+    const renames = calls.filter((c) => c.method === "device.rename").map((c) => c.params as { le_audio?: boolean });
+    expect(renames.map((r) => r.le_audio === true).sort()).toEqual([false, true]);
+    const made = calls
+      .filter((c) => c.method === "profile.save")
+      .map((c) => (c.params as { profile: { le_audio: boolean; device_address: string } }).profile);
+    expect(made.map((p) => p.le_audio).sort()).toEqual([false, true]);
+    expect(made.every((p) => p.device_address === "F4:4E:FD:00:11:22")).toBe(true);
+    const started = calls.find((c) => c.method === "stream.start")!.params as { profile: string };
+    expect(started.profile).toBe("Galaxy Buds2 Pro LE Audio");
   });
 
   it("hides the LE Audio entries with LE Audio off", async () => {
