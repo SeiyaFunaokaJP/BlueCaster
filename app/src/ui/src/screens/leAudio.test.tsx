@@ -34,7 +34,7 @@ describe("settings", () => {
   it("has no LE Audio or GMAP switch: both are the device's (Codecs)", async () => {
     start("#/settings");
     await screen.findByRole("switch", { name: named(t("ui.settings.developer_mode")) });
-    expect(screen.queryByRole("switch", { name: named(t("settings.le_low_latency")) })).toBeNull();
+    expect(screen.queryByText(t("codec.lc3_ll"))).toBeNull();
   });
 });
 
@@ -42,7 +42,7 @@ describe("Codecs screen", () => {
   /** The LE Audio entry of the earbuds on the Codecs screen */
   const leSection = () => screen.queryByRole("region", { name: "Galaxy Buds2 Pro" });
 
-  it("lists the LE Audio entry, LC3 alone and without settings, only with the setting on", async () => {
+  it("lists the LE Audio entry, LC3 and its low latency card, only with the setting on (issue #86)", async () => {
     start("#/codecs");
     await screen.findByRole("region", { name: "WH-1000XM5" });
     expect(leSection()).toBeNull();
@@ -51,10 +51,20 @@ describe("Codecs screen", () => {
 
     start("#/codecs", "le");
     const le = await screen.findByRole("region", { name: "Galaxy Buds2 Pro" });
+    // The LE Audio tag alone, not "Audio" beside it
     expect(le).toHaveTextContent(t("device.tag_le_audio"));
-    expect(within(le).getByRole("radio", { name: named(t("ui.codec.lc3")) })).toBeChecked();
-    expect(within(le).getAllByRole("radio").filter((r) => !r.closest(".headset-mic"))).toHaveLength(1);
-    expect(within(le).queryByRole("button", { name: /\.\.\.|settings/i })).toBeNull();
+    expect(within(le).queryByText(t("device.tag_audio"))).toBeNull();
+    const radios = within(le).getAllByRole("radio").filter((r) => !r.closest(".headset-mic"));
+    expect(radios.map((r) => (r as HTMLInputElement).value)).toEqual(["lc3", "lc3_ll"]);
+    // Cards like the A2DP ones: three bars each
+    expect(le.querySelectorAll(".codec-card .cbar")).toHaveLength(6);
+    // GMAP low latency is on by default
+    expect(within(le).getByRole("radio", { name: named(t("codec.lc3_ll")) })).toBeChecked();
+    // "..." shows the settings, read only
+    fireEvent.click(within(le).getByRole("button", { name: t("ui.profile.codec_settings", t("codec.lc3")) }));
+    const dialog = await screen.findByRole("dialog", { name: t("ui.profile.codec_settings", t("codec.lc3")) });
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
+    expect(within(dialog).getByText(t("connection.sample_rate"))).toBeInTheDocument();
   });
 
   it("says the adapter cannot stream LE Audio, or is not checked yet (issue #86)", async () => {
@@ -69,12 +79,10 @@ describe("Codecs screen", () => {
     expect(within(unchecked).getByText(t("ui.profile.le_audio_unchecked"))).toBeInTheDocument();
   });
 
-  it("offers GMAP low latency, on by default, saved with the profile", async () => {
+  it("chooses LC3 without GMAP low latency, saved with the profile (issue #86)", async () => {
     const { calls } = start("#/codecs", "le");
     const le = await screen.findByRole("region", { name: "Galaxy Buds2 Pro" });
-    const gmap = within(le).getByRole("switch", { name: t("settings.le_low_latency") });
-    expect(gmap).toBeChecked();
-    fireEvent.click(gmap);
+    fireEvent.click(le.querySelector<HTMLInputElement>('input[value="lc3"]')!);
     await waitFor(() => expect(calls.some((c) => c.method === "profile.save")).toBe(true));
     const saved = (calls.find((c) => c.method === "profile.save")!.params as { profile: Record<string, unknown> }).profile;
     expect(saved).toMatchObject({ name: "Buds (LE Audio)", le_audio: true, le_low_latency: false });
@@ -84,7 +92,7 @@ describe("Codecs screen", () => {
     const { calls } = start("#/codecs", "le");
     await mock!.call("profile.delete", { name: "Buds (LE Audio)" });
     const le = await screen.findByRole("region", { name: "Galaxy Buds2 Pro" });
-    const lc3 = within(le).getByRole("radio", { name: named(t("ui.codec.lc3")) });
+    const lc3 = within(le).getByRole("radio", { name: named(t("codec.lc3_ll")) });
     await waitFor(() => expect(lc3).not.toBeChecked());
     fireEvent.click(lc3);
     await waitFor(() => expect(calls.some((c) => c.method === "profile.save")).toBe(true));
