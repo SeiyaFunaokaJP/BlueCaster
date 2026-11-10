@@ -198,6 +198,7 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
     volume_sync: true,
     mute_output: false,
     volume_mixer: false,
+    all_audio_devices: false,
     developer_mode: false,
     dev_overrides: {
       rtp_marker: false,

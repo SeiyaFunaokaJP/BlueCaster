@@ -77,6 +77,12 @@ mute_output: boolean,
  */
 volume_mixer: boolean, 
 /**
+ * Developer > Show every audio device (off by default): the Output and
+ * Input Source lists offer every device, in force while developer_mode
+ * is on
+ */
+all_audio_devices: boolean, 
+/**
  * Developer mode: receiver test, HCI capture, debug details
  */
 developer_mode: boolean, 

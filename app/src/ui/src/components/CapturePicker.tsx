@@ -39,16 +39,21 @@ export function captureValue(p: Profile): string {
 
 /** The choices: virtual devices, every output device, and playing apps, the profile's own also when it is not there now.
  *  No apps for LE Audio (error.le_audio_capture) or on a Windows that cannot
- *  capture one app. The 16-channel cable only in developer mode (issue #86). */
+ *  capture one app. Neither the 16-channel cable nor the microphone's cable
+ *  (`micId`, it would be mixed into the sound) unless chosen or `all`
+ *  (Developer > Show every audio device, issue #86). */
 export function captureChoices(
   p: Profile,
   devices: readonly AudioDevice[],
   apps: readonly AudioApp[],
   appsOk: boolean,
-  developer = false,
+  all = false,
+  micId = "",
 ): { virtual: Choice[]; output: Choice[]; apps: Choice[] } {
+  const offered = (d: AudioDevice) =>
+    all || (!multichannelCable(d) && !(micId && d.id === micId)) || [`virtual:${d.id}`, `output:${d.id}`].includes(captureValue(p));
   const virtual = devices
-    .filter((d) => d.is_virtual && (developer || !multichannelCable(d) || captureValue(p) === `virtual:${d.id}`))
+    .filter((d) => d.is_virtual && offered(d))
     .map((d) => ({ value: `virtual:${d.id}`, label: d.name }));
   if (p.capture_mode === "virtual" && p.audio_device_id && !virtual.some((c) => c.value === captureValue(p))) {
     virtual.unshift({
@@ -58,7 +63,7 @@ export function captureChoices(
   }
   // The other outputs: each device is listed once, virtual ones under Virtual
   // Device
-  const output: Choice[] = devices.filter((d) => !d.is_virtual).map((d) => ({ value: `output:${d.id}`, label: d.name }));
+  const output: Choice[] = devices.filter((d) => !d.is_virtual && offered(d)).map((d) => ({ value: `output:${d.id}`, label: d.name }));
   if (p.capture_mode === "output" && p.audio_device_id && !output.some((c) => c.value === captureValue(p))) {
     output.unshift({
       value: captureValue(p),
