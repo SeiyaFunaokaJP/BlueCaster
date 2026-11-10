@@ -1,7 +1,9 @@
 //! A small .zip writer (deflate, no ZIP64) for the diagnostic bundle: the
-//! files are read into memory first, and each stays well under 4 GB.
+//! files are read into memory first, and each stays well under 4 GB. And a
+//! reader of the same kind of archive ([`read_all`]), for VB-Audio's driver
+//! pack (vb_cable.rs).
 
-use std::io::Write;
+use std::io::{Read, Write};
 
 use flate2::Compression;
 use flate2::write::DeflateEncoder;
@@ -125,9 +127,85 @@ fn put32(o: &mut Vec<u8>, v: u32) {
     o.extend_from_slice(&v.to_le_bytes());
 }
 
+/// The files of an archive held in memory: (name, contents), stored or
+/// deflated entries only, each checked against its CRC-32. Directory
+/// entries are left out. None for anything else (ZIP64, encryption, a
+/// broken archive).
+pub fn read_all(zip: &[u8]) -> Option<Vec<(String, Vec<u8>)>> {
+    let u16_at = |at: usize| zip.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
+    let u32_at = |at: usize| zip.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    // End of central directory: the last signature, within its comment's reach
+    let eocd = (0..=zip.len().checked_sub(22)?).rev().take(22 + 0xFFFF).find(|&i| u32_at(i) == Some(0x0605_4b50))?;
+    let count = usize::from(u16_at(eocd + 10)?);
+    let mut at = u32_at(eocd + 16)? as usize;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        if u32_at(at)? != 0x0201_4b50 {
+            return None;
+        }
+        let flags = u16_at(at + 8)?;
+        let method = u16_at(at + 10)?;
+        let crc = u32_at(at + 16)?;
+        let packed = u32_at(at + 20)? as usize;
+        let size = u32_at(at + 24)? as usize;
+        let name_len = usize::from(u16_at(at + 28)?);
+        let extra_len = usize::from(u16_at(at + 30)?);
+        let comment_len = usize::from(u16_at(at + 32)?);
+        let local = u32_at(at + 42)? as usize;
+        let name = String::from_utf8_lossy(zip.get(at + 46..at + 46 + name_len)?).into_owned();
+        at += 46 + name_len + extra_len + comment_len;
+        if flags & 1 != 0 {
+            return None;
+        }
+        if name.ends_with('/') {
+            continue;
+        }
+        if u32_at(local)? != 0x0403_4b50 {
+            return None;
+        }
+        let start = local + 30 + usize::from(u16_at(local + 26)?) + usize::from(u16_at(local + 28)?);
+        let body = zip.get(start..start.checked_add(packed)?)?;
+        let data = match method {
+            0 => body.to_vec(),
+            8 => {
+                let mut data = Vec::with_capacity(size);
+                flate2::read::DeflateDecoder::new(body).take(size as u64 + 1).read_to_end(&mut data).ok()?;
+                data
+            }
+            _ => return None,
+        };
+        if data.len() != size || crc32fast::hash(&data) != crc {
+            return None;
+        }
+        out.push((name, data));
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_back_what_it_writes() {
+        let mut z = ZipWriter::new((2026, 11, 11, 12, 0, 0));
+        let text = b"VB-CABLE ".repeat(100);
+        z.add("readme.txt", &text);
+        z.add("setup.exe", &[0x4d, 0x5a, 0x90, 0x00]);
+        let files = read_all(&z.finish()).unwrap();
+        assert_eq!(files, vec![("readme.txt".into(), text), ("setup.exe".into(), vec![0x4d, 0x5a, 0x90, 0x00])]);
+    }
+
+    #[test]
+    fn refuses_a_broken_archive() {
+        let mut z = ZipWriter::new((2026, 11, 11, 12, 0, 0));
+        z.add("a.txt", &b"hello hello hello hello".repeat(10));
+        let mut bytes = z.finish();
+        assert!(read_all(&bytes[..bytes.len() - 1]).is_none());
+        bytes[40] ^= 0xFF;
+        assert!(read_all(&bytes).is_none());
+        assert!(read_all(b"").is_none());
+    }
 
     /// The archive opens with Windows' own reader (tar.exe, bsdtar) and
     /// gives the files back

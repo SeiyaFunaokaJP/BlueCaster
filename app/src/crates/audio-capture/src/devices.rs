@@ -41,6 +41,8 @@ pub struct DeviceInfo {
     /// for a cable's "CABLE Input"), by name: where apps record what is
     /// rendered to it. None for other devices
     pub capture_name: Option<String>,
+    /// The sample rate Windows runs that recording side at
+    pub capture_rate: Option<u32>,
 }
 
 /// Active render endpoints, in Windows' order
@@ -63,14 +65,19 @@ pub fn render_devices() -> Result<Vec<DeviceInfo>, CaptureError> {
             id,
             name,
             capture_name: None,
+            capture_rate: None,
         });
     }
     let ids: Vec<String> = out.iter().map(|d| d.id.clone()).collect();
-    match audio_policy::paired_capture_names(&ids) {
+    match audio_policy::paired_capture_sides(&ids) {
         // Only a virtual device's recording side is what is rendered to it:
         // a headset's or a sound card's is its own microphone, line in or
         // stereo mix (issue #86: a headset listed as "Microphone (...)")
-        Ok(names) => out.iter_mut().zip(names).for_each(|(d, n)| d.capture_name = n.filter(|_| d.is_virtual)),
+        Ok(sides) => out.iter_mut().zip(sides).filter(|(d, _)| d.is_virtual).for_each(|(d, side)| {
+            let side = side.unwrap_or_default();
+            d.capture_name = side.name;
+            d.capture_rate = side.rate;
+        }),
         Err(e) => tracing::debug!("audio devices: capture sides not read: HRESULT 0x{:08x}", e.code().0 as u32),
     }
     if tracing::enabled!(tracing::Level::DEBUG) {

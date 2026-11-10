@@ -20,6 +20,10 @@ export const LINKS = {
   issues: `${REPO}/issues/new/choose`,
   sponsor: "https://github.com/sponsors/SeiyaFunaokaJP",
   vbCable: "https://vb-audio.com/Cable/",
+  /** VB-CABLE's origin, which VB-Audio asks to be named where it is
+   *  installed with another application */
+  vbCableHome: "https://vb-cable.com/",
+  vbAudioHome: "https://vb-audio.com/",
   // On the same page, below VB-CABLE (HiFi-Cable & ASIO-Bridge)
   hifiCable: "https://vb-audio.com/Cable/",
 } as const;

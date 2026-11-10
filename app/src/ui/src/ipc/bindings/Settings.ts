@@ -50,6 +50,15 @@ media_keys: boolean,
  */
 auto_reconnect: boolean, 
 /**
+ * The suggestion to install VB-CABLE was closed: Settings still offers it
+ */
+vb_cable_note_hidden: boolean, 
+/**
+ * The suggestion to get the Hi-Fi Cable was closed: Settings still
+ * offers it
+ */
+hifi_cable_note_hidden: boolean, 
+/**
  * Windows Volume Sync for every device (on by default): the audio
  * device's volume and the captured device's Windows volume follow each
  * other. Off: no stream syncs. A change starts the profile in use

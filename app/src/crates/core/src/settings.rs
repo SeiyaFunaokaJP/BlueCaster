@@ -142,14 +142,19 @@ pub struct Settings {
     /// released, so headphones turned off can go to a phone instead.
     #[serde(default = "default_true")]
     pub auto_reconnect: bool,
-    /// No VB-Cable when last looked: once it is there, the profiles that
-    /// capture System Loopback take it, one time (issue #86)
+    /// No VB-Cable when last looked: once it is there, it is taken into use
+    /// one time (issue #86; the core's watch_cables)
     pub awaiting_vb_cable: bool,
-    /// No Hi-Fi Cable when last looked: once it is there, the classic
-    /// profiles whose microphone has no working output play it there, one
-    /// time (issue #86)
+    /// No Hi-Fi Cable when last looked: once it is there, it is taken into
+    /// use one time (issue #86; the core's watch_cables)
     #[serde(default)]
     pub awaiting_hifi_cable: bool,
+    /// The suggestion to install VB-CABLE was closed
+    #[serde(default)]
+    pub vb_cable_note_hidden: bool,
+    /// The suggestion to get the Hi-Fi Cable was closed
+    #[serde(default)]
+    pub hifi_cable_note_hidden: bool,
     /// Each device's volume (address -> AVRCP volume 0..127), set again when
     /// it connects (issue #86: one device's volume must not carry over to
     /// another)
@@ -242,15 +247,18 @@ pub const LOG_KEEP_DAYS: u32 = 7;
 /// stop
 pub const LOG_DAY_CAP_MB: u32 = 100;
 
-/// Developer > Debug (issue #86): LE Audio on a MediaTek adapter, tried
-/// over its interrupt interface (hci_transport::iso_intr), with optional
-/// zero padding, and one HCI command sent after init (bt_host::debug_command);
+/// Developer > Debug (issue #86): LE Audio on a MediaTek adapter kept on
+/// the bulk pipe instead of its interrupt interface (hci_transport::
+/// iso_intr), another padding or queue, and one HCI command sent after
+/// init (bt_host::debug_command);
 /// the driver restore handing Windows the LE keys too
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DevDebug {
-    pub mtk_iso_interface: bool,
-    /// Outgoing ISO packets zero-padded to this length; 0: none
+    /// ISO stays on the bulk pipe, not the interrupt interface
+    pub mtk_iso_bulk: bool,
+    /// Outgoing ISO packets zero-padded to this length; 0: the default
+    /// (hci_transport::iso_intr::DEFAULT_PAD)
     pub mtk_iso_pad: u16,
     /// "FD98 08 01": opcode, then parameter bytes, in hex; empty: none
     pub mtk_command: String,
@@ -354,6 +362,8 @@ impl Default for Settings {
             auto_reconnect: true,
             awaiting_vb_cable: false,
             awaiting_hifi_cable: false,
+            vb_cable_note_hidden: false,
+            hifi_cable_note_hidden: false,
             saved_volumes: BTreeMap::new(),
             device_options: None,
             volume_sync: true,

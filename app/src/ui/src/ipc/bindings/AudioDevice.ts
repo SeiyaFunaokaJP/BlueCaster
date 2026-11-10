@@ -11,4 +11,9 @@ mix_rate: number | null, mix_channels: number | null, mix_bits: number | null,
  * microphone is rendered here ("CABLE Output" for "CABLE Input");
  * None: it has none or is not a virtual device
  */
-capture_name: string | null, };
+capture_name: string | null, 
+/**
+ * The sample rate Windows runs that recording side at (None: not known
+ * or no recording side)
+ */
+capture_rate: number | null, };
