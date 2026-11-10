@@ -1909,7 +1909,14 @@ pub enum Method {
 
 pub struct AudioDevice {
     pub id: String,
+    /// Windows' friendly name, which already ends in the adapter's name in
+    /// parentheses: "Speakers (Realtek(R) Audio)"
     pub name: String,
+    /// The endpoint's own name without the adapter's ("Speakers"); None:
+    /// Windows has none
+    #[ts(optional = nullable)]
+    #[serde(default)]
+    pub short_name: Option<String>,
     pub is_default: bool,
     pub is_virtual: bool,
     /// Windows' shared-mode mix format: what capturing it delivers without

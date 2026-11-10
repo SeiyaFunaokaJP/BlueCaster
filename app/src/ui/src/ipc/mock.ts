@@ -591,6 +591,7 @@ const sameEntry = (
 const CABLE: AudioDevice = {
   id: "{0.0.0.00000000}.{cable}",
   name: "CABLE Input (VB-Audio Virtual Cable)",
+  short_name: "CABLE Input",
   is_default: false,
   is_virtual: true,
   mix_rate: 44100,
@@ -603,6 +604,7 @@ const CABLE: AudioDevice = {
 const HIFI_CABLE: AudioDevice = {
   id: "{0.0.0.00000000}.{hificable}",
   name: "Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)",
+  short_name: "Hi-Fi Cable Input",
   is_default: false,
   is_virtual: true,
   mix_rate: 48000,
@@ -616,6 +618,7 @@ const AUDIO_DEVICES: AudioDevice[] = [
   {
     id: "{0.0.0.00000000}.{cable16}",
     name: "CABLE In 16ch (VB-Audio Virtual Cable)",
+    short_name: "CABLE In 16ch",
     is_default: false,
     is_virtual: true,
     mix_rate: 48000,
@@ -627,6 +630,7 @@ const AUDIO_DEVICES: AudioDevice[] = [
   {
     id: "{0.0.0.00000000}.{speakers}",
     name: "Speakers (Realtek(R) Audio)",
+    short_name: "Speakers",
     is_default: true,
     is_virtual: false,
     mix_rate: 48000,
@@ -639,6 +643,7 @@ const AUDIO_DEVICES: AudioDevice[] = [
   {
     id: "{0.0.0.00000000}.{voicemeeter}",
     name: "Voicemeeter Input (VB-Audio Voicemeeter VAIO)",
+    short_name: "Voicemeeter Input",
     is_default: false,
     is_virtual: true,
     mix_rate: 48000,
@@ -650,6 +655,7 @@ const AUDIO_DEVICES: AudioDevice[] = [
   {
     id: "{0.0.0.00000000}.{display}",
     name: "M28U (NVIDIA High Definition Audio)",
+    short_name: "M28U",
     is_default: false,
     is_virtual: false,
     mix_rate: 48000,

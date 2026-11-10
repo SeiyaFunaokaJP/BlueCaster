@@ -145,8 +145,11 @@ export function DeviceSettings(props: { device: Device }) {
     }
     // Whatever Windows' default output is, by its present name, first and
     // in no group: it follows the default, which may be a virtual device
-    // too (issue #86: under Sound Devices it read as a repeated entry)
-    const output = (devices() ?? []).find((d) => d.is_default)?.name;
+    // too (issue #86: under Sound Devices it read as a repeated entry).
+    // Its short name: Windows' friendly name already ends in "(adapter)",
+    // which nested a second pair of parentheses in the label (issue #86)
+    const dflt = (devices() ?? []).find((d) => d.is_default);
+    const output = dflt?.short_name || dflt?.name;
     const loopback: Option<string> = {
       value: "loopback",
       label: output ? t("capture.loopback_default", output) : t("capture.loopback_default_none"),
