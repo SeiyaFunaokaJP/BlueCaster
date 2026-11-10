@@ -20,7 +20,7 @@ nav_order: 4
 
 BlueCaster 讓 Windows 能使用 LHDC V5、LDAC、aptX Adaptive、aptX HD、
 aptX Low Latency、aptX、Opus、AAC、SBC XQ 與 SBC 藍牙音訊
-（以及透過 LE Audio 的 LC3，實驗性）。Windows 本身的藍牙堆疊在 A2DP 上
+（以及透過 LE Audio 的 LC3）。Windows 本身的藍牙堆疊在 A2DP 上
 只支援 SBC、傳統 aptX 與（僅限 Windows 11）AAC — 本工具不需核心驅動程式
 即可加入其他轉碼器。
 
@@ -147,7 +147,7 @@ HCI Reset（仍處於 bootloader 的控制器除外），讓下一個工作階�
 | 2. 元件 | `audio-capture` | WASAPI 擷取（`wasapi` crate）：系統回送、虛擬裝置、單一應用程式（處理程序回送）；裝置與應用程式清單、測試音、各應用程式的音量（音量混音程式） |
 | 2. 元件 | `voice-link` | 耳機麥克風的音訊（開發人員模式）：向所選輸出裝置播放單聲道 PCM（WASAPI）、為上行方向將擷取縮混為單聲道，以及基於 SCO 酬載的語音轉碼器 CVSD / mSBC / LC3-SWB |
 | 3. 引擎 | `bt-host` | 在專用執行緒上執行 BTstack，由命令與具型別的事件驅動：GAP、A2DP Source、AVRCP、SDP、供轉送使用的 RFCOMM 通道（`rfcomm.*`）、連結金鑰、裝置的 SDP 服務、AFH、韌體載入與晶片載入程式（`bringup`）、晶片探測與晶片指令碼、HCI 擷取（`.pklg`）、LE Audio（`le/`） |
-| 2. 元件 | `le-audio` | LE Audio（實驗性）：不依賴 BTstack 或 Windows 的邏輯（assigned numbers、LTV、PACS / ASCS PDU、預設組合、CSIP / VCP / MCP / CCP 模型） |
+| 2. 元件 | `le-audio` | LE Audio：不依賴 BTstack 或 Windows 的邏輯（assigned numbers、LTV、PACS / ASCS PDU、預設組合、CSIP / VCP / MCP / CCP 模型） |
 | 3. 引擎 | `pipeline` | PCM 環形緩衝區、格式轉換、降混、編碼、媒體酬載、送出節奏控制、ABR |
 | 4. 核心 | `bluecaster-core`（目錄 `core`） | 狀態機、重新連線、睡眠 / 恢復、設定檔、設定與 v1 移轉、音量同步、輸出靜音、更新檢查、Realtek 韌體下載、接收器測試用戶端、統計資料、廠商協定（`vendor/`） |
 | 4. 核心 | `ipc` | 核心與視窗共用的通訊協定型別（serde；TypeScript 型別以 `ts-rs` 產生）與管道的訊框處理 |
@@ -291,7 +291,7 @@ Windows 8 以上內建由 Microsoft 簽署的 WinUSB 驅動程式（`winusb.inf`
 - 註冊串流端點：廠商轉碼器（LDAC、aptX HD、aptX、aptX LL、
   LHDC V5、FastStream、Opus、Opus 05、aptX Adaptive）以及 SBC（SBC XQ 也使用）
   與 AAC：共 11 個（BTstack 的 `MAX_NR_AVDTP_STREAM_ENDPOINTS`）
-- 註冊 SDP 記錄（A2DP Source、AVRCP Controller、AVRCP Target；在該實驗性
+- 註冊 SDP 記錄（A2DP Source、AVRCP Controller、AVRCP Target；在該
   設定開啟時，另有僅用於電量的 HFP Audio Gateway）
 - 管理 SSP 配對（Just Works、General Bonding；保存連結金鑰）
 - 連線逾時後拆除半開的連線，讓重試能正常運作
@@ -361,7 +361,7 @@ Windows 中的名稱儲存。開發人員模式會顯示裝置的連結金鑰與
 | LHDC V5 | lhdcv5-enc（AOSP 編碼器的 C 語言移植版） | 400/500/900/1000 kbps（低/中/中高/高），不超過接收端列出的最大值，ABR 160–400 kbps | 16/24 位元、5 ms 訊框、2 位元組媒體酬載標頭、RTP 標頭 |
 | LDAC | libldac (AOSP) | 330/660/990 kbps | 高/中/低（HQ/SQ/MQ）模式、ABR |
 | aptX Adaptive | aptx-adaptive（AKS-Logic/aptx-adaptive-linux 的純 Rust 編碼器，MIT） | 高 427 kbps、低延遲 265 kbps（R2 接收端：270）；ABR 降至 364/318（R2：270/204） | 48 kHz 立體聲（選擇時，對列出 96 kHz 的 R2 接收端於高品質使用 96 kHz：646/340/255 kbps）、24 位元；每個媒體封包一個轉碼器封包，前面為 BlueCaster 自己的 RTP 標頭；高品質時 ABR；「自動」排在 LHDC V5 與 LDAC 之後選用 |
-| Opus | libopus 1.5.2 | 256 kbps（立體聲；單聲道為一半） | 實驗性；Android 的 A2DP Opus：48 kHz、20 ms 訊框（接收端只支援 10 ms 時為 10 ms）、上限為媒體酬載大小的受限 VBR、每個封包一個訊框、1 位元組媒體酬載標頭、RTP 標頭 |
+| Opus | libopus 1.5.2 | 256 kbps（立體聲；單聲道為一半） | Android 的 A2DP Opus：48 kHz、20 ms 訊框（接收端只支援 10 ms 時為 10 ms）、上限為媒體酬載大小的受限 VBR、每個封包一個訊框、1 位元組媒體酬載標頭、RTP 標頭 |
 | aptX HD | libopenaptx | 576 kbps | 24 位元輸入、固定位元率、RTP 標頭 |
 | aptX | libopenaptx | 352/384 kbps (44.1/48 kHz) | 16 位元立體聲、無 RTP 標頭 |
 | aptX LL | libopenaptx | 352 kbps | 約 32 ms 延遲、無 RTP 標頭、封包 ≤ 約 7.5 ms |
@@ -449,10 +449,10 @@ BlueCaster 自己的 12 位元組 RTP 標頭（BTstack 不另加）：酬載類�
 | `settings.json` | 應用程式設定，附 `schema_version`；未知的鍵會保留 |
 | `profiles.json` | 設定檔 |
 | `devices\devices.txt` | 已知裝置 |
-| `devices\le_audio_devices.txt` | LE Audio（實驗性）：裝置清單中的 LE Audio 項目 |
+| `devices\le_audio_devices.txt` | LE Audio：裝置清單中的 LE Audio 項目 |
 | `devices\device_codecs.json` | 每個傳統藍牙裝置上次連線時提供的內容（以及是否曾向 OPPO 耳機要求 Hi-Res） |
 | `pairing\link_keys.txt` | 連結金鑰：與 v1 或 2.0.x 配對過的耳機不需重新配對即可重新連線 |
-| `pairing\le_audio_bonds.tlv`、`pairing\le_audio_csip.txt` | LE Audio（實驗性）：LE 綁定資訊（含 GATT 伺服器持久保存的 CCC 值）以及協調集 |
+| `pairing\le_audio_bonds.tlv`、`pairing\le_audio_csip.txt` | LE Audio：LE 綁定資訊（含 GATT 伺服器持久保存的 CCC 值）以及協調集 |
 | `pairing\windows_le_keys.txt`、`pairing\replaced_windows_keys.json` | 從 Windows 接手的 LE 金鑰（直到啟用 LE 的協定堆疊將其加入）；**還原原始驅動程式** 取代掉的 Windows 金鑰 |
 | `adapters\adapter_caps.json` | 堆疊對每個介面卡得知的資訊（是否支援 LE Audio、位址、HCI 版本、Windows 中的名稱） |
 | `adapters\driver\<instance id>.json` | 每個曾指派 WinUSB 的介面卡先前使用的驅動程式 |
@@ -485,8 +485,8 @@ BlueCaster 自己的 12 位元組 RTP 標頭（BTstack 不另加）：酬載類�
 
 ## 重要注意事項 {#important-considerations}
 
-- **介面卡相容性**：Realtek（測試最完整）與 CSR USB 介面卡；Intel 與
-  Broadcom 為實驗性。Realtek 介面卡在啟動時需要上傳韌體，
+- **介面卡相容性**：Realtek（測試最完整）、CSR、Intel、Broadcom、
+  MediaTek 等（[已驗證的硬體](hardware)）。Realtek 介面卡在啟動時需要上傳韌體，
   處於 bootloader 模式的 Intel 介面卡亦同
 - **配對**：使用 SSP Just Works 搭配 General Bonding。連結金鑰保存於
   本機檔案，或從該介面卡的 Windows 藍牙接手

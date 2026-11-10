@@ -49,7 +49,7 @@ See the [Setup guide](https://seiyafunaokajp.github.io/BlueCaster/setup) and the
 ## Features
 
 - **Codec choice**: picks the best codec the headphones support, or the one you choose; ABR on LHDC V5, LDAC and aptX Adaptive
-- **LE Audio (experimental)**: LC3 to LE Audio headphones and earbuds with a Bluetooth 5.2 adapter; tested only against the Bluetooth emulator ([details](https://seiyafunaokajp.github.io/BlueCaster/usage#le-audio))
+- **LE Audio**: LC3 to LE Audio headphones and earbuds with a Bluetooth 5.2 adapter; tested on a MediaTek MT7925 and against the Bluetooth emulator so far ([details](https://seiyafunaokajp.github.io/BlueCaster/usage#le-audio))
 - **Capture**: all system audio, a virtual audio device (e.g. VB-CABLE), or one application
 - **Runs in the tray**: keeps streaming with the window closed, reconnects after a lost link and after sleep
 - **Driver setup in the app**: assigns and restores WinUSB without Zadig; headphones paired in Windows through the adapter connect without pairing again
@@ -58,7 +58,7 @@ See the [Setup guide](https://seiyafunaokajp.github.io/BlueCaster/setup) and the
 - **Command line**: `bluecaster-core.exe --cli` ([CLI Mode](https://seiyafunaokajp.github.io/BlueCaster/usage#cli-mode))
 - **Updates**: daily check, updates itself
 - **8 languages**: English, Japanese, Chinese (Simplified / Traditional), Korean, German, French, Spanish
-- **Headset microphone (experimental)**: the headphones' microphone as a Windows microphone through a virtual audio cable such as VB-CABLE; classic devices play at call quality meanwhile, LE Audio keeps its quality ([details](https://seiyafunaokajp.github.io/BlueCaster/usage#codecs))
+- **Headset microphone**: the headphones' microphone as a Windows microphone through a virtual audio cable such as VB-CABLE; classic devices play at call quality meanwhile, LE Audio keeps its quality ([details](https://seiyafunaokajp.github.io/BlueCaster/usage#codecs))
 - **Works with** third-party apps such as earbud control apps: [Works With](https://seiyafunaokajp.github.io/BlueCaster/works-with) (not supported by this project)
 
 ## Building

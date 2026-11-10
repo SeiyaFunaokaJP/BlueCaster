@@ -20,7 +20,7 @@ nav_order: 4
 
 BlueCaster permet l'audio Bluetooth LHDC V5, LDAC, aptX Adaptive, aptX HD,
 aptX Low Latency, aptX, Opus, AAC, SBC XQ et SBC sous Windows
-(ainsi que LC3 via LE Audio, à titre expérimental). La pile Bluetooth propre à Windows ne prend en charge
+(ainsi que LC3 via LE Audio). La pile Bluetooth propre à Windows ne prend en charge
 que SBC, l'aptX classique et (Windows 11 uniquement) AAC pour A2DP — cet outil ajoute les
 autres sans nécessiter de pilote noyau.
 
@@ -157,7 +157,7 @@ chaque couche ne dépend que des couches inférieures. Les bibliothèques se tro
 | 2. Composants | `audio-capture` | Capture WASAPI (crate `wasapi`) : bouclage système, périphérique virtuel, une application (bouclage de processus) ; listes des périphériques et des applications, signal de test, volume par application (Mélangeur de volume) |
 | 2. Composants | `voice-link` | Le son du micro du casque (mode développeur) : PCM mono joué sur le périphérique de sortie choisi (WASAPI), la capture mixée en mono pour le sens montant et les codecs vocaux CVSD / mSBC / LC3-SWB sur les charges SCO |
 | 3. Moteur | `bt-host` | Exécute BTstack sur son propre thread, piloté par des commandes et des événements typés : GAP, A2DP Source, AVRCP, SDP, canaux RFCOMM pour le relais (`rfcomm.*`), clés de liaison, services SDP d'un appareil, AFH, chargement du firmware et chargeurs de puce (`bringup`), sonde de puce et scripts de puce, capture HCI (`.pklg`), LE Audio (`le/`) |
-| 2. Composants | `le-audio` | LE Audio (expérimental) : la logique sans BTstack ni Windows (assigned numbers, LTV, PDU PACS / ASCS, préréglages, modèles CSIP / VCP / MCP / CCP) |
+| 2. Composants | `le-audio` | LE Audio : la logique sans BTstack ni Windows (assigned numbers, LTV, PDU PACS / ASCS, préréglages, modèles CSIP / VCP / MCP / CCP) |
 | 3. Moteur | `pipeline` | Anneaux PCM, conversion de format, downmix, encodage, charges utiles média, cadencement, ABR |
 | 4. Cœur | `bluecaster-core` (répertoire `core`) | La machine à états, les reconnexions, la veille / reprise, les profils, les paramètres et la migration depuis la v1, la synchro du volume, la coupure de la sortie, la recherche de mises à jour, le téléchargement du firmware Realtek, le client du test avec récepteur, les statistiques, les protocoles des fabricants (`vendor/`) |
 | 4. Cœur | `ipc` | Les types du protocole partagés par le cœur et la fenêtre (serde ; types TypeScript générés avec `ts-rs`) et le découpage en trames sur le canal nommé |
@@ -316,7 +316,7 @@ Lister les adaptateurs et leur pilote ne nécessite aucune élévation.
   LHDC V5, FastStream, Opus, Opus 05, aptX Adaptive) plus SBC (également utilisé par
   SBC XQ) et AAC : 11 en tout (`MAX_NR_AVDTP_STREAM_ENDPOINTS` de BTstack)
 - Enregistrer les enregistrements SDP (A2DP Source, AVRCP Controller, AVRCP Target ; HFP
-  Audio Gateway, uniquement pour le niveau de batterie, tant que ce réglage expérimental
+  Audio Gateway, uniquement pour le niveau de batterie, tant que ce réglage
   est activé)
 - Gérer l'association SSP (Just Works, General Bonding ; clés de liaison conservées)
 - Fermer une connexion à moitié ouverte après un délai de connexion dépassé, pour que les nouvelles tentatives fonctionnent
@@ -409,7 +409,7 @@ quand il se termine.
 | LHDC V5 | lhdcv5-enc (portage en C de l'encodeur AOSP) | 400/500/900/1000 kbps (Basse/Moyenne/Moyenne-haute/Haute), au plus le maximum annoncé par le récepteur, ABR 160–400 kbps | 16/24 bits, trames de 5 ms, en-tête de charge utile média de 2 octets, en-tête RTP |
 | LDAC | libldac (AOSP) | 330/660/990 kbps | Modes Haute/Moyenne/Basse (HQ/SQ/MQ), ABR |
 | aptX Adaptive | aptx-adaptive (encodeur en Rust pur d'AKS-Logic/aptx-adaptive-linux, MIT) | 427 kbps en Haute, 265 kbps en Faible latence (récepteurs R2 : 270) ; l'ABR descend à 364/318 (R2 : 270/204) | 48 kHz stéréo (96 kHz en Haute sur demande, vers un récepteur R2 qui l'annonce : 646/340/255 kbps), 24 bits ; un paquet codec par paquet média derrière l'en-tête RTP propre à BlueCaster ; ABR en Haute ; Auto le prend après LHDC V5 et LDAC |
-| Opus | libopus 1.5.2 | 256 kbps (stéréo ; mono : moitié) | Expérimental ; Opus A2DP d'Android : 48 kHz, trames de 20 ms (10 ms si le récepteur ne propose que cela), VBR contraint plafonné à la charge utile média, une trame par paquet, en-tête de charge utile média de 1 octet, en-tête RTP |
+| Opus | libopus 1.5.2 | 256 kbps (stéréo ; mono : moitié) | Opus A2DP d'Android : 48 kHz, trames de 20 ms (10 ms si le récepteur ne propose que cela), VBR contraint plafonné à la charge utile média, une trame par paquet, en-tête de charge utile média de 1 octet, en-tête RTP |
 | aptX HD | libopenaptx | 576 kbps | Entrée 24 bits, débit fixe, en-tête RTP |
 | aptX | libopenaptx | 352/384 kbps (44.1/48 kHz) | Stéréo 16 bits, sans en-tête RTP |
 | aptX LL | libopenaptx | 352 kbps | Latence ~32 ms, sans en-tête RTP, paquets ≤ ~7,5 ms |
@@ -502,10 +502,10 @@ ci-dessous) :
 | `settings.json` | Paramètres de l'application, avec un `schema_version` ; les clés inconnues sont conservées |
 | `profiles.json` | Profils |
 | `devices\devices.txt` | Appareils connus |
-| `devices\le_audio_devices.txt` | LE Audio (expérimental) : les entrées LE Audio de la liste des appareils |
+| `devices\le_audio_devices.txt` | LE Audio : les entrées LE Audio de la liste des appareils |
 | `devices\device_codecs.json` | Ce que chaque appareil classique a proposé lors de sa dernière connexion (et si des écouteurs OPPO se sont vu demander le Hi-Res) |
 | `pairing\link_keys.txt` | Clés de liaison : les casques associés avec la v1 ou la 2.0.x se reconnectent sans nouvelle association |
-| `pairing\le_audio_bonds.tlv`, `pairing\le_audio_csip.txt` | LE Audio (expérimental) : les liaisons LE (avec les valeurs CCC persistantes du serveur GATT) et les ensembles coordonnés |
+| `pairing\le_audio_bonds.tlv`, `pairing\le_audio_csip.txt` | LE Audio : les liaisons LE (avec les valeurs CCC persistantes du serveur GATT) et les ensembles coordonnés |
 | `pairing\windows_le_keys.txt`, `pairing\replaced_windows_keys.json` | Clés LE reprises de Windows, jusqu'à ce qu'une pile avec LE les ajoute ; les clés de Windows que **Restaurer le pilote d'origine** a remplacées |
 | `adapters\adapter_caps.json` | Ce qu'une pile a appris de chaque adaptateur (prise en charge de LE Audio, adresse, version HCI, nom que lui donne Windows) |
 | `adapters\driver\<instance id>.json` | Le pilote précédent de chaque adaptateur auquel WinUSB a été attribué |
@@ -539,8 +539,8 @@ programme de désinstallation et `licenses\` (`licenses\README.txt`, `licenses\b
 
 ## Points importants
 
-- **Compatibilité des adaptateurs** : adaptateurs USB Realtek (les mieux testés) et CSR ; Intel et
-  Broadcom sont expérimentaux. Les adaptateurs Realtek nécessitent l'envoi du firmware au démarrage,
+- **Compatibilité des adaptateurs** : Realtek (les mieux testés), CSR, Intel, Broadcom, MediaTek
+  et d'autres ([Matériel vérifié](hardware)). Les adaptateurs Realtek nécessitent l'envoi du firmware au démarrage,
   les adaptateurs Intel en mode bootloader aussi
 - **Association** : utilise SSP Just Works avec General Bonding. Les clés de liaison sont conservées
   dans un fichier local, ou reprises du Bluetooth de Windows pour l'adaptateur

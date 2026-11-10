@@ -101,7 +101,7 @@
   "error.le_audio_connect": "LE Audio: デバイスに接続できませんでした（%s）。",
   "error.le_audio_stream": "LE Audio: ストリームを開始できませんでした（%s）。",
   "error.auracast": "Auracast: ブロードキャストを開始できませんでした（%s）。",
-  "error.le_audio_capture": "LE Audio（実験的）でキャプチャできるのはサウンドデバイスと仮想デバイスだけです。",
+  "error.le_audio_capture": "LE Audio でキャプチャできるのはサウンドデバイスと仮想デバイスだけです。",
   "error.aac_unavailable": "AAC エンコーダーが利用できません（fdk-aac が未ビルド）",
   "error.no_virtual_device_selected": "仮想オーディオデバイスが選択されていません",
   "error.virtual_capture_init": "仮想デバイスでのキャプチャ初期化に失敗しました",

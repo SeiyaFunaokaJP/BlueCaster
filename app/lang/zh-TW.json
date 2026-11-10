@@ -101,7 +101,7 @@
   "error.le_audio_connect": "LE Audio：無法連線到裝置（%s）。",
   "error.le_audio_stream": "LE Audio：無法建立音訊串流（%s）。",
   "error.auracast": "Auracast：無法開始廣播（%s）。",
-  "error.le_audio_capture": "LE Audio（實驗性）僅可擷取音效裝置與虛擬裝置。",
+  "error.le_audio_capture": "LE Audio 僅可擷取音效裝置與虛擬裝置。",
   "error.aac_unavailable": "無法使用 AAC 編碼器 (未建置 fdk-aac)",
   "error.no_virtual_device_selected": "未選取虛擬音訊裝置",
   "error.virtual_capture_init": "無法在虛擬裝置上初始化擷取",

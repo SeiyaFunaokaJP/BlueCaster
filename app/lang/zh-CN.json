@@ -101,7 +101,7 @@
   "error.le_audio_connect": "LE Audio：无法连接到设备（%s）。",
   "error.le_audio_stream": "LE Audio：无法建立音频流（%s）。",
   "error.auracast": "Auracast：无法开始广播（%s）。",
-  "error.le_audio_capture": "LE Audio（实验性）仅可捕获声音设备和虚拟设备。",
+  "error.le_audio_capture": "LE Audio 仅可捕获声音设备和虚拟设备。",
   "error.aac_unavailable": "AAC 编码器不可用（未构建 fdk-aac）",
   "error.no_virtual_device_selected": "未选择虚拟音频设备",
   "error.virtual_capture_init": "无法在虚拟设备上初始化捕获",

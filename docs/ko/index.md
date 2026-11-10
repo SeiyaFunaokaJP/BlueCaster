@@ -11,7 +11,7 @@ has_toc: false
 모든 코덱을 지원하는 Windows용 Bluetooth A2DP 오디오 스트리밍 도구
 {: .fs-6 .fw-300 }
 
-저렴한 USB 동글이나 많은 노트북의 내장 어댑터처럼, Windows에서는 기본 코덱만 쓰는 평범한 Bluetooth 어댑터를 Hi-Fi 송신기로 바꿉니다. **LHDC V5, LDAC, aptX Adaptive**를 최대 96 kHz(LHDC V5는 192 kHz)로, 그 밖에 **aptX HD, aptX, aptX Low Latency, Opus, AAC, SBC XQ, SBC, FastStream**과 LE Audio(LC3, 실험적)를 지원합니다. 어댑터 설정은 BlueCaster가 직접 하며, 클릭 한 번으로 Windows에 되돌릴 수 있습니다([작동 방식](architecture)).
+저렴한 USB 동글이나 많은 노트북의 내장 어댑터처럼, Windows에서는 기본 코덱만 쓰는 평범한 Bluetooth 어댑터를 Hi-Fi 송신기로 바꿉니다. **LHDC V5, LDAC, aptX Adaptive**를 최대 96 kHz(LHDC V5는 192 kHz)로, 그 밖에 **aptX HD, aptX, aptX Low Latency, Opus, AAC, SBC XQ, SBC, FastStream**과 LE Audio(LC3)를 지원합니다. 어댑터 설정은 BlueCaster가 직접 하며, 클릭 한 번으로 Windows에 되돌릴 수 있습니다([작동 방식](architecture)).
 
 ![BlueCaster's Codecs screen, streaming LDAC 990 kbps / 48 kHz to Sony WH-1000XM4](../images/app_sample.png)
 
@@ -144,7 +144,7 @@ BlueCaster는 Windows Bluetooth 스택을 완전히 우회합니다. [BTstack](h
 ## 주요 기능
 
 - **다중 코덱**: LHDC V5, LDAC, aptX Adaptive, aptX, AAC, aptX HD, aptX Low Latency, Opus, Opus 05, FastStream, SBC XQ, SBC, 자동 협상
-- **LE 오디오 (실험적)**: LE 오디오 헤드폰과 이어폰으로 LC3 전송(BAP 유니캐스트, 한 쌍의 양쪽 이어폰, 헤드셋 음량, 미디어 버튼, GMAP 저지연). Bluetooth 5.2의 등시성 채널을 지원하는 어댑터가 필요합니다. Bluetooth 에뮬레이터로만 시험했고 실제 LE 오디오 헤드폰으로는 아직 확인하지 않았습니다([사용법](usage#le-audio) 참조)
+- **LE 오디오**: LE 오디오 헤드폰과 이어폰으로 LC3 전송(BAP 유니캐스트, 한 쌍의 양쪽 이어폰, 헤드셋 음량, 미디어 버튼, GMAP 저지연). Bluetooth 5.2의 등시성 채널을 지원하는 어댑터가 필요합니다. 지금까지 MediaTek MT7925와 Bluetooth 에뮬레이터로 시험했습니다([사용법](usage#le-audio) 참조)
 - **세 가지 캡처 모드**: 시스템 루프백, 가상 오디오 장치 라우팅, 또는 한 응용 프로그램의 출력
 - **창, 트레이, CLI**: 설정과 진단을 위한 창, 평소 연결에 쓰는 트레이 플라이아웃과 메뉴, 그리고 명령줄 ([사용법](usage) 참조)
 - **앱 내 WinUSB 할당**: 어댑터에 WinUSB 드라이버를 할당하고 원래 드라이버를 복원하며, Zadig가 필요 없습니다 ([설정](setup#winusb) 참조). Windows가 이 어댑터로 페어링한 헤드폰은 다시 페어링하지 않고 연결됩니다

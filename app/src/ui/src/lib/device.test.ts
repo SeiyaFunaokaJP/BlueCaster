@@ -101,7 +101,7 @@ describe("LE Audio entries", () => {
     expect(knownCodecs([le("F4:4E:FD:00:11:22"), ...list], "F4:4E:FD:00:11:22")).toEqual(["sbc", "aac"]);
   });
 
-  it("are listed only with LE Audio (experimental) on, as v1", () => {
+  it("are listed only with LE Audio on, as v1", () => {
     const list = [dev("AC:80:0A:12:34:56", []), le("F4:4E:FD:00:11:22")];
     expect(listedDevices(list, false).map(deviceKey)).toEqual(["AC:80:0A:12:34:56"]);
     expect(listedDevices(list, true)).toHaveLength(2);

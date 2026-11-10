@@ -11,7 +11,7 @@ has_toc: false
 適用於 Windows、支援所有轉碼器的藍牙 A2DP 音訊串流工具。
 {: .fs-6 .fw-300 }
 
-把一般的藍牙介面卡（便宜的 USB 介面卡，或許多筆電的內建介面卡）從 Windows 只給的基本轉碼器，變成 Hi-Fi 發射器：**LHDC V5、LDAC 與 aptX Adaptive** 最高 96 kHz（LHDC V5 最高 192 kHz），以及 **aptX HD、aptX、aptX Low Latency、Opus、AAC、SBC XQ、SBC 與 FastStream**，還有 LE Audio（LC3，實驗性）。BlueCaster 會自行設定介面卡，一鍵即可交還給 Windows（[運作方式](architecture)）。
+把一般的藍牙介面卡（便宜的 USB 介面卡，或許多筆電的內建介面卡）從 Windows 只給的基本轉碼器，變成 Hi-Fi 發射器：**LHDC V5、LDAC 與 aptX Adaptive** 最高 96 kHz（LHDC V5 最高 192 kHz），以及 **aptX HD、aptX、aptX Low Latency、Opus、AAC、SBC XQ、SBC 與 FastStream**，還有 LE Audio（LC3）。BlueCaster 會自行設定介面卡，一鍵即可交還給 Windows（[運作方式](architecture)）。
 
 ![BlueCaster's Codecs screen, streaming LDAC 990 kbps / 48 kHz to Sony WH-1000XM4](../images/app_sample.png)
 
@@ -144,7 +144,7 @@ BlueCaster 完全繞過 Windows 藍牙堆疊。它透過 WinUSB 直接與 USB �
 ## 功能
 
 - **多轉碼器**：LHDC V5、LDAC、aptX Adaptive、aptX、AAC、aptX HD、aptX Low Latency、Opus、Opus 05、FastStream、SBC XQ 及 SBC，自動協商
-- **LE Audio（實驗性）**：以 LC3 傳送到 LE Audio 耳機與耳塞式耳機（BAP 單播、一對耳機的左右兩耳、耳機音量、媒體按鍵、GMAP 低延遲）。需要支援 Bluetooth 5.2 等時通道的介面卡；只在藍牙模擬器上測試過，尚未在實際的 LE Audio 耳機上確認（請參閱[使用方式](usage#le-audio)）
+- **LE Audio**：以 LC3 傳送到 LE Audio 耳機與耳塞式耳機（BAP 單播、一對耳機的左右兩耳、耳機音量、媒體按鍵、GMAP 低延遲）。需要支援 Bluetooth 5.2 等時通道的介面卡；目前已在 MediaTek MT7925 與藍牙模擬器上測試過（請參閱[使用方式](usage#le-audio)）
 - **三種擷取模式**：系統回送、虛擬音訊裝置路由，或單一應用程式的輸出
 - **視窗、系統匣與 CLI**：用於設定與診斷的視窗、日常連線用的系統匣快顯視窗與選單，以及命令列（請參閱 [使用方式](usage)）
 - **應用程式內的 WinUSB 設定**：為介面卡指派 WinUSB 驅動程式，並可還原原本的驅動程式，不需要 Zadig（請參閱 [安裝設定](setup#winusb)）；Windows 透過此介面卡配對的耳機不必重新配對即可連線

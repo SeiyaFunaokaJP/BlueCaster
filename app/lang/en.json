@@ -101,7 +101,7 @@
   "error.le_audio_connect": "LE Audio: could not connect to the device (%s).",
   "error.le_audio_stream": "LE Audio: the stream could not be set up (%s).",
   "error.auracast": "Auracast: the broadcast could not start (%s).",
-  "error.le_audio_capture": "LE Audio (experimental) captures sound devices and virtual devices only.",
+  "error.le_audio_capture": "LE Audio captures sound devices and virtual devices only.",
   "error.aac_unavailable": "AAC encoder not available (fdk-aac not built)",
   "error.no_virtual_device_selected": "No virtual audio device selected",
   "error.virtual_capture_init": "Failed to initialize capture on virtual device",

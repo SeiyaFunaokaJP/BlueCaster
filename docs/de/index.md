@@ -11,7 +11,7 @@ has_toc: false
 Bluetooth-A2DP-Audiostreaming für Windows mit voller Codec-Unterstützung.
 {: .fs-6 .fw-300 }
 
-Macht aus einem gewöhnlichen Bluetooth-Adapter -- einem günstigen USB-Stick oder bei vielen Laptops dem eingebauten -- statt der einfachen Codecs von Windows einen Hi-Fi-Sender: **LHDC V5, LDAC und aptX Adaptive** mit bis zu 96 kHz (LHDC V5 bis 192 kHz), dazu **aptX HD, aptX, aptX Low Latency, Opus, AAC, SBC XQ, SBC und FastStream** sowie LE Audio (LC3, experimentell). BlueCaster richtet den Adapter selbst ein und gibt ihn mit einem Klick an Windows zurück ([so funktioniert es](architecture)).
+Macht aus einem gewöhnlichen Bluetooth-Adapter -- einem günstigen USB-Stick oder bei vielen Laptops dem eingebauten -- statt der einfachen Codecs von Windows einen Hi-Fi-Sender: **LHDC V5, LDAC und aptX Adaptive** mit bis zu 96 kHz (LHDC V5 bis 192 kHz), dazu **aptX HD, aptX, aptX Low Latency, Opus, AAC, SBC XQ, SBC und FastStream** sowie LE Audio (LC3). BlueCaster richtet den Adapter selbst ein und gibt ihn mit einem Klick an Windows zurück ([so funktioniert es](architecture)).
 
 ![BlueCaster's Codecs screen, streaming LDAC 990 kbps / 48 kHz to Sony WH-1000XM4](../images/app_sample.png)
 
@@ -144,7 +144,7 @@ BlueCaster umgeht den Bluetooth-Stack von Windows vollständig. Es kommuniziert 
 ## Funktionen
 
 - **Mehrere Codecs**: LHDC V5, LDAC, aptX Adaptive, aptX, AAC, aptX HD, aptX Low Latency, Opus, Opus 05, FastStream, SBC XQ und SBC mit automatischer Aushandlung
-- **LE Audio (experimentell)**: LC3 an LE-Audio-Kopfhörer und -Ohrhörer (BAP Unicast, beide Ohrhörer eines Paars, Headset-Lautstärke, Medientasten, GMAP mit niedriger Latenz). Benötigt einen Adapter mit isochronen Bluetooth-5.2-Kanälen; nur mit dem Bluetooth-Emulator getestet, noch nicht mit echten LE-Audio-Kopfhörern ([Verwendung](usage#le-audio))
+- **LE Audio**: LC3 an LE-Audio-Kopfhörer und -Ohrhörer (BAP Unicast, beide Ohrhörer eines Paars, Headset-Lautstärke, Medientasten, GMAP mit niedriger Latenz). Benötigt einen Adapter mit isochronen Bluetooth-5.2-Kanälen; bisher am MediaTek MT7925 und mit dem Bluetooth-Emulator getestet ([Verwendung](usage#le-audio))
 - **Drei Aufnahmemodi**: System-Loopback, Umleitung über ein virtuelles Audiogerät oder die Ausgabe einer einzelnen Anwendung
 - **Fenster, Infobereich und CLI**: ein Fenster für Einrichtung und Diagnose, ein Flyout und ein Menü im Infobereich für das alltägliche Verbinden sowie eine Kommandozeile (siehe [Verwendung](usage))
 - **WinUSB in der App**: weist dem Adapter den WinUSB-Treiber zu und stellt den ursprünglichen Treiber wieder her, Zadig ist nicht nötig (siehe [Einrichtung](setup#winusb)); Kopfhörer, die Windows über den Adapter gekoppelt hat, verbinden sich ohne erneutes Koppeln

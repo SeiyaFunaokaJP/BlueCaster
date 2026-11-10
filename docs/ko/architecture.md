@@ -20,7 +20,7 @@ nav_order: 4
 
 BlueCaster는 Windows에서 LHDC V5, LDAC, aptX Adaptive, aptX HD,
 aptX Low Latency, aptX, Opus, AAC, SBC XQ, SBC Bluetooth 오디오를 사용할 수 있게 합니다
-(LE 오디오를 통한 LC3도 실험적으로 지원). Windows 자체 Bluetooth 스택은 A2DP에서
+(LE 오디오를 통한 LC3도 지원). Windows 자체 Bluetooth 스택은 A2DP에서
 SBC, 기본 aptX, (Windows 11만) AAC만 지원합니다. 이 도구는 커널 드라이버 없이
 나머지 코덱을 추가합니다.
 
@@ -152,7 +152,7 @@ Cargo 워크스페이스 하나(저장소 루트의 `Cargo.toml`)가 다섯 계�
 | 2. 부품 | `audio-capture` | WASAPI 캡처(`wasapi` 크레이트): 시스템 루프백, 가상 장치, 한 응용 프로그램(프로세스 루프백), 장치 및 앱 목록, 테스트 톤, 앱별 볼륨(볼륨 믹서) |
 | 2. 부품 | `voice-link` | 헤드셋 마이크의 오디오(개발자 모드): 선택한 출력 장치로의 모노 PCM 재생(WASAPI), 상향 방향을 위한 캡처의 모노 다운믹스, SCO 페이로드 위의 음성 코덱 CVSD / mSBC / LC3-SWB |
 | 3. 엔진 | `bt-host` | BTstack을 자체 스레드에서 실행하며, 명령과 타입이 지정된 이벤트로 구동: GAP, A2DP Source, AVRCP, SDP, 패스스루용 RFCOMM 채널(`rfcomm.*`), 링크 키, 장치의 SDP 서비스, AFH, 펌웨어 로딩과 칩 로더(`bringup`), 칩 프로브와 칩 스크립트, HCI 캡처(`.pklg`), LE 오디오(`le/`) |
-| 2. 부품 | `le-audio` | LE 오디오(실험적): BTstack이나 Windows에 의존하지 않는 로직(할당 번호, LTV, PACS / ASCS PDU, 프리셋, CSIP / VCP / MCP / CCP 모델) |
+| 2. 부품 | `le-audio` | LE 오디오: BTstack이나 Windows에 의존하지 않는 로직(할당 번호, LTV, PACS / ASCS PDU, 프리셋, CSIP / VCP / MCP / CCP 모델) |
 | 3. 엔진 | `pipeline` | PCM 링 버퍼, 형식 변환, 다운믹스, 인코딩, 미디어 페이로드, 전송 속도 조절, ABR |
 | 4. 코어 | `bluecaster-core` (디렉터리 `core`) | 상태 머신, 다시 연결, 절전 / 복귀, 프로필, 설정과 v1 마이그레이션, 볼륨 동기화, 출력 음소거, 업데이트 확인, Realtek 펌웨어 다운로드, 수신기 테스트 클라이언트, 통계, 제조사 프로토콜(`vendor/`) |
 | 4. 코어 | `ipc` | 코어와 창이 공유하는 프로토콜 타입(serde, `ts-rs`로 TypeScript 타입 생성)과 파이프 프레이밍 |
@@ -306,7 +306,7 @@ Windows 8 이상에는 Microsoft가 서명한 WinUSB 드라이버(`winusb.inf`)�
 - 스트림 엔드포인트 등록: 벤더 코덱(LDAC, aptX HD, aptX, aptX LL,
   LHDC V5, FastStream, Opus, Opus 05, aptX Adaptive) 및 SBC(SBC XQ도 사용)와
   AAC, 모두 11개 (BTstack의 `MAX_NR_AVDTP_STREAM_ENDPOINTS`)
-- SDP 레코드 등록 (A2DP Source, AVRCP Controller, AVRCP Target. 그 실험적 설정이
+- SDP 레코드 등록 (A2DP Source, AVRCP Controller, AVRCP Target. 그 설정이
   켜져 있는 동안에는 배터리 잔량 전용으로 HFP Audio Gateway도)
 - SSP 페어링 관리 (Just Works, General Bonding, 링크 키 저장)
 - 연결 시간 초과 후 반쯤 열린 연결을 해제하여 재시도가 가능하도록 함
@@ -386,7 +386,7 @@ DPAPI로 Windows 사용자별로 암호화됩니다(`win-sys::dpapi`). 다른 �
 | LHDC V5 | lhdcv5-enc (AOSP 인코더의 C 포팅) | 400/500/900/1000 kbps (낮음/중간/중상/높음), 싱크가 알리는 최대값 이하, ABR 160–400 kbps | 16/24비트, 5 ms 프레임, 2바이트 미디어 페이로드 헤더, RTP 헤더 |
 | LDAC | libldac (AOSP) | 330/660/990 kbps | 높음/중간/낮음 (HQ/SQ/MQ) 모드, ABR |
 | aptX Adaptive | aptx-adaptive (AKS-Logic/aptx-adaptive-linux의 순수 Rust 인코더, MIT) | 높음 427 kbps, 저지연 265 kbps (R2 싱크: 270). ABR은 364/318 (R2: 270/204)까지 낮춤 | 48 kHz 스테레오(선택한 경우 이를 알리는 R2 싱크에는 높음에서 96 kHz: 646/340/255 kbps), 24비트. 미디어 패킷당 코덱 패킷 하나, BlueCaster 자체 RTP 헤더. 높음에서 ABR. 자동은 LHDC V5와 LDAC 다음으로 선택 |
-| Opus | libopus 1.5.2 | 256 kbps (스테레오, 모노는 절반) | 실험적. Android의 A2DP Opus: 48 kHz, 20 ms 프레임(싱크가 10 ms만 지원하면 10 ms), 미디어 페이로드에 맞춘 상한이 있는 constrained VBR, 패킷당 프레임 하나, 1바이트 미디어 페이로드 헤더, RTP 헤더 |
+| Opus | libopus 1.5.2 | 256 kbps (스테레오, 모노는 절반) | Android의 A2DP Opus: 48 kHz, 20 ms 프레임(싱크가 10 ms만 지원하면 10 ms), 미디어 페이로드에 맞춘 상한이 있는 constrained VBR, 패킷당 프레임 하나, 1바이트 미디어 페이로드 헤더, RTP 헤더 |
 | aptX HD | libopenaptx | 576 kbps | 24비트 입력, 고정 비트레이트, RTP 헤더 |
 | aptX | libopenaptx | 352/384 kbps (44.1/48 kHz) | 16비트 스테레오, RTP 헤더 없음 |
 | aptX LL | libopenaptx | 352 kbps | 약 32 ms 지연, RTP 헤더 없음, 패킷 ≤ 약 7.5 ms |
@@ -477,10 +477,10 @@ LL 패킷은 348바이트(10 ms)입니다. 자동은 이를 기본 aptX, Opus, A
 | `settings.json` | 앱 설정 (`schema_version` 포함). 알 수 없는 키는 유지됨 |
 | `profiles.json` | 프로필 |
 | `devices\devices.txt` | 알려진 장치 |
-| `devices\le_audio_devices.txt` | LE 오디오(실험적): 장치 목록의 LE 오디오 항목 |
+| `devices\le_audio_devices.txt` | LE 오디오: 장치 목록의 LE 오디오 항목 |
 | `devices\device_codecs.json` | 각 클래식 장치가 마지막으로 연결했을 때 제공한 내용 (그리고 OPPO 이어폰에 Hi-Res를 요청했는지 여부) |
 | `pairing\link_keys.txt` | 링크 키: v1이나 2.0.x에서 페어링한 헤드폰은 다시 페어링하지 않고 다시 연결됨 |
-| `pairing\le_audio_bonds.tlv`, `pairing\le_audio_csip.txt` | LE 오디오(실험적): LE 본딩 정보(GATT 서버가 유지하는 CCC 값 포함)와 조정 세트 |
+| `pairing\le_audio_bonds.tlv`, `pairing\le_audio_csip.txt` | LE 오디오: LE 본딩 정보(GATT 서버가 유지하는 CCC 값 포함)와 조정 세트 |
 | `pairing\windows_le_keys.txt`, `pairing\replaced_windows_keys.json` | Windows에서 가져온 LE 키(LE를 쓰는 스택이 추가할 때까지)와 **원래 드라이버 복원**이 교체한 Windows의 키 |
 | `adapters\adapter_caps.json` | 스택이 각 어댑터에 대해 알아낸 내용 (LE 오디오 지원, 주소, HCI 버전, Windows에서의 이름) |
 | `adapters\driver\<instance id>.json` | WinUSB를 할당한 각 어댑터의 이전 드라이버 |
@@ -513,8 +513,8 @@ LL 패킷은 348바이트(10 ms)입니다. 자동은 이를 기본 aptX, Opus, A
 
 ## 중요 고려 사항
 
-- **어댑터 호환성**: Realtek(가장 많이 테스트됨)과 CSR USB 어댑터. Intel과
-  Broadcom은 실험적. Realtek 어댑터는 시작 시 펌웨어 업로드가 필요하며,
+- **어댑터 호환성**: Realtek(가장 많이 테스트됨), CSR, Intel, Broadcom, MediaTek
+  등([검증된 하드웨어](hardware)). Realtek 어댑터는 시작 시 펌웨어 업로드가 필요하며,
   부트로더 모드의 Intel 어댑터도 마찬가지
 - **페어링**: General Bonding과 함께 SSP Just Works 사용. 링크 키는
   로컬 파일에 저장되거나, 그 어댑터에 대해 Windows의 Bluetooth로부터 넘겨받음

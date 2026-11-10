@@ -101,7 +101,7 @@
   "error.le_audio_connect": "LE Audio : impossible de se connecter à l’appareil (%s).",
   "error.le_audio_stream": "LE Audio : le flux n’a pas pu être établi (%s).",
   "error.auracast": "Auracast : la diffusion n’a pas pu démarrer (%s).",
-  "error.le_audio_capture": "LE Audio (expérimental) ne capture que les périphériques audio et virtuels.",
+  "error.le_audio_capture": "LE Audio ne capture que les périphériques audio et virtuels.",
   "error.aac_unavailable": "Encodeur AAC indisponible (fdk-aac non compilé)",
   "error.no_virtual_device_selected": "Aucun périphérique audio virtuel sélectionné",
   "error.virtual_capture_init": "Échec de l'initialisation de la capture sur le périphérique virtuel",

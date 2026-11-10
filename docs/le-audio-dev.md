@@ -5,11 +5,11 @@ nav_exclude: true
 english_only: true
 ---
 
-# LE Audio (experimental) - developer note
+# LE Audio - developer note
 
 BlueCaster can stream to LE Audio devices as a **BAP unicast client** (audio
 source): LC3 over Connected Isochronous Streams (CIS), on the same BTstack
-session and WinUSB adapter as A2DP. It is **experimental**, used only for a
+session and WinUSB adapter as A2DP. It is used only for a
 device's LE Audio entry (or `--le-audio` in CLI mode). `le_audio_experimental`
 in `settings.json` (on by default, no switch in the window) turns the LE side
 off altogether. With the setting off none of the LE code runs and HCI init is that of a build
@@ -479,7 +479,7 @@ CLI) and a group of UGTs with the Sink feature,
 `adjust_stream_request` puts `48_3_gr, 48_4_gr, 48_1_gr, 48_2_gr, 32_1_gr,
 32_2_gr` first with the Game context (Media when Game is not available).
 
-**BAS (Battery Service client, `bas.rs`, experimental).** Reads each
+**BAS (Battery Service client, `bas.rs`).** Reads each
 device's Battery Level and follows its notifications; with a set of earbuds
 the lowest level is reported (`HostEvent::Battery`, "BAS: device N: battery
 X% (reported Y%)"). Emulator option `--bas L[,L2]`, `--bas-change S:L`.
@@ -625,7 +625,7 @@ Users with the setting off get the behaviour of a build without LE:
   scanning in the emulator. The aarch64 build of the LE code has not been
   checked.
 
-## TODO (before LE Audio can leave "experimental")
+## TODO
 
 Collected from the v1 profile branches (2026-10-16) and the v2 port
 (2026-10-18). Everything so far is verified only against the Bumble
