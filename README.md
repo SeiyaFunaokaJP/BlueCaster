@@ -13,18 +13,18 @@ Bluetooth audio transmitter for Windows. It turns an ordinary Bluetooth adapter,
 | LHDC V5 | 400–1000 kbps, ABR 160–400 | 44.1–192 kHz | 16/24 bit | ❌ | ✅ |
 | LDAC | 330/660/990 kbps | 44.1–96 kHz | 16/24/32 bit | ❌ | ✅ |
 | aptX Adaptive | 265/427 kbps (96 kHz: 646) | 48/96 kHz | 24 bit | ❌ | ✅ |
-| Opus (Android) | 256 kbps | 48 kHz | 16 bit | ❌ | 🧪 |
-| aptX HD | 576 kbps | 44.1/48 kHz | 24 bit | ❌ | 🧪 |
+| Opus (Android) | 256 kbps | 48 kHz | 16 bit | ❌ | ✅ |
+| aptX HD | 576 kbps | 44.1/48 kHz | 24 bit | ❌ | ✅ |
 | aptX | 352/384 kbps | 44.1/48 kHz | 16 bit | ✅ | ✅ |
-| aptX Low Latency | 352 kbps | 44.1/48 kHz | 16 bit | ❌ | 🧪 |
+| aptX Low Latency | 352 kbps | 44.1/48 kHz | 16 bit | ❌ | ✅ |
 | AAC | up to 256 kbps | 44.1/48 kHz | 16 bit | Windows 11 | ✅ |
 | SBC XQ | up to 552 kbps | 44.1/48 kHz | 16 bit | ❌ | ✅ |
 | SBC | up to ~345 kbps | 44.1/48 kHz | 16 bit | ✅ | ✅ |
-| FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | ❌ | 🧪 |
-| Opus 05 (PipeWire) | 256 kbps | 48 kHz | 16 bit | ❌ | 🧪 🔧 |
-| LC3 (LE Audio) | 32–124 kbps per channel | 16–48 kHz | 16 bit | Windows 11 | 🧪 |
+| FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | ❌ | ✅ |
+| Opus 05 (PipeWire) | 256 kbps | 48 kHz | 16 bit | ❌ | ✅ 🔧 |
+| LC3 (LE Audio) | 32–124 kbps per channel | 16–48 kHz | 16 bit | Windows 11 | ✅ |
 
-✅ supported · 🧪 experimental: works against a virtual Bluetooth sink, not yet confirmed with real headphones ([reports welcome](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/11)) · 🔧 developer mode only · ❌ not supported
+✅ supported · 🔧 developer mode only · ❌ not supported
 
 ## Requirements
 
@@ -49,7 +49,7 @@ See the [Setup guide](https://seiyafunaokajp.github.io/BlueCaster/setup) and the
 ## Features
 
 - **Codec choice**: picks the best codec the headphones support, or the one you choose; ABR on LHDC V5, LDAC and aptX Adaptive
-- **LE Audio (experimental)**: LC3 to LE Audio headphones and earbuds with a Bluetooth 5.2 adapter; tested only against the Bluetooth emulator ([details](https://seiyafunaokajp.github.io/BlueCaster/usage#le-audio))
+- **LE Audio**: LC3 to LE Audio headphones and earbuds with a Bluetooth 5.2 adapter; tested on a MediaTek MT7925 and against the Bluetooth emulator so far ([details](https://seiyafunaokajp.github.io/BlueCaster/usage#le-audio))
 - **Capture**: all system audio, a virtual audio device (e.g. VB-CABLE), or one application
 - **Runs in the tray**: keeps streaming with the window closed, reconnects after a lost link and after sleep
 - **Driver setup in the app**: assigns and restores WinUSB without Zadig; headphones paired in Windows through the adapter connect without pairing again
@@ -58,7 +58,7 @@ See the [Setup guide](https://seiyafunaokajp.github.io/BlueCaster/setup) and the
 - **Command line**: `bluecaster-core.exe --cli` ([CLI Mode](https://seiyafunaokajp.github.io/BlueCaster/usage#cli-mode))
 - **Updates**: daily check, updates itself
 - **8 languages**: English, Japanese, Chinese (Simplified / Traditional), Korean, German, French, Spanish
-- **Headset microphone (experimental)**: the headphones' microphone as a Windows microphone through a virtual audio cable such as VB-CABLE; classic devices play at call quality meanwhile, LE Audio keeps its quality ([details](https://seiyafunaokajp.github.io/BlueCaster/usage#codecs))
+- **Headset microphone**: the headphones' microphone as a Windows microphone through a virtual audio cable such as VB-CABLE; classic devices play at call quality meanwhile, LE Audio keeps its quality ([details](https://seiyafunaokajp.github.io/BlueCaster/usage#codecs))
 - **Works with** third-party apps such as earbud control apps: [Works With](https://seiyafunaokajp.github.io/BlueCaster/works-with) (not supported by this project)
 
 ## Building

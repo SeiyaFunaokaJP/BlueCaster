@@ -520,9 +520,7 @@ impl Profile {
             codec_fallback: true,
             codec_forced: self.codec_forced,
             unlisted_options: self.unlisted_options,
-            // The setting's, filled in by whoever starts the stream
-            experimental_codecs: true,
-            // Settings' developer_mode, filled in the same way
+            // Settings' developer_mode, filled in by whoever starts the stream
             developer_codecs: false,
             auto_order: self.order(),
             quality: Quality::from_key(&self.quality),

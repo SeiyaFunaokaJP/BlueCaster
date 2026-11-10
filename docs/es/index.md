@@ -11,7 +11,7 @@ has_toc: false
 Transmisión de audio Bluetooth A2DP para Windows con compatibilidad completa de códecs.
 {: .fs-6 .fw-300 }
 
-Convierte un adaptador Bluetooth corriente -- un adaptador USB económico o, en muchos portátiles, el integrado -- de los códecs básicos que le da Windows en un transmisor Hi-Fi: **LHDC V5, LDAC y aptX Adaptive** hasta 96 kHz (LHDC V5 hasta 192 kHz), además de **aptX, AAC, SBC XQ y SBC**. Experimentales: **aptX HD, aptX Low Latency, Opus, FastStream y LE Audio (LC3)**. BlueCaster configura el adaptador por sí mismo y lo devuelve a Windows con un clic ([cómo funciona](architecture)).
+Convierte un adaptador Bluetooth corriente -- un adaptador USB económico o, en muchos portátiles, el integrado -- de los códecs básicos que le da Windows en un transmisor Hi-Fi: **LHDC V5, LDAC y aptX Adaptive** hasta 96 kHz (LHDC V5 hasta 192 kHz), además de **aptX HD, aptX, aptX Low Latency, Opus, AAC, SBC XQ, SBC y FastStream**, y LE Audio (LC3). BlueCaster configura el adaptador por sí mismo y lo devuelve a Windows con un clic ([cómo funciona](architecture)).
 
 ![BlueCaster's Codecs screen, streaming LDAC 990 kbps / 48 kHz to Sony WH-1000XM4](../images/app_sample.png)
 
@@ -27,17 +27,17 @@ Convierte un adaptador Bluetooth corriente -- un adaptador USB económico o, en 
 | LHDC V5 | 400/500/900/1000 kbps, ABR 160--400 kbps | 44.1/48/96/192 kHz | 16/24 bits | -- |
 | LDAC | 330/660/990 kbps | 44.1--96 kHz | 16/24/32 bits | ~200 ms |
 | aptX Adaptive | 265/427 kbps (96 kHz: 646) | 48/96 kHz | 24 bits | -- |
-| Opus 🧪 | 256 kbps | 48 kHz | 16 bits | -- |
-| aptX HD 🧪 | 576 kbps | 44.1/48 kHz | 24 bits | ~150 ms |
+| Opus | 256 kbps | 48 kHz | 16 bits | -- |
+| aptX HD | 576 kbps | 44.1/48 kHz | 24 bits | ~150 ms |
 | aptX | 352/384 kbps | 44.1/48 kHz | 16 bits | -- |
-| aptX Low Latency 🧪 | 352 kbps | 44.1/48 kHz | 16 bits | ~32 ms |
+| aptX Low Latency | 352 kbps | 44.1/48 kHz | 16 bits | ~32 ms |
 | AAC | hasta 256 kbps | 44.1/48 kHz | 16 bits | ~150 ms |
 | SBC XQ | ~385/505/552 kbps | 44.1/48 kHz | 16 bits | ~150 ms |
 | SBC | hasta ~345 kbps | 44.1/48 kHz | 16 bits | ~150 ms |
-| FastStream 🧪 | 198/216 kbps | 44.1/48 kHz | 16 bits | -- |
-| Opus 05 🧪 | 256 kbps | 48 kHz | 16 bits | -- |
-| LC3 (LE Audio) 🧪 | 32--124 kbps por canal | 16/24/32/48 kHz | 16 bits | ~140 ms |
-| LC3 baja latencia (LE Audio GMAP) 🧪 | 64--96 kbps por canal | 32/48 kHz | 16 bits | ~30 ms |
+| FastStream | 198/216 kbps | 44.1/48 kHz | 16 bits | -- |
+| Opus 05 | 256 kbps | 48 kHz | 16 bits | -- |
+| LC3 (LE Audio) | 32--124 kbps por canal | 16/24/32/48 kHz | 16 bits | ~140 ms |
+| LC3 baja latencia (LE Audio GMAP) | 64--96 kbps por canal | 32/48 kHz | 16 bits | ~30 ms |
 
 ### Compatibilidad de códecs por plataforma (envío a los auriculares)
 
@@ -46,33 +46,33 @@ Convierte un adaptador Bluetooth corriente -- un adaptador USB económico o, en 
 | LHDC V5 | ❌ | ❌ | ❌ | ✅ |
 | LDAC | ❌ | ❌ | ✅ | ✅ |
 | aptX Adaptive | ❌ | ❌ | ❌ | ✅ |
-| Opus (Opus A2DP de Android) | ❌ | ❌ | ✅ PipeWire 1.2+ (`opus_g`); no está en Ubuntu 24.04 (PipeWire 1.0.5) | 🧪 experimental |
-| aptX HD | ❌ | ❌ | ✅ | 🧪 experimental |
+| Opus (Opus A2DP de Android) | ❌ | ❌ | ✅ PipeWire 1.2+ (`opus_g`); no está en Ubuntu 24.04 (PipeWire 1.0.5) | ✅ |
+| aptX HD | ❌ | ❌ | ✅ | ✅ |
 | aptX | ✅ | ✅ | ✅ | ✅ |
-| aptX Low Latency | ❌ | ❌ | ✅ | 🧪 experimental |
+| aptX Low Latency | ❌ | ❌ | ✅ | ✅ |
 | AAC | ❌ | ✅ | ❌ no está en los paquetes de Ubuntu | ✅ |
 | SBC XQ | ❌ | ❌ | ✅ | ✅ (receptores cuyo SBC admite canal dual y bitpool ≥ 29) |
 | SBC | ✅ | ✅ | ✅ | ✅ |
-| FastStream | ❌ | ❌ | ✅ | 🧪 experimental (solo música, si se elige expresamente) |
-| Opus 05 (Opus propio de PipeWire) | ❌ | ❌ | ✅ PipeWire 0.3.57+ (`opus_05`, solo hacia dispositivos PipeWire) | 🧪 experimental (si se elige expresamente, solo en el modo de desarrollador) |
-| LC3 (LE Audio, BAP unicast) | ❌ | ✅ en PC cuyo hardware y controlador Bluetooth admiten LE Audio | ✅ PipeWire BAP `lc3` (LE Audio de BlueZ) | 🧪 experimental (la entrada LE Audio de un dispositivo; baja latencia GMAP con auriculares gaming; adaptador Bluetooth 5.2 con ISO, [Uso](usage#le-audio)) |
+| FastStream | ❌ | ❌ | ✅ | ✅ (solo música, si se elige expresamente) |
+| Opus 05 (Opus propio de PipeWire) | ❌ | ❌ | ✅ PipeWire 0.3.57+ (`opus_05`, solo hacia dispositivos PipeWire) | ✅ (si se elige expresamente, solo en el modo de desarrollador) |
+| LC3 (LE Audio, BAP unicast) | ❌ | ✅ en PC cuyo hardware y controlador Bluetooth admiten LE Audio | ✅ PipeWire BAP `lc3` (LE Audio de BlueZ) | ✅ (la entrada LE Audio de un dispositivo; baja latencia GMAP con auriculares gaming; adaptador Bluetooth 5.2 con ISO, [Uso](usage#le-audio)) |
 
-✅ compatible · 🧪 experimental · ❌ no compatible. Todas las columnas corresponden al lado emisor (PC → auriculares). «Integrado» es el audio Bluetooth propio del sistema operativo, sin BlueCaster; la columna de Ubuntu es el conjunto de códecs de PipeWire en Ubuntu 26.04 (`libspa-0.2-bluetooth`).
+✅ compatible · ❌ no compatible. Todas las columnas corresponden al lado emisor (PC → auriculares). «Integrado» es el audio Bluetooth propio del sistema operativo, sin BlueCaster; la columna de Ubuntu es el conjunto de códecs de PipeWire en Ubuntu 26.04 (`libspa-0.2-bluetooth`).
 
 {: .warning }
-**aptX HD y aptX Low Latency son experimentales.** Siguen las implementaciones de Android / PipeWire y superan las pruebas de ida y vuelta de codificación/decodificación, pero aún no se han verificado con auriculares reales. Los valores de latencia de esta tabla son cifras típicas, no medidas con BlueCaster.
+**aptX HD y aptX Low Latency** siguen las implementaciones de Android / PipeWire y superan las pruebas de ida y vuelta de codificación/decodificación, pero aún no se han verificado con auriculares reales. Los valores de latencia de esta tabla son cifras típicas, no medidas con BlueCaster.
 
 {: .warning }
 **Acerca de LHDC V5.** Usa un port en C del codificador LHDC V5 que Google añadió a Android 17 (AOSP, Apache-2.0); se verificó que el port produce exactamente los mismos bits que el codificador en Rust de AOSP, y la señalización A2DP sigue `a2dp_vendor_lhdcv5` de Android. Un usuario lo verificó con auriculares LHDC V5 reales a 1000 kbps / 192 kHz con la v1.1.1-beta.1 ([#50](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/50)); la v2 usa el mismo codificador. Solo se admite LHDC V5 con pérdida: LHDC V2/V3 (auriculares más antiguos) y el modo sin pérdida «LHDC-RAW» no tienen codificador de código abierto. En modo Automático, LHDC V5 tiene la máxima prioridad, por encima de LDAC.
 
 {: .warning }
-**Opus es experimental.** Es el códec de fabricante Opus A2DP de Android (Android 13+, ID de fabricante 0x000000E0 Google): 48 kHz, tramas de 20 ms, 256 kbps estéreo tal como lo solicita Android (Estándar 192, Móvil 128 kbps), codificado con libopus 1.5.2. Supera la prueba de extremo a extremo contra un receptor virtual, pero aún no se ha verificado con auriculares Opus reales. En modo Automático tiene menos prioridad que aptX Adaptive y más que aptX HD.
+**Opus** es el códec de fabricante Opus A2DP de Android (Android 13+, ID de fabricante 0x000000E0 Google): 48 kHz, tramas de 20 ms, 256 kbps estéreo tal como lo solicita Android (Estándar 192, Móvil 128 kbps), codificado con libopus 1.5.2. Supera la prueba de extremo a extremo contra un receptor virtual, pero aún no se ha verificado con auriculares Opus reales. En modo Automático tiene menos prioridad que aptX Adaptive y más que aptX HD.
 
 {: .warning }
-**Opus 05 es experimental y no está verificado en hardware real.** Es el códec de fabricante Opus A2DP propio de PipeWire (ID de fabricante 0x000005F1, códec 0x1005; `opus_05` de PipeWire), que solo implementa PipeWire, así que el receptor tiene que ser un PC con PipeWire como receptor A2DP. BlueCaster envía solo la dirección de música estéreo (sin 5.1 / 7.1 ni canal de retorno): 48 kHz, tramas de 10 ms (20 ms si el receptor solo admite esas), el mismo codificador libopus y las mismas tasas de bits que Opus, limitadas al máximo del receptor. El modo Automático nunca lo elige; elíjalo en **Códecs** o con `-c opus05`. Supera la prueba de extremo a extremo contra un receptor virtual que ofrece las capacidades de PipeWire, pero no se ha probado con un receptor PipeWire real. PipeWire como receptor A2DP decodifica Opus 05 desde la 0.3.57 y el Opus de Android (`opus_g`) desde la 1.2.0: Ubuntu 24.04 LTS incluye PipeWire 1.0.5 (solo Opus 05), Ubuntu 25.10 (1.4.7) y 26.04 LTS (1.6.2) incluyen ambos; ninguno está aún verificado con BlueCaster.
+**Opus 05** es el códec de fabricante Opus A2DP propio de PipeWire (ID de fabricante 0x000005F1, códec 0x1005; `opus_05` de PipeWire), que solo implementa PipeWire, así que el receptor tiene que ser un PC con PipeWire como receptor A2DP. BlueCaster envía solo la dirección de música estéreo (sin 5.1 / 7.1 ni canal de retorno): 48 kHz, tramas de 10 ms (20 ms si el receptor solo admite esas), el mismo codificador libopus y las mismas tasas de bits que Opus, limitadas al máximo del receptor. El modo Automático nunca lo elige; elíjalo en **Códecs** o con `-c opus05`. Supera la prueba de extremo a extremo contra un receptor virtual que ofrece las capacidades de PipeWire, pero no se ha probado con un receptor PipeWire real. PipeWire como receptor A2DP decodifica Opus 05 desde la 0.3.57 y el Opus de Android (`opus_g`) desde la 1.2.0: Ubuntu 24.04 LTS incluye PipeWire 1.0.5 (solo Opus 05), Ubuntu 25.10 (1.4.7) y 26.04 LTS (1.6.2) incluyen ambos; ninguno está aún verificado con BlueCaster.
 
 {: .warning }
-**SBC XQ** se verificó con unos Sony WH-1000XM4 (canal dual, bitpool 43 a 48 kHz, 552 kbps). Los receptores que rechazan la configuración se reconectan con SBC normal. **FastStream es experimental:** supera la prueba de extremo a extremo contra un receptor virtual, pero no se ha probado con auriculares FastStream reales. Solo la dirección de música; Automático nunca lo elige.
+**SBC XQ** se verificó con unos Sony WH-1000XM4 (canal dual, bitpool 43 a 48 kHz, 552 kbps). Los receptores que rechazan la configuración se reconectan con SBC normal. **FastStream** supera la prueba de extremo a extremo contra un receptor virtual, pero no se ha probado con auriculares FastStream reales. Solo la dirección de música; Automático nunca lo elige.
 
 {: .note }
 **¿Solo necesita aptX clásico?** Windows 10 ya admite aptX clásico en su pila Bluetooth integrada (no aptX HD, aptX LL ni aptX Adaptive), así que BlueCaster no es necesario para ese códec. BlueCaster es útil sobre todo para LHDC V5, LDAC, aptX Adaptive, aptX HD y aptX Low Latency.
@@ -143,8 +143,8 @@ BlueCaster omite por completo la pila Bluetooth de Windows. Se comunica directam
 
 ## Funciones
 
-- **Varios códecs**: LHDC V5, LDAC, aptX Adaptive, aptX, AAC, SBC XQ, SBC y (de forma experimental) aptX HD / aptX Low Latency / Opus / Opus 05 / FastStream con negociación automática
-- **LE Audio (experimental)**: LC3 hacia auriculares y auriculares de botón LE Audio (BAP unicast, los dos auriculares de un par, volumen del auricular, botones multimedia, baja latencia GMAP). Necesita un adaptador con canales isócronos de Bluetooth 5.2; solo probado con el emulador de Bluetooth, todavía no con auriculares LE Audio reales ([Uso](usage#le-audio))
+- **Varios códecs**: LHDC V5, LDAC, aptX Adaptive, aptX, AAC, aptX HD, aptX Low Latency, Opus, Opus 05, FastStream, SBC XQ y SBC con negociación automática
+- **LE Audio**: LC3 hacia auriculares y auriculares de botón LE Audio (BAP unicast, los dos auriculares de un par, volumen del auricular, botones multimedia, baja latencia GMAP). Necesita un adaptador con canales isócronos de Bluetooth 5.2; probado hasta ahora en un MediaTek MT7925 y con el emulador de Bluetooth ([Uso](usage#le-audio))
 - **Tres modos de captura**: loopback del sistema, enrutamiento a través de un dispositivo de audio virtual o la salida de una sola aplicación
 - **Ventana, bandeja y CLI**: una ventana para la configuración y el diagnóstico, un panel desplegable y un menú en la bandeja para conectarse en el día a día, y una línea de comandos (consulte [Uso](usage))
 - **WinUSB desde la aplicación**: asigna el controlador WinUSB al adaptador y restaura el controlador original, sin necesidad de Zadig (consulte [Configuración](setup#winusb)); los auriculares que Windows emparejó a través del adaptador se conectan sin volver a emparejarlos

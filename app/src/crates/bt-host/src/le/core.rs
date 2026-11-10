@@ -1991,7 +1991,7 @@ impl LeCore {
         if self.initialized {
             return;
         }
-        tracing::info!("LE Audio (experimental): initializing (SM, GATT client / server, ISO)");
+        tracing::info!("LE Audio: initializing (SM, GATT client / server, ISO)");
         let path: PathBuf = self
             .config
             .as_ref()

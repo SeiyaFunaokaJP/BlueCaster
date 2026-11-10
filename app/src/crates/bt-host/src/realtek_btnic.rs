@@ -1,5 +1,5 @@
 //! Realtek chips whose firmware only Realtek's Windows driver has: the
-//! RTL8852BD (0BDA:B853, issue #374), experimental and untested on hardware
+//! RTL8852BD (0BDA:B853, issue #374), untested on hardware
 //!
 //! linux-firmware has no file for this chip: its ROM (ROM version 3) is not
 //! in rtl8852bu_fw.bin, so BTstack's Realtek download finds no patch for it.
@@ -359,7 +359,7 @@ impl ChipLoader for Loader {
     }
 
     fn start(&mut self) -> Vec<Action> {
-        tracing::info!("realtek {}: checking its firmware (experimental), {}", self.chip, self.file);
+        tracing::info!("realtek {}: checking its firmware, {}", self.chip, self.file);
         self.send(State::Version, OP_READ_LOCAL_VERSION, &[])
     }
 
@@ -672,12 +672,8 @@ mod tests {
         // No BTstack Realtek init for it: that would look for rtl8852bu_fw
         assert_eq!(chips::resolve_realtek_pid(0x0BDA, 0xB853, crate::realtek_usb_firmware()), None);
         assert_eq!(chips::vendor_for_usb(0x0BDA, 0xB853, None), ChipVendor::Realtek);
-        assert_eq!(
-            chips::display_name(0x0BDA, 0xB853, None, ChipVendor::Realtek),
-            "RTL8852BD (0x0BDA:0xB853) [experimental]"
-        );
-        assert_eq!(chips::chip_support_tag(ChipVendor::Realtek, 0x0BDA, 0xB853), Some("experimental"));
-        assert_eq!(chips::chip_support_tag(ChipVendor::Realtek, 0x0BDA, 0xB85B), None);
+        assert_eq!(chips::display_name(0x0BDA, 0xB853, None, ChipVendor::Realtek), "RTL8852BD (0x0BDA:0xB853)");
+        assert_eq!(chips::chip_support_tag(ChipVendor::Realtek, 0x0BDA, 0xB853), None);
         assert_eq!(chip(0x0BDA, 0x4853), None);
     }
 

@@ -235,7 +235,6 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
     remote_sink: "",
     le_audio_experimental: false,
     le_audio_low_latency: false,
-    experimental_codecs: true,
     // Off, as schema 5 sets it: WH-1000XM5 chose LDAC
     auto_codec: false,
     ...over,
@@ -1364,8 +1363,6 @@ export class MockCore implements Transport {
             next.le_audio_experimental ?? before.le_audio_experimental,
           le_audio_low_latency:
             next.le_audio_low_latency ?? before.le_audio_low_latency,
-          // Always on, as the core reads it (issue #86)
-          experimental_codecs: true,
           auto_codec: next.auto_codec ?? before.auto_codec,
           // As the core's serde default for a client that sends none
           setup_done: next.setup_done ?? true,
@@ -1388,7 +1385,7 @@ export class MockCore implements Transport {
           this.log(
             "info",
             "bluecaster_core_exe::state",
-            `LE Audio (experimental) ${on}${busy ? ": takes effect at the next scan or connection" : ""}`,
+            `LE Audio ${on}${busy ? ": takes effect at the next scan or connection" : ""}`,
           );
           if (!busy && this.snap.adapter.status !== "stopped")
             this.setAdapter("stopped");
@@ -1707,7 +1704,7 @@ export class MockCore implements Transport {
         ...mtk,
         driver: "winusb",
         driver_service: "WinUSB",
-        display_name: "MT7925 (0x0E8D:0x7925) [experimental]",
+        display_name: "MT7925 (0x0E8D:0x7925)",
         vendor_note: { key: "firmware.vendor_mediatek", args: [] },
       },
     ];
@@ -3067,7 +3064,7 @@ export class MockCore implements Transport {
       `Adapter: ${s.adapter.adapters.map((a) => `${a.display_name} [${a.driver_service}]`).join(", ") || "none"}`,
       `Firmware files: ${s.adapter.adapters.map((a) => `${a.display_name}: ${a.firmware_present === null ? "none needed" : a.firmware_present ? "present" : "MISSING"} (${a.firmware_files.join(", ")})`).join("; ")}`,
       `State: ${s.stream.state}${s.stream.info ? ` ${s.stream.info.codec} ${s.stream.info.bitrate_kbps} kbps` : ""}${s.stream.info?.le ? ` (${s.stream.info.le.summary})` : ""}`,
-      `LE Audio (experimental): ${s.settings.le_audio_experimental ? "on" : "off"}${s.settings.le_audio_low_latency ? ", low latency" : ""}`,
+      `LE Audio: ${s.settings.le_audio_experimental ? "on" : "off"}${s.settings.le_audio_low_latency ? ", low latency" : ""}`,
       `Profiles: ${s.profiles.map((p) => `${p.name} [${p.device_address}]`).join(", ")}`,
       `Config: ${s.config_dir}`,
     ].join("\n");

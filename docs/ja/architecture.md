@@ -18,7 +18,7 @@ nav_order: 4
 
 ## 概要 {#overview}
 
-BlueCaster は、Windows で LHDC V5、LDAC、aptX Adaptive、aptX HD、aptX Low Latency、aptX、Opus、AAC、SBC XQ、SBC の Bluetooth オーディオを使えるようにします（LE Audio の LC3 にも実験的に対応）。Windows 標準の Bluetooth スタックが A2DP で対応するのは SBC、クラシック aptX、AAC（Windows 11 のみ）だけですが、このツールはカーネルドライバーなしでそれ以外のコーデックを追加します。
+BlueCaster は、Windows で LHDC V5、LDAC、aptX Adaptive、aptX HD、aptX Low Latency、aptX、Opus、AAC、SBC XQ、SBC の Bluetooth オーディオを使えるようにします（LE Audio の LC3 にも対応）。Windows 標準の Bluetooth スタックが A2DP で対応するのは SBC、クラシック aptX、AAC（Windows 11 のみ）だけですが、このツールはカーネルドライバーなしでそれ以外のコーデックを追加します。
 
 **BTstack + WinUSB** を使います。完全にユーザーモードで動作し、ドライバー署名は不要です。
 
@@ -124,7 +124,7 @@ USB トランスポートには、v1 で実機のアダプターのために必�
 | 2. 部品 | `audio-capture` | `wasapi` クレートによる WASAPI キャプチャ: システムループバック、仮想デバイス、アプリ単位（プロセスループバック）。デバイスとアプリの一覧、テストトーン、アプリごとの音量（音量ミキサー） |
 | 2. 部品 | `voice-link` | ヘッドセットマイクの音声（開発者モード）: 選んだ出力デバイスへのモノラル PCM の再生（WASAPI）、上り方向のためのキャプチャのモノラル化、SCO ペイロード上の音声コーデック CVSD / mSBC / LC3-SWB |
 | 3. エンジン | `bt-host` | BTstack を専用スレッドで動かし、コマンドと型付きイベントで操作する: GAP、A2DP Source、AVRCP、SDP、パススルー用の RFCOMM チャネル（`rfcomm.*`）、リンクキー、デバイスの SDP サービス、AFH、ファームウェアの読み込みとチップのローダー（`bringup`）、チップのプローブとチップスクリプト、HCI キャプチャ（`.pklg`）、LE Audio（`le/`） |
-| 2. 部品 | `le-audio` | LE Audio（実験的）: BTstack にも Windows にも依存しないロジック（Assigned Numbers、LTV、PACS / ASCS の PDU、プリセット、CSIP / VCP / MCP / CCP のモデル） |
+| 2. 部品 | `le-audio` | LE Audio: BTstack にも Windows にも依存しないロジック（Assigned Numbers、LTV、PACS / ASCS の PDU、プリセット、CSIP / VCP / MCP / CCP のモデル） |
 | 3. エンジン | `pipeline` | PCM のリング、形式変換、ダウンミックス、エンコード、メディアペイロード、送信ペース、ABR |
 | 4. コア | `bluecaster-core`（ディレクトリ `core`） | 状態機械、再接続、スリープと復帰、プロファイル、設定と v1 からの移行、音量の連動、出力のミュート、更新チェック、Realtek のファームウェアのダウンロード、受信機テストのクライアント、統計、ベンダーのプロトコル（`vendor/`） |
 | 4. コア | `ipc` | コアとウィンドウで共有するプロトコルの型（serde。TypeScript の型は `ts-rs` で生成）とパイプのフレーム |
@@ -208,7 +208,6 @@ Windows 8 以降には、Microsoft 署名済みの WinUSB ドライバー（`win
 
 - リモートの能力を解析する: 標準の SBC と AAC の要素、ベンダーコーデック。aptX LL は両方の Vendor ID、aptX Adaptive は R1 と R2 のシンク（48 kHz ステレオでのみ使える）
 - コーデックを選ぶ: 自動では、リモートが提示するうちで最も音質の高いコーデックを選ぶ。リモートが提示しないコーデックを求めた場合は、自動が選ぶのと同じコーデックに置き換え（プロファイルでは issue #86 以降は常に、コマンドラインでは `--fallback` のときだけ）、それ以外はエラーにする
-- 実験的コーデック（aptX HD、aptX LL、Opus、Opus 05、FastStream）は、コマンドラインの `--no-experimental` で自動とフォールバックから外す。アプリでは常に使う（2.0.2-beta.7 のコーデック画面で入った `experimental_codecs` の設定は、issue #86 以降はオンとして読む）
 - `auto_codec` の設定がオンの間（**コーデック > 対応するコーデックのうち最も音質の高いものを自動で選ぶ**。schema 5 以降はすべてのデバイスで 1 つの設定）、すべての A2DP プロファイルを自動の既定の設定で、自動として配信する。デバイスに選んだコーデックは、オフのときのためにプロファイルに残る
 - ユーザーがカードをドラッグして決めたデバイスのコーデックの順番（プロファイルの `codec_order`。`codec::AutoOrder`。空なら音質の高い順）に従って、自動の選択と、選んだコーデックのフォールバックを決める（自動選択の間も）。FastStream と Opus 05 は、自動の選択にもフォールバックにもならない（2.0.2 のベータでは、すべてのデバイスに共通の 1 つの順番が settings.json の `auto_order` にあったが、今は無視する）
 - aptX 系のサンプルレートを選ぶ（リモートが通知するレートから 44.1 / 48 kHz。キャプチャのリサンプリングは WASAPI が行う）。aptX Adaptive は 48 kHz。96 kHz を選び、音質が高音質で、シンクが R2 で 96 kHz を通知していれば 96 kHz。自動のレート（自動選択でも）は 48 kHz を求め、それがなければ各コーデックの選択がシンクの通知する中で最良のものを選ぶ（issue #86: シンクが通知する最高のレートでも、Windows のミックスのレートでもない）
@@ -220,7 +219,7 @@ Windows 8 以降には、Microsoft 署名済みの WinUSB ドライバー（`win
 **責務**:
 - USB（または TCP）の HCI トランスポートで、BTstack を専用スレッドで動かす
 - ストリームエンドポイントの登録: ベンダーコーデック（LDAC、aptX HD、aptX、aptX LL、LHDC V5、FastStream、Opus、Opus 05、aptX Adaptive）と SBC（SBC XQ も使う）、AAC。合わせて 11 個（BTstack の `MAX_NR_AVDTP_STREAM_ENDPOINTS`）
-- SDP レコードの登録（A2DP Source、AVRCP Controller、AVRCP Target。その実験的な設定がオンの間は、バッテリー残量のためだけに HFP Audio Gateway も）
+- SDP レコードの登録（A2DP Source、AVRCP Controller、AVRCP Target。その設定がオンの間は、バッテリー残量のためだけに HFP Audio Gateway も）
 - SSP ペアリングの管理（Just Works、General Bonding。リンクキーを永続化）
 - 接続タイムアウトの後は半開きの接続を切断し、再試行できるようにする
 - 失敗した接続を再試行し（最大 3 回）、原因（応答なし、無通信のリンク、相手からの切断、認証）を区別する。デバイスがもう知らないリンクキーは削除して、ペアリングし直す
@@ -268,7 +267,7 @@ Windows Audio Session API で音声をリアルタイムに取り込みます。
 | LHDC V5 | lhdcv5-enc（AOSP エンコーダーの C 移植） | 400/500/900/1000 kbps（Low/Medium/Medium-High/High）、シンクが通知する最大以下、ABR 160–400 kbps | 16/24 bit、5 ms フレーム、2 バイトのメディアペイロードヘッダー、RTP ヘッダー |
 | LDAC | libldac (AOSP) | 330/660/990 kbps | High/Medium/Low（HQ/SQ/MQ）モード、ABR |
 | aptX Adaptive | aptx-adaptive（AKS-Logic/aptx-adaptive-linux の純 Rust のエンコーダー、MIT） | High 427 kbps、Low Latency 265 kbps（R2 のシンク: 270）。ABR で 364/318 に下がる（R2: 270/204） | 48 kHz ステレオ（選んだときは、96 kHz を通知する R2 のシンクへ High で 96 kHz: 646/340/255 kbps）、24 bit。メディアパケット 1 つにコーデックのパケット 1 つ、BlueCaster 自身の RTP ヘッダー付き。High で ABR。自動では LHDC V5 と LDAC の次に選ぶ |
-| Opus | libopus 1.5.2 | 256 kbps（ステレオ。モノラルは半分） | 実験的。Android の A2DP Opus: 48 kHz、20 ms フレーム（シンクが 10 ms だけならそれ）、メディアペイロードに収まる上限付きの制約付き VBR、1 パケットに 1 フレーム、1 バイトのメディアペイロードヘッダー、RTP ヘッダー |
+| Opus | libopus 1.5.2 | 256 kbps（ステレオ。モノラルは半分） | Android の A2DP Opus: 48 kHz、20 ms フレーム（シンクが 10 ms だけならそれ）、メディアペイロードに収まる上限付きの制約付き VBR、1 パケットに 1 フレーム、1 バイトのメディアペイロードヘッダー、RTP ヘッダー |
 | aptX HD | libopenaptx | 576 kbps | 24 bit 入力、固定レート、RTP ヘッダー |
 | aptX | libopenaptx | 352/384 kbps（44.1/48 kHz） | 16 bit ステレオ、RTP ヘッダーなし |
 | aptX LL | libopenaptx | 352 kbps | 約 32 ms の遅延、RTP ヘッダーなし、パケットは約 7.5 ms 以下 |
@@ -322,10 +321,10 @@ AAC と SBC は、A2DP の仕様で定義された標準のコーデック ID �
 | `settings.json` | アプリの設定。`schema_version` 付き。知らないキーも消さずに残す |
 | `profiles.json` | プロファイル |
 | `devices\devices.txt` | 既知のデバイス |
-| `devices\le_audio_devices.txt` | LE Audio（実験的）: デバイス一覧の LE Audio の項目 |
+| `devices\le_audio_devices.txt` | LE Audio: デバイス一覧の LE Audio の項目 |
 | `devices\device_codecs.json` | クラシックの各デバイスが前回の接続で提示した内容（と、OPPO のイヤホンに Hi-Res を求めたかどうか） |
 | `pairing\link_keys.txt` | リンクキー。v1 や 2.0.x でペアリングしたヘッドホンは、ペアリングし直さずに再接続する |
-| `pairing\le_audio_bonds.tlv`、`pairing\le_audio_csip.txt` | LE Audio（実験的）: LE のボンディング情報（GATT サーバーが保持する CCC の値を含む）とコーディネートセット |
+| `pairing\le_audio_bonds.tlv`、`pairing\le_audio_csip.txt` | LE Audio: LE のボンディング情報（GATT サーバーが保持する CCC の値を含む）とコーディネートセット |
 | `pairing\windows_le_keys.txt`、`pairing\replaced_windows_keys.json` | Windows から引き継いだ LE のキー（LE を使うスタックが取り込むまで）と、**元のドライバに戻す** で置き換えた Windows のキー |
 | `adapters\adapter_caps.json` | スタックが各アダプターについて知ったこと（LE Audio への対応、アドレス、HCI のバージョン、Windows でのアダプターの名前） |
 | `adapters\driver\<instance id>.json` | WinUSB を割り当てた各アダプターの、元のドライバー |
@@ -351,7 +350,7 @@ AAC と SBC は、A2DP の仕様で定義された標準のコーデック ID �
 
 ## 重要な注意事項 {#important-considerations}
 
-- **アダプターの互換性**: Realtek（最も検証済み）と CSR の USB アダプター。Intel と Broadcom は試験的。Realtek のアダプターは起動時にファームウェアのアップロードが必要で、ブートローダーモードの Intel のアダプターも同じ
+- **アダプターの互換性**: Realtek（最も検証済み）、CSR、Intel、Broadcom、MediaTek など（[検証済みの機器](hardware)）。Realtek のアダプターは起動時にファームウェアのアップロードが必要で、ブートローダーモードの Intel のアダプターも同じ
 - **ペアリング**: SSP Just Works と General Bonding を使う。リンクキーはローカルのファイルに永続化するか、そのアダプターについて Windows の Bluetooth から引き継ぐ
 - **2 つ目のアダプターを推奨**: Windows には内蔵の Bluetooth を残し、BlueCaster には専用の USB アダプターを使う
 - 一部の Bluetooth アダプターは、ファームウェアが出せるビットレートを制限する

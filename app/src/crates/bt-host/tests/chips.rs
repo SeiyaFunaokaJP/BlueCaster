@@ -109,15 +109,15 @@ fn vendors_and_names() {
 #[test]
 fn display_names_like_v1() {
     assert_eq!(display_name(0x2357, 0x0604, Some(0x8771), ChipVendor::Realtek), "RTL8761BU (0x2357:0x0604)");
-    assert_eq!(display_name(0x8087, 0x0033, None, ChipVendor::Intel), "Intel (0x8087:0x0033) [experimental]");
+    assert_eq!(display_name(0x8087, 0x0032, None, ChipVendor::Intel), "Intel (0x8087:0x0032)");
     assert_eq!(display_name(0x0E8D, 0x6639, None, ChipVendor::MediaTek), "MediaTek (0x0E8D:0x6639) [unsupported]");
-    assert_eq!(display_name(0x0E8D, 0x0608, None, ChipVendor::MediaTek), "MediaTek (0x0E8D:0x0608) [experimental]");
+    assert_eq!(display_name(0x0E8D, 0x0608, None, ChipVendor::MediaTek), "MediaTek (0x0E8D:0x0608)");
     // An MT7921 module under AzureWave's VID
     assert_eq!(vendor_for_usb(0x13D3, 0x3563, None), ChipVendor::MediaTek);
     assert_eq!(vendor_for_usb(0x13D3, 0x1234, None), ChipVendor::Unknown);
-    assert_eq!(display_name(0x0E8D, 0x7925, None, ChipVendor::MediaTek), "MediaTek (0x0E8D:0x7925) [experimental]");
+    assert_eq!(display_name(0x0E8D, 0x7925, None, ChipVendor::MediaTek), "MediaTek (0x0E8D:0x7925)");
     // Qualcomm ROME and WCN6855, also under a module maker's VID; not the QCA6290
-    assert_eq!(display_name(0x0CF3, 0xE300, None, ChipVendor::Qualcomm), "Qualcomm (0x0CF3:0xE300) [experimental]");
+    assert_eq!(display_name(0x0CF3, 0xE300, None, ChipVendor::Qualcomm), "Qualcomm (0x0CF3:0xE300)");
     assert_eq!(vendor_for_usb(0x0489, 0xE0C7, None), ChipVendor::Qualcomm);
     assert_eq!(display_name(0x0CF3, 0xE400, None, ChipVendor::Qualcomm), "Qualcomm (0x0CF3:0xE400) [unsupported]");
     assert_eq!(display_name(0x0A12, 0x0001, None, ChipVendor::Csr), "CSR (0x0A12:0x0001)");
@@ -280,12 +280,12 @@ fn rom_dongles_and_wifi_loaded_combos() {
         assert_eq!(vendor_for_usb(0x1286, pid, None), ChipVendor::Unknown);
         assert!(!is_bluetooth_vendor_vid(0x1286, pid));
     }
-    assert_eq!(display_name(0x1286, 0x204C, None, ChipVendor::Marvell), "Marvell (0x1286:0x204C) [experimental]");
+    assert_eq!(display_name(0x1286, 0x204C, None, ChipVendor::Marvell), "Marvell (0x1286:0x204C)");
     // Actions ATS2851: runs from ROM, its broken commands hidden from BTstack
     assert_eq!(vendor_for_usb(0x10D7, 0xB012, None), ChipVendor::Actions);
     assert_eq!(vendor_for_usb(0x10D7, 0x1234, None), ChipVendor::Unknown);
     assert!(chip_supported(ChipVendor::Actions, 0x10D7, 0xB012));
-    assert_eq!(display_name(0x10D7, 0xB012, None, ChipVendor::Actions), "Actions (0x10D7:0xB012) [experimental]");
+    assert_eq!(display_name(0x10D7, 0xB012, None, ChipVendor::Actions), "Actions (0x10D7:0xB012)");
     // None of them is taken as Realtek
     let table = bt_host::realtek_usb_firmware();
     for (vid, pid) in [(0x33FA, 0x0010), (0x33FA, 0x0012), (0x1286, 0x204C), (0x1286, 0x204E)] {

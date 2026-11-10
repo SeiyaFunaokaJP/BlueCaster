@@ -398,7 +398,7 @@ fn upgrade_v2(dir: &Path, report: &mut Report) {
     // 3: LE Audio on by default (2.0.0 wrote it off for everyone)
     if report.schema_before.is_some_and(|n| n < 3) && !settings.le_audio_experimental {
         settings.le_audio_experimental = true;
-        tracing::info!("settings: LE Audio (experimental) turned on, as it now is by default");
+        tracing::info!("settings: LE Audio turned on, as it now is by default");
     }
     // 5: one Auto-select for every device
     if report.schema_before.is_some_and(|n| n < 5) {
