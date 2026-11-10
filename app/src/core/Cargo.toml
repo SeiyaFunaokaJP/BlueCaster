@@ -30,6 +30,9 @@ time = { version = "0.3", features = ["local-offset"] }
 # bundle.rs: the diagnostic bundle's .zip
 flate2 = "1"
 crc32fast = "1"
+# vb_cable.rs: VB-Audio's driver pack, fetched when the user installs it
+ureq = { version = "3.3", default-features = false, features = ["rustls", "win-system-proxy"] }
+sha2 = "0.10"
 base64 = "0.22"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "net", "time", "macros", "io-util"] }
 tray-icon = "0.26"

@@ -35,6 +35,7 @@ pub use stream::{
 };
 pub use vendor::huawei::is_huawei;
 pub use voice::{HeadsetMic, MicOutput, MicTarget, mic_conflict, resolve_mic_output};
+pub use voice_link::VoiceCodec;
 pub mod diag;
 pub mod firmware;
 pub mod mute_output;

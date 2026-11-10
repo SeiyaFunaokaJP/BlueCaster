@@ -25,6 +25,9 @@ cases tagged 'mic'. The playback direction is checked as in every case
                  carries both directions, the right one plays only
   mic-mono-16k   mono headset, 16_2_1 both ways (its microphone takes 16 kHz
                  only)
+  mic-rate-16k   stereo headset whose microphone takes 16 and 32 kHz, 16 kHz
+                 chosen (--mic-rate 16000, the rate chosen with Auto-select
+                 off): 16_2_1 from it instead of 32_2_1
 """
 
 import math
@@ -43,6 +46,8 @@ CASES = [
     Case('mic-earbuds', 'earbuds', EARBUDS, sink_args=['--mic', '1'], tags=('mic',)),
     Case('mic-mono-16k', 'mono', r'LC3 16000 Hz 10 ms 40 octets, 1 channel\(s\) over 1 CIS', tones=MONO_TONES,
          sink_args=['--mic', '--mic-rates', '16000'], bluecaster_args=['--le-preset', '16_2_1'], tags=('mic',)),
+    Case('mic-rate-16k', 'stereo', STEREO, sink_args=['--mic'], bluecaster_args=['--mic-rate', '16000'],
+         tags=('mic',)),
 ]
 
 # What each case's microphone is: (preset, Hz, microphone CIS)
@@ -50,6 +55,7 @@ EXPECTED = {
     'mic-stereo': ('32_2_1', 32000, 1),
     'mic-earbuds': ('32_2_1', 32000, 1),
     'mic-mono-16k': ('16_2_1', 16000, 1),
+    'mic-rate-16k': ('16_2_1', 16000, 1),
 }
 
 PREFILL = 2            # BlueCaster's jitter buffer (pipeline le_rx PREFILL_SDUS)

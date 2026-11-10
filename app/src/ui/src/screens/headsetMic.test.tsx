@@ -102,25 +102,67 @@ describe("Input Source on Audio Devices", () => {
     expect(micSelect(wh).value).toBe(CABLE);
   });
 
-  it("lists the Hi-Fi Cable first, keeping the device chosen (issue #86)", async () => {
+  it("lists VB-Cable first and the Hi-Fi Cable after, keeping the device chosen", async () => {
     start("#/devices", "voice");
     mock!.hifiCable = true;
     const wh = await deviceEntry(/WH-1000XM5/);
     await waitFor(() =>
       expect([...micSelect(wh).options].map((o) => o.textContent)).toEqual([
-        "Hi-Fi Cable Output (VB-Audio Hi-Fi Cable)",
         "CABLE Output (VB-Audio Virtual Cable)",
         "Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)",
+        "Hi-Fi Cable Output (VB-Audio Hi-Fi Cable)",
       ]),
     );
     expect(micSelect(wh).value).toBe(CABLE);
   });
 
-  it("adds the 16-channel cable's own name in developer mode, not a second CABLE Output", async () => {
+  it("recommends the Hi-Fi Cable over VB-Cable for the sound, and swaps them", async () => {
     const { core } = start("#/devices", "voice");
     const wh = await deviceEntry(/WH-1000XM5/);
+    // The microphone off: VB-Cable is free to be the source
+    fireEvent.click(mode(wh, "off"));
+    const source = () => within(wh).getByLabelText(t("capture.mode")) as HTMLSelectElement;
+    await within(source()).findByRole("option", { name: "CABLE Input (VB-Audio Virtual Cable)" });
+    fireEvent.change(source(), { target: { value: `virtual:${CABLE}` } });
+    await waitFor(() => expect(wh.textContent).toContain(t("capture.vbcable_delay")));
+    // Not installed: where to get it
+    expect(within(wh).getByRole("button", { name: t("hificable.download") })).toBeInTheDocument();
+    mock!.hifiCable = true;
+    window.dispatchEvent(new Event("focus"));
+    fireEvent.click(await within(wh).findByRole("button", { name: t("capture.use_hificable") }));
+    await waitFor(() => {
+      const p = core.state.snap!.profiles.find((x) => x.device_address === "AC:80:0A:12:34:56" && !x.le_audio)!;
+      expect(p.audio_device_name).toBe("Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)");
+      expect(p.mic_device_id).toBe(CABLE);
+    });
+    expect(wh.textContent).not.toContain(t("capture.vbcable_delay"));
+  });
+
+  it("says when the Hi-Fi Cable's two sides run at different rates", async () => {
+    start("#/devices", "voice");
+    mock!.hifiCable = true;
+    mock!.hifiCaptureRate = 44100;
+    const wh = await deviceEntry(/WH-1000XM5/);
+    const hifi = await waitFor(() => {
+      const o = [...micSelect(wh).options].find((x) => /Hi-Fi/.test(x.textContent ?? ""));
+      expect(o).toBeTruthy();
+      return o!;
+    });
+    fireEvent.change(micSelect(wh), { target: { value: hifi.value } });
+    await waitFor(() => expect(wh.textContent).toContain(t("capture.hifi_rates_differ", 48000, 44100)));
+  });
+
+  it("adds the 16-channel cable's own name with every device shown, not a second CABLE Output", async () => {
+    const { core } = start("#/devices", "voice");
+    const wh = await deviceEntry(/WH-1000XM5/);
+    // Developer mode alone keeps the short list (issue #86)
     await core.request("settings.set", {
       settings: { ...core.state.snap!.settings, developer_mode: true },
+    });
+    await waitFor(() => expect(micSelect(wh).value).toBe(CABLE));
+    expect(micSelect(wh).querySelector("optgroup")).toBeNull();
+    await core.request("settings.set", {
+      settings: { ...core.state.snap!.settings, developer_mode: true, all_audio_devices: true },
     });
     await waitFor(() => {
       const labels = [...micSelect(wh).options].map((o) => o.textContent);
@@ -231,9 +273,32 @@ describe("Input Source on Audio Devices", () => {
     expect(micSelect(wh).value).toBe(CABLE);
   });
 
-  it("refuses the device the output source plays from", async () => {
+  it("lists only the cables a microphone can use, without the output source's", async () => {
     start("#/devices", "voice");
     const wh = await deviceEntry(/WH-1000XM5/);
+    await waitFor(() => expect(micSelect(wh).value).toBe(CABLE));
+    const source = within(wh).getByLabelText(t("capture.mode")) as HTMLSelectElement;
+    const values = (s: HTMLSelectElement) => [...s.options].map((o) => o.value);
+    // The microphone's cable is not offered as the source (issue #86)
+    await waitFor(() => expect(values(source)).toContain(`virtual:${VOICEMEETER}`));
+    expect(values(source)).not.toContain(`virtual:${CABLE}`);
+    expect(values(source)).not.toContain("virtual:{0.0.0.00000000}.{cable16}");
+    fireEvent.change(micSelect(wh), { target: { value: VOICEMEETER } });
+    await waitFor(() => expect(values(source)).toContain(`virtual:${CABLE}`));
+    expect(values(source)).not.toContain(`virtual:${VOICEMEETER}`);
+    // The source's cable leaves the microphone's list instead of being disabled
+    fireEvent.change(source, { target: { value: `virtual:${CABLE}` } });
+    await waitFor(() => expect(values(micSelect(wh))).not.toContain(CABLE));
+    expect(values(micSelect(wh))).toEqual([VOICEMEETER]);
+    expect([...micSelect(wh).options].some((o) => o.disabled)).toBe(false);
+  });
+
+  it("refuses the device the output source plays from", async () => {
+    const { core } = start("#/devices", "voice");
+    const wh = await deviceEntry(/WH-1000XM5/);
+    await core.request("settings.set", {
+      settings: { ...core.state.snap!.settings, developer_mode: true, all_audio_devices: true },
+    });
     await waitFor(() => expect(micSelect(wh).value).toBe(CABLE));
     const source = within(wh).getByLabelText(
       t("capture.mode"),
@@ -282,7 +347,7 @@ describe("Input Source on Audio Devices", () => {
     const { core } = start("#/devices", "voice");
     const wh = await deviceEntry(/WH-1000XM5/);
     await core.request("settings.set", {
-      settings: { ...core.state.snap!.settings, developer_mode: true },
+      settings: { ...core.state.snap!.settings, developer_mode: true, all_audio_devices: true },
     });
     const source = within(wh).getByLabelText(
       t("capture.mode"),
@@ -585,29 +650,141 @@ describe("call codecs on Codecs (issue #86)", () => {
       return s!;
     });
 
-  it("lists the headphones' voice codecs, read only, the open one in use", async () => {
+  it("shows the call codecs instead of the music ones while the call link is open (issue #86)", async () => {
     const { core } = start("#/codecs", "voice");
     await core.request("stream.start", { profile: "WH-1000XM5 (LDAC)" });
     await waitFor(() => expect(core.state.snap?.stream.voice?.codec).toBe("msbc"));
     const wh = await section("WH-1000XM5");
-    const list = await within(wh).findByRole("list", { name: t("ui.codecs.voice_title") });
-    const cards = within(list).getAllByRole("listitem");
-    // Only the supported ones (the toggle is on): CVSD and mSBC
-    expect(cards.map((c) => c.querySelector(".codec-card-name")?.textContent)).toEqual(["CVSD", "mSBC"]);
-    expect(cards[1].querySelector(".codec-card")).toHaveClass("on");
-    expect(cards[1]).toHaveTextContent(t("ui.codecs.voice_in_use"));
-    expect(cards[1]).toHaveTextContent("16 kHz");
-    // Nothing to choose
-    expect(within(list).queryByRole("radio")).toBeNull();
-    // All three with the toggle off, LC3-SWB not supported
+    await waitFor(() => expect(wh.querySelector('input[value="ldac"]')).toBeNull());
+    const radios = () => [...wh.querySelectorAll<HTMLInputElement>("input[type=radio]")];
+    // Only the supported ones (the toggle is on), like the A2DP cards
+    expect(radios().map((r) => r.value)).toEqual(["msbc", "cvsd"]);
+    expect(wh.querySelectorAll(".codec-card .cbar")).toHaveLength(6);
+    expect(radios()[0]).toBeChecked();
+    // Auto-select off (the mock's default): they can be chosen
+    expect(radios().every((r) => !r.disabled)).toBe(true);
+    // "..." shows its settings, read only
+    fireEvent.click(within(wh).getByRole("button", { name: t("ui.profile.codec_settings", "mSBC") }));
+    const dialog = await screen.findByRole("dialog", { name: t("ui.profile.codec_settings", "mSBC") });
+    expect(dialog).toHaveTextContent("16 kHz");
+    expect(dialog).toHaveTextContent("64 kbps");
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    // All three with the toggle off, each saying whether the headphones list it
     fireEvent.click(screen.getByRole("switch", { name: t("ui.profile.codecs_hide") }));
-    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(3));
-    expect(within(list).getAllByRole("listitem")[2]).toHaveTextContent(t("ui.profile.codec_not_supported"));
+    await waitFor(() => expect(radios().map((r) => r.value)).toEqual(["lc3_swb", "msbc", "cvsd"]));
+    const tag = (v: string) => radios().find((r) => r.value === v)!.closest("label")!.querySelector(".codec-card-tags");
+    expect(tag("lc3_swb")).toHaveTextContent(t("ui.profile.codec_not_supported"));
+    expect(tag("msbc")).toHaveTextContent(t("ui.profile.codec_supported"));
+    expect(tag("cvsd")).toHaveTextContent(t("ui.profile.codec_supported"));
   });
 
   it("is not there for a device not connected", async () => {
     start("#/codecs", "voice");
     const wh = await section("WH-1000XM5");
-    expect(within(wh).queryByRole("list", { name: t("ui.codecs.voice_title") })).toBeNull();
+    expect(wh.querySelector('input[value="msbc"]')).toBeNull();
+    expect(wh.querySelector('input[value="ldac"]')).not.toBeNull();
+  });
+
+  it("chooses the call codec with Auto-select off, saved apart from the codec", async () => {
+    const { core, saves } = start("#/codecs", "voice");
+    await core.request("stream.start", { profile: "WH-1000XM5 (LDAC)" });
+    await waitFor(() => expect(core.state.snap?.stream.voice?.codec).toBe("msbc"));
+    const wh = await section("WH-1000XM5");
+    const cvsd = await waitFor(() => {
+      const r = wh.querySelector<HTMLInputElement>('input[value="cvsd"]');
+      expect(r).toBeTruthy();
+      return r!;
+    });
+    // The music cards never show while the call link opens again (A2DP
+    // plays in between)
+    let musicShown = false;
+    const watch = new MutationObserver(() => {
+      if (wh.querySelector('input[value="ldac"]')) musicShown = true;
+    });
+    watch.observe(wh, { childList: true, subtree: true });
+    fireEvent.click(cvsd);
+    await waitFor(() => expect(saves().at(-1)).toMatchObject({ voice_codec: "cvsd", codec: "ldac" }));
+    await waitFor(() => expect(core.state.snap?.stream.voice).toBeNull());
+    const radio = (v: string) => wh.querySelector<HTMLInputElement>(`input[value="${v}"]`);
+    // Meanwhile: the one chosen, waiting
+    expect(radio("cvsd")).toBeChecked();
+    expect(radio("cvsd")).toBeDisabled();
+    // The link takes it
+    await waitFor(() => expect(core.state.snap?.stream.voice?.codec).toBe("cvsd"));
+    await waitFor(() => expect(radio("cvsd")).toBeChecked());
+    await waitFor(() => expect(radio("cvsd")).not.toBeDisabled());
+    watch.disconnect();
+    expect(musicShown).toBe(false);
+  });
+
+  it("shows the link's call codec under Auto-select and offers to turn it off", async () => {
+    const { core, saves, calls } = start("#/codecs", "voice");
+    await waitFor(() => expect(core.state.snap).toBeTruthy());
+    await core.request("settings.set", { settings: { ...core.state.snap!.settings, auto_codec: true } });
+    await core.request("stream.start", { profile: "WH-1000XM5 (LDAC)" });
+    await waitFor(() => expect(core.state.snap?.stream.voice?.codec).toBe("msbc"));
+    const wh = await section("WH-1000XM5");
+    const radio = (v: string) => wh.querySelector<HTMLInputElement>(`input[value="${v}"]`);
+    await waitFor(() => expect(radio("msbc")).toBeChecked());
+    expect(radio("cvsd")).toBeDisabled();
+    // A click on a card offers to turn Auto-select off, then chooses it
+    fireEvent.click(radio("cvsd")!.closest("label")!);
+    const dialog = await screen.findByRole("dialog", { name: t("ui.codecs.auto_dialog_title") });
+    fireEvent.click(within(dialog).getByRole("button", { name: t("ui.codecs.auto_dialog_disable") }));
+    await waitFor(() => expect(saves().at(-1)).toMatchObject({ voice_codec: "cvsd" }));
+    expect(calls.filter((c) => c.method === "settings.set").at(-1)?.params).toMatchObject({
+      settings: { auto_codec: false },
+    });
+  });
+});
+
+describe("LE Audio microphone on Codecs (issue #86)", () => {
+  const micGrid = () =>
+    waitFor(() => {
+      const le = screen.getByRole("region", { name: "Galaxy Buds2 Pro" });
+      const h = within(le).getByRole("heading", { name: t("ui.diag.mic_title") });
+      const grid = h.nextElementSibling as HTMLElement;
+      expect(grid).toHaveClass("codec-grid");
+      return grid;
+    });
+  const openMic = async () => {
+    fireEvent.click(within(await micGrid()).getByRole("button", { name: t("ui.profile.codec_settings", t("codec.lc3")) }));
+    return screen.findByRole("dialog", { name: t("ui.profile.codec_settings", t("codec.lc3")) });
+  };
+
+  it("shows the microphone's card while it runs, mono, its rate chosen with Auto-select off", async () => {
+    const { core, saves } = start("#/codecs", "voice");
+    await screen.findByRole("region", { name: "Galaxy Buds2 Pro" });
+    expect(screen.queryByRole("heading", { name: t("ui.diag.mic_title") })).toBeNull();
+    await core.request("stream.start", { profile: "Buds (LE Audio)" });
+    await waitFor(() => expect(core.state.snap?.stream.voice?.rate).toBe(32000));
+    const dialog = await openMic();
+    expect(dialog).toHaveTextContent(t("ui.diag.cd_mode.mono"));
+    // No stereo to choose, no bit rate to show
+    expect(within(dialog).queryByText(t("ui.codecs.bit_rate"))).toBeNull();
+    const select = within(dialog).getByRole("combobox") as HTMLSelectElement;
+    expect([...select.options].map((o) => o.textContent)).toEqual([
+      t("codec.auto_value", "32 kHz"),
+      "32 kHz",
+      "16 kHz",
+    ]);
+    expect(select.value).toBe("0");
+    fireEvent.change(select, { target: { value: "16000" } });
+    await waitFor(() => expect(saves().at(-1)).toMatchObject({ le_audio: true, mic_rate: 16000 }));
+    await waitFor(() => expect(core.state.snap?.stream.voice?.rate).toBe(16000));
+    // The dialog stays open with the rate chosen
+    expect(dialog).toBeInTheDocument();
+    await waitFor(() => expect((within(dialog).getByRole("combobox") as HTMLSelectElement).value).toBe("16000"));
+  });
+
+  it("shows the rate in use under Auto-select, nothing to choose", async () => {
+    const { core } = start("#/codecs", "voice");
+    await waitFor(() => expect(core.state.snap).toBeTruthy());
+    await core.request("settings.set", { settings: { ...core.state.snap!.settings, auto_codec: true } });
+    await core.request("stream.start", { profile: "Buds (LE Audio)" });
+    await waitFor(() => expect(core.state.snap?.stream.voice?.rate).toBe(32000));
+    const dialog = await openMic();
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
+    expect(dialog).toHaveTextContent("32 kHz");
   });
 });

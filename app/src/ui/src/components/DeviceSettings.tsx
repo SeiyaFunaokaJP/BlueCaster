@@ -11,22 +11,30 @@
 import { createEffect, createMemo, createResource, createSignal, createUniqueId, on, onCleanup, onMount, Show } from "solid-js";
 import { createStore, unwrap } from "solid-js/store";
 import { useApp } from "../app/context";
+import { allAudioDevices } from "../app/settings";
 import { t } from "../i18n";
 import { codecSpec } from "../lib/codecs";
 import type { AudioApp, AudioDevice, Device, Profile, Snapshot } from "../ipc/types";
 import { LINKS } from "../lib/links";
 import {
   appCaptureSupport,
+  audioEntries,
   captureDevice,
   deviceFields,
   deviceFieldsComplete,
+  deviceKey,
   entryBase,
   followedName,
   formatMismatch,
+  headsetMode,
+  hifiCable,
+  isVbCable,
   normalizeProfile,
   profilesOf,
+  vbCable,
   type DeviceFields,
 } from "../lib/profile";
+import { saveHeadsetMic } from "../screens/Codecs";
 import { captureChoices, captureText, captureValue, withCapture } from "./CapturePicker";
 import { InputSource } from "./InputSource";
 import { Banner, Button, Field, IconButton, Select, Toggle, type Option } from "./controls";
@@ -115,11 +123,17 @@ export function DeviceSettings(props: { device: Device }) {
     setSaving(false);
   };
 
+  /** The device the microphone plays into, while it is on: not offered as
+   *  the source (issue #86) */
+  const micDevice = () => {
+    const p = audioEntries(snap()).find((x) => x.key === deviceKey(props.device))?.profile;
+    return p && headsetMode(p) !== "off" ? p.mic_device_id : "";
+  };
   /** The sound devices (the Windows default first), the virtual devices
    *  and the playing apps in one list (issue #86: no "Loopback") */
   const sources = createMemo((): Option<string>[] => {
     const p = shown();
-    const c = captureChoices(p, devices() ?? [], apps() ?? [], appSupport() !== "no", snap().settings.developer_mode);
+    const c = captureChoices(p, devices() ?? [], apps() ?? [], appSupport() !== "no", allAudioDevices(snap().settings), micDevice());
     const virtual: Option<string>[] = c.virtual.map((o) => ({ ...o, group: t("capture.virtual") }));
     if (virtual.length === 0 && noVirtual()) {
       virtual.push({ value: "virtual:", label: t("capture.no_virtual_device"), group: t("capture.virtual"), disabled: true });
@@ -152,6 +166,33 @@ export function DeviceSettings(props: { device: Device }) {
     });
   };
 
+  // VB-Cable captured for the sound: the Hi-Fi Cable adds less delay, and
+  // VB-Cable is then free for the microphone (recommended, not forced)
+  const capturesVbCable = () => {
+    const d = captureDevice(shown(), devices() ?? []);
+    return !!d && isVbCable(d);
+  };
+  const hifi = () => hifiCable(devices() ?? []);
+  const useHifi = async () => {
+    const h = hifi();
+    if (!h) return;
+    await apply({
+      capture_mode: "virtual",
+      audio_device_id: h.id,
+      audio_device_name: h.name,
+      app_exe: "",
+      app_name: "",
+    });
+    // The microphone, where it played into the Hi-Fi Cable or nowhere, goes
+    // to VB-Cable
+    const vb = vbCable(devices() ?? []);
+    const e = audioEntries(snap()).find((x) => x.key === deviceKey(props.device));
+    const mic = e?.profile?.mic_device_id ?? "";
+    if (vb && e?.profile && !e.le_audio && (mic === "" || mic === h.id)) {
+      await saveHeadsetMic(app, e, { mic_device_id: vb.id, mic_device_name: vb.name });
+    }
+  };
+
   return (
     <div class="device-settings" aria-busy={saving() ? "true" : undefined}>
       <Field label={t("capture.mode")} stacked>
@@ -179,6 +220,26 @@ export function DeviceSettings(props: { device: Device }) {
         </Show>
       </div>
       <FormatWarning fields={shown()} profiles={profiles()} devices={devices()} />
+      <Show when={capturesVbCable()}>
+        <div class="source-advice">
+          <p class="field-warn">
+            <Icon name="warning" />
+            <span>{t("capture.vbcable_delay")}</span>
+          </p>
+          <Show
+            when={hifi()}
+            fallback={
+              <Button icon="open" onClick={() => core.transport.openUrl(LINKS.hifiCable)}>
+                {t("hificable.download")}
+              </Button>
+            }
+          >
+            <Button busy={saving()} onClick={() => void useHifi()}>
+              {t("capture.use_hificable")}
+            </Button>
+          </Show>
+        </div>
+      </Show>
       {/* Whether this Windows can capture one app: only the core knows the
           build for sure (it refuses the stream on an older Windows); the UI
           asks the WebView's client hints */}
@@ -297,32 +358,5 @@ function FormatWarning(props: CaptureFormatProps) {
         </p>
       )}
     </Show>
-  );
-}
-
-/** Why a virtual device is wanted, where it is not installed */
-export function VbCableNote() {
-  const { core } = useApp();
-  return (
-    <div class="setup-note">
-      <p>{t("ui.setup.vbcable_note")}</p>
-      <Button icon="open" onClick={() => core.transport.openUrl(LINKS.vbCable)}>
-        {t("vbcable.download")}
-      </Button>
-    </div>
-  );
-}
-
-/** The second cable for the headset microphone (issue #86), where VB-Cable
- *  is there and the Hi-Fi Cable is not */
-export function HifiCableNote() {
-  const { core } = useApp();
-  return (
-    <div class="setup-note">
-      <p>{t("ui.setup.hificable_note")}</p>
-      <Button icon="open" onClick={() => core.transport.openUrl(LINKS.hifiCable)}>
-        {t("hificable.download")}
-      </Button>
-    </div>
   );
 }

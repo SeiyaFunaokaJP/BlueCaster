@@ -25,14 +25,16 @@ BlueCaster で使われたことのあるアダプターとヘッドホンです
 | TP-Link UB500 | Realtek RTL8761BU | 2357:0604 | USB ドングル | ✅ 最も検証済み | ファームウェア `rtl8761bu`。LE Audio は不可（アイソクロナスチャネルなし） | メンテナー、[#84](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/84)、[#87](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/87) |
 | 汎用 RTL8761B ドングル | Realtek RTL8761BU | 0BDA:A729 | USB ドングル | ✅ | ファームウェア `rtl8761bu`。2.0.2 から自動で認識（それより前はチップに RTL8761BU を選ぶ）。LE Audio は不可 | [#66](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/66)、[#86](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/86) |
 | ノート PC 内蔵の Realtek RTL8852BE | Realtek RTL8852BU | 0BDA:4853 | 内蔵 | ✅ | ファームウェア `rtl8852bu`。2.0.2-beta.1 から認識。BlueCaster が使っている間、Windows 自身の Bluetooth はなくなる | [#81](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/81) |
-| ASUS BT400 | Broadcom BCM20702 | 0B05:17CB | USB ドングル | ✅ 試験的 | ROM のファームウェアで動き、ファイルは不要。v1（1.0.12–1.0.17）での報告 | [#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18)、[#27](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/27)、[#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30) |
+| ASUS BT400 | Broadcom BCM20702 | 0B05:17CB | USB ドングル | ✅ | ROM のファームウェアで動き、ファイルは不要。v1（1.0.12–1.0.17）での報告 | [#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18)、[#27](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/27)、[#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30) |
 | 「Realtek Bluetooth 6.0」ドングル | Realtek RTL8761B | 0BDA:A760 | USB ドングル | ✅ | まだ自動では認識しない（LMP サブバージョン 0x8761）。LE Audio は不可 | [#208](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/208) |
 | CSR8510 A10 ドングル | CSR8510 | 0A12:0001 | USB ドングル | ✅ | ファームウェアのファイルは不要 | [#32](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/32) |
-| Intel AX211（内蔵の Wi-Fi / Bluetooth カード） | Intel AX211（TLV ブートローダー） | 8087:0033 | 内蔵 | ✅ 試験的 | ファームウェアは linux-firmware の `intel/` から、ブートローダーから 1.5–1.7 秒で読み込む: `ibt-0180-0041`（バリアント 0x1B）または `ibt-1040-0041`（バリアント 0x19）。ファイル名はログに出る。ペアリング、AAC、LDAC が動作。BlueCaster が使っている間、Windows 自身の Bluetooth はなくなる | [#261](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/261) |
+| Intel AX211（内蔵の Wi-Fi / Bluetooth カード） | Intel AX211（TLV ブートローダー） | 8087:0033 | 内蔵 | ✅ | ファームウェアは linux-firmware の `intel/` から、ブートローダーから 1.5–1.7 秒で読み込む: `ibt-0180-0041`（バリアント 0x1B）または `ibt-1040-0041`（バリアント 0x19）。ファイル名はログに出る。ペアリング、AAC、LDAC が動作。BlueCaster が使っている間、Windows 自身の Bluetooth はなくなる | [#261](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/261) |
+| MediaTek MT7925（内蔵の Wi-Fi / Bluetooth カード） | MediaTek MT7925 | 0E8D:7925 | 内蔵 | ✅ | ファームウェアは MediaTek の Windows ドライバーから読み込む。A2DP が動作。LE Audio は 開発者 > Debug の設定で再生できた | [#86](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/86) |
+| MediaTek MT7921（内蔵の Wi-Fi / Bluetooth カード） | MediaTek MT7921 | 13D3:3606 | 内蔵 | ✅ | – | [#432](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/432) |
 | 「MA530」アダプター | 不明 | – | USB ドングル | ✅ | v1.0.9 での報告 | [#3](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/3)、[#9](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/9) |
 | UGREEN Bluetooth 5.4 / 6.0 ドングル | 不明 | – | USB ドングル | ✅ | 2.0.1 での報告 | [#11](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/11#issuecomment-6563908711) |
 
-MediaTek と Qualcomm のアダプターはまだ報告がありません。どう動くと見込まれるかは [推奨アダプター](setup#adapters) を参照してください。
+Qualcomm のアダプターはまだ報告がありません。どう動くと見込まれるかは [推奨アダプター](setup#adapters) を参照してください。
 
 ## ヘッドホン {#headphones}
 
@@ -63,5 +65,5 @@ MediaTek と Qualcomm のアダプターはまだ報告がありません。ど�
 ## まだ検証していないもの {#not-verified-yet}
 
 - **実際のヘッドホンでのコーデック**: aptX HD、aptX Low Latency、Opus、Opus 05、FastStream
-- **LE Audio**: エミュレーターでしかテストしていません。上記のアダプターにはどれもアイソクロナスチャネルがありません
+- **LE Audio**: テストしたのはエミュレーターと MediaTek MT7925 だけです
 - **ARM64 版 Windows** と **v2 での Windows 10**（v1 は Windows 10 22H2 で動きました: [#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18)、[#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30)）

@@ -475,6 +475,11 @@ pub struct StreamStatus {
     /// call codecs (issue #86); empty while unknown, cleared as the battery
     #[serde(default)]
     pub voice_codecs: Vec<String>,
+    /// LE Audio: the microphone's sampling rates (Hz) the headphones allow,
+    /// the one Auto takes first, for the Codecs screen; empty while unknown
+    /// or without the microphone, cleared as `voice_codecs`
+    #[serde(default)]
+    pub mic_rates: Vec<u32>,
     /// The voice link (headset microphone): Some only while
     /// it carries audio, cleared on Idle / Error / Reconnecting like the
     /// battery
@@ -613,6 +618,17 @@ pub struct Profile {
     /// as with headset_mic "off"; headset_mic is kept for unmuting
     #[serde(default)]
     pub mic_muted: bool,
+    /// Classic devices: the call codec chosen on its card with Auto-select
+    /// off ("cvsd", "msbc", "lc3_swb"; "" = none chosen, the best both
+    /// sides have). The voice link takes it, or the next lower one the
+    /// headphones list. Kept but not used while Auto-select is on.
+    #[serde(default)]
+    pub voice_codec: String,
+    /// LE Audio: the microphone's sampling rate chosen with Auto-select off
+    /// (Hz; 0 = none chosen). One the headphones do not allow falls back
+    /// to Auto's. Kept but not used while Auto-select is on.
+    #[serde(default)]
+    pub mic_rate: u32,
     /// SBC / SBC XQ: the bitpool to encode with, within what the device
     /// allows (0 = by quality)
     #[serde(default)]
@@ -768,9 +784,10 @@ pub struct VendorInfo {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(default)]
 pub struct DevDebug {
-    /// LE Audio over the MediaTek adapter's interrupt interface
-    pub mtk_iso_interface: bool,
-    /// Outgoing ISO packets zero-padded to this length; 0: none
+    /// LE Audio on the MediaTek adapter's bulk pipe, not its interrupt
+    /// interface
+    pub mtk_iso_bulk: bool,
+    /// Outgoing ISO packets zero-padded to this length; 0: the default
     pub mtk_iso_pad: u16,
     /// One HCI command after init, in hex ("FD98 08 01"); empty: none
     pub mtk_command: String,
@@ -785,6 +802,9 @@ pub struct DevDebug {
     /// Restore original driver hands Windows BlueCaster's LE keys too, for
     /// the devices Windows keeps LE keys of (issue #86)
     pub le_keys_to_windows: bool,
+    /// A Realtek chip's firmware from Realtek's Windows driver on this PC
+    /// instead of the firmware folder's (the RTL8761B, issue #427)
+    pub realtek_driver_firmware: bool,
 }
 
 /// Developer mode's logging (bluecaster_core::settings::DevLog), in force while
@@ -853,6 +873,13 @@ pub struct Settings {
     /// Off: the session ends and the adapter is released.
     #[serde(default = "yes")]
     pub auto_reconnect: bool,
+    /// The suggestion to install VB-CABLE was closed: Settings still offers it
+    #[serde(default)]
+    pub vb_cable_note_hidden: bool,
+    /// The suggestion to get the Hi-Fi Cable was closed: Settings still
+    /// offers it
+    #[serde(default)]
+    pub hifi_cable_note_hidden: bool,
     /// Windows Volume Sync for every device (on by default): the audio
     /// device's volume and the captured device's Windows volume follow each
     /// other. Off: no stream syncs. A change starts the profile in use
@@ -868,6 +895,11 @@ pub struct Settings {
     /// flyout's app list and mute_output take effect only with it on
     #[serde(default)]
     pub volume_mixer: bool,
+    /// Developer > Show every audio device (off by default): the Output and
+    /// Input Source lists offer every device, in force while developer_mode
+    /// is on
+    #[serde(default)]
+    pub all_audio_devices: bool,
     /// Developer mode: receiver test, HCI capture, debug details
     pub developer_mode: bool,
     /// Developer mode: overrides of the codec and media path, in force
@@ -901,10 +933,6 @@ pub struct Settings {
     /// LE Audio stream is set up); only with le_audio_experimental
     #[serde(default)]
     pub le_audio_low_latency: bool,
-    /// Before 2.0.2: Codecs > "Enable experimental codecs". Every codec
-    /// is used now: the core reads it as on whatever is sent
-    #[serde(default = "yes")]
-    pub experimental_codecs: bool,
     /// Codecs > "Auto-select the codec with the highest quality", for every
     /// device (on by default): on, every A2DP profile streams as Auto; off,
     /// each with the codec chosen for it (read when the next stream starts)
@@ -1728,6 +1756,11 @@ pub enum Method {
     /// -> AudioApp[]
     #[serde(rename = "audio.apps")]
     AudioApps,
+    /// Downloads VB-Audio's VB-CABLE pack and installs it (UAC prompt)
+    /// -> bool: VB-CABLE is among Windows' outputs now (false: Windows may
+    /// need a restart first)
+    #[serde(rename = "audio.install_vb_cable")]
+    AudioInstallVbCable,
     /// -> MixerApp[]
     #[serde(rename = "audio.mixer")]
     AudioMixer,
@@ -1892,6 +1925,10 @@ pub struct AudioDevice {
     /// None: it has none or is not a virtual device
     #[serde(default)]
     pub capture_name: Option<String>,
+    /// The sample rate Windows runs that recording side at (None: not known
+    /// or no recording side)
+    #[serde(default)]
+    pub capture_rate: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

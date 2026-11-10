@@ -7,7 +7,7 @@
 //! identity address (le_device_db, the bond TLV file); which classic device
 //! a bond came from is kept beside it in the same file (one tag per bond).
 //!
-//! Runs only while [`set_ctkd`] is on (developer mode) and SM is set up (LE
+//! Runs only while [`set_ctkd`] is on (always, since issue #86) and SM is set up (LE
 //! Audio on, [`Stack::le_init`]): after a new pairing, and on a connection
 //! of a device without keys from it yet (once per device and run). A device
 //! that does not list the channel is not asked; one that refuses, or does

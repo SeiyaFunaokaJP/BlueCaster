@@ -3,8 +3,9 @@
 // or removed from the list (v1 OnDeviceEditName / OnDeviceDelete). The
 // first-run setup connects one with a button on its row instead. With LE
 // Audio (experimental) on, the LE Audio entries too: a dual-mode device is
-// listed twice, its classic entry and its LE Audio one (address and kind
-// name an entry). Once one is picked, the others are folded away until asked
+// listed once, as its LE Audio entry (issue #86; lib/profile.ts
+// listedDevices), and adding, renaming or forgetting it does both sides.
+// Once one is picked, the others are folded away until asked
 // for or a new scan. Used by the profile editor and the first-run setup.
 
 import { createEffect, createMemo, createSignal, createUniqueId, For, on, onCleanup, onMount, Show, type JSX } from "solid-js";
@@ -16,9 +17,11 @@ import {
   defaultProfileName,
   deviceKey,
   deviceProfile,
+  entryBase,
   listedDevices,
   newProfile,
   normalizeProfile,
+  twinOf,
   validDeviceName,
 } from "../lib/profile";
 import { Button, Dialog, Field, IconButton } from "./controls";
@@ -40,12 +43,22 @@ export function sortDevices(devices: readonly Device[]): Device[] {
   });
 }
 
+/** A name not yet taken by a profile: `base`, else "base (2)"... */
+function freeName(app: AppContext, base: string): string {
+  const taken = app.core.state.snap!.profiles.map((p) => p.name);
+  let name = base;
+  for (let n = 2; taken.includes(name); n++) name = `${base} (${n})`;
+  return name;
+}
+
 /**
  * Saves a device found by a scan or typed (the list keeps its name; an
  * unnamed one is saved under its address and can be renamed). A device
  * without a profile gets one that picks the best codec ("<name> | Auto").
- * The profile of the device, or null when saving failed. `cable`: a new
- * profile captures that virtual device.
+ * A dual-mode device is saved with both sides, each with its profile
+ * (issue #86: one device, one Add; "Use LE Audio when available" decides
+ * which connects). The profile of the side added, or null when saving
+ * failed. `cable`: a new classic profile captures that virtual device.
  */
 export async function saveWithProfile(
   app: AppContext,
@@ -55,25 +68,39 @@ export async function saveWithProfile(
   cable?: AudioDevice | null,
 ): Promise<string | null> {
   const snap = () => app.core.state.snap!;
+  const twin = twinOf(snap().devices, { address, le_audio: leAudio });
+  const savedAs = (le: boolean) =>
+    snap().devices.find((d) => d.saved && d.le_audio === le && d.address.toUpperCase() === address.toUpperCase());
   // A saved device typed by its address keeps its name
-  const known = snap().devices.find((d) => d.saved && d.le_audio === leAudio && d.address.toUpperCase() === address.toUpperCase());
-  const saved = name.trim() || known?.name || address;
-  const ok =
-    (known && known.name === saved) ||
-    (await app.run(() =>
-      app.core.request("device.rename", { address, name: saved, ...(leAudio ? { le_audio: true } : {}) }),
-    ));
-  // LE Audio profiles are made on the Codecs screen (its LC3 card)
-  if (!ok || leAudio) return null;
-  // The device's own (classic) profile: one per device entry
-  const own = deviceProfile(snap(), address, false);
+  const saved = name.trim() || savedAs(leAudio)?.name || twin?.name || address;
+  const save = async (le: boolean) =>
+    savedAs(le)?.name === saved ||
+    (await app.run(() => app.core.request("device.rename", { address, name: saved, ...(le ? { le_audio: true } : {}) })));
+  if (!(await save(leAudio)) || (twin && !(await save(!leAudio)))) return null;
+  const classic = !leAudio || twin ? await classicProfile(app, address, saved, cable) : null;
+  if (!leAudio) return classic;
+  // The LE Audio side's own, with the device settings of the classic one
+  const own = deviceProfile(snap(), address, true);
   if (own) return own.name;
-  const taken = snap().profiles.map((p) => p.name);
-  const base = defaultProfileName(saved, address, false, t("codec.auto"));
-  let profileName = base;
-  for (let n = 2; taken.includes(profileName); n++) profileName = `${base} (${n})`;
+  const profileName = freeName(app, defaultProfileName(saved, address, true));
+  const base = entryBase({ address, name: saved, le_audio: true }, snap().profiles);
+  const profile = normalizeProfile({ ...base, name: profileName });
+  const made = await app.run(() => app.core.request("profile.save", { profile, original_name: null }));
+  return made ? profileName : null;
+}
+
+/** The classic side's profile, made when it has none */
+async function classicProfile(
+  app: AppContext,
+  address: string,
+  saved: string,
+  cable?: AudioDevice | null,
+): Promise<string | null> {
+  const own = deviceProfile(app.core.state.snap!, address, false);
+  if (own) return own.name;
+  const profileName = freeName(app, defaultProfileName(saved, address, false, t("codec.auto")));
   // Captured by System Loopback, as every new device (issue #86), unless
-  // the setup found VB-Cable
+  // the setup found a virtual cable
   const capture = cable ? { capture_mode: "virtual", audio_device_id: cable.id, audio_device_name: cable.name } : {};
   const profile = normalizeProfile({ ...newProfile(), ...capture, name: profileName, device_address: address, device_name: saved });
   const made = await app.run(() => app.core.request("profile.save", { profile, original_name: null }));
@@ -221,13 +248,11 @@ export function DevicePicker(props: {
     setRenameTried(true);
     if (!d || !validDeviceName(n) || busy()) return;
     setBusy(true);
-    const ok = await app.run(() =>
-      app.core.request("device.rename", {
-        address: d.address,
-        name: n,
-        ...kind(d),
-      }),
-    );
+    // Both sides of a dual-mode device (issue #86)
+    const twin = twinOf(snap().devices, d);
+    const named = (x: Device) =>
+      app.run(() => app.core.request("device.rename", { address: d.address, name: n, ...kind(x) }));
+    const ok = (await named(d)) && (!twin?.saved || (await named(twin)));
     setBusy(false);
     if (!ok) return;
     setRenaming(null);
@@ -276,9 +301,10 @@ export function DevicePicker(props: {
     const d = forgetting();
     if (!d || busy()) return;
     setBusy(true);
-    await app.run(() =>
-      app.core.request("device.forget", { address: d.address, ...kind(d) }),
-    );
+    // Both sides of a dual-mode device (issue #86)
+    const twin = twinOf(snap().devices, d);
+    await app.run(() => app.core.request("device.forget", { address: d.address, ...kind(d) }));
+    if (twin?.saved) await app.run(() => app.core.request("device.forget", { address: d.address, ...kind(twin) }));
     setBusy(false);
     setForgetting(null);
   };

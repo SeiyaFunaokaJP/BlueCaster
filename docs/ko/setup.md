@@ -50,9 +50,9 @@ BlueCaster 3.0.0은 A2DP Windows Bridge의 새 이름입니다. 설치된 2.0.x 
 
 USB Bluetooth 어댑터를 꽂고 BlueCaster를 시작합니다. 처음 시작할 때(아직 오디오 기기가 없거나 WinUSB가 설치된 어댑터가 없을 때) BlueCaster는 **설정 마법사**를 열며, 다음 네 단계로 진행합니다. 한 번 완료하거나 건너뛰면 저절로 다시 열리지 않으며, 기기는 **홈** 또는 **오디오 장치**에서 추가합니다.
 
-1. **어댑터 선택**: 발견된 USB Bluetooth 어댑터가 표시됩니다. 사용할 어댑터가 없으면 꽂은 후 **새로 고침**을 누릅니다. BlueCaster가 사용할 수 있는지는 녹색 **지원됨**, 주황색 **실험적**, 빨간색 **지원되지 않음**으로 표시됩니다. 지원되지 않는 어댑터는 목록에 표시되지만 선택할 수 없습니다
+1. **어댑터 선택**: 발견된 USB Bluetooth 어댑터가 표시됩니다. 사용할 어댑터가 없으면 꽂은 후 **새로 고침**을 누릅니다. BlueCaster가 사용할 수 있는지는 녹색 **지원됨** 또는 빨간색 **지원되지 않음**으로 표시됩니다. 지원되지 않는 어댑터는 목록에 표시되지만 선택할 수 없습니다
 2. **드라이버 및 펌웨어**: 이 단계에서 수행할 작업이 표시되고, **이 어댑터 준비**가 이를 실행합니다. 어댑터의 드라이버를 WinUSB로 교체하고(Windows가 관리자 권한을 요청합니다. [2단계](#winusb) 참조), 어댑터에 필요한 Realtek 펌웨어 파일을 다운로드합니다([펌웨어](#firmware) 참조). BlueCaster가 다운로드할 수 없는 펌웨어는 직접 펌웨어 폴더에 넣습니다. Windows가 이 어댑터로 페어링한 기기가 있으면(내장 어댑터의 키보드나 마우스 등) 버튼이 그 기기를 먼저 알려 줍니다. BlueCaster가 어댑터를 사용하는 동안 그 기기는 Windows에서 작동하지 않으며, **취소**를 누르면 그대로 유지됩니다. 자체 USB 수신기를 쓰는 기기는 영향을 받지 않습니다. 나머지 기기를 유지하려면 별도의 USB 어댑터로 BlueCaster를 사용하십시오. **어댑터** 화면의 **WinUSB 드라이버로 교체**도 그 기기를 알려 줍니다
-3. **오디오 기기 찾기**: 검색은 자동으로 시작됩니다. 오디오 기기를 페어링 모드로 두고 옆의 **연결**을 누릅니다(또는 주소를 입력하고 **사용**). BlueCaster가 기기를 최적의 코덱(Auto)으로 저장하고 연결하며, 그 기기는 **페어링된 기기** 아래에 상태를 나타내는 점과 함께 표시되고, 검색은 멈춥니다. **기기 추가**를 누르면 연결을 끊고 다른 기기를 찾도록 검색을 다시 시작합니다. 끊긴 기기는 저장된 채로 남고, 잘못 고른 기기는 거기서 삭제할 수 있습니다. Windows가 이 어댑터로 기기를 페어링한 경우 **Windows 페어링 가져오기**가 표시되며, 그 **가져오기** 버튼은 기기를 모두 체크된 상태로 나열합니다([3단계](#headphones) 참조). **다음**은 기기 없이도 누를 수 있으며, 오디오 기기는 나중에 **오디오 장치**에서 추가할 수 있습니다. VB-Cable이 설치되어 있으면 새 기기는 이를 캡처합니다. 없으면 이 단계에서 필요한 이유를 **VB-Cable 다운로드**와 함께 알려 주며, 나중에 BlueCaster가 처음 발견하면 **기본 장치**를 사용하는 기기가 VB-Cable로 전환됩니다. VB-Cable이 있으면 이 단계는 헤드폰 마이크용 두 번째 케이블로 VB-Audio의 무료 **Hi-Fi Cable**(**Hi-Fi Cable 다운로드**)을 권하며, 마이크를 재생 소리와 분리해 줍니다. 코덱은 나중에 **코덱**에서 변경할 수 있습니다
+3. **오디오 기기 찾기**: 검색은 자동으로 시작됩니다. 오디오 기기를 페어링 모드로 두고 옆의 **연결**을 누릅니다(또는 주소를 입력하고 **사용**). BlueCaster가 기기를 최적의 코덱(Auto)으로 저장하고 연결하며, 그 기기는 **페어링된 기기** 아래에 상태를 나타내는 점과 함께 표시되고, 검색은 멈춥니다. **기기 추가**를 누르면 연결을 끊고 다른 기기를 찾도록 검색을 다시 시작합니다. 끊긴 기기는 저장된 채로 남고, 잘못 고른 기기는 거기서 삭제할 수 있습니다. Windows가 이 어댑터로 기기를 페어링한 경우 **Windows 페어링 가져오기**가 표시되며, 그 **가져오기** 버튼은 기기를 모두 체크된 상태로 나열합니다([3단계](#headphones) 참조). **다음**은 기기 없이도 누를 수 있으며, 오디오 기기는 나중에 **오디오 장치**에서 추가할 수 있습니다. 새 기기는 **Hi-Fi Cable**이 설치되어 있으면 그것을, 없으면 VB-CABLE을 캡처합니다. Hi-Fi Cable은 지연이 가장 적으므로 소리에는 Hi-Fi Cable을, 헤드폰 마이크에는 VB-CABLE을 권장합니다. 이 단계는 없는 케이블을 권하며, 각각 ×로 닫을 수 있습니다(둘 다 **설정** > **가상 케이블**에 남습니다). **VB-CABLE 설치**는 VB-Audio의 VB-CABLE 패키지를 VB-Audio에서 다운로드(1.3 MB)하여 설치합니다(관리자 권한 요청이 나타나며, 나타나지 않으면 Windows를 다시 시작하세요). **Hi-Fi Cable 다운로드**는 VB-Audio 페이지를 엽니다. 둘 다 VB-Audio의 도네이션웨어입니다([vb-cable.com](https://vb-cable.com/)). BlueCaster는 VB-CABLE을 포함하지 않으며, 기부금은 VB-Audio에 갑니다. 회사나 그 밖의 조직에서는 VB-Audio가 설치마다 라이선스를 요구합니다([라이선스](https://vb-audio.com/Services/licensing.htm)). 나중에 BlueCaster가 케이블을 처음 발견하면 **기본 장치**를 사용하는 기기가 그것을 캡처하고(VB-CABLE은 Hi-Fi Cable이 설치되지 않은 동안만), 마이크 출력이 작동하지 않는 기기는 그쪽으로 마이크를 재생합니다. 코덱은 나중에 **코덱**에서 변경할 수 있습니다
 4. **일반 설정**: 테마, **시작**, **알림**, 업데이트 확인. 설정과 같은 항목이며 바로 저장됩니다. 첫 설정에서는 **Windows 시작 시 실행**과 **트레이에서 시작**이 켜집니다
 
 **나중에 설정**을 누르면 나머지 단계를 건너뜁니다. **설정 > 설정 마법사 실행**으로 다시 열 수 있습니다.
@@ -123,7 +123,7 @@ bluecaster-core.exe --cli --scan
 
 ## 펌웨어 (Realtek 어댑터) {#firmware}
 
-Realtek 기반 USB Bluetooth 어댑터(예: TP-Link UB500, RTL8761BU 동글)는 작동하려면 독점 펌웨어가 필요합니다. CSR 어댑터는 펌웨어가 필요 없습니다. Intel, MediaTek MT79xx, Qualcomm 및 Broadcom 어댑터(실험적)는 자체 펌웨어 파일이 필요할 수 있습니다. [권장 어댑터](#adapters)를 참조하십시오.
+Realtek 기반 USB Bluetooth 어댑터(예: TP-Link UB500, RTL8761BU 동글)는 작동하려면 독점 펌웨어가 필요합니다. CSR 어댑터는 펌웨어가 필요 없습니다. Intel, MediaTek MT79xx, Qualcomm 및 Broadcom 어댑터는 자체 펌웨어 파일이 필요할 수 있습니다. [권장 어댑터](#adapters)를 참조하십시오.
 
 ### 앱에서 (안내형 다운로드)
 
@@ -167,15 +167,15 @@ BlueCaster에서 실제로 사용된 어댑터와 헤드폰, 그 코덱과 보�
 | 칩셋 | 제품 예 | 참고 |
 |:-----|:--------|:-----|
 | Realtek | TP-Link UB500, RTL8761BU | 펌웨어 다운로드 필요(위 참조). 가장 많이 테스트됨 |
-| Realtek | 노트북 내장 RTL8852BD(`0BDA:B853`) | *실험적.* linux-firmware에는 이 칩의 펌웨어가 없습니다. BlueCaster가 Realtek의 Windows Bluetooth 드라이버에서 `rtl8852bd_mp_chip_new.dat`를 읽으므로 그 드라이버를 제거하지 마십시오(또는 파일을 펌웨어 폴더에 넣으십시오). 아직 실제 하드웨어에서 테스트되지 않았습니다 |
+| Realtek | 노트북 내장 RTL8852BD(`0BDA:B853`) | linux-firmware에는 이 칩의 펌웨어가 없습니다. BlueCaster가 Realtek의 Windows Bluetooth 드라이버에서 `rtl8852bd_mp_chip_new.dat`를 읽으므로 그 드라이버를 제거하지 마십시오(또는 파일을 펌웨어 폴더에 넣으십시오). 아직 실제 하드웨어에서 테스트되지 않았습니다 |
 | CSR | 일반 CSR8510 동글 | 바로 작동하며 펌웨어 불필요 |
 | Barrot | Bluetooth 5.4 / 6.0 동글(`33FA:0010`, `33FA:0012`) | ROM 펌웨어로 작동하며 펌웨어 불필요. 지금까지 사용자 보고 1건 |
-| Marvell | Microsoft Surface Pro / Surface Book 내장(88W8897) | *실험적.* 펌웨어 파일 불필요: Wi-Fi 드라이버가 Bluetooth 펌웨어도 불러오므로 Wi-Fi를 켜 두세요. 실제 하드웨어에서는 아직 테스트되지 않았습니다 |
-| Actions | ATS2851 동글 (`10D7:B012`) | *실험적.* ROM 펌웨어로 동작하며 펌웨어가 필요 없습니다. 실행할 수 없는 명령을 지원한다고 알리므로 BlueCaster가 숨깁니다. 아직 실제 하드웨어에서 테스트되지 않음 |
-| Broadcom | ASUS BT400 (BCM20702) | *실험적.* Bluetooth `E0/01/01` 대신 벤더 클래스 `FF/01/01`을 보고하는 어댑터(BCM20702 OEM 동글)도 감지됩니다. ROM 펌웨어로 작동하며, 펌웨어 폴더에 선택적인 PatchRAM `.hcd`(예: `BCM20702A1-0b05-17cb.hcd`)가 있으면 시작 시 업로드됩니다 |
-| Intel | Intel 7260 / 3160 / 7265 / 3165 / 3168 / 8260 / 8265 / 9260 / AX200 / AX201 / AX210 / AX211 | *실험적.* 부트로더 모드(예: 콜드 부팅 직후)에서는 linux-firmware `intel/`의 해당 `ibt-*.sfi` + `ibt-*.ddc`가 펌웨어 폴더에 필요합니다. 필요한 파일 이름은 로그에 나옵니다(예: `ibt-0180-0041.sfi`). 7260 / 3160 / 7265 / 3165 / 3168은 ROM으로 동작하므로 파일이 필요 없습니다. 같은 폴더에 해당 `ibt-hw-*.bseq` 패치가 있으면 적용합니다. 지금까지 테스트된 것은 AX211뿐입니다 |
-| MediaTek | MT7925, MT7922, MT7921, MT7902(AMD RZ717, RZ616, RZ608 등 Wi-Fi 카드) | *실험적.* 칩에 맞는 `BT_RAM_CODE_MT*_hdr.bin`(예: `BT_RAM_CODE_MT7925_1_1_hdr.bin`)이 필요합니다. MediaTek의 Windows Bluetooth 드라이버가 설치되어 있으면 BlueCaster가 거기서 읽고, 없으면 linux-firmware `mediatek/`의 파일을 펌웨어 폴더에 넣으십시오. 필요한 파일 이름은 로그에 나옵니다. 아직 실제 하드웨어에서 테스트되지 않았습니다 |
-| Qualcomm | QCA61x4, QCA9377(ROME), WCN6855(FastConnect 6900) | *실험적.* 칩의 rampatch와 NVM(예: `AthrBT_0x00000302.dfu`, `ramps_0x00000302_48.dfu`)이 필요합니다. Qualcomm의 Windows Bluetooth 드라이버가 설치되어 있으면 BlueCaster가 거기서 읽고, 없으면 linux-firmware `qca/`의 파일(`rampatch_usb_*.bin`, `nvm_usb_*.bin`)을 펌웨어 폴더에 넣으십시오. 필요한 파일 이름은 로그에 나옵니다. 아직 실제 하드웨어에서 테스트되지 않았습니다 |
+| Marvell | Microsoft Surface Pro / Surface Book 내장(88W8897) | 펌웨어 파일 불필요: Wi-Fi 드라이버가 Bluetooth 펌웨어도 불러오므로 Wi-Fi를 켜 두세요. 실제 하드웨어에서는 아직 테스트되지 않았습니다 |
+| Actions | ATS2851 동글 (`10D7:B012`) | ROM 펌웨어로 동작하며 펌웨어가 필요 없습니다. 실행할 수 없는 명령을 지원한다고 알리므로 BlueCaster가 숨깁니다. 아직 실제 하드웨어에서 테스트되지 않음 |
+| Broadcom | ASUS BT400 (BCM20702) | Bluetooth `E0/01/01` 대신 벤더 클래스 `FF/01/01`을 보고하는 어댑터(BCM20702 OEM 동글)도 감지됩니다. ROM 펌웨어로 작동하며, 펌웨어 폴더에 선택적인 PatchRAM `.hcd`(예: `BCM20702A1-0b05-17cb.hcd`)가 있으면 시작 시 업로드됩니다 |
+| Intel | Intel 7260 / 3160 / 7265 / 3165 / 3168 / 8260 / 8265 / 9260 / AX200 / AX201 / AX210 / AX211 | 부트로더 모드(예: 콜드 부팅 직후)에서는 linux-firmware `intel/`의 해당 `ibt-*.sfi` + `ibt-*.ddc`가 펌웨어 폴더에 필요합니다. 필요한 파일 이름은 로그에 나옵니다(예: `ibt-0180-0041.sfi`). 7260 / 3160 / 7265 / 3165 / 3168은 ROM으로 동작하므로 파일이 필요 없습니다. 같은 폴더에 해당 `ibt-hw-*.bseq` 패치가 있으면 적용합니다 |
+| MediaTek | MT7925, MT7922, MT7921, MT7902(AMD RZ717, RZ616, RZ608 등 Wi-Fi 카드) | 칩에 맞는 `BT_RAM_CODE_MT*_hdr.bin`(예: `BT_RAM_CODE_MT7925_1_1_hdr.bin`)이 필요합니다. MediaTek의 Windows Bluetooth 드라이버가 설치되어 있으면 BlueCaster가 거기서 읽고, 없으면 linux-firmware `mediatek/`의 파일을 펌웨어 폴더에 넣으십시오. 필요한 파일 이름은 로그에 나옵니다 |
+| Qualcomm | QCA61x4, QCA9377(ROME), WCN6855(FastConnect 6900) | 칩의 rampatch와 NVM(예: `AthrBT_0x00000302.dfu`, `ramps_0x00000302_48.dfu`)이 필요합니다. Qualcomm의 Windows Bluetooth 드라이버가 설치되어 있으면 BlueCaster가 거기서 읽고, 없으면 linux-firmware `qca/`의 파일(`rampatch_usb_*.bin`, `nvm_usb_*.bin`)을 펌웨어 폴더에 넣으십시오. 필요한 파일 이름은 로그에 나옵니다. 아직 실제 하드웨어에서 테스트되지 않았습니다 |
 | MediaTek, Qualcomm | 기타 MediaTek 칩(MT7927), 기타 Qualcomm 칩(QCA6290, WCN785x) | 미지원: BlueCaster에 없는 펌웨어 로더가 필요합니다 ([지원 추가 돕기](chip-support)) |
 
 LDAC 같은 고비트레이트 코덱에는 일반적으로 USB Bluetooth 5.0 이상 어댑터가 가장 적합합니다.

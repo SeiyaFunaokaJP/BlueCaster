@@ -5,11 +5,12 @@
  */
 export type DevDebug = { 
 /**
- * LE Audio over the MediaTek adapter's interrupt interface
+ * LE Audio on the MediaTek adapter's bulk pipe, not its interrupt
+ * interface
  */
-mtk_iso_interface: boolean, 
+mtk_iso_bulk: boolean, 
 /**
- * Outgoing ISO packets zero-padded to this length; 0: none
+ * Outgoing ISO packets zero-padded to this length; 0: the default
  */
 mtk_iso_pad: number, 
 /**
@@ -34,4 +35,9 @@ mtk_register: string,
  * Restore original driver hands Windows BlueCaster's LE keys too, for
  * the devices Windows keeps LE keys of (issue #86)
  */
-le_keys_to_windows: boolean, };
+le_keys_to_windows: boolean, 
+/**
+ * A Realtek chip's firmware from Realtek's Windows driver on this PC
+ * instead of the firmware folder's (the RTL8761B, issue #427)
+ */
+realtek_driver_firmware: boolean, };

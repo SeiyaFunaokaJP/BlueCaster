@@ -265,6 +265,15 @@ impl Op {
                 b.read_long(con, *handle)
             }
             Op::Write { handle, value, .. } => b.write(con, *handle, value),
+            // A characteristic with room for one descriptor only: that is
+            // its CCC (mandatory with notify / indicate), written without
+            // looking for it first (one ATT round trip less)
+            Op::Subscribe { chr, config, .. }
+                if chr.end_handle == chr.value_handle.wrapping_add(1)
+                    && chr.properties & (PROPERTY_NOTIFY | PROPERTY_INDICATE) != 0 =>
+            {
+                b.write(con, chr.end_handle, &config.to_le_bytes())
+            }
             Op::Subscribe { chr, config, .. } => b.write_ccc(con, chr, *config),
             // Its first step, or the step a busy gatt_client held back
             // (always one with a query: a step is only held back once it
@@ -669,6 +678,38 @@ mod tests {
         let mut u = [0u8, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0x80, 0x5F, 0x9B, 0x34, 0xFB];
         u[2..4].copy_from_slice(&uuid.to_be_bytes());
         u.iter().rev().copied().collect()
+    }
+
+    #[test]
+    fn a_lone_descriptor_is_written_as_the_ccc() {
+        let b = Fake::default();
+        let mut g = GattClient::new();
+        g.attach(0x40);
+        let chr = |value_handle: u16, end_handle: u16, properties: u16| GattChar {
+            value_handle,
+            end_handle,
+            properties,
+            ..Default::default()
+        };
+        // One handle after the value: written directly
+        g.subscribe(0x40, &chr(0x21, 0x22, PROPERTY_NOTIFY), false, None);
+        g.pump_all(&b);
+        assert_eq!(b.calls(), ["write 40 22 [1, 0]"]);
+        g.on_event(&b, &complete(0x40, 0));
+        // Indications
+        g.subscribe(0x40, &chr(0x24, 0x25, PROPERTY_INDICATE), true, None);
+        g.pump_all(&b);
+        assert_eq!(b.calls(), ["write 40 25 [2, 0]"]);
+        g.on_event(&b, &complete(0x40, 0));
+        // More room for descriptors: BTstack looks for the CCC
+        g.subscribe(0x40, &chr(0x27, 0x29, PROPERTY_NOTIFY), false, None);
+        g.pump_all(&b);
+        assert_eq!(b.calls(), ["ccc 40 27 1"]);
+        g.on_event(&b, &complete(0x40, 0));
+        // Without notify / indicate in its properties: left to BTstack
+        g.subscribe(0x40, &chr(0x2b, 0x2c, 0), false, None);
+        g.pump_all(&b);
+        assert_eq!(b.calls(), ["ccc 40 2b 1"]);
     }
 
     #[test]

@@ -25,14 +25,16 @@ Adaptadores y auriculares con los que se ha usado BlueCaster, según las pruebas
 | TP-Link UB500 | Realtek RTL8761BU | 2357:0604 | Llave USB | ✅ El más probado | Firmware `rtl8761bu`. Sin LE Audio (no tiene canales isócronos) | Mantenedor; [#84](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/84), [#87](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/87) |
 | Llave RTL8761B genérica | Realtek RTL8761BU | 0BDA:A729 | Llave USB | ✅ | Firmware `rtl8761bu`. Se detecta automáticamente desde 2.0.2 (antes: elegir RTL8761BU como chip). Sin LE Audio | [#66](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/66), [#86](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/86) |
 | Realtek RTL8852BE integrado de un portátil | Realtek RTL8852BU | 0BDA:4853 | Integrado | ✅ | Firmware `rtl8852bu`, reconocido desde 2.0.2-beta.1. Windows se queda sin Bluetooth propio mientras BlueCaster lo usa | [#81](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/81) |
-| ASUS BT400 | Broadcom BCM20702 | 0B05:17CB | Llave USB | ✅ Experimental | Funciona con el firmware de su ROM, sin necesidad de archivos. Informado en la v1 (1.0.12–1.0.17) | [#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18), [#27](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/27), [#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30) |
+| ASUS BT400 | Broadcom BCM20702 | 0B05:17CB | Llave USB | ✅ | Funciona con el firmware de su ROM, sin necesidad de archivos. Informado en la v1 (1.0.12–1.0.17) | [#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18), [#27](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/27), [#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30) |
 | Llave «Realtek Bluetooth 6.0» | Realtek RTL8761B | 0BDA:A760 | Llave USB | ✅ | Todavía no se detecta automáticamente (subversión LMP 0x8761). Sin LE Audio | [#208](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/208) |
 | Llave CSR8510 A10 | CSR8510 | 0A12:0001 | Llave USB | ✅ | No necesita archivos de firmware | [#32](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/32) |
-| Intel AX211 (tarjeta Wi-Fi / Bluetooth integrada) | Intel AX211 (bootloader TLV) | 8087:0033 | Integrado | ✅ Experimental | Firmware de linux-firmware `intel/`, cargado desde el bootloader en 1.5–1.7 s: `ibt-0180-0041` (variante 0x1B) o `ibt-1040-0041` (variante 0x19); el registro indica el archivo. El emparejamiento, AAC y LDAC funcionan. Windows se queda sin Bluetooth propio mientras BlueCaster lo usa | [#261](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/261) |
+| Intel AX211 (tarjeta Wi-Fi / Bluetooth integrada) | Intel AX211 (bootloader TLV) | 8087:0033 | Integrado | ✅ | Firmware de linux-firmware `intel/`, cargado desde el bootloader en 1.5–1.7 s: `ibt-0180-0041` (variante 0x1B) o `ibt-1040-0041` (variante 0x19); el registro indica el archivo. El emparejamiento, AAC y LDAC funcionan. Windows se queda sin Bluetooth propio mientras BlueCaster lo usa | [#261](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/261) |
+| MediaTek MT7925 (tarjeta Wi-Fi / Bluetooth integrada) | MediaTek MT7925 | 0E8D:7925 | Integrado | ✅ | Firmware leído del controlador de Windows de MediaTek. A2DP funciona; LE Audio sonó con un ajuste de Desarrollador > Debug | [#86](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/86) |
+| MediaTek MT7921 (tarjeta Wi-Fi / Bluetooth integrada) | MediaTek MT7921 | 13D3:3606 | Integrado | ✅ | – | [#432](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/432) |
 | Adaptador «MA530» | No indicado | – | Llave USB | ✅ | Informado en la v1.0.9 | [#3](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/3), [#9](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/9) |
 | Llaves UGREEN Bluetooth 5.4 y 6.0 | No indicado | – | Llave USB | ✅ | Informado en 2.0.1 | [#11](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/11#issuecomment-6563908711) |
 
-Todavía no hay informes de adaptadores MediaTek ni Qualcomm: consulte [Adaptadores recomendados](setup#adapters) para saber qué se espera de ellos.
+Todavía no hay informes de adaptadores Qualcomm: consulte [Adaptadores recomendados](setup#adapters) para saber qué se espera de ellos.
 
 ## Auriculares
 
@@ -63,5 +65,5 @@ Todavía no hay informes de adaptadores MediaTek ni Qualcomm: consulte [Adaptado
 ## Pendiente de verificar
 
 - **Códecs con auriculares reales**: aptX HD, aptX Low Latency, Opus, Opus 05, FastStream
-- **LE Audio**: solo probado con el emulador; ninguno de los adaptadores anteriores tiene canales isócronos
+- **LE Audio**: solo probado con el emulador y en el MediaTek MT7925
 - **Windows en ARM64** y **Windows 10 con la v2** (la v1 funcionaba en Windows 10 22H2: [#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18), [#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30))

@@ -4,7 +4,7 @@ import { App } from "../app/App";
 import { t } from "../i18n";
 import { MockCore, type MockScenario, sampleSnapshot } from "../ipc/mock";
 import { createCore } from "../ipc/store";
-import { adapterExperimental, adapterIds, adapterIdsHint, adapterName, driverText } from "./Adapter";
+import { adapterIds, adapterIdsHint, adapterName, driverText } from "./Adapter";
 
 let mock: MockCore | null = null;
 
@@ -114,7 +114,7 @@ describe("Adapter firmware", () => {
       instance_id: "USB\\VID_8087&PID_0033\\5&1",
       vid: 0x8087,
       pid: 0x0033,
-      display_name: "Intel (0x8087:0x0033) [experimental]",
+      display_name: "Intel (0x8087:0x0033)",
       vendor: "Intel",
       driver: "winusb",
       realtek_chip: null,
@@ -151,11 +151,9 @@ describe("Adapter firmware", () => {
     // The chip choice goes with the Realtek adapter only
     expect(within(mtk).queryByLabelText("Bluetooth Chip")).toBeNull();
     expect(within(rtl).getByLabelText("Bluetooth Chip")).toBeInTheDocument();
-    // "[experimental]" is a tag beside the name, not part of it
+    // No Experimental tag on any adapter (issue #86)
     const intelCard = screen.getByRole("region", { name: "Intel" });
-    expect(intelCard).not.toHaveTextContent("[experimental]");
-    // Amber (issue #86)
-    expect(within(intelCard).getByText("Experimental")).toHaveClass("st-exp");
+    expect(intelCard).not.toHaveTextContent(/Experimental/i);
     // Its firmware from the folder, without the Realtek chip choice
     const intelFw = within(intelCard).getByRole("group", { name: "Firmware: From the firmware folder" });
     expect(within(intelFw).queryByLabelText("Bluetooth Chip")).toBeNull();
@@ -219,11 +217,9 @@ describe("Adapter firmware", () => {
     expect(driverText("other").text).toBe("Original driver");
     expect(driverText("winusb").text).toBe("WinUSB driver");
     expect(driverText("none").text).toBe("No driver");
-    // An Intel adapter on WinUSB without a product string: the mark is a tag
-    const intel = { ...a, display_name: "Intel (0x8087:0x0033) [experimental]", vendor: "Intel", realtek_chip: null };
+    // An Intel adapter on WinUSB without a product string
+    const intel = { ...a, display_name: "Intel (0x8087:0x0033)", vendor: "Intel", realtek_chip: null };
     expect(adapterName(intel)).toBe("Intel");
-    expect(adapterExperimental(intel)).toBe(true);
-    expect(adapterExperimental(a)).toBe(false);
   });
 
   it("opens the firmware folder", async () => {

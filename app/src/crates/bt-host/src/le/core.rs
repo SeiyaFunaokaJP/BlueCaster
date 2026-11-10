@@ -33,7 +33,7 @@ use le_audio::sdu_queue::SduQueue;
 
 use super::bap::{self, Unicast, UnicastEnv, UnicastTimer};
 use super::broadcast::Broadcast;
-use super::gatt_client::{GattChar, GattClient, GattService};
+use super::gatt_client::{GattChar, GattClient, GattService, PROPERTY_INDICATE};
 use super::gatt_server::{AttRead, AttWrite, GattServer, WriteAction};
 use super::iso_recv::{IsoRx, LeRxStats, RxSdu};
 use super::iso_send::IsoSender;
@@ -85,6 +85,9 @@ pub struct LeDevice {
     pub secured: bool,
     /// GATT cache + PACS + ASCS read
     pub gatt_ready: bool,
+    /// `services` came from the kept list without a Database Hash check
+    /// (gatt_cache): dropped from it when the setup fails
+    pub services_kept: bool,
     /// `le_connect` may return
     pub ready: bool,
     /// Why it went down / failed (HCI / ATT / SM)
@@ -125,6 +128,7 @@ impl LeDevice {
             pair_attempts: 0,
             secured: false,
             gatt_ready: false,
+            services_kept: false,
             ready: false,
             last_error: 0,
             services: Vec::new(),
@@ -283,6 +287,10 @@ pub struct LeCore {
     connect: Option<ConnectAttempt>,
     /// By RPA
     rpa_cache: HashMap<[u8; 6], RpaEntry>,
+    /// Identity (non-RPA) addresses by when they were last seen advertising
+    /// (run loop ms): a device that switched back from an RPA to its
+    /// identity is connected with the identity
+    identity_seen: HashMap<[u8; 6], u32>,
     pub(crate) gatt: GattClient,
     server: GattServer,
     presets: PresetTable,
@@ -487,6 +495,13 @@ impl<'a> LeCtx<'a> {
 
     fn lookup_rpa(&mut self, addr: LeAddr, seen: bool) {
         if !addr.is_rpa() {
+            if seen {
+                if self.core.identity_seen.len() >= RPA_CACHE_MAX && !self.core.identity_seen.contains_key(&addr.addr) {
+                    self.core.identity_seen.clear();
+                }
+                let now = self.stack.time_ms();
+                self.core.identity_seen.insert(addr.addr, now);
+            }
             return;
         }
         if !self.core.rpa_cache.contains_key(&addr.addr) {
@@ -534,11 +549,21 @@ impl<'a> LeCtx<'a> {
                     .then_some((now.wrapping_sub(seen), *rpa))
             })
             .min_by_key(|(age, _)| *age);
+        let identity_age = self.core.identity_seen.get(&d.addr.addr).map(|&t| now.wrapping_sub(t));
         tracing::debug!(
-            "LE Audio: connect address for device {dev:?}: given {given}, freshest resolved RPA {:?}",
+            "LE Audio: connect address for device {dev:?}: given {given}, freshest resolved RPA {:?}, identity seen {identity_age:?} ms ago",
             best.map(|(age, rpa)| (crate::addr_str(&rpa), age))
         );
         match best {
+            // The device advertises with its identity again (seen after the
+            // RPA): an RPA it no longer uses gets no answer
+            Some((age, _)) if identity_age.is_some_and(|i| i < age) => {
+                if given.addr == d.addr.addr {
+                    given
+                } else {
+                    d.addr
+                }
+            }
             Some((_, rpa)) => LeAddr { addr: rpa, addr_type: LeAddr::RANDOM },
             None => given,
         }
@@ -968,6 +993,7 @@ impl<'a> LeCtx<'a> {
         d.pairing = false;
         d.secured = false;
         d.gatt_ready = false;
+        d.services_kept = false;
         d.ready = false;
         d.services.clear();
         tracing::info!("LE Audio: LE link to {} up (handle 0x{handle:04x}), securing it", d.addr);
@@ -981,6 +1007,9 @@ impl<'a> LeCtx<'a> {
     }
 
     fn fail_connect(&mut self, dev: LeDeviceId, why: String) {
+        if self.device(dev).is_some_and(|d| d.services_kept && !d.ready) {
+            self.forget_kept_services(dev, "the setup with them failed");
+        }
         if let Some(d) = self.device(dev) {
             tracing::warn!("LE Audio: {}: {why}", d.addr);
             if d.connected() {
@@ -1043,10 +1072,25 @@ impl<'a> LeCtx<'a> {
         // still its services (crate::le::gatt_cache)
         let cached = self.core.gatt_cache_file.clone().zip(d_identity(self, id)).and_then(|(file, (addr, kind))| {
             let db = super::gatt_cache::load(&file, &addr)?;
-            (db.address_type == kind && db.hash.is_some()).then_some((file, db))
+            (db.address_type == kind
+                && (db.hash.is_some() || super::gatt_cache::service_changed(&db.services).is_some()))
+            .then_some((file, db))
         });
-        match cached.and_then(|(file, db)| super::gatt_cache::hash_handle(&db.services).map(|h| (file, db, h))) {
-            Some((file, db, handle)) => {
+        let hash_handle = cached.as_ref().and_then(|(_, db)| super::gatt_cache::hash_handle(&db.services));
+        match (cached, hash_handle) {
+            // No usable Database Hash, but Service Changed tells of changes
+            (Some((_, db)), _) if db.hash.is_none() => {
+                tracing::info!(
+                    "LE Audio: {}: kept services used (Service Changed, no Database Hash), discovery skipped",
+                    db.address
+                );
+                if let Some(d) = self.device_on_mut(id, con) {
+                    d.services_kept = true;
+                }
+                // Not stored again: kept as they are until a discovery
+                self.services_known(id, con, db.services, None);
+            }
+            (Some((file, db)), Some(handle)) => {
                 tracing::debug!("LE Audio: device {} has kept services, reading its Database Hash", id.0);
                 self.core.gatt.read(
                     con,
@@ -1072,11 +1116,44 @@ impl<'a> LeCtx<'a> {
                     }),
                 );
             }
-            None => {
+            _ => {
                 let file = self.core.gatt_cache_file.clone();
                 self.discover(id, con, file);
             }
         }
+    }
+
+    /// Drops a device's kept services (the next connection discovers)
+    fn forget_kept_services(&mut self, id: LeDeviceId, why: &str) {
+        let (Some(file), Some((addr, _))) = (self.core.gatt_cache_file.clone(), d_identity(self, id)) else {
+            return;
+        };
+        if super::gatt_cache::remove(&file, &addr) {
+            tracing::info!("LE Audio: {addr}: kept services dropped ({why})");
+        }
+    }
+
+    /// Service Changed indications of the device: on every connection, so
+    /// that a bonded device tells of a change on a later one too
+    fn watch_service_changed(&mut self, id: LeDeviceId, con: u16, services: &[GattService]) {
+        let Some(chr) = super::gatt_cache::service_changed(services).cloned() else { return };
+        if chr.properties & PROPERTY_INDICATE == 0 {
+            return;
+        }
+        self.core.gatt.listen(
+            con,
+            chr.value_handle,
+            Box::new(move |ctx, value| {
+                tracing::info!("LE Audio: device {}: Service Changed {value:02X?}", id.0);
+                ctx.forget_kept_services(id, "Service Changed");
+                // Set up with handles that may be gone: again, with a
+                // discovery
+                if ctx.device_on(id, con).is_some_and(|d| d.services_kept && !d.ready) {
+                    ctx.fail_connect(id, "its services changed, connect again".into());
+                }
+            }),
+        );
+        self.core.gatt.subscribe(con, &chr, true, None);
     }
 
     /// GATT discovery, then the services kept (`file`) and the setup goes on
@@ -1123,6 +1200,11 @@ impl<'a> LeCtx<'a> {
     fn services_known(&mut self, id: LeDeviceId, con: u16, services: Vec<GattService>, file: Option<PathBuf>) {
         if let (Some(file), Some((address, address_type))) = (file, d_identity(self, id)) {
             let db = super::gatt_cache::CachedDb { address, address_type, hash: None, services: services.clone() };
+            let kept_without = if super::gatt_cache::service_changed(&services).is_some() {
+                "kept, Service Changed tells of changes"
+            } else {
+                "discovered on every connection"
+            };
             if !super::gatt_cache::store(&file, db.clone()) && !services.iter().any(|s| s.primary) {
                 tracing::info!("LE Audio: device {}: discovery found no service, the kept ones stay", id.0);
             }
@@ -1138,17 +1220,19 @@ impl<'a> LeCtx<'a> {
                                 super::gatt_cache::store(&file, super::gatt_cache::CachedDb { hash, ..db });
                             }
                             None => tracing::info!(
-                                "LE Audio: {}: Database Hash not read (0x{status:02x}): discovered on every connection",
-                                db.address
+                                "LE Audio: {}: no usable Database Hash (0x{status:02x}, {} bytes): {kept_without}",
+                                db.address,
+                                value.len()
                             ),
                         }
                     }),
                 ),
                 None => {
-                    tracing::info!("LE Audio: {}: no Database Hash: discovered on every connection", db.address);
+                    tracing::info!("LE Audio: {}: no Database Hash: {kept_without}", db.address);
                 }
             }
         }
+        self.watch_service_changed(id, con, &services);
         let Some(d) = self.device_on_mut(id, con) else { return };
         d.services = services;
         let chars: usize = d.services.iter().map(|s| s.chars.len()).sum();
@@ -1858,6 +1942,7 @@ impl LeCore {
             scan_found: 0,
             connect: None,
             rpa_cache: HashMap::new(),
+            identity_seen: HashMap::new(),
             gatt: GattClient::new(),
             server: GattServer::new(),
             presets: PresetTable::new(),
@@ -1906,7 +1991,7 @@ impl LeCore {
         if self.initialized {
             return;
         }
-        tracing::info!("LE Audio (experimental): initializing (SM, GATT client / server, ISO)");
+        tracing::info!("LE Audio: initializing (SM, GATT client / server, ISO)");
         let path: PathBuf = self
             .config
             .as_ref()
@@ -1945,6 +2030,7 @@ impl LeCore {
         self.scanning = false;
         self.connect = None;
         self.rpa_cache.clear();
+        self.identity_seen.clear();
         self.gatt = GattClient::new();
         self.sink_pacs_by_char.clear();
         self.source_pacs_by_char.clear();
@@ -2007,6 +2093,7 @@ impl LeCore {
         self.devices.clear();
         self.scan_results.clear();
         self.rpa_cache.clear();
+        self.identity_seen.clear();
         self.queue = None;
         self.status = None;
         tracing::info!("LE Audio: stopped");

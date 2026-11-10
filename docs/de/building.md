@@ -72,7 +72,7 @@ BlueCaster/
 ├── Cargo.toml              Cargo workspace
 ├── installer/              Release script, Inno Setup script, updater notes (installer/README.md)
 ├── compat/                 MSVC compatibility headers for the AOSP code
-├── docs/                   Documentation (this site) and the design document (v2-design.md)
+├── docs/                   Documentation (this site)
 ├── extern/                 Third-party C libraries (git submodules)
 │   ├── btstack/            BTstack Bluetooth stack
 │   ├── libldac/            AOSP LDAC encoder
@@ -132,7 +132,7 @@ Ein Codec besteht, wenn all dies zutrifft:
 | Option | Beschreibung |
 |:-------|:------------|
 | `--codecs sbc aac ...` | Nur diese Codecs testen (`sbc sbcxq aac aptx aptxhd aptxll ldac lhdcv5 faststream opus opus05`) oder Aushandlungsfälle (Abtastraten, niedrige Bitpools, SBC-Frame-Aufbauten, aptX Adaptive, ...; `-h` listet sie auf); Standard: alle |
-| `--le-audio [case ...]` | Stattdessen die Fälle für LE Audio (experimentell) ausführen (Standard: alle) |
+| `--le-audio [case ...]` | Stattdessen die Fälle für LE Audio ausführen (Standard: alle) |
 | `--scan [case ...]` | Stattdessen die Fälle der Gerätesuche ausführen (`eir`, `name-request`) |
 | `--link [case ...]` | Stattdessen die Verbindungsfälle ausführen (`disconnect`, `device-link`, `device-a2dp`, `device-stream`, `restart-on-link`) |
 | `--duration <s>` | Sekunden Streaming pro Codec (Standard 5) |

@@ -142,6 +142,9 @@ pub struct LeRequest {
     /// `--mic-output`): a path ending in ".wav" (a WAV file), else a render
     /// device's id or part of its name; None: the default output
     pub mic_output: Option<String>,
+    /// The microphone's sampling rate chosen (Hz, `--mic-rate`); None:
+    /// Auto. One the headphones do not allow falls back to Auto's.
+    pub mic_rate: Option<u32>,
 }
 
 /// What a broadcast was asked for (`stream.start_broadcast`, `--auracast`)

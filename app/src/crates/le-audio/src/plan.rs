@@ -19,7 +19,9 @@
 //! source ASEs only gets a CIS of its own that carries P->C only. The source
 //! preset is the first of [`StreamRequest::source_preset_order`] (those with
 //! the sink preset's frame duration first) that every such device's Source
-//! PAC records allow. When none fits, or no device has a source ASE, the
+//! PAC records allow. [`StreamRequest::source_rate`] (a rate the user
+//! chose) takes the first of those at that rate instead, and the first at
+//! any rate when none is. When none fits, or no device has a source ASE, the
 //! plan has no source direction and says why in [`StreamPlan::source_note`]:
 //! playback goes on without the microphone.
 
@@ -60,6 +62,9 @@ pub struct StreamRequest {
     pub source_preset_order: Vec<String>,
     /// Streaming Audio Contexts in the Enable of source ASEs (CONTEXT_*)
     pub source_contexts: u16,
+    /// The microphone's sampling rate chosen (Hz): the first source preset
+    /// at that rate; None, or none at that rate: the first one that fits
+    pub source_rate: Option<u32>,
 }
 
 impl Default for StreamRequest {
@@ -75,6 +80,7 @@ impl Default for StreamRequest {
             conversational: false,
             source_preset_order: DEFAULT_SOURCE_PRESET_ORDER.iter().map(|s| s.to_string()).collect(),
             source_contexts: CONTEXT_CONVERSATIONAL,
+            source_rate: None,
         }
     }
 }
@@ -173,6 +179,10 @@ pub struct SourcePlan {
     pub contexts: u16,
     /// Finalized after Config Codec (clamped into every source ASE's range)
     pub presentation_delay_us: u32,
+    /// The sampling rates (Hz) of the source presets every device allows,
+    /// in the order they are tried (the first is the one taken without a
+    /// [`StreamRequest::source_rate`]): what may be chosen
+    pub rates: Vec<u32>,
 }
 
 /// The configuration of a unicast stream (v1 struct StreamPlan)
@@ -466,14 +476,19 @@ pub fn plan_stream(
 
     // Streaming context: checked again right before Enable (BAP), as the
     // available contexts may change until then. A conversational stream
-    // also names Conversational for the sink ASEs (where available).
-    let requested = request.contexts | if source.is_some() { CONTEXT_CONVERSATIONAL } else { 0 };
+    // names the microphone's contexts for the sink ASEs too, alone, as a
+    // phone in a call does: EarFun earbuds reject Media | Conversational
+    // ("Rejected Metadata", issue #86). Only where every sink has them:
+    // otherwise the usual contexts, so playback still starts.
     let available: Vec<u16> = devices
         .iter()
         .zip(&sink_ases)
         .filter(|(_, ids)| !ids.is_empty())
         .map(|(d, _)| d.available_sink_contexts)
         .collect();
+    let mic_contexts_everywhere = available.iter().fold(request.source_contexts, |c, a| c & a) != 0;
+    let requested =
+        if source.is_some() && mic_contexts_everywhere { request.source_contexts } else { request.contexts };
     Ok(StreamPlan {
         preset: preset.clone(),
         cig_id: 1,
@@ -512,9 +527,22 @@ fn plan_source(
     let mut candidates: Vec<&StreamPreset> =
         request.source_preset_order.iter().filter_map(|n| presets.find(n)).collect();
     candidates.sort_by_key(|p| p.frame_us != sink.frame_us);
-    let preset = candidates
+    let fitting: Vec<&StreamPreset> = candidates
         .into_iter()
-        .find(|p| u32::from(p.octets) + 4 <= iso_len && mics.iter().all(|(d, _)| pacs_support(&d.source_pacs, p, 1)))
+        .filter(|p| u32::from(p.octets) + 4 <= iso_len && mics.iter().all(|(d, _)| pacs_support(&d.source_pacs, p, 1)))
+        .collect();
+    let mut rates: Vec<u32> = Vec::new();
+    for p in &fitting {
+        if !rates.contains(&p.sampling_hz) {
+            rates.push(p.sampling_hz);
+        }
+    }
+    let chosen = request.source_rate.and_then(|hz| fitting.iter().find(|p| p.sampling_hz == hz));
+    if let Some(hz) = request.source_rate.filter(|_| chosen.is_none()) {
+        tracing::info!("LE Audio plan: no microphone configuration at {hz} Hz (allowed: {rates:?}), taking the first");
+    }
+    let preset = *chosen
+        .or(fitting.first())
         .ok_or_else(|| "no microphone configuration supported by every device (source PAC records)".to_string())?;
 
     let mut extra = 0;
@@ -555,6 +583,7 @@ fn plan_source(
         requested_contexts: request.source_contexts,
         contexts: choose_streaming_contexts(&available, request.source_contexts),
         presentation_delay_us: preset.presentation_delay_us,
+        rates,
     })
 }
 
@@ -1000,8 +1029,9 @@ mod tests {
         assert_eq!(s.presentation_delay_us, 40000);
         assert_eq!(p.cis[0].source_ase, Some(SourceDir { ase_id: 3, channels: 1, allocation: FL, octets: 80 }));
         assert_eq!(p.cis[0].source_ase.unwrap().sdu_len(), 80);
-        // Conversational added to the sink contexts (the device has it)
-        assert_eq!((p.requested_contexts, p.contexts), (CONTEXT_MEDIA | CONTEXT_CONVERSATIONAL, 0x0006));
+        // The sink ASEs name Conversational alone (issue #86: Media |
+        // Conversational rejected by EarFun earbuds)
+        assert_eq!((p.requested_contexts, p.contexts), (CONTEXT_CONVERSATIONAL, CONTEXT_CONVERSATIONAL));
         assert_eq!(
             p.ases(),
             [
@@ -1066,6 +1096,23 @@ mod tests {
     }
 
     #[test]
+    fn microphone_rate_chosen() {
+        // The emulator's microphone: 16 and 32 kHz, Auto takes 32 kHz
+        let d = with_mic(sink(1, 0, 1, 0x01), 0);
+        let s = plan(std::slice::from_ref(&d), &conversational(), EMU_ISO).unwrap().source.unwrap();
+        assert_eq!((s.preset.name.as_str(), s.rates.as_slice()), ("32_2_1", &[32000, 16000][..]));
+        // 16 kHz chosen
+        let request = StreamRequest { source_rate: Some(16000), ..conversational() };
+        let s = plan(std::slice::from_ref(&d), &request, EMU_ISO).unwrap().source.unwrap();
+        assert_eq!(s.preset.name, "16_2_1");
+        assert_eq!(s.rates, [32000, 16000]);
+        // A rate the device does not allow: the first that fits
+        let request = StreamRequest { source_rate: Some(24000), ..conversational() };
+        let s = plan(&[d], &request, EMU_ISO).unwrap().source.unwrap();
+        assert_eq!(s.preset.name, "32_2_1");
+    }
+
+    #[test]
     fn conversational_earbuds() {
         // 'mic-earbuds': the left earbud has the microphone
         let devices = [with_mic(sink(1, FL, 1, 0x01), FL), sink(2, FR, 1, 0x01)];
@@ -1073,11 +1120,13 @@ mod tests {
         assert_eq!(layout(&p), vec![(1, 1, 0, vec![(FL, Left)]), (2, 1, 1, vec![(FR, Right)])]);
         assert_eq!(p.cis[0].source_ase.map(|s| s.ase_id), Some(3));
         assert_eq!(p.cis[1].source_ase, None);
-        // Sink contexts: Conversational only where every sink has it
+        // Sink contexts: Conversational only where every sink has it,
+        // else the usual ones, so playback still starts
         let mut right = sink(2, FR, 1, 0x01);
         right.available_sink_contexts = CONTEXT_MEDIA;
         let p = plan(&[devices[0].clone(), right], &conversational(), EMU_ISO).unwrap();
         assert_eq!(p.contexts, CONTEXT_MEDIA);
+        assert_ne!(p.requested_contexts & CONTEXT_MEDIA, 0);
         // Both with a microphone: one source per earbud
         let devices = [with_mic(sink(1, FL, 1, 0x01), FL), with_mic(sink(2, FR, 1, 0x01), FR)];
         let p = plan(&devices, &conversational(), EMU_ISO).unwrap();

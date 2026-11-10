@@ -57,10 +57,6 @@ export interface CodecSpec {
   vbr?: boolean;
   /** The SBC bitpool and frame setup (blocks, subbands, allocation) can be chosen */
   bitpool?: boolean;
-  /** Not yet confirmed with real headphones (the README's 🧪; core:
-   *  CodecKind::experimental). The app offers and uses them as any other
-   *  (issue #86); only the CLI's --no-experimental leaves them out */
-  experimental?: boolean;
   /** Shown and used only in developer mode (core: CodecKind::developer_only):
    *  outside it, a device's is left out as if it did not offer it */
   developer?: boolean;
@@ -125,7 +121,6 @@ export const CODECS: CodecSpec[] = [
     abr: false,
     hiRes: false,
     bits: 24,
-    experimental: true,
   },
   {
     id: "aptx",
@@ -144,7 +139,6 @@ export const CODECS: CodecSpec[] = [
     fixedKbps: [352, 384],
     abr: false,
     hiRes: false,
-    experimental: true,
   },
   {
     // aptX Adaptive: High with an R1 sink
@@ -173,7 +167,6 @@ export const CODECS: CodecSpec[] = [
     abr: false,
     hiRes: false,
     rates: [0, 48000],
-    experimental: true,
   },
   {
     id: "aac",
@@ -217,7 +210,6 @@ export const CODECS: CodecSpec[] = [
     fixedKbps: [198, 216],
     abr: false,
     hiRes: false,
-    experimental: true,
   },
   {
     // PipeWire's own Opus ("Opus 05"; never picked by Auto):
@@ -229,7 +221,6 @@ export const CODECS: CodecSpec[] = [
     abr: false,
     hiRes: false,
     rates: [0, 48000],
-    experimental: true,
     developer: true,
   },
 ];
@@ -402,26 +393,16 @@ export function offeredCodecs<T extends string>(list: readonly T[], developer: b
   return list.filter((c) => developer || !developerOnly(c));
 }
 
-/** Not yet confirmed with real headphones (CodecSpec.experimental) */
-export function isExperimental(codec: string): boolean {
-  return codecSpec(codec).experimental === true;
-}
-
-/** Offered by the device and allowed (an experimental codec only with `experimental`) */
-function usable(codec: string, known: readonly string[], experimental: boolean): boolean {
-  return codecSupport(codec, known) === "offered" && (experimental || !isExperimental(codec));
+/** Offered by the device */
+function usable(codec: string, known: readonly string[]): boolean {
+  return codecSupport(codec, known) === "offered";
 }
 
 /** The codec Auto picks among those a device offers (`known`, as
  *  Device.codecs): the first in `order` (the device's, AUTO_ORDER unless
- *  given; never FastStream nor Opus 05), leaving out the experimental ones
- *  unless `experimental`; null when not known */
-export function autoPick(
-  known: readonly string[],
-  experimental = true,
-  order: readonly string[] = AUTO_ORDER,
-): CodecId | null {
-  return autoOrder(order).find((c) => usable(c, known, experimental)) ?? null;
+ *  given; never FastStream nor Opus 05); null when not known */
+export function autoPick(known: readonly string[], order: readonly string[] = AUTO_ORDER): CodecId | null {
+  return autoOrder(order).find((c) => usable(c, known)) ?? null;
 }
 
 /**
@@ -430,18 +411,16 @@ export function autoPick(
  * codec itself when offered, else the first in the device's `order`
  * (AUTO_ORDER unless given) it offers, as Auto picks (issue #86 round 8:
  * not the next one below the codec chosen). Null when the device's codecs
- * are not known yet. Unless `experimental`, the experimental codecs are
- * never used (a chosen one falls back the same way).
+ * are not known yet.
  */
 export function effectiveCodec(
   codec: string,
   known: readonly string[],
-  experimental = true,
   order: readonly string[] = AUTO_ORDER,
 ): CodecId | null {
   if (known.length === 0) return null;
-  if (codec !== "auto" && usable(codec, known, experimental)) return codec as CodecId;
-  return autoPick(known, experimental, order);
+  if (codec !== "auto" && usable(codec, known)) return codec as CodecId;
+  return autoPick(known, order);
 }
 
 export function sampleRates(codec: string): number[] {

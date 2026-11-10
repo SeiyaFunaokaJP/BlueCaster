@@ -6,7 +6,7 @@ nav_order: 4.5
 
 # Adding Chip Support
 
-BlueCaster drives the Bluetooth adapter itself (WinUSB), so it has to do what the vendor's Windows driver does before the adapter works: on many chips, load firmware into it at every start. Realtek, Intel, Broadcom and CSR adapters work today, and the MediaTek MT7925, MT7922, MT7921 and MT7902 and the Qualcomm QCA61x4, QCA9377 and WCN6855 experimentally; the other MediaTek chips (MT7927 and older ones) and Qualcomm chips (QCA6290, WCN785x) do not, because nobody has written their loader yet. `app/src/crates/bt-host/src/mediatek.rs` (the MT79xx's) is a real loader to start from for another MediaTek chip.
+BlueCaster drives the Bluetooth adapter itself (WinUSB), so it has to do what the vendor's Windows driver does before the adapter works: on many chips, load firmware into it at every start. Realtek, Intel, Broadcom and CSR adapters work today, and so do the MediaTek MT7925, MT7922, MT7921 and MT7902 and the Qualcomm QCA61x4, QCA9377 and WCN6855 (the MT7922, the MT7902 and the Qualcomm chips not yet tested on hardware); the other MediaTek chips (MT7927 and older ones) and Qualcomm chips (QCA6290, WCN785x) do not, because nobody has written their loader yet. `app/src/crates/bt-host/src/mediatek.rs` (the MT79xx's) is a real loader to start from for another MediaTek chip.
 
 This page is the procedure for adding one. You need an adapter with that chip; the maintainers do not have them. Even without writing code, you can help: steps 1 and 2 give the report a contributor needs.
 
@@ -203,7 +203,7 @@ cargo test -p bt-host
 
 Every file to change, for a vendor already listed as unsupported (MediaTek, Qualcomm) or a new one. For a new vendor the compiler points at the `match`es that need its variant; the rest, and everything for a vendor already listed, only this list finds.
 
-**One chip or the whole vendor?** A loader usually covers some of a vendor's chips (the MT7921 but not the MT7925). Then only those chips may leave "unsupported": list their VID:PIDs in `LOADER_CHIPS` in `app/src/crates/bt-host/src/chips.rs`, and leave the vendor's `support_tag()` as it is. `chips::chip_supported(vendor, vid, pid)` and `chip_support_tag()` then answer per adapter, and the adapter's name tag, its note on the Adapters screen, WinUSB being offered there and the "not implemented" warning follow them. Change `support_tag()` only for a loader that covers every chip of the vendor (as Intel's).
+**One chip or the whole vendor?** A loader usually covers some of a vendor's chips (the MT7921 but not the MT7925). Then only those chips may leave "unsupported": list their VID:PIDs in `LOADER_CHIPS` in `app/src/crates/bt-host/src/chips.rs`, and leave the vendor in `listed_chips_only()`. `chips::chip_supported(vendor, vid, pid)` and `chip_support_tag()` then answer per adapter, and the adapter's name tag, its note on the Adapters screen, WinUSB being offered there and the "not implemented" warning follow them. Take a vendor out of `listed_chips_only()` only for a loader that covers all its chips (as Intel's).
 
 {: .note }
 Keep each file's line endings: some source files use CRLF, others LF. Some editors and `sed -i` in Git Bash rewrite them silently, and `cargo fmt` does not put them back. `git diff --stat` shows it: a file you changed in a few places counts every line. Then convert the file back (for example with VS Code's line ending switch in the status bar) before committing.
@@ -211,7 +211,7 @@ Keep each file's line endings: some source files use CRLF, others LF. Some edito
 **Detection** (`app/src/crates/bt-host/src/chips.rs`):
 
 1. `ChipVendor`: a new vendor gets a variant (with a doc line) and an arm in `name()`. For any vendor, bring the enum's doc comment (which vendors have loaders) and the variant's doc line ("not supported") up to date
-2. Some chips: their VID:PIDs in `LOADER_CHIPS`, and a test in the loader's module that its own chip check (chip ID, version) accepts exactly what those entries are. The whole vendor: `support_tag()` moves from `"unsupported"` to `"experimental"`
+2. Some chips: their VID:PIDs in `LOADER_CHIPS`, and a test in the loader's module that its own chip check (chip ID, version) accepts exactly what those entries are. The whole vendor: take it out of `listed_chips_only()`
 3. `vendor_for_usb()`: the vendor's USB VIDs. A VID other makers use too must be matched as `VID if pid == PID`, never as a whole: laptop modules under the module maker's VID (AzureWave 0x13D3, Foxconn 0x0489), and shared VIDs such as pid.codes 0x1209. Every VID listed here also makes `is_bluetooth_vendor_vid` treat that maker's devices as Bluetooth adapters. A VID:PID in BTstack's Realtek table or in `OEM_TABLE` (both in this file's `resolve_realtek_pid`) is taken as Realtek before `vendor_for_usb` is asked: check that yours is in neither
 4. `company_name()`: the Bluetooth SIG company ID from Read Local Version, if it is not there yet
 5. Tests: `app/src/crates/bt-host/tests/chips.rs` (the VID:PIDs and the tag)
@@ -228,12 +228,12 @@ Keep each file's line endings: some source files use CRLF, others LF. Some edito
 **What the window shows**:
 
 10. `app/src/core/src/state.rs`, `vendor_note()`: an arm with a new key `firmware.vendor_<vendor>`, out of the `MediaTek | Qualcomm` arm, and its test. The function answers `firmware.vendor_unsupported` before that for chips `chip_supported` refuses, so the vendor's other chips keep it. The Adapters screen offers WinUSB to every adapter whose note is not `firmware.vendor_unsupported`
-11. `app/lang/*.json` (all 8 languages, same line in each): the new key, as the Intel one ("… adapter (experimental). …"). Where it names a button or folder, use that language's own words from the same file (the firmware folder's button is `firmware.open_folder`). Whole vendor: take its name out of `firmware.vendor_unsupported`. Some chips: leave it there, as the vendor's other chips still show that text
+11. `app/lang/*.json` (all 8 languages, same line in each): the new key, as the Intel one ("Intel adapter. …"). Where it names a button or folder, use that language's own words from the same file (the firmware folder's button is `firmware.open_folder`). Whole vendor: take its name out of `firmware.vendor_unsupported`. Some chips: leave it there, as the vendor's other chips still show that text
 12. `app/src/ui/src/lib/links.ts`: the vendor's firmware page (in `LINKS`, `firmwareUrl()` and `vendorFirmwareUrl()`, as Intel's linux-firmware folder), so the Adapters screen shows where to get the files; tests in `app/src/ui/src/lib/chips.test.ts`. The Adapters screen shows the page only for adapters whose note is not `firmware.vendor_unsupported`, so the vendor's other chips do not get it
 
 **Docs**:
 
-13. The chip table in `docs/setup.md` and `docs/*/setup.md` (all languages): a row like Intel's, with the chips it covers, the firmware files and where they go (the firmware folder: `%APPDATA%\BlueCaster\firmware`, or its `<vendor>` subfolder; older rows still say "config folder") and *Experimental.* Name the window's buttons as each language's `app/lang/*.json` has them (`ui.nav.adapter` for the Adapters screen, `firmware.open_folder` for the button that opens that folder). Whole vendor: take it out of the "Not supported" row. Some chips: keep the vendor there and name the chips still not supported. Add the vendor to the sentence at the top of the Firmware section ("Intel and Broadcom adapters (experimental) may need firmware files of their own")
+13. The chip table in `docs/setup.md` and `docs/*/setup.md` (all languages): a row like Intel's, with the chips it covers, the firmware files and where they go (the firmware folder: `%APPDATA%\BlueCaster\firmware`, or its `<vendor>` subfolder; older rows still say "config folder"). Name the window's buttons as each language's `app/lang/*.json` has them (`ui.nav.adapter` for the Adapters screen, `firmware.open_folder` for the button that opens that folder). Whole vendor: take it out of the "Not supported" row. Some chips: keep the vendor there and name the chips still not supported. Add the vendor to the sentence at the top of the Firmware section ("Intel and Broadcom adapters may need firmware files of their own")
 14. [Verified Hardware](hardware) (`docs/hardware.md`) once someone has used it, and the opening of this page (`docs/chip-support.md`, all languages), which names the vendors without a loader (some chips: "the other <vendor> chips")
 
 ## Step 7: Try it on the adapter
@@ -282,4 +282,3 @@ In the pull request:
 - Base it on the current `develop-v*` branch
 - Say which adapters you tested (product, VID:PID, chip), cold start and warm, and attach a probe report and the HCI capture of a download
 - Say where the facts in the loader come from
-- The loader stays **experimental** until a few people have used it; the Adapters screen shows that tag

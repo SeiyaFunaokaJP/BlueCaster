@@ -27,16 +27,15 @@
 //! `driver_state` is read-only and needs none.
 //!
 //! Whether SetupDiBuildDriverInfoList offers winusb.inf (class USBDevice)
-//! for a device of another class (Bluetooth) varies (docs/v2-design.md
-//! phase 0; both paths have run on real adapters). If it does not, the class
-//! is changed to USBDevice first (what installing a driver of another class
-//! does anyway) and the list is built again; if that fails too, the device
-//! is put back as by `restore`.
+//! for a device of another class (Bluetooth) varies (both paths have run on
+//! real adapters). If it does not, the class is changed to USBDevice first
+//! (what installing a driver of another class does anyway) and the list is
+//! built again; if that fails too, the device is put back as by `restore`.
 
 use std::time::{Duration, Instant};
 
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
-    CM_Get_Parent, CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW, CM_REENUMERATE_SYNCHRONOUS, CM_Reenumerate_DevNode,
+    CM_Get_Parent, CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW, CM_REENUMERATE_ASYNCHRONOUS, CM_Reenumerate_DevNode,
     CR_SUCCESS, DI_ENUMSINGLEINF, DI_FLAGSEX_ALLOWEXCLUDEDDRVS, DI_NEEDREBOOT, DI_NEEDRESTART, DICS_FLAG_GLOBAL,
     DICS_PROPCHANGE, DIF_PROPERTYCHANGE, DIIDFLAG_NOFINISHINSTALLUI, DIREG_DEV, DiInstallDevice, DiUninstallDevice,
     SP_CLASSINSTALL_HEADER, SP_DEVINFO_DATA, SP_DEVINSTALL_PARAMS_W, SP_DRVINFO_DATA_V2_W, SP_DRVINFO_DETAIL_DATA_W,
@@ -771,13 +770,18 @@ fn uninstall_and_reenumerate(set: &DevInfoSet, data: &SP_DEVINFO_DATA, instance_
     });
     tracing::debug!("driver: uninstalling {instance_id} (parent devnode {parent:?})");
     let mut reboot = BOOL(0);
+    let start = Instant::now();
     // SAFETY: valid set and element; no window, default flags (the driver
     // package stays in the driver store).
     unsafe { DiUninstallDevice(HWND::default(), set.0, data, 0, Some(&mut reboot)) }
         .map_err(DriverError::win32("DiUninstallDevice"))?;
-    tracing::debug!("driver: DiUninstallDevice done, reboot {}", reboot.as_bool());
+    tracing::info!("driver: uninstalled in {} ms, reboot {}", start.elapsed().as_millis(), reboot.as_bool());
+    let start = Instant::now();
     let reenumerated = parent.is_some_and(reenumerate);
-    tracing::debug!("driver: re-enumerating the parent: {reenumerated}");
+    tracing::info!(
+        "driver: re-enumeration of the parent requested in {} ms: {reenumerated}",
+        start.elapsed().as_millis()
+    );
     if !reenumerated {
         // No parent known (the device was not present) or it failed: the
         // whole tree, as "Scan for hardware changes" does
@@ -791,9 +795,14 @@ fn uninstall_and_reenumerate(set: &DevInfoSet, data: &SP_DEVINFO_DATA, instance_
     Ok(reboot.as_bool())
 }
 
+/// Asks Windows to look for devices under `devinst` again, without waiting:
+/// `wait_for_driver` watches for the adapter itself. A synchronous request
+/// returns only once the whole subtree is done, which on a composite adapter
+/// (MediaTek's, issue #86) is the interfaces, the radio and a node per
+/// paired device.
 fn reenumerate(devinst: u32) -> bool {
     // SAFETY: a devinst from CM_Locate_DevNode / CM_Get_Parent.
-    let cr = unsafe { CM_Reenumerate_DevNode(devinst, CM_REENUMERATE_SYNCHRONOUS) };
+    let cr = unsafe { CM_Reenumerate_DevNode(devinst, CM_REENUMERATE_ASYNCHRONOUS) };
     if cr != CR_SUCCESS {
         tracing::debug!("driver: CM_Reenumerate_DevNode({devinst}) returned CR {}", cr.0);
     }
@@ -819,7 +828,7 @@ fn wait_for_driver(instance_id: &str) -> Option<DriverState> {
         {
             match state.problem_code {
                 None => {
-                    tracing::debug!("driver: {instance_id} back after {:?}", start.elapsed());
+                    tracing::info!("driver: back after {} ms", start.elapsed().as_millis());
                     return Some(state);
                 }
                 // A problem may only last while the driver starts; one that
@@ -827,9 +836,9 @@ fn wait_for_driver(instance_id: &str) -> Option<DriverState> {
                 Some(code) => {
                     let since = *problem_since.get_or_insert_with(Instant::now);
                     if since.elapsed() >= PROBLEM_SETTLE {
-                        tracing::debug!(
-                            "driver: {instance_id} back after {:?} with problem code {code}",
-                            start.elapsed()
+                        tracing::info!(
+                            "driver: back after {} ms with problem code {code}",
+                            start.elapsed().as_millis()
                         );
                         return Some(state);
                     }

@@ -4,29 +4,25 @@
 // source, default output switching), and a card to add one: scan for new
 // ones or type an address. Profiles then pick from this list.
 
-import { createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createSignal, onCleanup, onMount } from "solid-js";
 import { useApp } from "../app/context";
 import { saveSettings } from "../app/settings";
 import { Toggle } from "../components/controls";
 import { DevicePicker } from "../components/DevicePicker";
-import { DeviceSettings, HifiCableNote, VbCableNote } from "../components/DeviceSettings";
+import { CableNotes } from "../components/CableNotes";
+import { DeviceSettings } from "../components/DeviceSettings";
 import { t } from "../i18n";
-import { hifiCable, vbCable } from "../lib/profile";
+import type { AudioDevice } from "../ipc/types";
 
 export function Devices() {
   const { core } = useApp();
-  // Not installed, once Windows' list was read (installed meanwhile: gone
-  // when the window comes back); the microphone's cable once VB-Cable is
-  // there (issue #86)
-  const [noCable, setNoCable] = createSignal(false);
-  const [noHifi, setNoHifi] = createSignal(false);
+  // Windows' outputs, for the cables it lacks (installed meanwhile: read
+  // again when the window comes back)
+  const [devices, setDevices] = createSignal<AudioDevice[] | null>(null);
   const load = () =>
     core
       .request("audio.devices")
-      .then((list) => {
-        setNoCable(vbCable(list) === null);
-        setNoHifi(hifiCable(list) === null);
-      })
+      .then(setDevices)
       .catch(() => {});
   onMount(() => {
     void load();
@@ -38,16 +34,7 @@ export function Devices() {
       <header class="page-head">
         <h1>{t("ui.nav.devices")}</h1>
       </header>
-      <Show when={noCable()}>
-        <section class="card device-note">
-          <VbCableNote />
-        </section>
-      </Show>
-      <Show when={!noCable() && noHifi()}>
-        <section class="card device-note">
-          <HifiCableNote />
-        </section>
-      </Show>
+      <CableNotes devices={devices()} reload={() => void load()} wrap />
       <AllDevices />
       <DevicePicker manage address="" onPick={() => {}} settings={(d) => <DeviceSettings device={d} />} />
     </div>

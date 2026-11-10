@@ -72,7 +72,7 @@ BlueCaster/
 ├── Cargo.toml              Cargo workspace
 ├── installer/              Release script, Inno Setup script, updater notes (installer/README.md)
 ├── compat/                 MSVC compatibility headers for the AOSP code
-├── docs/                   Documentation (this site) and the design document (v2-design.md)
+├── docs/                   Documentation (this site)
 ├── extern/                 Third-party C libraries (git submodules)
 │   ├── btstack/            BTstack Bluetooth stack
 │   ├── libldac/            AOSP LDAC encoder
@@ -132,7 +132,7 @@ python tools/emu/run_test.py                        # every codec and negotiatio
 | 選項 | 說明 |
 |:-------|:------------|
 | `--codecs sbc aac ...` | 只測試這些轉碼器（`sbc sbcxq aac aptx aptxhd aptxll ldac lhdcv5 faststream opus opus05`）或協商案例（取樣率、低 bitpool、SBC 訊框設定、aptX Adaptive、...；`-h` 會列出）；預設：全部 |
-| `--le-audio [case ...]` | 改為執行 LE Audio（實驗性）案例（預設：全部） |
+| `--le-audio [case ...]` | 改為執行 LE Audio 案例（預設：全部） |
 | `--scan [case ...]` | 改為執行裝置掃描案例（`eir`、`name-request`） |
 | `--link [case ...]` | 改為執行連結案例（`disconnect`、`device-link`、`device-a2dp`、`device-stream`、`restart-on-link`） |
 | `--duration <s>` | 每種轉碼器的串流秒數（預設 5） |

@@ -359,6 +359,7 @@ pub(crate) fn stream_request(le: &LeRequest) -> (LeStreamRequest, bool) {
         request.preset_order = vec![p.clone()];
     }
     request.conversational = le.headset_mic.is_on();
+    request.source_rate = le.mic_rate;
     // The profile's choice (or --le-low-latency); an explicit preset wins
     let low_latency = le.low_latency && le.preset.is_none();
     (request, low_latency)
@@ -383,7 +384,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     }
     let mut le = req.le.clone().unwrap_or_default();
     let addr = bt_host::addr_str(&req.device);
-    tracing::info!("LE Audio (experimental) stream to {addr} ({})", crate::diag::quoted(&req.device_name));
+    tracing::info!("LE Audio stream to {addr} ({})", crate::diag::quoted(&req.device_name));
     tracing::debug!("le stream: request {req:?}");
     let stopped = || inner.stop_requested();
     let ready = || inner.notify(StreamState::Idle, Msg::new("status.ready"));
@@ -435,14 +436,31 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     devices.extend(le.extra_devices.iter().copied());
     tracing::debug!("le stream: devices {:?}", devices.iter().map(bt_host::addr_str).collect::<Vec<_>>());
 
-    // Connect (the address type comes from the advertisement) and stream
+    // Connect (the address type comes from the advertisement) and stream.
+    // A stream with the microphone the headphones refuse plays without it
+    // (issue #86: the microphone kept LE Audio from connecting at all), and
+    // so do the reconnects after it.
+    let mic_refused = std::cell::Cell::new(false);
     let connect_and_stream = || -> Result<LeStreamStarted, Msg> {
         inner.notify(StreamState::Connecting, Msg::new("status.connecting_device"));
         let t = Instant::now();
         let ids = connect_devices(&host, &devices, &req.device_name, &stopped)?;
         tracing::debug!("le stream: connected {ids:?} in {} ms, starting the stream", t.elapsed().as_millis());
         let t = Instant::now();
-        let r = host.le_start_stream(ids, request.clone(), &le_silence_set).map_err(|e| {
+        let mut asked = request.clone();
+        asked.conversational &= !mic_refused.get();
+        let mut r = host.le_start_stream(ids.clone(), asked.clone(), &le_silence_set);
+        if let Err(e) = &r
+            && asked.conversational
+            && !stopped()
+        {
+            tracing::warn!("LE Audio: the stream with the microphone failed ({e}): trying without it");
+            host.le_stop_stream();
+            mic_refused.set(true);
+            asked.conversational = false;
+            r = host.le_start_stream(ids, asked, &le_silence_set);
+        }
+        let r = r.map_err(|e| {
             tracing::debug!("le stream: start failed after {} ms: {e}", t.elapsed().as_millis());
             host.le_stop_stream();
             Msg::with("error.le_audio_stream", &[&e])
@@ -465,6 +483,9 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
             return if stopped() { ready() } else { inner.notify(StreamState::Error, m) };
         }
     };
+    if mic_refused.get() {
+        mic_note = Some(Msg::new("status.headset_mic_failed"));
+    }
 
     // Audio at the LC3 rate
     let switch_default = || match &req.source {
@@ -498,6 +519,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         let rate = plan.preset.sampling_hz;
         let format = audio.map(LeAudioPath::format);
         inner.set_le_stream(Some(details));
+        inner.mic_rates(plan.source.as_ref().map(|s| s.rates.clone()).unwrap_or_default());
         inner.stream_info(StreamInfo {
             codec: CODEC_NAME.into(),
             bitrate_kbps: plan.preset.kbps_per_channel() * channels,
@@ -1007,6 +1029,10 @@ mod tests {
         // Auto: the same (the conversational stream keeps the media preset)
         let (r, _) = stream_request(&LeRequest { headset_mic: bt_host::HeadsetMic::Auto, ..LeRequest::default() });
         assert!(r.conversational);
+        assert_eq!(r.source_rate, None);
+        // The microphone's rate chosen
+        let le = LeRequest { headset_mic: bt_host::HeadsetMic::On, mic_rate: Some(16000), ..LeRequest::default() };
+        assert_eq!(stream_request(&le).0.source_rate, Some(16000));
     }
 
     #[test]

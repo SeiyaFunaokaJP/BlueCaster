@@ -53,6 +53,25 @@ nav_order: 2.7
 
 协议版本必须完全一致。保持版本 1 可用的新增内容改为在 `features` 中公布（请参阅[兼容性](#compatibility)）。
 
+```mermaid
+sequenceDiagram
+    participant C as 客户端
+    participant B as bluecaster-core
+    C->>B: hello (protocol 1)
+    alt 协议一致
+        B-->>C: welcome (features)
+        B-->>C: snapshot (全部状态，rev)
+        loop 连接期间（顺序不定）
+            B-->>C: event (rev + 1)
+            C->>B: request (id)
+            B-->>C: response (相同 id)
+        end
+        B-->>C: bye (核心关闭时)
+    else 协议不一致，或 5 秒内没有 hello
+        B-->>C: reject, 关闭管道
+    end
+```
+
 ## 状态与事件 {#state-and-events}
 
 ```json

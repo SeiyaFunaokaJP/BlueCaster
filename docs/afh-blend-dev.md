@@ -5,7 +5,7 @@ nav_exclude: true
 english_only: true
 ---
 
-# AFH Blend (experimental) - developer note
+# AFH Blend - developer note
 
 **Blend** is an AFH policy next to Auto, Off and Manual, offered only in
 developer mode (`blend-mild`, `blend-medium`, `blend-strong`; without

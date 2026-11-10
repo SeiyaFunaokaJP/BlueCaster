@@ -269,8 +269,10 @@ const STREAM: &str = "bluecaster_core::stream";
 const CAPTURE: &str = "audio_capture";
 const LE_STREAM: &str = "bluecaster_core::le_stream";
 const LE_ENCODER: &str = "pipeline::le";
-/// An LE Audio (experimental) stream's first line
-const LE_START: &str = "LE Audio (experimental) stream to ";
+/// An LE Audio stream's first line
+const LE_START: &str = "LE Audio stream to ";
+/// The same line in logs of 3.0.0-beta.4 and older
+const LE_START_OLD: &str = "LE Audio (experimental) stream to ";
 
 use Action as A;
 use DetailFrom as D;
@@ -477,7 +479,7 @@ impl ConnectionFlow {
         let start = if target_matches(target, STREAM) {
             message.starts_with("stream: device ").then_some("stream: device ")
         } else {
-            (target_matches(target, LE_STREAM) && message.starts_with(LE_START)).then_some(LE_START)
+            [LE_START, LE_START_OLD].into_iter().find(|s| target_matches(target, LE_STREAM) && message.starts_with(s))
         };
         if let Some(needle) = start {
             let id = self.session.id + 1;
@@ -1382,7 +1384,7 @@ fn le_audio_section(out: &mut String, s: &Settings, le: Option<&LeAudioDiag>) {
     if !s.le_audio_experimental && le.is_none() {
         return;
     }
-    out.push_str("\n[LE Audio (experimental)]\n");
+    out.push_str("\n[LE Audio]\n");
     let _ = writeln!(
         out,
         "  Setting: {}, low latency {}; BTstack LE {}",
@@ -1793,7 +1795,7 @@ mod tests {
         let mut f = ConnectionFlow::new();
         #[rustfmt::skip]
         feed(&mut f, &[
-            (1000, LE_STREAM, Level::INFO, "LE Audio (experimental) stream to 00:A2:D0:00:00:12 (\u{201C}Buds\u{201D})"),
+            (1000, LE_STREAM, Level::INFO, "LE Audio stream to 00:A2:D0:00:00:12 (\u{201C}Buds\u{201D})"),
             (1010, API, Level::INFO, "LE Audio: connecting to 00:A2:D0:00:00:12 (address type 0)"),
             (1020, API, Level::WARN, "LE Audio: connecting to 00:A2:D0:00:00:12 failed: cancelled"),
             (1100, API, Level::INFO, "LE Audio: connecting to 00:A2:D0:00:00:12 (address type 0)"),
@@ -2502,7 +2504,7 @@ mod tests {
         le_settings.le_audio_experimental = true;
         input.settings = &le_settings;
         let text = diag_text(&input);
-        assert!(text.contains("[LE Audio (experimental)]\n  Setting: on, low latency off; BTstack LE not running\n\n"));
+        assert!(text.contains("[LE Audio]\n  Setting: on, low latency off; BTstack LE not running\n\n"));
         let le = LeAudioDiag {
             stream: Some("LC3 48 kHz 10 ms 100 octets (80 kbps/ch), 2 ch over 2 CIS, 48_4_2".into()),
             stats: Some(bt_host::LeStreamStats {

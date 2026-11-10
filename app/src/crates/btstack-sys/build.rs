@@ -380,7 +380,7 @@ fn patched_avrcp_target(btstack: &Path) -> PathBuf {
 /// with Secure Connections, BlueCaster as Central asks the device over the
 /// BR/EDR security manager channel (CID 7) for its IRK and identity
 /// address, and both sides derive the LE LTK from the link key. That runs
-/// only while the shim says so (bluecaster_ctkd_enabled: developer mode;
+/// only while the shim says so (bluecaster_ctkd_enabled: always since issue #86;
 /// SM itself runs only with LE Audio on), after a new pairing (BTstack's
 /// own trigger) or on a connection of a device with no keys from it yet
 /// (bluecaster_ctkd_wanted). A device that does not list CID 7 is not

@@ -68,6 +68,8 @@ pub(crate) struct Setup {
     pub realtek_pid: u16,
     /// Realtek firmware / config file stems (no extension) of the chip
     pub realtek_files: Option<(String, String)>,
+    /// HostConfig::realtek_firmware_file
+    pub realtek_firmware_file: Option<PathBuf>,
     pub broadcom_ids: Vec<(u16, u16)>,
     /// HFP audio gateway for the headphones' battery level
     pub battery: bool,
@@ -326,7 +328,7 @@ impl HostApp {
     /// firmware running the loader is done after one command.
     pub fn start_intel_loader(&mut self, stack: &Stack) {
         let dir = self.setup.firmware_dir.clone();
-        tracing::info!("Intel adapter: checking bootloader firmware (experimental), folder {}", dir.display());
+        tracing::info!("Intel adapter: checking bootloader firmware, folder {}", dir.display());
         let loader = intel::Loader::new(Box::new(move |name| read_firmware_file(&dir, "intel", name)));
         self.start_loader(stack, Box::new(loader));
     }
@@ -335,7 +337,7 @@ impl HostApp {
     /// init: the firmware folder first, then MediaTek's Windows driver
     pub fn start_mediatek_loader(&mut self, stack: &Stack) {
         let dir = self.setup.firmware_dir.clone();
-        tracing::info!("MediaTek adapter: checking its firmware (experimental), folder {}", dir.display());
+        tracing::info!("MediaTek adapter: checking its firmware, folder {}", dir.display());
         let loader = mediatek::Loader::new(Box::new(move |name| {
             read_firmware_file(&dir, "mediatek", name).or_else(|| mediatek::from_windows_driver(name))
         }));
@@ -350,7 +352,7 @@ impl HostApp {
     /// init: the firmware folder first, then Qualcomm's Windows driver
     pub fn start_qualcomm_loader(&mut self, stack: &Stack) {
         let dir = self.setup.firmware_dir.clone();
-        tracing::info!("Qualcomm adapter: checking its firmware (experimental), folder {}", dir.display());
+        tracing::info!("Qualcomm adapter: checking its firmware, folder {}", dir.display());
         let loader = qualcomm::Loader::new(Box::new(move |name| {
             read_firmware_file(&dir, "qca", name).or_else(|| qualcomm::from_windows_driver(name))
         }));
@@ -362,7 +364,7 @@ impl HostApp {
     /// first, then the driver
     pub fn start_realtek_driver_loader(&mut self, stack: &Stack, chip: &'static str, file: &'static str) {
         let dir = self.setup.firmware_dir.clone();
-        tracing::info!("Realtek {chip}: checking its firmware (experimental), folder {}", dir.display());
+        tracing::info!("Realtek {chip}: checking its firmware, folder {}", dir.display());
         let loader = realtek_btnic::Loader::new(
             Box::new(move |name| {
                 read_firmware_file(&dir, "realtek", name).or_else(|| realtek_btnic::from_windows_driver(name))
@@ -544,7 +546,15 @@ impl HostApp {
                 remove_alias(&self.setup.firmware_dir, &fw);
                 remove_alias(&self.setup.firmware_dir, &cfg);
             }
-            stack.realtek_setup(pid, &self.setup.firmware_dir.to_string_lossy());
+            let driver_fw = self.setup.realtek_firmware_file.as_ref().map(|p| p.to_string_lossy().into_owned());
+            if let Some(p) = &self.setup.realtek_firmware_file {
+                tracing::info!(
+                    "Realtek firmware from Realtek's Windows driver ({}, {} bytes)",
+                    p.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
+                    std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+                );
+            }
+            stack.realtek_setup(pid, &self.setup.firmware_dir.to_string_lossy(), driver_fw.as_deref());
             stack.set_chipset_realtek();
         } else {
             tracing::info!("no Realtek PID configured, skipping the Realtek chipset init");
@@ -582,6 +592,7 @@ impl HostApp {
         // (headset microphone, developer mode) also the audio connection
         if self.setup.battery || self.setup.voice {
             stack.hfp_ag_init(self.setup.voice);
+            self.voice.on_ag_init();
         }
         // LE Audio (experimental, off by default): SM, GATT client / server,
         // ISO. Nothing of it runs while the setting is off.
@@ -603,6 +614,7 @@ impl HostApp {
         self.shared.update(|s| {
             s.power_on_at = Some(Instant::now());
             s.realtek_rom = false;
+            s.hci_version_settled = false;
         });
         tracing::info!("hci_init done, powering on");
         if stack.power_on().is_err() {
@@ -629,7 +641,9 @@ impl HostApp {
             return Vec::new();
         };
         let dir = &self.setup.firmware_dir;
-        [Some(fw), with_config.then_some(cfg)]
+        // Realtek's Windows driver's file stands in for the firmware
+        let fw = self.setup.realtek_firmware_file.is_none().then_some(fw);
+        [fw, with_config.then_some(cfg)]
             .into_iter()
             .flatten()
             // The driver also takes the extension-less file alone
@@ -653,6 +667,7 @@ impl HostApp {
                 "Realtek firmware download ran (ROM LMP subversion 0x{:04X}); not verified",
                 self.rtk_lmp_first
             );
+            self.shared.update(|s| s.hci_version_settled = true);
         }
     }
 
@@ -1505,6 +1520,8 @@ impl HostApp {
     fn on_working(&mut self, stack: &Stack) {
         let elapsed = self.init_started.elapsed().as_millis();
         tracing::info!("HCI ready (took {elapsed} ms)");
+        // A Realtek download read back below settles the HCI version later
+        let mut verifying = false;
         tracing::debug!(
             "realtek check: pid 0x{:04X}, version seen {}, first LMP subversion 0x{:04X} (ROM {})",
             self.setup.realtek_pid,
@@ -1534,6 +1551,7 @@ impl HostApp {
                 } else {
                     // HCI init read the version only before the download
                     self.rtk_verify_tries = RTK_VERIFY_TRIES;
+                    verifying = true;
                     self.verify_realtek_download(stack);
                 }
             } else if let Some(company) = self.controller_company.filter(|&c| c != COMPANY_ID_REALTEK) {
@@ -1555,7 +1573,7 @@ impl HostApp {
         // (set to go before reset, the MediaTek loader sent it already)
         self.debug_command = crate::debug_command::get()
             .filter(|_| self.controller_company == Some(0x0046) && !crate::debug_command::before_reset());
-        crate::le::iso_send::debug_depth_for_controller(self.controller_company == Some(0x0046));
+        crate::le::iso_send::depth_for_controller(self.controller_company == Some(0x0046));
         self.send_debug_command(stack);
         let le_audio_capable = stack.controller_iso() == Some(true);
         tracing::info!(
@@ -1567,6 +1585,9 @@ impl HostApp {
             s.hci_off = false;
             s.le_audio_capable = le_audio_capable;
             s.init_done = Some(Ok(()));
+            if !verifying {
+                s.hci_version_settled = true;
+            }
         });
         self.afh_ticks = 0;
         self.afh_policy_version_seen = None;
@@ -1610,6 +1631,7 @@ impl HostApp {
             self.rtk_version_seen = true;
             if self.rtk_verify_pending {
                 self.rtk_verify_pending = false;
+                self.shared.update(|s| s.hci_version_settled = true);
                 if is_realtek_rom_lmp(lmp_subver) {
                     tracing::warn!(
                         "Realtek firmware NOT loaded (LMP subversion 0x{lmp_subver:04X} is the ROM code); check the firmware files"
@@ -1643,7 +1665,7 @@ impl HostApp {
         );
         match find_bcm_hcd(&self.setup.firmware_dir, &self.setup.broadcom_ids) {
             Some(path) => {
-                tracing::info!("Broadcom PatchRAM {} (experimental)", path.display());
+                tracing::info!("Broadcom PatchRAM {}", path.display());
                 stack.set_chipset_bcm(&path.to_string_lossy());
             }
             None => tracing::info!(

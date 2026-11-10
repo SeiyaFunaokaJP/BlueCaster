@@ -42,6 +42,7 @@ const audio = (id: string, is_default: boolean, mix_rate: number | null, mix_bit
   mix_channels: 2,
   mix_bits,
   capture_name: null,
+  capture_rate: null,
 });
 
 describe("addresses", () => {
@@ -101,10 +102,20 @@ describe("LE Audio entries", () => {
     expect(knownCodecs([le("F4:4E:FD:00:11:22"), ...list], "F4:4E:FD:00:11:22")).toEqual(["sbc", "aac"]);
   });
 
-  it("are listed only with LE Audio (experimental) on, as v1", () => {
+  it("are listed only with LE Audio on, as v1", () => {
     const list = [dev("AC:80:0A:12:34:56", []), le("F4:4E:FD:00:11:22")];
     expect(listedDevices(list, false).map(deviceKey)).toEqual(["AC:80:0A:12:34:56"]);
     expect(listedDevices(list, true)).toHaveLength(2);
+  });
+
+  it("list a dual-mode device once, its LE Audio entry, saved when either side is (issue #86)", () => {
+    const classic = { ...dev("F4:4E:FD:00:11:22", []), name: "Buds", saved: true };
+    const list = [classic, { ...le("f4:4e:fd:00:11:22"), name: "" }];
+    expect(listedDevices(list, false)).toEqual([classic]);
+    const [one, ...rest] = listedDevices(list, true);
+    expect(rest).toHaveLength(0);
+    expect(deviceKey(one)).toBe("F4:4E:FD:00:11:22/le");
+    expect(one).toMatchObject({ name: "Buds", saved: true, le_audio: true });
   });
 
   it("name a new profile \"<device> LE Audio\" (v1)", () => {

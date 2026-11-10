@@ -192,6 +192,8 @@ fn to_ipc_profile(p: &CoreProfile, legacy: u16) -> Profile {
         mic_device_id: p.mic_device_id.clone(),
         mic_device_name: p.mic_device_name.clone(),
         mic_muted: p.mic_muted,
+        voice_codec: p.voice_codec.clone(),
+        mic_rate: p.mic_rate,
         sbc_bitpool: p.sbc_bitpool,
         sbcxq_bitpool: p.sbcxq_bitpool,
         sbc_min_bitpool: p.sbc_min_bitpool,
@@ -272,6 +274,9 @@ fn merge_profile(base: Option<&CoreProfile>, p: &Profile) -> CoreProfile {
     c.mic_device_id = p.mic_device_id.clone();
     c.mic_device_name = p.mic_device_name.clone();
     c.mic_muted = p.mic_muted;
+    // A call codec not known reads as none chosen
+    c.voice_codec = bluecaster_core::VoiceCodec::from_name(&p.voice_codec).map_or(String::new(), |v| v.name().into());
+    c.mic_rate = p.mic_rate;
     c.sbc_bitpool = p.sbc_bitpool;
     c.sbcxq_bitpool = p.sbcxq_bitpool;
     c.sbc_min_bitpool = p.sbc_min_bitpool;
@@ -316,9 +321,12 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
         include_alphas: s.include_alphas,
         media_keys: s.media_keys,
         auto_reconnect: s.auto_reconnect,
+        vb_cable_note_hidden: s.vb_cable_note_hidden,
+        hifi_cable_note_hidden: s.hifi_cable_note_hidden,
         volume_sync: s.volume_sync,
         mute_output: s.mute_output,
         volume_mixer: s.volume_mixer,
+        all_audio_devices: s.all_audio_devices,
         developer_mode: s.debug_mode,
         dev_overrides: DevOverrides {
             rtp_marker: s.dev_overrides.rtp_marker,
@@ -357,13 +365,14 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
             health_every_interval: s.dev_log.health_every_interval,
         },
         dev_debug: ipc::DevDebug {
-            mtk_iso_interface: s.dev_debug.mtk_iso_interface,
+            mtk_iso_bulk: s.dev_debug.mtk_iso_bulk,
             mtk_iso_pad: s.dev_debug.mtk_iso_pad,
             mtk_command: s.dev_debug.mtk_command.clone(),
             mtk_iso_queue: s.dev_debug.mtk_iso_queue,
             mtk_command_before_reset: s.dev_debug.mtk_command_before_reset,
             mtk_register: s.dev_debug.mtk_register.clone(),
             le_keys_to_windows: s.dev_debug.le_keys_to_windows,
+            realtek_driver_firmware: s.dev_debug.realtek_driver_firmware,
         },
         bt_chip_pid: s.bt_chip_pid,
         bt_chip_fw_stem: s.bt_chip_fw_stem.clone(),
@@ -371,7 +380,6 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
         remote_sink: s.remote_sink.clone(),
         le_audio_experimental: s.le_audio_experimental,
         le_audio_low_latency: s.le_audio_low_latency,
-        experimental_codecs: s.experimental_codecs,
         auto_codec: s.auto_codec,
     }
 }
@@ -404,9 +412,12 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
     c.include_alphas = s.include_alphas;
     c.media_keys = s.media_keys;
     c.auto_reconnect = s.auto_reconnect;
+    c.vb_cable_note_hidden = s.vb_cable_note_hidden;
+    c.hifi_cable_note_hidden = s.hifi_cable_note_hidden;
     c.volume_sync = s.volume_sync;
     c.mute_output = s.mute_output;
     c.volume_mixer = s.volume_mixer;
+    c.all_audio_devices = s.all_audio_devices;
     c.debug_mode = s.developer_mode;
     c.dev_overrides = codec::dev::DevOverrides {
         rtp_marker: s.dev_overrides.rtp_marker,
@@ -458,13 +469,14 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
     }
     .clamped();
     c.dev_debug = bluecaster_core::settings::DevDebug {
-        mtk_iso_interface: s.dev_debug.mtk_iso_interface,
+        mtk_iso_bulk: s.dev_debug.mtk_iso_bulk,
         mtk_iso_pad: s.dev_debug.mtk_iso_pad.min(hci_transport::iso_intr::PAD_MAX as u16),
         mtk_command: s.dev_debug.mtk_command.trim().to_string(),
         mtk_iso_queue: s.dev_debug.mtk_iso_queue.min(12),
         mtk_command_before_reset: s.dev_debug.mtk_command_before_reset,
         mtk_register: s.dev_debug.mtk_register.trim().to_string(),
         le_keys_to_windows: s.dev_debug.le_keys_to_windows,
+        realtek_driver_firmware: s.dev_debug.realtek_driver_firmware,
     };
     c.bt_chip_pid = s.bt_chip_pid;
     c.bt_chip_fw_stem = s.bt_chip_fw_stem.clone();
@@ -472,7 +484,6 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
     c.remote_sink = s.remote_sink.clone();
     c.le_audio_experimental = s.le_audio_experimental;
     c.le_audio_low_latency = s.le_audio_low_latency;
-    // experimental_codecs: always on (issue #86), as loaded
     c.auto_codec = s.auto_codec;
     c
 }
@@ -620,12 +631,16 @@ fn adapter_infos(config_dir: &Path, settings: &CoreSettings) -> Vec<AdapterInfo>
                     .and_then(|r| r.address.clone())
                     .or_else(|| bluecaster_core::adapter::address(config_dir, a.device.vid, a.device.pid))
                     .or_else(|| bluecaster_core::adapter::serial_address(a.vendor, &a.device.instance_id)),
-                bt_version: radio
-                    .as_ref()
-                    .and_then(|r| r.hci_version)
-                    .or_else(|| bluecaster_core::adapter::hci_version(config_dir, a.device.vid, a.device.pid))
-                    .and_then(bluecaster_core::adapter::bt_core_version)
-                    .map(str::to_owned),
+                // The running firmware's: on WinUSB BlueCaster's own read
+                // (issue #427: the firmware it loaded, not Windows' driver's)
+                bt_version: bluecaster_core::adapter::shown_hci_version(
+                    driver == DriverKind::Winusb,
+                    radio.as_ref().and_then(|r| r.hci_version),
+                    bluecaster_core::adapter::hci_version(config_dir, a.device.vid, a.device.pid),
+                    bluecaster_core::adapter::windows_hci_version(config_dir, a.device.vid, a.device.pid),
+                )
+                .and_then(bluecaster_core::adapter::bt_core_version)
+                .map(str::to_owned),
                 // An adapter already on WinUSB when BlueCaster came to know
                 // radios: the device's own product string, as Device
                 // Manager shows it (the WinUSB INF only names it "WinUSB
@@ -1226,9 +1241,7 @@ fn connected_balloon(lang: &str, device: Option<&str>, stream: &StreamStatus) ->
     lines.push(i.codec.clone());
     lines.push(codec_params(&i.codec, i.bitrate_kbps, i.sample_rate, i.bits, i.abr));
     if let Some(req) = &i.requested_codec {
-        let (key, default) = if stream.message.key == "status.connected_fallback_experimental" {
-            ("ui.codec.fallback_experimental", "(%s is experimental)")
-        } else if stream.message.key == "status.connected_fallback_developer" {
+        let (key, default) = if stream.message.key == "status.connected_fallback_developer" {
             ("ui.codec.fallback_developer", "(%s needs developer mode)")
         } else if i.requested_in_use {
             ("ui.codec.fallback_in_use", "(%s is in use)")
@@ -1297,7 +1310,7 @@ fn voice_line(lang: &str, codec: &str) -> String {
     let name = match codec {
         "cvsd" => tr("codec.cvsd", "CVSD"),
         "msbc" => tr("codec.msbc", "mSBC"),
-        "lc3_swb" => tr("codec.lc3_swb", "LC3-SWB"),
+        "lc3_swb" => tr("codec.lc3_swb", "LC3"),
         "lc3" => "LC3".to_string(),
         other => other.to_string(),
     };
@@ -1306,12 +1319,55 @@ fn voice_line(lang: &str, codec: &str) -> String {
 
 /// A tray menu item: the device, its LE Audio entry tagged as in the
 /// flyout ("WF-1000XM5 (LE Audio)")
+/// The profiles the tray offers, one per device as the window lists it
+/// (issue #86): with LE Audio on, a device with an LE Audio profile by that
+/// one alone; off, no LE Audio profile
+fn tray_profiles(profiles: &[Profile], le_on: bool) -> Vec<&Profile> {
+    profiles
+        .iter()
+        .filter(|p| {
+            if !le_on {
+                return !p.le_audio;
+            }
+            p.le_audio
+                || !profiles.iter().any(|o| o.le_audio && o.device_address.eq_ignore_ascii_case(&p.device_address))
+        })
+        .collect()
+}
+
 fn tray_label(device: &str, le_audio: bool, le_tag: &str) -> String {
     if le_audio { format!("{device} ({le_tag})") } else { device.to_string() }
 }
 
 /// A saved profile is the one streaming or connecting (under its name before
 /// the save): it is started again with the new settings
+/// The profile that connects after LE Audio was turned on or off while
+/// `in_use` streamed (issue #86): the same device's LE Audio profile when it
+/// is on, its classic one when it is off; `in_use` when the device has no
+/// such profile (one that cannot stream says why)
+fn le_switched_profile(list: &[CoreProfile], in_use: &CoreProfile, le_on: bool) -> String {
+    if in_use.le_audio == le_on {
+        return in_use.name.clone();
+    }
+    list.iter()
+        .find(|p| p.le_audio == le_on && p.device_address.eq_ignore_ascii_case(&in_use.device_address))
+        .map_or_else(|| in_use.name.clone(), |p| p.name.clone())
+}
+
+/// The LE Audio side's profile of a device made from its classic profile
+/// `classic` (its capture and device settings), named "<device> LE Audio"
+fn le_side_profile(list: &[CoreProfile], classic: &CoreProfile) -> CoreProfile {
+    let device = if classic.device_name.is_empty() { &classic.device_address } else { &classic.device_name };
+    let base = format!("{device} LE Audio");
+    let mut name = base.clone();
+    let mut n = 2;
+    while list.iter().any(|p| p.name == name) {
+        name = format!("{base} ({n})");
+        n += 1;
+    }
+    CoreProfile { name, le_audio: true, ..classic.clone() }
+}
+
 fn restart_after_save(stream: &StreamStatus, saved: &str) -> bool {
     matches!(stream.state, StreamState::Connecting | StreamState::Streaming | StreamState::Reconnecting)
         && stream.profile.as_deref() == Some(saved)
@@ -1381,8 +1437,8 @@ fn codec_named_in_place(stream: &StreamStatus, before: Option<&CoreProfile>, sav
     as_before == *b
 }
 
-/// A new classic profile left on Auto without a microphone output gets the
-/// Hi-Fi Cable's, else VB-CABLE's (issue #86), unless its capture source is
+/// A new classic profile left on Auto without a microphone output gets
+/// VB-CABLE's, else the Hi-Fi Cable's (issue #86), unless its capture source is
 /// that cable (the microphone would loop into the stream). LE Audio takes Auto as On, so
 /// its profiles get none by themselves.
 fn default_mic_output(p: &mut CoreProfile) {
@@ -1391,8 +1447,9 @@ fn default_mic_output(p: &mut CoreProfile) {
     }
     let devices = audio_capture::render_devices().unwrap_or_default();
     let default_output = devices.iter().find(|d| d.is_default).map_or("", |d| d.id.as_str());
-    // The Hi-Fi Cable first: VB-CABLE then stays free for the sound
-    let Some(cable) = [hifi_cable(&devices), default_cable(&devices)]
+    // VB-CABLE first: the Hi-Fi Cable, with less delay, stays free for the
+    // sound
+    let Some(cable) = [default_cable(&devices), hifi_cable(&devices)]
         .into_iter()
         .flatten()
         .find(|c| profiles::mic_output_conflicts(&p.source(), &c.id, default_output).is_none())
@@ -1428,8 +1485,18 @@ fn set_headset_mic(req: &mut StreamRequest, mode: HeadsetMic, mic_device_id: &st
     }
 }
 
-/// What a save that changed only the headset mode or the microphone output
-/// of the profile in use does to its stream
+/// The microphone's codec chosen into a profile's request, with Auto-select
+/// (`auto_select`) off: the best call codec (classic), the microphone's rate
+/// (LE Audio). Auto-select on: Auto for both, the choice stays saved.
+fn set_mic_codec(req: &mut StreamRequest, p: &CoreProfile, auto_select: bool) {
+    req.voice_codec = p.voice_codec_in_force(auto_select);
+    if let Some(le) = req.le.as_mut().filter(|le| le.broadcast.is_none()) {
+        le.mic_rate = p.mic_rate_in_force(auto_select);
+    }
+}
+
+/// What a save that changed only the headset mode, the microphone output or
+/// the microphone's codec of the profile in use does to its stream
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HeadsetChange {
     /// Nothing the stream uses: the microphone output changed while
@@ -1448,8 +1515,15 @@ fn is_mic_note(key: &str) -> bool {
     matches!(key, "error.headset_mic_loop" | "status.headset_mic_failed" | "status.headset_mic_output_failed")
 }
 
-/// The save changed only `headset_mic` / `mic_device_*` (None: something else
-/// changed as well, or nothing)
+/// Whether the microphone's codec chosen on a profile matters to its stream:
+/// headset mode in force and a call codec (classic) or microphone rate (LE
+/// Audio) chosen. Auto-select turned on or off then changes what it uses.
+fn mic_choice_matters(p: &CoreProfile) -> bool {
+    headset_mic_in_force(p).is_on() && if p.le_audio { p.mic_rate != 0 } else { !p.voice_codec.is_empty() }
+}
+
+/// The save changed only `headset_mic` / `mic_device_*` / the microphone's
+/// codec (None: something else changed as well, or nothing)
 fn headset_change(stream: &StreamStatus, before: Option<&CoreProfile>, saved: &CoreProfile) -> Option<HeadsetChange> {
     let before = before.filter(|b| b.only_headset_mic_differs(saved))?;
     Some(if !before.headset_mic_mode().is_on() && !saved.headset_mic_mode().is_on() {
@@ -1759,11 +1833,12 @@ impl CoreState {
             base
         };
         let le = bluecaster_core::messages::translate(&lang, "device.tag_le_audio", "LE Audio");
-        let labels = s.profiles.iter().map(|p| tray_label(device_name(&s.devices, p), p.le_audio, &le)).collect();
+        let shown = tray_profiles(&s.profiles, s.settings.le_audio_experimental);
+        let labels = shown.iter().map(|p| tray_label(device_name(&s.devices, p), p.le_audio, &le)).collect();
         (self.tray)(TrayView {
             streaming,
             tooltip,
-            profiles: s.profiles.iter().map(|p| p.name.clone()).collect(),
+            profiles: shown.iter().map(|p| p.name.clone()).collect(),
             labels,
             active_profile: s.active_profile.clone(),
             language: lang,
@@ -1850,6 +1925,7 @@ impl CoreState {
                     stream.battery_refused = false;
                     stream.voice = None;
                     stream.voice_codecs.clear();
+                    stream.mic_rates.clear();
                 }
                 if matches!(state, CoreStreamState::Idle | CoreStreamState::Error) {
                     stream.info = None;
@@ -1858,6 +1934,7 @@ impl CoreState {
                     stream.battery_refused = false;
                     stream.voice = None;
                     stream.voice_codecs.clear();
+                    stream.mic_rates.clear();
                     if state == CoreStreamState::Idle {
                         stream.profile = None;
                     }
@@ -1951,12 +2028,16 @@ impl CoreState {
             }
             // A report that arrives after the device went off (HFP still
             // closing) is not shown on a device no longer connected
-            ServiceEvent::Battery(_) | ServiceEvent::BatteryRefused | ServiceEvent::VoiceCodecs(_)
+            ServiceEvent::Battery(_)
+            | ServiceEvent::BatteryRefused
+            | ServiceEvent::VoiceCodecs(_)
+            | ServiceEvent::MicRates(_)
                 if matches!(stream.state, StreamState::Idle | StreamState::Error) =>
             {
                 tracing::debug!("battery report while not connected: ignored");
             }
             ServiceEvent::VoiceCodecs(codecs) => stream.voice_codecs = codecs,
+            ServiceEvent::MicRates(rates) => stream.mic_rates = rates,
             ServiceEvent::BatteryRefused => {
                 stream.battery = None;
                 stream.battery_refused = true;
@@ -2049,23 +2130,30 @@ impl CoreState {
         Ok(Value::Null)
     }
 
-    /// VB-Cable that came after it was missing is taken into use, one time
-    /// (issue #86): a device the user set up otherwise before stays as it is
-    pub fn watch_vb_cable(&self, devices: &[audio_capture::DeviceInfo]) {
+    /// VB-CABLE that came after it was missing is taken into use, one time
+    /// (issue #86): for the sound where the Hi-Fi Cable is not there (the
+    /// profiles that capture System Loopback), else for the microphone (the
+    /// classic profiles whose microphone has no working output). A device
+    /// the user set up otherwise before stays as it is.
+    fn watch_vb_cable(&self, devices: &[audio_capture::DeviceInfo]) {
         let mut s = self.service.settings();
         match (vb_cable(devices), s.awaiting_vb_cable) {
             (None, false) => s.awaiting_vb_cable = true,
-            (Some(cable), true) => {
+            (Some(_), true) => {
                 s.awaiting_vb_cable = false;
+                let cable = default_cable(devices).expect("VB-CABLE is there");
                 let mut list = profiles::load(&self.config_dir());
-                let changed = profiles::use_virtual_device(&mut list, &cable.id, &cable.name);
-                tracing::info!("VB-Cable found: {changed} profile(s) capture it now");
-                let active = Some(s.last_profile.clone()).filter(|n| list.iter().any(|p| &p.name == n));
-                if changed > 0
-                    && let Err(e) = self.save_profiles(&list, active)
-                {
-                    tracing::warn!("VB-Cable: profiles not saved: {}", e.code);
-                }
+                let changed = if hifi_cable(devices).is_some() {
+                    let default_output = devices.iter().find(|d| d.is_default).map_or("", |d| d.id.as_str());
+                    let n = profiles::use_mic_cable(&mut list, &cable.id, &cable.name, default_output);
+                    tracing::info!("VB-Cable found: {n} profile(s) play the microphone into it now");
+                    n
+                } else {
+                    let n = profiles::use_virtual_device(&mut list, &cable.id, &cable.name);
+                    tracing::info!("VB-Cable found: {n} profile(s) capture it now");
+                    n
+                };
+                self.save_found_cable(&list, &s, changed, "VB-Cable");
             }
             _ => return,
         }
@@ -2073,16 +2161,17 @@ impl CoreState {
         self.service.set_settings(s);
     }
 
-    /// The virtual cables taken into use when they come (issue #86): VB-CABLE
-    /// for the sound, then the Hi-Fi Cable for the microphone
+    /// The virtual cables taken into use when they come (issue #86): the
+    /// Hi-Fi Cable for the sound (less delay), VB-CABLE for the microphone
     pub fn watch_cables(&self, devices: &[audio_capture::DeviceInfo]) {
         self.watch_vb_cable(devices);
         self.watch_hifi_cable(devices);
     }
 
-    /// The Hi-Fi Cable that came after it was missing takes the microphone
-    /// of the classic profiles whose microphone had no working output, one
-    /// time: one that works stays, as apps record from it
+    /// The Hi-Fi Cable that came after it was missing, one time: the profiles
+    /// that capture System Loopback capture it, then the classic profiles
+    /// whose microphone had no working output play it there (one that works
+    /// stays, as apps record from it)
     fn watch_hifi_cable(&self, devices: &[audio_capture::DeviceInfo]) {
         let mut s = self.service.settings();
         match (hifi_cable(devices), s.awaiting_hifi_cable) {
@@ -2091,19 +2180,27 @@ impl CoreState {
                 s.awaiting_hifi_cable = false;
                 let default_output = devices.iter().find(|d| d.is_default).map_or("", |d| d.id.as_str());
                 let mut list = profiles::load(&self.config_dir());
-                let changed = profiles::use_mic_cable(&mut list, &cable.id, &cable.name, default_output);
-                tracing::info!("Hi-Fi Cable found: {changed} profile(s) play the microphone into it now");
-                let active = Some(s.last_profile.clone()).filter(|n| list.iter().any(|p| &p.name == n));
-                if changed > 0
-                    && let Err(e) = self.save_profiles(&list, active)
-                {
-                    tracing::warn!("Hi-Fi Cable: profiles not saved: {}", e.code);
-                }
+                let sound = profiles::use_virtual_device(&mut list, &cable.id, &cable.name);
+                let mic = profiles::use_mic_cable(&mut list, &cable.id, &cable.name, default_output);
+                tracing::info!(
+                    "Hi-Fi Cable found: {sound} profile(s) capture it, {mic} play the microphone into it now"
+                );
+                self.save_found_cable(&list, &s, sound + mic, "Hi-Fi Cable");
             }
             _ => return,
         }
         let _ = s.save(&self.config_dir());
         self.service.set_settings(s);
+    }
+
+    /// The profiles a cable that came changed, saved (`changed` > 0)
+    fn save_found_cable(&self, list: &[CoreProfile], s: &CoreSettings, changed: usize, what: &str) {
+        let active = Some(s.last_profile.clone()).filter(|n| list.iter().any(|p| &p.name == n));
+        if changed > 0
+            && let Err(e) = self.save_profiles(list, active)
+        {
+            tracing::warn!("{what}: profiles not saved: {}", e.code);
+        }
     }
 
     fn save_settings(&self, s: CoreSettings) -> Result<(), ErrorInfo> {
@@ -2227,7 +2324,6 @@ impl CoreState {
             .unwrap_or(p)
             .to_request(settings.legacy_max_media_payload())
             .map_err(|_| err("profile.invalid_address", "error.invalid_address"))?;
-        req.experimental_codecs = settings.experimental_codecs;
         req.developer_codecs = settings.debug_mode;
         req.volume_sync = effective_volume_sync(settings.volume_sync, req.volume_sync);
         req.mute_output = settings.mutes_output();
@@ -2251,6 +2347,8 @@ impl CoreState {
         // conversational configuration and renders the microphone, with the
         // same refusal (le_stream.rs)
         set_headset_mic(&mut req, headset_mic, &p.mic_device_id);
+        // The microphone's codec chosen, as the codec: only with Auto-select off
+        set_mic_codec(&mut req, p, settings.auto_codec);
         self.set_active_profile(Some(name.to_string()));
         self.begin_stream(req, Some(name.to_string()));
         Ok(())
@@ -2260,7 +2358,6 @@ impl CoreState {
     pub fn start_custom(&self, c: &CustomStream) -> Result<(), ErrorInfo> {
         let settings = self.service.settings();
         let mut req = custom_request(c, settings.legacy_max_media_payload())?;
-        req.experimental_codecs = settings.experimental_codecs;
         req.developer_codecs = settings.debug_mode;
         req.mute_output = settings.mutes_output();
         tracing::info!("custom stream to {}: codec {}, source {}", c.device, c.codec, req.source);
@@ -2302,6 +2399,7 @@ impl CoreState {
             battery: None,
             battery_refused: false,
             voice_codecs: Vec::new(),
+            mic_rates: Vec::new(),
             voice: None,
             codec_stop: None,
         }));
@@ -2327,6 +2425,17 @@ impl CoreState {
     /// and a second save right behind it (Home turns Auto-select off, then
     /// saves the codec) is one restart, not two (issue #86: a second restart
     /// broke off the first one's connection)
+    /// The adapter's state after the stack was shut down to start again
+    fn publish_adapter_stopped(&self) {
+        let (_, s) = self.snapshot();
+        self.publish(Event::Adapter(AdapterState {
+            status: AdapterStatus::Stopped,
+            error: None,
+            rom_firmware: false,
+            ..s.adapter
+        }));
+    }
+
     fn restart_profile(&self, name: &str) -> Result<(), ErrorInfo> {
         self.restarting.store(true, Ordering::Release);
         let r = self.start_profile(name);
@@ -2886,8 +2995,11 @@ impl CoreState {
                         // capture; false (no stream, or a stack without
                         // voice): it starts again instead
                         let mode = headset_mic_in_force(&in_order);
-                        let kept =
-                            self.service.set_headset_mic(mode, mode.is_on().then(|| in_order.mic_device_id.clone()));
+                        let kept = self.service.set_headset_mic(
+                            mode,
+                            mode.is_on().then(|| in_order.mic_device_id.clone()),
+                            in_order.voice_codec_in_force(auto_select),
+                        );
                         // Another output or mode: the session tries again
                         // and says so anew if it still cannot
                         let mut stream = self.with_snapshot(|s| s.stream.clone());
@@ -3010,8 +3122,12 @@ impl CoreState {
                             }
                             restart_for_auto(&s.stream, p) && !same
                         };
+                        // An LE Audio microphone's rate chosen: set up again
+                        let mic_changes = |p: &CoreProfile| {
+                            p.le_audio && mic_choice_matters(p) && restart_after_save(&s.stream, &p.name)
+                        };
                         let restart = |p: &&CoreProfile| {
-                            (auto_toggled && auto_changes(p))
+                            (auto_toggled && (auto_changes(p) || mic_changes(p)))
                                 || (sync_toggled && restart_after_save(&s.stream, &p.name))
                         };
                         // Auto-select turned on after the codec stopped the
@@ -3034,6 +3150,23 @@ impl CoreState {
                                 bluecaster_core::diag::quoted(&p.name)
                             );
                             me.restart_profile(&p.name.clone())?;
+                        } else if let Some(p) = in_use.filter(|p| auto_toggled && !p.le_audio && mic_choice_matters(p))
+                        {
+                            // A call codec chosen: the classic stream's
+                            // voice link takes Auto's or the chosen one in
+                            // place, or the profile starts again
+                            let mode = headset_mic_in_force(p);
+                            let codec = p.voice_codec_in_force(settings.auto_codec);
+                            if !me.service.set_headset_mic(mode, Some(p.mic_device_id.clone()), codec)
+                                && restart_after_save(&s.stream, &p.name)
+                            {
+                                tracing::info!(
+                                    "Auto-select {}: the call codec of profile {} changes, it starts again",
+                                    if settings.auto_codec { "on" } else { "off" },
+                                    bluecaster_core::diag::quoted(&p.name)
+                                );
+                                me.restart_profile(&p.name.clone())?;
+                            }
                         }
                     }
                     // Developer mode off while one of its codecs streams
@@ -3048,8 +3181,47 @@ impl CoreState {
                             me.restart_profile(&name)?;
                         }
                     }
+                    // LE Audio on / off while a device is connected (issue
+                    // #86): the stack starts again at once, and the device
+                    // connects again over what is now on (its LE Audio
+                    // profile, or its classic one)
+                    if le_toggled {
+                        let (_, s) = me.snapshot();
+                        let list = profiles::load(&me.config_dir());
+                        let in_use = s
+                            .stream
+                            .profile
+                            .as_deref()
+                            .filter(|n| restart_after_save(&s.stream, n))
+                            .and_then(|n| list.iter().find(|p| p.name == n));
+                        if let Some(p) = in_use {
+                            let le_on = me.service.settings().le_audio_experimental;
+                            let mut next = le_switched_profile(&list, p, le_on);
+                            // An LE Audio side saved (a scan found it) without
+                            // its profile yet: one from the classic one
+                            let le_saved = bluecaster_core::devices::load_le(&me.config_dir())
+                                .iter()
+                                .any(|d| d.address.eq_ignore_ascii_case(&p.device_address));
+                            if le_on && next == p.name && !p.le_audio && le_saved {
+                                let made = le_side_profile(&list, p);
+                                next = made.name.clone();
+                                let mut all = list.clone();
+                                all.push(made);
+                                let active = s.active_profile.clone();
+                                me.save_profiles(&all, active)?;
+                            }
+                            tracing::info!(
+                                "LE Audio {}: Bluetooth starts again, profile {} connects",
+                                if le_on { "on" } else { "off" },
+                                bluecaster_core::diag::quoted(&next)
+                            );
+                            me.service.restart_adapter();
+                            me.publish_adapter_stopped();
+                            me.restart_profile(&next)?;
+                        }
+                    }
                     // LE Audio on / off waits for the next scan or connection
-                    // while the stack is in use (v1's deferred text)
+                    // while the stack is in use otherwise (v1's deferred text)
                     let le_audio_deferred = le_toggled && me.service.le_audio_deferred();
                     Ok(json(&SettingsApplied { le_audio_deferred }))
                 }))
@@ -3084,18 +3256,11 @@ impl CoreState {
             Method::AdapterRestart => {
                 blocking(Box::new(|me| {
                     let again = me.service.restart_adapter();
-                    let (_, s) = me.snapshot();
-                    me.publish(Event::Adapter(AdapterState {
-                        status: AdapterStatus::Stopped,
-                        error: None,
-                        rom_firmware: false,
-                        ..s.adapter
-                    }));
+                    me.publish_adapter_stopped();
                     // The device streamed before connects again on the new
                     // stack, with the same profile (issue #86)
                     if let Some(mut req) = again {
                         let settings = me.service.settings();
-                        req.experimental_codecs = settings.experimental_codecs;
                         req.developer_codecs = settings.debug_mode;
                         let profile = me.starting_profile.lock().unwrap_or_else(|e| e.into_inner()).clone();
                         me.begin_stream(req, profile);
@@ -3239,10 +3404,22 @@ impl CoreState {
                                 is_default: d.is_default,
                                 is_virtual: d.is_virtual,
                                 capture_name: d.capture_name,
+                                capture_rate: d.capture_rate,
                             }
                         })
                         .collect();
                     Ok(json(&list))
+                }))
+                .await
+            }
+            Method::AudioInstallVbCable => {
+                blocking(Box::new(|me| {
+                    let found = crate::vb_cable::install()?;
+                    // Taken into use as any VB-CABLE that comes (watch_cables)
+                    if let Ok(d) = audio_capture::render_devices() {
+                        me.watch_cables(&d);
+                    }
+                    Ok(json(&found))
                 }))
                 .await
             }
@@ -3565,6 +3742,7 @@ mod tests {
             is_default: false,
             is_virtual: virt,
             capture_name: None,
+            capture_rate: None,
         };
         let list = [
             dev("spk", "Speakers (Realtek(R) Audio)", false),
@@ -3835,6 +4013,17 @@ mod tests {
         assert_eq!(device_name(&[], &unnamed), "AA:BB:CC:DD:EE:FF");
         assert_eq!(tray_label("Air Pro 4+", true, "LE Audio"), "Air Pro 4+ (LE Audio)");
         assert_eq!(tray_label("Air Pro 4+", false, "LE Audio"), "Air Pro 4+");
+        // One per device (issue #86)
+        let p = |name: &str, addr: &str, le_audio| Profile {
+            name: name.into(),
+            device_address: addr.into(),
+            le_audio,
+            ..to_ipc_profile(&CoreProfile::default(), 0)
+        };
+        let list = [p("Buds", "AA:01", false), p("Buds LE Audio", "aa:01", true), p("XM4", "AA:02", false)];
+        let names = |le| tray_profiles(&list, le).iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(true), ["Buds LE Audio", "XM4"]);
+        assert_eq!(names(false), ["Buds", "XM4"]);
     }
 
     #[test]
@@ -3927,10 +4116,66 @@ mod tests {
     }
 
     #[test]
+    fn the_microphone_codec_chosen_reaches_the_request_with_auto_select_off() {
+        let classic = CoreProfile {
+            name: "WH".into(),
+            device_address: "00:A2:D0:00:00:12".into(),
+            headset_mic: "on".into(),
+            mic_device_id: "{cable}".into(),
+            voice_codec: "cvsd".into(),
+            ..CoreProfile::default()
+        };
+        let mut req = classic.to_request(1000).unwrap();
+        set_mic_codec(&mut req, &classic, false);
+        assert_eq!(req.voice_codec, Some(bluecaster_core::VoiceCodec::Cvsd));
+        set_mic_codec(&mut req, &classic, true);
+        assert_eq!(req.voice_codec, None);
+        assert!(mic_choice_matters(&classic));
+        assert!(!mic_choice_matters(&CoreProfile { voice_codec: String::new(), ..classic.clone() }));
+        assert!(!mic_choice_matters(&CoreProfile { headset_mic: "off".into(), ..classic.clone() }));
+        // LE Audio: the microphone's rate
+        let le = CoreProfile { le_audio: true, mic_rate: 16000, ..classic };
+        let mut req = le.to_request(1000).unwrap();
+        set_mic_codec(&mut req, &le, false);
+        assert_eq!((req.voice_codec, req.le.as_ref().unwrap().mic_rate), (None, Some(16000)));
+        set_mic_codec(&mut req, &le, true);
+        assert_eq!(req.le.as_ref().unwrap().mic_rate, None);
+        assert!(mic_choice_matters(&le));
+        // The UI's value as saved: a call codec not known is none chosen
+        let saved = merge_profile(None, &Profile { voice_codec: "lc3".into(), ..to_ipc_profile(&le, 1000) });
+        assert_eq!(saved.voice_codec, "");
+    }
+
+    #[test]
+    fn le_audio_switched_connects_the_same_device_over_the_other_stack() {
+        let mk = |name: &str, addr: &str, le: bool| CoreProfile {
+            name: name.into(),
+            device_address: addr.into(),
+            le_audio: le,
+            ..CoreProfile::default()
+        };
+        let list = vec![
+            mk("Buds", "AA:BB:CC:DD:EE:01", false),
+            mk("Buds LE Audio", "aa:bb:cc:dd:ee:01", true),
+            mk("Other", "AA:BB:CC:DD:EE:02", false),
+        ];
+        assert_eq!(le_switched_profile(&list, &list[0], true), "Buds LE Audio");
+        assert_eq!(le_switched_profile(&list, &list[1], false), "Buds");
+        // Nothing to switch to: the same one
+        assert_eq!(le_switched_profile(&list, &list[2], true), "Other");
+        assert_eq!(le_switched_profile(&list, &list[0], false), "Buds");
+        // The LE Audio side's profile made from the classic one
+        let other = CoreProfile { device_name: "Other".into(), ..list[2].clone() };
+        let made = le_side_profile(&list, &other);
+        assert_eq!((made.name.as_str(), made.le_audio), ("Other LE Audio", true));
+        assert_eq!(made.device_address, "AA:BB:CC:DD:EE:02");
+    }
+
+    #[test]
     fn the_tray_names_the_voice_codec() {
         assert_eq!(voice_line("en", "msbc"), "Voice: mSBC");
         assert_eq!(voice_line("en", "cvsd"), "Voice: CVSD");
-        assert_eq!(voice_line("en", "lc3_swb"), "Voice: LC3-SWB");
+        assert_eq!(voice_line("en", "lc3_swb"), "Voice: LC3");
         assert_eq!(voice_line("en", "lc3"), "Voice: LC3");
     }
 

@@ -11,7 +11,7 @@ has_toc: false
 適用於 Windows、支援所有轉碼器的藍牙 A2DP 音訊串流工具。
 {: .fs-6 .fw-300 }
 
-把一般的藍牙介面卡（便宜的 USB 介面卡，或許多筆電的內建介面卡）從 Windows 只給的基本轉碼器，變成 Hi-Fi 發射器：**LHDC V5、LDAC 與 aptX Adaptive** 最高 96 kHz（LHDC V5 最高 192 kHz），以及 **aptX、AAC、SBC XQ 與 SBC**。實驗性：**aptX HD、aptX Low Latency、Opus、FastStream 與 LE Audio（LC3）**。BlueCaster 會自行設定介面卡，一鍵即可交還給 Windows（[運作方式](architecture)）。
+把一般的藍牙介面卡（便宜的 USB 介面卡，或許多筆電的內建介面卡）從 Windows 只給的基本轉碼器，變成 Hi-Fi 發射器：**LHDC V5、LDAC 與 aptX Adaptive** 最高 96 kHz（LHDC V5 最高 192 kHz），以及 **aptX HD、aptX、aptX Low Latency、Opus、AAC、SBC XQ、SBC 與 FastStream**，還有 LE Audio（LC3）。BlueCaster 會自行設定介面卡，一鍵即可交還給 Windows（[運作方式](architecture)）。
 
 ![BlueCaster's Codecs screen, streaming LDAC 990 kbps / 48 kHz to Sony WH-1000XM4](../images/app_sample.png)
 
@@ -27,17 +27,17 @@ has_toc: false
 | LHDC V5 | 400/500/900/1000 kbps，ABR 160--400 kbps | 44.1/48/96/192 kHz | 16/24 bit | -- |
 | LDAC | 330/660/990 kbps | 44.1--96 kHz | 16/24/32 bit | 約 200 ms |
 | aptX Adaptive | 265/427 kbps（96 kHz：646） | 48/96 kHz | 24 bit | -- |
-| Opus 🧪 | 256 kbps | 48 kHz | 16 bit | -- |
-| aptX HD 🧪 | 576 kbps | 44.1/48 kHz | 24 bit | 約 150 ms |
+| Opus | 256 kbps | 48 kHz | 16 bit | -- |
+| aptX HD | 576 kbps | 44.1/48 kHz | 24 bit | 約 150 ms |
 | aptX | 352/384 kbps | 44.1/48 kHz | 16 bit | -- |
-| aptX Low Latency 🧪 | 352 kbps | 44.1/48 kHz | 16 bit | 約 32 ms |
+| aptX Low Latency | 352 kbps | 44.1/48 kHz | 16 bit | 約 32 ms |
 | AAC | 最高 256 kbps | 44.1/48 kHz | 16 bit | 約 150 ms |
 | SBC XQ | 約 385/505/552 kbps | 44.1/48 kHz | 16 bit | 約 150 ms |
 | SBC | 最高約 345 kbps | 44.1/48 kHz | 16 bit | 約 150 ms |
-| FastStream 🧪 | 198/216 kbps | 44.1/48 kHz | 16 bit | -- |
-| Opus 05 🧪 | 256 kbps | 48 kHz | 16 bit | -- |
-| LC3（LE Audio） 🧪 | 每聲道 32--124 kbps | 16/24/32/48 kHz | 16 bit | 約 140 ms |
-| LC3 低延遲（LE Audio GMAP） 🧪 | 每聲道 64--96 kbps | 32/48 kHz | 16 bit | 約 30 ms |
+| FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | -- |
+| Opus 05 | 256 kbps | 48 kHz | 16 bit | -- |
+| LC3（LE Audio） | 每聲道 32--124 kbps | 16/24/32/48 kHz | 16 bit | 約 140 ms |
+| LC3 低延遲（LE Audio GMAP） | 每聲道 64--96 kbps | 32/48 kHz | 16 bit | 約 30 ms |
 
 ### 各平台的轉碼器支援（傳送到耳機）
 
@@ -46,33 +46,33 @@ has_toc: false
 | LHDC V5 | ❌ | ❌ | ❌ | ✅ |
 | LDAC | ❌ | ❌ | ✅ | ✅ |
 | aptX Adaptive | ❌ | ❌ | ❌ | ✅ |
-| Opus（Android 的 A2DP Opus） | ❌ | ❌ | ✅ PipeWire 1.2+（`opus_g`）；Ubuntu 24.04（PipeWire 1.0.5）中沒有 | 🧪 實驗性 |
-| aptX HD | ❌ | ❌ | ✅ | 🧪 實驗性 |
+| Opus（Android 的 A2DP Opus） | ❌ | ❌ | ✅ PipeWire 1.2+（`opus_g`）；Ubuntu 24.04（PipeWire 1.0.5）中沒有 | ✅ |
+| aptX HD | ❌ | ❌ | ✅ | ✅ |
 | aptX | ✅ | ✅ | ✅ | ✅ |
-| aptX Low Latency | ❌ | ❌ | ✅ | 🧪 實驗性 |
+| aptX Low Latency | ❌ | ❌ | ✅ | ✅ |
 | AAC | ❌ | ✅ | ❌ 不在 Ubuntu 的套件中 | ✅ |
 | SBC XQ | ❌ | ❌ | ✅ | ✅（SBC 允許雙聲道且 bitpool ≥ 29 的接收端） |
 | SBC | ✅ | ✅ | ✅ | ✅ |
-| FastStream | ❌ | ❌ | ✅ | 🧪 實驗性（僅限音樂，需明確選擇） |
-| Opus 05（PipeWire 自有的 Opus） | ❌ | ❌ | ✅ PipeWire 0.3.57+（`opus_05`，僅限 PipeWire 裝置） | 🧪 實驗性（需明確選擇，僅限開發人員模式） |
-| LC3（LE Audio，BAP 單播） | ❌ | ✅ 僅限藍牙硬體與驅動程式支援 LE Audio 的 PC | ✅ PipeWire BAP `lc3`（BlueZ LE Audio） | 🧪 實驗性（裝置的 LE Audio 項目；電競耳機使用 GMAP 低延遲；需要支援 ISO 的 Bluetooth 5.2 介面卡，[使用方式](usage#le-audio)） |
+| FastStream | ❌ | ❌ | ✅ | ✅（僅限音樂，需明確選擇） |
+| Opus 05（PipeWire 自有的 Opus） | ❌ | ❌ | ✅ PipeWire 0.3.57+（`opus_05`，僅限 PipeWire 裝置） | ✅（需明確選擇，僅限開發人員模式） |
+| LC3（LE Audio，BAP 單播） | ❌ | ✅ 僅限藍牙硬體與驅動程式支援 LE Audio 的 PC | ✅ PipeWire BAP `lc3`（BlueZ LE Audio） | ✅（裝置的 LE Audio 項目；電競耳機使用 GMAP 低延遲；需要支援 ISO 的 Bluetooth 5.2 介面卡，[使用方式](usage#le-audio)） |
 
-✅ 支援 · 🧪 實驗性 · ❌ 不支援。所有欄位皆為傳送端（PC → 耳機）。「內建」指不使用 BlueCaster 時作業系統本身的藍牙音訊；Ubuntu 欄位為 Ubuntu 26.04 的 PipeWire 轉碼器組合（`libspa-0.2-bluetooth`）。
+✅ 支援 · ❌ 不支援。所有欄位皆為傳送端（PC → 耳機）。「內建」指不使用 BlueCaster 時作業系統本身的藍牙音訊；Ubuntu 欄位為 Ubuntu 26.04 的 PipeWire 轉碼器組合（`libspa-0.2-bluetooth`）。
 
 {: .warning }
-**aptX HD 與 aptX Low Latency 為實驗性功能。** 兩者依照 Android / PipeWire 的實作，並通過編碼/解碼往返測試，但尚未在實際耳機上驗證。此表中的延遲值為典型數值，並非以 BlueCaster 實測。
+**aptX HD 與 aptX Low Latency** 依照 Android / PipeWire 的實作，並通過編碼/解碼往返測試，但尚未在實際耳機上驗證。此表中的延遲值為典型數值，並非以 BlueCaster 實測。
 
 {: .warning }
 **關於 LHDC V5。** 它使用 Google 加入 Android 17 的 LHDC V5 編碼器（AOSP，Apache-2.0）的 C 語言移植版；此移植版已與 AOSP 的 Rust 編碼器比對驗證為位元完全一致，A2DP 訊號則依照 Android 的 `a2dp_vendor_lhdcv5`。已有使用者在 v1.1.1-beta.1 上以實際的 LHDC V5 耳機驗證，可在 1000 kbps / 192 kHz 下運作（[#50](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/50)）；v2 使用相同的編碼器。僅支援有損的 LHDC V5：LHDC V2/V3（較舊的耳機）與無損的「LHDC-RAW」模式沒有開放原始碼的編碼器。在「自動」模式下，LHDC V5 的優先順序最高，高於 LDAC。
 
 {: .warning }
-**Opus 為實驗性功能。** 這是 Android 的 A2DP Opus 廠商轉碼器（Android 13 以上，廠商 ID 0x000000E0 Google）：48 kHz、20 ms 訊框，依 Android 的要求以 256 kbps 立體聲傳送（標準 192 kbps、行動 128 kbps），使用 libopus 1.5.2 編碼。它通過了針對虛擬接收端的端對端測試，但尚未在實際的 Opus 耳機上驗證。在「自動」模式下，其優先順序低於 aptX Adaptive，高於 aptX HD。
+**Opus** 是 Android 的 A2DP Opus 廠商轉碼器（Android 13 以上，廠商 ID 0x000000E0 Google）：48 kHz、20 ms 訊框，依 Android 的要求以 256 kbps 立體聲傳送（標準 192 kbps、行動 128 kbps），使用 libopus 1.5.2 編碼。它通過了針對虛擬接收端的端對端測試，但尚未在實際的 Opus 耳機上驗證。在「自動」模式下，其優先順序低於 aptX Adaptive，高於 aptX HD。
 
 {: .warning }
-**Opus 05 為實驗性功能，尚未在實際裝置上驗證。** 這是 PipeWire 自有的 A2DP Opus 廠商轉碼器（廠商 ID 0x000005F1，轉碼器 0x1005；PipeWire 的 `opus_05`），只有 PipeWire 實作了它，因此接收端必須是以 PipeWire 作為 A2DP 接收端的 PC。BlueCaster 只傳送立體聲音樂方向（沒有 5.1 / 7.1，也沒有回傳通道）：48 kHz、10 ms 訊框（接收端只支援 20 ms 時用 20 ms），編碼器與位元率和 Opus 相同，並限制在接收端的上限以內。「自動」不會選擇它；請在 **編解碼器** 畫面或用 `-c opus05` 選擇。它已通過針對提供 PipeWire 能力的虛擬接收端的端對端測試，但尚未在實際的 PipeWire 接收端上試過。作為 A2DP 接收端的 PipeWire 自 0.3.57 起可解碼 Opus 05，自 1.2.0 起可解碼 Android 的 Opus（`opus_g`）：Ubuntu 24.04 LTS 內附 PipeWire 1.0.5（僅 Opus 05），Ubuntu 25.10（1.4.7）與 26.04 LTS（1.6.2）兩者皆有；兩者都尚未用 BlueCaster 驗證。
+**Opus 05** 是 PipeWire 自有的 A2DP Opus 廠商轉碼器（廠商 ID 0x000005F1，轉碼器 0x1005；PipeWire 的 `opus_05`），只有 PipeWire 實作了它，因此接收端必須是以 PipeWire 作為 A2DP 接收端的 PC。BlueCaster 只傳送立體聲音樂方向（沒有 5.1 / 7.1，也沒有回傳通道）：48 kHz、10 ms 訊框（接收端只支援 20 ms 時用 20 ms），編碼器與位元率和 Opus 相同，並限制在接收端的上限以內。「自動」不會選擇它；請在 **編解碼器** 畫面或用 `-c opus05` 選擇。它已通過針對提供 PipeWire 能力的虛擬接收端的端對端測試，但尚未在實際的 PipeWire 接收端上試過。作為 A2DP 接收端的 PipeWire 自 0.3.57 起可解碼 Opus 05，自 1.2.0 起可解碼 Android 的 Opus（`opus_g`）：Ubuntu 24.04 LTS 內附 PipeWire 1.0.5（僅 Opus 05），Ubuntu 25.10（1.4.7）與 26.04 LTS（1.6.2）兩者皆有；兩者都尚未用 BlueCaster 驗證。
 
 {: .warning }
-**SBC XQ** 已用 Sony WH-1000XM4 驗證（雙聲道，48 kHz 下 bitpool 43，552 kbps）。拒絕該設定的接收端會改用一般 SBC 重新連線。**FastStream 為實驗性功能：**它已通過針對虛擬接收端的端對端測試，但尚未用實際的 FastStream 耳機試過。僅支援音樂方向；「自動」不會選擇它。
+**SBC XQ** 已用 Sony WH-1000XM4 驗證（雙聲道，48 kHz 下 bitpool 43，552 kbps）。拒絕該設定的接收端會改用一般 SBC 重新連線。**FastStream** 已通過針對虛擬接收端的端對端測試，但尚未用實際的 FastStream 耳機試過。僅支援音樂方向；「自動」不會選擇它。
 
 {: .note }
 **只需要傳統 aptX？** Windows 10 的內建藍牙堆疊已支援傳統 aptX（不含 aptX HD、aptX LL 或 aptX Adaptive），因此不需要 BlueCaster。BlueCaster 主要適用於 LHDC V5、LDAC、aptX Adaptive、aptX HD 與 aptX Low Latency。
@@ -133,7 +133,7 @@ flowchart TD
     s2["虛擬裝置"]
     s3["應用程式（處理程序回送）"]
     s1 & s2 & s3 --> cap["WASAPI 回送擷取 (PCM)"]
-    cap --> enc["音訊編碼器: LDAC / aptX 系列 / LHDC V5 / Opus / AAC / SBC"]
+    cap --> enc["音訊編碼器:<br>LDAC / aptX 系列 / LHDC V5 / Opus / AAC / SBC"]
     enc --> bt["BTstack: A2DP Source → AVDTP → L2CAP → HCI"]
     bt --> usb["WinUSB → USB 藍牙介面卡"]
     usb -.-> hp["耳機"]
@@ -143,8 +143,8 @@ BlueCaster 完全繞過 Windows 藍牙堆疊。它透過 WinUSB 直接與 USB �
 
 ## 功能
 
-- **多轉碼器**：LHDC V5、LDAC、aptX Adaptive、aptX、AAC、SBC XQ、SBC 及（實驗性的）aptX HD / aptX Low Latency / Opus / Opus 05 / FastStream，自動協商
-- **LE Audio（實驗性）**：以 LC3 傳送到 LE Audio 耳機與耳塞式耳機（BAP 單播、一對耳機的左右兩耳、耳機音量、媒體按鍵、GMAP 低延遲）。需要支援 Bluetooth 5.2 等時通道的介面卡；只在藍牙模擬器上測試過，尚未在實際的 LE Audio 耳機上確認（請參閱[使用方式](usage#le-audio)）
+- **多轉碼器**：LHDC V5、LDAC、aptX Adaptive、aptX、AAC、aptX HD、aptX Low Latency、Opus、Opus 05、FastStream、SBC XQ 及 SBC，自動協商
+- **LE Audio**：以 LC3 傳送到 LE Audio 耳機與耳塞式耳機（BAP 單播、一對耳機的左右兩耳、耳機音量、媒體按鍵、GMAP 低延遲）。需要支援 Bluetooth 5.2 等時通道的介面卡；目前已在 MediaTek MT7925 與藍牙模擬器上測試過（請參閱[使用方式](usage#le-audio)）
 - **三種擷取模式**：系統回送、虛擬音訊裝置路由，或單一應用程式的輸出
 - **視窗、系統匣與 CLI**：用於設定與診斷的視窗、日常連線用的系統匣快顯視窗與選單，以及命令列（請參閱 [使用方式](usage)）
 - **應用程式內的 WinUSB 設定**：為介面卡指派 WinUSB 驅動程式，並可還原原本的驅動程式，不需要 Zadig（請參閱 [安裝設定](setup#winusb)）；Windows 透過此介面卡配對的耳機不必重新配對即可連線

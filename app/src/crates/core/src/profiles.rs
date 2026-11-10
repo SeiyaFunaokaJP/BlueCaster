@@ -68,6 +68,9 @@ fn is_false(b: &bool) -> bool {
 fn is_zero(n: &u8) -> bool {
     *n == 0
 }
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -183,6 +186,15 @@ pub struct Profile {
     /// unmuting (written only when muted)
     #[serde(default, skip_serializing_if = "is_false")]
     pub mic_muted: bool,
+    /// Classic devices: the call codec chosen with Auto-select off
+    /// ("cvsd", "msbc", "lc3_swb"; "" = none, written only when chosen):
+    /// the best the voice link may use ([`Profile::voice_codec_in_force`])
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub voice_codec: String,
+    /// LE Audio: the microphone's sampling rate chosen with Auto-select off
+    /// (Hz; 0 = none, written only when chosen)
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub mic_rate: u32,
     /// The settings of the other codecs, by codec key, as they were last
     /// chosen: choosing one of them again brings them back (the codec in
     /// use has its own in the fields above)
@@ -236,6 +248,8 @@ impl Default for Profile {
             mic_device_id: String::new(),
             mic_device_name: String::new(),
             mic_muted: false,
+            voice_codec: String::new(),
+            mic_rate: 0,
             codec_settings: BTreeMap::new(),
             codec_order: Vec::new(),
             other: BTreeMap::new(),
@@ -450,24 +464,39 @@ impl Profile {
         same == *new && self.bitpools() != new.bitpools()
     }
 
-    /// `new` is this profile with another headset mode, microphone output
-    /// or mute and nothing else changed
+    /// `new` is this profile with another headset mode, microphone output,
+    /// mute or microphone codec (call codec, LE Audio microphone rate) and
+    /// nothing else changed
     pub fn only_headset_mic_differs(&self, new: &Profile) -> bool {
         let same = Profile {
             headset_mic: new.headset_mic.clone(),
             mic_device_id: new.mic_device_id.clone(),
             mic_device_name: new.mic_device_name.clone(),
             mic_muted: new.mic_muted,
+            voice_codec: new.voice_codec.clone(),
+            mic_rate: new.mic_rate,
             ..self.clone()
         };
-        same == *new
-            && (&self.headset_mic, &self.mic_device_id, &self.mic_device_name, self.mic_muted)
-                != (&new.headset_mic, &new.mic_device_id, &new.mic_device_name, new.mic_muted)
+        // Only those fields left to differ, and they do
+        same == *new && *self != *new
     }
 
     /// The headset mode as saved, Off while the microphone is muted
     pub fn headset_mic_mode(&self) -> HeadsetMic {
         if self.mic_muted { HeadsetMic::Off } else { HeadsetMic::parse(&self.headset_mic) }
+    }
+
+    /// The call codec chosen, while Auto-select (`auto_select`) is off:
+    /// the best the voice link may use. None: Auto (also for an LE Audio
+    /// profile, or a name not known).
+    pub fn voice_codec_in_force(&self, auto_select: bool) -> Option<voice_link::VoiceCodec> {
+        if auto_select || self.le_audio { None } else { voice_link::VoiceCodec::from_name(&self.voice_codec) }
+    }
+
+    /// LE Audio: the microphone's rate chosen, while Auto-select is off.
+    /// None: Auto.
+    pub fn mic_rate_in_force(&self, auto_select: bool) -> Option<u32> {
+        (!auto_select && self.le_audio && self.mic_rate != 0).then_some(self.mic_rate)
     }
 
     /// Why headset mode must not run with this profile's microphone output:
@@ -520,9 +549,7 @@ impl Profile {
             codec_fallback: true,
             codec_forced: self.codec_forced,
             unlisted_options: self.unlisted_options,
-            // The setting's, filled in by whoever starts the stream
-            experimental_codecs: true,
-            // Settings' developer_mode, filled in the same way
+            // Settings' developer_mode, filled in by whoever starts the stream
             developer_codecs: false,
             auto_order: self.order(),
             quality: Quality::from_key(&self.quality),
@@ -559,6 +586,7 @@ impl Profile {
             // app's start_profile)
             headset_mic: HeadsetMic::Off,
             mic_output: None,
+            voice_codec: None,
         })
     }
 }
@@ -1122,6 +1150,33 @@ mod tests {
         assert!(auto.only_headset_mic_differs(&muted));
         let back: Profile = serde_json::from_value(serde_json::to_value(&muted).unwrap()).unwrap();
         assert!(back.mic_muted && back.headset_mic == "auto");
+    }
+
+    #[test]
+    fn the_microphone_codec_chosen_counts_only_with_auto_select_off() {
+        let p = Profile::default();
+        let out = serde_json::to_value(&p).unwrap();
+        assert!(out.get("voice_codec").is_none() && out.get("mic_rate").is_none());
+        assert_eq!(p.voice_codec_in_force(false), None);
+        let msbc = Profile { voice_codec: "msbc".into(), ..p.clone() };
+        assert_eq!(serde_json::to_value(&msbc).unwrap()["voice_codec"], "msbc");
+        assert_eq!(msbc.voice_codec_in_force(false), Some(voice_link::VoiceCodec::Msbc));
+        // Auto-select on: Auto, the choice kept
+        assert_eq!(msbc.voice_codec_in_force(true), None);
+        assert_eq!(Profile { voice_codec: "lc3".into(), ..p.clone() }.voice_codec_in_force(false), None);
+        // A change of it alone goes the headset microphone's way
+        assert!(p.only_headset_mic_differs(&msbc));
+        assert!(!p.only_headset_mic_differs(&Profile { codec: "sbc".into(), ..msbc.clone() }));
+        // LE Audio: the microphone's rate
+        let le = Profile { le_audio: true, ..p.clone() };
+        let rate = Profile { mic_rate: 16000, ..le.clone() };
+        assert_eq!(serde_json::to_value(&rate).unwrap()["mic_rate"], 16000);
+        assert_eq!((rate.mic_rate_in_force(false), rate.mic_rate_in_force(true)), (Some(16000), None));
+        assert_eq!(le.mic_rate_in_force(false), None);
+        assert!(le.only_headset_mic_differs(&rate));
+        // Neither applies to the other kind of device
+        assert_eq!(Profile { mic_rate: 16000, ..p.clone() }.mic_rate_in_force(false), None);
+        assert_eq!(Profile { voice_codec: "msbc".into(), ..le }.voice_codec_in_force(false), None);
     }
 
     #[test]

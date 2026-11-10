@@ -50,7 +50,7 @@ fn read_lines(file: &Path) -> Vec<(String, String)> {
 /// Both files: the classic devices, then the LE Audio ones (le_audio set;
 /// the prototype's "|le" lines of devices.txt first, an address listed in
 /// both places once)
-fn load_all(dir: &Path) -> Vec<SavedDevice> {
+pub fn load_all(dir: &Path) -> Vec<SavedDevice> {
     let mut classic = Vec::new();
     let mut le: Vec<SavedDevice> = Vec::new();
     for (address, name) in read_lines(&paths::devices_file(dir)) {

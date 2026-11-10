@@ -72,7 +72,7 @@ BlueCaster/
 ├── Cargo.toml              Workspace de Cargo
 ├── installer/              Script de versión, script de Inno Setup, notas del actualizador (installer/README.md)
 ├── compat/                 Encabezados de compatibilidad MSVC para el código de AOSP
-├── docs/                   Documentación (este sitio) y el documento de diseño (v2-design.md)
+├── docs/                   Documentación (este sitio)
 ├── extern/                 Bibliotecas de terceros en C (submódulos de git)
 │   ├── btstack/            Pila Bluetooth BTstack
 │   ├── libldac/            Codificador LDAC de AOSP
@@ -132,7 +132,7 @@ Un códec supera la prueba cuando se cumple todo esto:
 | Opción | Descripción |
 |:-------|:------------|
 | `--codecs sbc aac ...` | Probar solo estos códecs (`sbc sbcxq aac aptx aptxhd aptxll ldac lhdcv5 faststream opus opus05`) o casos de negociación (frecuencias de muestreo, bitpools bajos, configuraciones de tramas SBC, aptX Adaptive, ...; `-h` los enumera); predeterminado: todos |
-| `--le-audio [case ...]` | Ejecutar en su lugar los casos de LE Audio (experimental) (predeterminado: todos) |
+| `--le-audio [case ...]` | Ejecutar en su lugar los casos de LE Audio (predeterminado: todos) |
 | `--scan [case ...]` | Ejecutar en su lugar los casos de búsqueda de dispositivos (`eir`, `name-request`) |
 | `--link [case ...]` | Ejecutar en su lugar los casos de enlace (`disconnect`, `device-link`, `device-a2dp`, `device-stream`, `restart-on-link`) |
 | `--duration <s>` | Segundos de transmisión por códec (predeterminado 5) |

@@ -308,6 +308,19 @@ impl Stack {
         out[..usize::from(n).min(out.len())].to_vec()
     }
 
+    /// The voice codecs the AG offers from now on (HFP codec ids, best
+    /// first, at most 3); `acl`'s service level connection negotiates again
+    /// on its next audio connection. False when not applied (no voice, an
+    /// empty or too long list).
+    pub fn hfp_ag_set_codecs(&self, acl: u16, codecs: &[u8]) -> bool {
+        let Ok(n) = u8::try_from(codecs.len()) else { return false };
+        // SAFETY: on the BTstack thread after hfp_ag_init; `n` bytes read
+        // from `codecs` (the C side refuses more than it holds).
+        let status = unsafe { ffi::bluecaster_hfp_ag_set_codecs(acl, codecs.as_ptr(), n) };
+        tracing::debug!(target: "btstack", "hfp_ag_set_codecs acl 0x{acl:04X} {codecs:?}: {status}");
+        status == 0
+    }
+
     /// Sets the headphones' HFP speaker gain (+VGS, 0..15, clamped)
     pub fn hfp_ag_set_speaker_gain(&self, acl: u16, gain: u8) -> u8 {
         // SAFETY: on the BTstack thread after hfp_ag_init.
@@ -414,15 +427,25 @@ impl Stack {
         unsafe { ffi::hci_enable_custom_pre_init() };
     }
 
-    pub fn realtek_setup(&self, product_id: u16, folder: &str) {
-        tracing::debug!(target: "btstack", "realtek setup: product ID 0x{product_id:04X}, folder {folder}");
+    /// The Realtek download's product ID and folder; `firmware_file` loads
+    /// that file instead of the folder's firmware (the config stays the
+    /// folder's)
+    pub fn realtek_setup(&self, product_id: u16, folder: &str, firmware_file: Option<&str>) {
+        tracing::debug!(
+            target: "btstack",
+            "realtek setup: product ID 0x{product_id:04X}, folder {folder}, firmware file of its own {}",
+            firmware_file.is_some()
+        );
         let p = keep_path(folder);
-        // SAFETY: on the BTstack thread; the path outlives BTstack (PATHS,
-        // cleared only after deinit); BTstack copies nothing and keeps p.
+        let f = firmware_file.map_or(std::ptr::null(), keep_path);
+        // SAFETY: on the BTstack thread; the paths outlive BTstack (PATHS,
+        // cleared only after deinit); BTstack copies nothing and keeps p,
+        // csrc/realtek.c keeps f (or NULL, clearing an earlier one).
         unsafe {
             ffi::btstack_chipset_realtek_set_product_id(product_id);
             ffi::btstack_chipset_realtek_set_firmware_folder_path(p);
             ffi::btstack_chipset_realtek_set_config_folder_path(p);
+            ffi::bluecaster_realtek_set_firmware_file(f);
         }
     }
 

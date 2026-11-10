@@ -8,16 +8,16 @@
 // 4 the general settings worth asking (Start with Windows and in the tray are
 // on by default). The scan runs while nothing is connected, as the core
 // refuses one during a stream: a connected device joins the saved ones above
-// the list, and adding another one disconnects it. With VB-Cable installed
-// new devices capture it; without it the step says why one is wanted. The
-// setup has a window size of its own.
+// the list, and adding another one disconnects it. New devices capture the
+// Hi-Fi Cable, else VB-Cable, where installed; the step suggests the cables
+// that are not. The setup has a window size of its own.
 
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { errorText, useApp, type AppContext } from "../app/context";
 import { saveSettings } from "../app/settings";
 import { Banner, Button, Dialog, Toggle } from "../components/controls";
 import { PairedDevicesNote, windowsDevices } from "../components/PairedDevices";
-import { HifiCableNote, VbCableNote } from "../components/DeviceSettings";
+import { CableNotes } from "../components/CableNotes";
 import { DevicePicker, saveWithProfile } from "../components/DevicePicker";
 import { ImportPairings } from "../components/ImportPairings";
 import { Icon } from "../components/Icon";
@@ -28,7 +28,6 @@ import type { AdapterInfo, AudioDevice, Device, Snapshot, WindowsPairedDevice } 
 import { firmwareUrl, LINKS } from "../lib/links";
 import { audioEntries, deviceKey, hifiCable, vbCable } from "../lib/profile";
 import {
-  adapterExperimental,
   adapterIds,
   adapterIdsHint,
   adapterName,
@@ -66,16 +65,7 @@ function AdapterLine(props: { adapter: AdapterInfo }) {
           {adapterIds(props.adapter)} · {driverText(props.adapter.driver).text}
         </span>
       </span>
-      <Show
-        when={!ok() || !adapterExperimental(props.adapter)}
-        fallback={
-          <span class="tag st-exp" title={t("ui.adapter.experimental_hint")}>
-            {t("ui.adapter.experimental")}
-          </span>
-        }
-      >
-        <span class={`tag st-${ok() ? "good" : "bad"}`}>{t(ok() ? "ui.setup.supported" : "ui.adapter.firmware_unsupported")}</span>
-      </Show>
+      <span class={`tag st-${ok() ? "good" : "bad"}`}>{t(ok() ? "ui.setup.supported" : "ui.adapter.firmware_unsupported")}</span>
     </>
   );
 }
@@ -293,7 +283,9 @@ function StepDriver(props: { adapter: AdapterInfo | null }) {
   const start = async (a: AdapterInfo) => {
     if (a.driver === "winusb") return setUp(a);
     setChecking(true);
-    const list = await windowsDevices(app, a);
+    // Not the audio devices: the setup's import and pairing take them over
+    // (issue #86)
+    const list = (await windowsDevices(app, a)).filter((d) => !d.audio);
     setChecking(false);
     if (list.length > 0) setLosing(list);
     else void setUp(a);
@@ -456,18 +448,17 @@ function StepDevice() {
   const snap = () => app.core.state.snap!;
   const stream = () => snap().stream;
   const entries = createMemo(() => classicEntries(snap()));
-  // VB-Cable, when Windows' list was read: new devices capture it, without
-  // it the step says why one is wanted (issue #86)
-  const [cable, setCable] = createSignal<AudioDevice | null | undefined>(undefined);
-  // And the Hi-Fi Cable for the headphones' microphone, once VB-Cable is there
-  const [hifi, setHifi] = createSignal<AudioDevice | null | undefined>(undefined);
+  // Windows' outputs, once read: new devices capture the Hi-Fi Cable, else
+  // VB-Cable; the step suggests the cables it lacks (issue #86)
+  const [devices, setDevices] = createSignal<AudioDevice[] | null>(null);
+  const cable = () => {
+    const list = devices();
+    return list && (hifiCable(list) ?? vbCable(list));
+  };
   const load = () =>
     app.core
       .request("audio.devices")
-      .then((list) => {
-        setCable(vbCable(list));
-        setHifi(hifiCable(list));
-      })
+      .then(setDevices)
       .catch(() => {});
   onMount(() => {
     void load();
@@ -549,12 +540,7 @@ function StepDevice() {
         noScan={running()}
         continuous={!paused()}
       >
-        <Show when={cable() === null}>
-          <VbCableNote />
-        </Show>
-        <Show when={!!cable() && hifi() === null}>
-          <HifiCableNote />
-        </Show>
+        <CableNotes devices={devices()} reload={() => void load()} />
         <ImportPairings />
       </DevicePicker>
       <Show when={running()}>

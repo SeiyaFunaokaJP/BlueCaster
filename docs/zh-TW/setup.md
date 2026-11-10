@@ -50,9 +50,9 @@ BlueCaster 3.0.0 是 A2DP Windows Bridge 的新名稱。直接在已安裝的 2.
 
 插入 USB 藍牙介面卡並啟動 BlueCaster。第一次啟動時（尚未有任何音訊裝置，或沒有任何介面卡使用 WinUSB），BlueCaster 會開啟 **設定精靈**，共四個步驟。完成或略過一次後，它不會再自動開啟：請在 **首頁** 或 **音訊裝置** 畫面新增裝置。
 
-1. **選擇介面卡**：列出找到的 USB 藍牙介面卡。若找不到您的介面卡，請插入後按 **重新整理**。綠色的 **支援**、橘色的 **實驗性** 或紅色的 **不支援** 表示 BlueCaster 能否使用該介面卡；不支援的介面卡會列出，但無法選擇
+1. **選擇介面卡**：列出找到的 USB 藍牙介面卡。若找不到您的介面卡，請插入後按 **重新整理**。綠色的 **支援** 或紅色的 **不支援** 表示 BlueCaster 能否使用該介面卡；不支援的介面卡會列出，但無法選擇
 2. **驅動程式與韌體**：此步驟會列出將要進行的操作，**準備此介面卡** 會執行這些操作：將介面卡的驅動程式替換為 WinUSB（Windows 會要求系統管理員權限，請參閱 [步驟 2](#winusb)），並下載介面卡所需的 Realtek 韌體檔案（請參閱 [韌體](#firmware)）。BlueCaster 無法下載的韌體，請手動放到韌體資料夾。若 Windows 有透過此介面卡配對的裝置（例如內建介面卡上的鍵盤或滑鼠），該按鈕會先列出它們：BlueCaster 使用該介面卡期間，它們無法再搭配 Windows 使用，按 **取消** 可保留它們。使用自有 USB 接收器的裝置不受影響；若要保留其他裝置，請為 BlueCaster 使用另外的 USB 介面卡。**介面卡** 畫面的 **替換為 WinUSB 驅動程式** 也會列出它們
-3. **尋找音訊裝置**：掃描會自動開始。將音訊裝置切換到配對模式，然後按旁邊的 **連線**（或輸入其位址後按 **使用**）：BlueCaster 會以它支援的最佳編解碼器（自動）儲存它並連線。該裝置隨後顯示在 **已配對的裝置** 之下，並以圓點標示其狀態，掃描也會停止。按 **新增裝置** 會中斷它並繼續掃描，以新增另一台裝置；它仍會保留，選錯的裝置可在此移除。Windows 曾透過此介面卡配對裝置時，會顯示 **匯入 Windows 的配對**：其 **匯入** 按鈕會列出這些裝置，並全部勾選（請參閱 [步驟 3](#headphones)）。沒有裝置也可以按 **下一步**；音訊裝置可之後在 **音訊裝置** 畫面新增。已安裝 VB-Cable 時，新裝置會擷取它；未安裝時，此步驟會說明為何需要它，並提供 **下載 VB-Cable**；之後 BlueCaster 首次發現它時，使用 **預設裝置** 的裝置會切換到它。裝好 VB-Cable 後，此步驟會推薦再用一條音訊線來接耳機的麥克風，即 VB-Audio 免費的 **Hi-Fi Cable**（**下載 Hi-Fi Cable**），讓麥克風與聲音分開。該裝置的編解碼器之後可在 **編解碼器** 畫面變更
+3. **尋找音訊裝置**：掃描會自動開始。將音訊裝置切換到配對模式，然後按旁邊的 **連線**（或輸入其位址後按 **使用**）：BlueCaster 會以它支援的最佳編解碼器（自動）儲存它並連線。該裝置隨後顯示在 **已配對的裝置** 之下，並以圓點標示其狀態，掃描也會停止。按 **新增裝置** 會中斷它並繼續掃描，以新增另一台裝置；它仍會保留，選錯的裝置可在此移除。Windows 曾透過此介面卡配對裝置時，會顯示 **匯入 Windows 的配對**：其 **匯入** 按鈕會列出這些裝置，並全部勾選（請參閱 [步驟 3](#headphones)）。沒有裝置也可以按 **下一步**；音訊裝置可之後在 **音訊裝置** 畫面新增。已安裝 **Hi-Fi Cable** 時，新裝置會擷取它，否則擷取 VB-CABLE：Hi-Fi Cable 增加的延遲最小，因此推薦用於聲音，VB-CABLE 則推薦用於耳機的麥克風。此步驟會推薦缺少的音訊線，每條都可用 × 關閉（兩者都保留在 **設定** > **虛擬線材** 中）：**安裝 VB-CABLE** 會從 VB-Audio 下載其 VB-CABLE 安裝套件（1.3 MB）並安裝（會要求系統管理員權限；若沒有出現，請重新啟動 Windows），**下載 Hi-Fi Cable** 會開啟 VB-Audio 的頁面。兩者都是 VB-Audio 的捐贈軟體（[vb-cable.com](https://vb-cable.com/)）：BlueCaster 不隨附 VB-CABLE，捐款歸 VB-Audio 所有。在公司或其他組織中，VB-Audio 要求每次安裝都有授權（[授權](https://vb-audio.com/Services/licensing.htm)）。之後 BlueCaster 首次發現某條音訊線時，使用 **預設裝置** 的裝置會擷取它（VB-CABLE 僅在未安裝 Hi-Fi Cable 時），麥克風沒有可用輸出的裝置會改用它播放麥克風。該裝置的編解碼器之後可在 **編解碼器** 畫面變更
 4. **一般設定**：主題、**啟動**、**通知** 與更新檢查，與「設定」中的控制項相同，會立即儲存。首次設定會開啟 **隨 Windows 啟動** 與 **在系統匣中啟動**
 
 **稍後設定** 會略過其餘步驟；可從 **設定 > 執行設定精靈** 再次開啟。
@@ -123,7 +123,7 @@ bluecaster-core.exe --cli --scan
 
 ## 韌體（Realtek 介面卡） {#firmware}
 
-採用 Realtek 晶片的 USB 藍牙介面卡（例如 TP-Link UB500、RTL8761BU 接收器）需要專有韌體才能運作。CSR 介面卡不需要韌體。Intel、MediaTek MT79xx、Qualcomm 與 Broadcom 介面卡（實驗性）可能需要各自的韌體檔案：請參閱 [建議的介面卡](#adapters)。
+採用 Realtek 晶片的 USB 藍牙介面卡（例如 TP-Link UB500、RTL8761BU 接收器）需要專有韌體才能運作。CSR 介面卡不需要韌體。Intel、MediaTek MT79xx、Qualcomm 與 Broadcom 介面卡可能需要各自的韌體檔案：請參閱 [建議的介面卡](#adapters)。
 
 ### 在應用程式中（下載引導）
 
@@ -167,15 +167,15 @@ BlueCaster 會偵測介面卡的晶片組，並顯示需要哪些韌體檔案。
 | 晶片組 | 產品範例 | 備註 |
 |:--------|:-----------------|:------|
 | Realtek | TP-Link UB500, RTL8761BU | 需要下載韌體（見上文）。測試最完整 |
-| Realtek | 筆電內建的 RTL8852BD（`0BDA:B853`） | *實驗性。* linux-firmware 沒有它的韌體：BlueCaster 會從 Realtek 的 Windows 藍牙驅動程式讀取 `rtl8852bd_mp_chip_new.dat`，因此請勿解除安裝該驅動程式（或將檔案放入韌體資料夾）。尚未在實際硬體上測試 |
+| Realtek | 筆電內建的 RTL8852BD（`0BDA:B853`） | linux-firmware 沒有它的韌體：BlueCaster 會從 Realtek 的 Windows 藍牙驅動程式讀取 `rtl8852bd_mp_chip_new.dat`，因此請勿解除安裝該驅動程式（或將檔案放入韌體資料夾）。尚未在實際硬體上測試 |
 | CSR | 一般的 CSR8510 接收器 | 隨插即用，不需要韌體 |
 | Barrot | Bluetooth 5.4 / 6.0 接收器（`33FA:0010`、`33FA:0012`） | 以 ROM 韌體運作，不需要韌體。目前僅有一份使用者回報 |
-| Marvell | Microsoft Surface Pro / Surface Book 內建（88W8897） | *實驗性。* 不需要韌體檔案：Wi-Fi 驅動程式也會載入藍牙韌體，請保持 Wi-Fi 開啟。尚未在實際硬體上測試 |
-| Actions | ATS2851 介面卡（`10D7:B012`） | *實驗性。* 使用 ROM 韌體運作，不需要韌體。它宣稱支援一些實際無法執行的命令，BlueCaster 會將其隱藏。尚未在實際硬體上測試 |
-| Broadcom | ASUS BT400 (BCM20702) | *實驗性。* 回報廠商類別 `FF/01/01` 而非藍牙類別 `E0/01/01` 的介面卡（BCM20702 OEM 接收器）也能偵測。以 ROM 韌體運作；若韌體資料夾中有選用的 PatchRAM `.hcd`（例如 `BCM20702A1-0b05-17cb.hcd`），會在啟動時上傳 |
-| Intel | Intel 7260 / 3160 / 7265 / 3165 / 3168 / 8260 / 8265 / 9260 / AX200 / AX201 / AX210 / AX211 | *實驗性。* 處於 bootloader 模式時（例如冷開機後），韌體資料夾中需要 linux-firmware `intel/` 內對應的 `ibt-*.sfi` + `ibt-*.ddc`，所需檔名會寫在記錄裡（例如 `ibt-0180-0041.sfi`）。7260 / 3160 / 7265 / 3165 / 3168 由 ROM 執行，不需檔案；同一資料夾中有對應的 `ibt-hw-*.bseq` 修補檔時會套用。目前只在 AX211 上測試過 |
-| MediaTek | MT7925、MT7922、MT7921、MT7902（AMD RZ717、RZ616、RZ608 等 Wi-Fi 網路卡） | *實驗性。* 需要該晶片的 `BT_RAM_CODE_MT*_hdr.bin`（例如 `BT_RAM_CODE_MT7925_1_1_hdr.bin`）：若已安裝 MediaTek 的 Windows 藍牙驅動程式，BlueCaster 會從中讀取；否則請將 linux-firmware `mediatek/` 中的該檔案放入韌體資料夾，所需檔名會寫在記錄裡。尚未在實際硬體上測試 |
-| Qualcomm | QCA61x4、QCA9377（ROME）、WCN6855（FastConnect 6900） | *實驗性。* 需要該晶片的 rampatch 與 NVM（例如 `AthrBT_0x00000302.dfu` 與 `ramps_0x00000302_48.dfu`）：若已安裝 Qualcomm 的 Windows 藍牙驅動程式，BlueCaster 會從中讀取；否則請將 linux-firmware `qca/` 中的檔案（`rampatch_usb_*.bin`、`nvm_usb_*.bin`）放入韌體資料夾，所需檔名會寫在記錄裡。尚未在實際硬體上測試 |
+| Marvell | Microsoft Surface Pro / Surface Book 內建（88W8897） | 不需要韌體檔案：Wi-Fi 驅動程式也會載入藍牙韌體，請保持 Wi-Fi 開啟。尚未在實際硬體上測試 |
+| Actions | ATS2851 介面卡（`10D7:B012`） | 使用 ROM 韌體運作，不需要韌體。它宣稱支援一些實際無法執行的命令，BlueCaster 會將其隱藏。尚未在實際硬體上測試 |
+| Broadcom | ASUS BT400 (BCM20702) | 回報廠商類別 `FF/01/01` 而非藍牙類別 `E0/01/01` 的介面卡（BCM20702 OEM 接收器）也能偵測。以 ROM 韌體運作；若韌體資料夾中有選用的 PatchRAM `.hcd`（例如 `BCM20702A1-0b05-17cb.hcd`），會在啟動時上傳 |
+| Intel | Intel 7260 / 3160 / 7265 / 3165 / 3168 / 8260 / 8265 / 9260 / AX200 / AX201 / AX210 / AX211 | 處於 bootloader 模式時（例如冷開機後），韌體資料夾中需要 linux-firmware `intel/` 內對應的 `ibt-*.sfi` + `ibt-*.ddc`，所需檔名會寫在記錄裡（例如 `ibt-0180-0041.sfi`）。7260 / 3160 / 7265 / 3165 / 3168 由 ROM 執行，不需檔案；同一資料夾中有對應的 `ibt-hw-*.bseq` 修補檔時會套用 |
+| MediaTek | MT7925、MT7922、MT7921、MT7902（AMD RZ717、RZ616、RZ608 等 Wi-Fi 網路卡） | 需要該晶片的 `BT_RAM_CODE_MT*_hdr.bin`（例如 `BT_RAM_CODE_MT7925_1_1_hdr.bin`）：若已安裝 MediaTek 的 Windows 藍牙驅動程式，BlueCaster 會從中讀取；否則請將 linux-firmware `mediatek/` 中的該檔案放入韌體資料夾，所需檔名會寫在記錄裡 |
+| Qualcomm | QCA61x4、QCA9377（ROME）、WCN6855（FastConnect 6900） | 需要該晶片的 rampatch 與 NVM（例如 `AthrBT_0x00000302.dfu` 與 `ramps_0x00000302_48.dfu`）：若已安裝 Qualcomm 的 Windows 藍牙驅動程式，BlueCaster 會從中讀取；否則請將 linux-firmware `qca/` 中的檔案（`rampatch_usb_*.bin`、`nvm_usb_*.bin`）放入韌體資料夾，所需檔名會寫在記錄裡。尚未在實際硬體上測試 |
 | MediaTek, Qualcomm | 其他 MediaTek 晶片（MT7927）, 其他 Qualcomm 晶片（QCA6290、WCN785x） | 不支援：需要 BlueCaster 沒有的韌體載入程式（[協助加入支援](chip-support)） |
 
 USB 藍牙 5.0 以上的介面卡通常最適合 LDAC 等高位元率轉碼器。

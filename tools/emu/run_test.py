@@ -56,7 +56,7 @@ bluecaster-core.exe --cli --scan lists it:
     from a name request after the first inquiry
 Outputs go to tools/emu/out/scan-<case>/.
 
-    python tools/emu/run_test.py --voice [cvsd msbc lc3swb cvsd-roundtrip cvsd-auto]
+    python tools/emu/run_test.py --voice [cvsd msbc lc3swb cvsd-roundtrip cvsd-auto lc3swb-msbc lc3swb-cvsd]
 
 runs the HFP audio cases instead (headset mode: bluecaster-core --headset-mic
 --mic-output <out>/mic.wav): emu_sink.py --hfp <codec> adds a hands-free
@@ -79,6 +79,9 @@ cvsd-roundtrip: headset mode on 3 s after streaming starts and off at 6 s
 the test tone in the last second the sink decoded.
 cvsd-auto: --headset-mic auto; a WAV output counts as recorded from, so the
 checks are cvsd's, plus Auto's "an application records" in the log.
+lc3swb-msbc / lc3swb-cvsd: the hands-free unit offers LC3-SWB, BlueCaster is
+given --voice-codec msbc / cvsd (the call codec chosen with Auto-select off):
+the link must come up with that codec instead.
 Outputs go to tools/emu/out/voice-<case>/.
 """
 
@@ -216,11 +219,6 @@ NEGOTIATION = {
     # Opus 05: 48 kHz from a 44.1 kHz request; Auto never takes it (AAC here)
     'opus05-from-44k': ('opus05', [], 'opus05', ['--rate', '44100']),
     'auto-not-opus05': ('auto', ['--codecs', 'sbc', 'aac', 'opus05'], 'aac', []),
-    # Codecs > Enable experimental codecs off (issue #86): Auto passes over
-    # Opus, and a chosen aptX HD falls back past aptX LL (experimental too)
-    'auto-no-experimental': ('auto', ['--codecs', 'sbc', 'aac', 'opus'], 'aac', ['--no-experimental']),
-    'noexp-aptxhd-to-aac': ('aptxhd', ['--codecs', 'sbc', 'aac', 'aptxhd', 'aptxll'], 'aac',
-                            ['--fallback', '--no-experimental']),
     # aptX Adaptive (offered by the sink only when named, with SBC, AAC and
     # aptX as aptX Adaptive headsets list them: emu_sink.py): HQ, low latency
     # (SSRC 0xA1, 348-byte packets), an R2 sink in HQ and LL (frame types 3 /
@@ -307,12 +305,13 @@ NEGOTIATION = {
     'oppo-never': ('lhdcv5', OPPO_SINK + ['--oppo', 'off'], 'lhdcv5', OPPO_NAME),
     # (earbuds that keep their limit: each stream asks, gains nothing, undoes it)
     'oppo-every-connection': ('lhdcv5', OPPO_SINK + ['--oppo', 'off', '--oppo-no-change'], 'lhdcv5', OPPO_TWICE),
-    # LE keys derived from the link key (issue #86; developer mode and LE
-    # Audio on, DEV_SETTINGS): asked after pairing, and the sink's LTK, IRK
-    # and identity address kept (CTKD_CASES); the next connection, from a
-    # sink that lists SMP over BR/EDR only from then on; none from a sink
-    # without it, one that refuses or one that never answers, and none with
-    # developer mode off; the stream as always
+    # LE keys derived from the link key (issue #86; LE Audio on,
+    # DEV_SETTINGS): asked after pairing, and the sink's LTK, IRK and
+    # identity address kept (CTKD_CASES); the next connection, from a sink
+    # that lists SMP over BR/EDR only from then on; none from a sink without
+    # it, one that refuses or one that never answers; with developer mode
+    # off too (one pairing for both kinds), none with LE Audio off; the
+    # stream as always
     'ctkd': ('sbc', CTKD_SINK, 'sbc', ['--sessions', '2']),
     'ctkd-next-connection': ('sbc', CTKD_SINK + ['--ctkd-from', '2', '--ctkd-public-identity'], 'sbc',
                              ['--sessions', '3']),
@@ -320,6 +319,7 @@ NEGOTIATION = {
     'ctkd-refused': ('sbc', CTKD_SINK + ['--ctkd-refuse'], 'sbc', []),
     'ctkd-silent': ('sbc', CTKD_SINK + ['--ctkd-silent'], 'sbc', []),
     'ctkd-developer-off': ('sbc', CTKD_SINK, 'sbc', []),
+    'ctkd-le-off': ('sbc', CTKD_SINK, 'sbc', []),
 }
 # Cases that must stop with an error before streaming: what the CLI's log
 # says of it (its "Codec stop" line carries the structured cause)
@@ -341,6 +341,7 @@ DEV_SETTINGS = {
     'ctkd-refused': CTKD_ON,
     'ctkd-silent': CTKD_ON,
     'ctkd-developer-off': {'debug_mode': False, 'le_audio_experimental': True},
+    'ctkd-le-off': {'debug_mode': True, 'le_audio_experimental': False},
 }
 QUALITY_ON, QUALITY_OFF = 'Huawei control: 2BA2 010101', 'Huawei control: 2BA2 010100'
 HI_RES_ON, HI_RES_OFF, HI_RES_CODEC = 'OPPO control: 0403 1801', 'OPPO control: 0403 1800', 'OPPO control: 041A 080100'
@@ -401,11 +402,12 @@ LOG_CHECKS = {
                     # NoAnswer after SM's 30 s (--duration 35), else the link ends
                     # first and the next connection asks again (NotAsked)
                     ('bluecaster.log', f'CTKD: no LE keys from {SINK_ADDRESS} (', 1)],
-    'ctkd-developer-off': [('sink.log', 'SMP over BR/EDR listed', True), ('sink.log', 'CTKD:', False),
-                           ('bluecaster.log', 'CTKD', False)],
+    'ctkd-developer-off': [('bluecaster.log', CTKD_GIVEN, 1), ('sink.log', 'CTKD: keys LTK', 1)],
+    'ctkd-le-off': [('sink.log', 'SMP over BR/EDR listed', True), ('sink.log', 'CTKD:', False),
+                    ('bluecaster.log', CTKD_GIVEN, False)],
 }
 # Cases whose LE keys BlueCaster keeps must equal the sink's (ctkd_check)
-CTKD_CASES = {'ctkd', 'ctkd-next-connection'}
+CTKD_CASES = {'ctkd', 'ctkd-next-connection', 'ctkd-developer-off'}
 TONES = ((1000.0, 0.5), (1500.0, 0.5))  # (frequency, amplitude) per channel, as --test-tone
 LATE_SDU_FAILURE = 'reached the controller after their SDU interval began'  # LE Audio cases run once more
 
@@ -1198,7 +1200,12 @@ VOICE_CASES = {
     'lc3swb': ('LC3-SWB', 8000 / 60),
     'cvsd-roundtrip': ('CVSD', 16000 / 60),
     'cvsd-auto': ('CVSD', 16000 / 60),
+    'lc3swb-msbc': ('mSBC', 8000 / 60),
+    'lc3swb-cvsd': ('CVSD', 16000 / 60),
 }
+# Cases that choose the call codec (--voice-codec): the hands-free unit
+# offers more, the link takes the one chosen (hfp_audio.py's name for it)
+VOICE_CHOSEN = {'lc3swb-msbc': ('msbc', 'msbc'), 'lc3swb-cvsd': ('cvsd', 'cvsd')}
 # The hands-free unit's tone (hfp_audio.py TX_TONE_HZ, voice_frames.py) as
 # BlueCaster's mic.wav must hold it: frequency and amplitude
 MIC_TONE = (1500.0, 8000 / 32768)
@@ -1269,6 +1276,10 @@ def run_voice_case(args, case, port):
     auto = case.endswith('-auto')
     headset = (['--headset-mic-toggle', ','.join(map(str, ROUNDTRIP_TOGGLE))] if roundtrip
                else ['--headset-mic', 'auto'] if auto else ['--headset-mic'])
+    # The codec the link negotiates (hfp_audio.py's name), the one chosen
+    chosen, negotiated = VOICE_CHOSEN.get(case, (None, hf_case))
+    if chosen:
+        headset += ['--voice-codec', chosen]
     sink = start_sink(port, sink_capture, os.path.join(out, 'sink.log'), extra=['--hfp', hf_case])
     try:
         env = dict(os.environ, BLUECASTER_CONFIG_DIR=os.path.join(out, 'config'), BLUECASTER_LOG='debug')
@@ -1292,8 +1303,8 @@ def run_voice_case(args, case, port):
         failures.append('bluecaster.log: no audio connection')
     elif m.group(1) != codec:
         failures.append(f'audio connection with {m.group(1)}, not {codec}')
-    if hf_case != 'cvsd' and f'HFP: codec negotiated {hf_case}' not in sink_log:
-        failures.append(f'sink.log: codec {hf_case} not negotiated')
+    if hf_case != 'cvsd' and f'HFP: codec negotiated {negotiated}' not in sink_log:
+        failures.append(f'sink.log: codec {negotiated} not negotiated')
     if not re.search(r'^Voice: \S+ at \d+ Hz', bc_log, re.M):
         failures.append('bluecaster.log: the voice link never carried audio ("Voice: ..." missing)')
     if re.search(r'Traceback|HFP-HF protocol failed', sink_log):
@@ -1319,8 +1330,8 @@ def run_voice_case(args, case, port):
         detail.append(f'sink rx {packets} tx {tx} status {status} tone {tone}')
         if int(packets) == 0:
             failures.append('the sink received no SCO packets')
-        if sink_codec != hf_case:
-            failures.append(f'sink codec {sink_codec}, not {hf_case}')
+        if sink_codec != negotiated:
+            failures.append(f'sink codec {sink_codec}, not {negotiated}')
         if not tone.startswith('ok'):
             failures.append(f'sink: what BlueCaster sent is not right ({tone})')
     if 'dropped an incoming HCI packet' in bc_log:
@@ -1417,7 +1428,7 @@ def main():
                         default=CODECS + list(NEGOTIATION),
                         help='codecs and negotiation cases (%(default)s)')
     parser.add_argument('--le-audio', nargs='*', metavar='CASE',
-                        help='run the LE Audio (experimental) cases instead (default: all of them)')
+                        help='run the LE Audio cases instead (default: all of them)')
     parser.add_argument('--scan', nargs='*', metavar='CASE',
                         help=f'run the device scan cases instead ({", ".join(SCAN_CASES)}; default: all of them)')
     parser.add_argument('--link', nargs='*', metavar='CASE',

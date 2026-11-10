@@ -165,14 +165,17 @@ pub struct HostConfig {
     /// Realtek firmware / config file stems (no extension), e.g.
     /// ("rtl8761bu_fw", "rtl8761bu_config")
     pub realtek_files: Option<(String, String)>,
-    /// Run the Intel bootloader firmware download first (experimental)
+    /// A Realtek firmware file loaded instead of the folder's (Realtek's
+    /// Windows driver's, Developer > Debug: issue #427)
+    pub realtek_firmware_file: Option<PathBuf>,
+    /// Run the Intel bootloader firmware download first
     pub intel_loader: bool,
-    /// Run the MediaTek MT79xx firmware download first (experimental)
+    /// Run the MediaTek MT79xx firmware download first
     pub mediatek_loader: bool,
-    /// Run the Qualcomm rampatch and NVM download first (experimental)
+    /// Run the Qualcomm rampatch and NVM download first
     pub qualcomm_loader: bool,
     /// Run the download of a Realtek chip whose firmware comes from
-    /// Realtek's Windows driver first (crate::realtek_btnic, experimental):
+    /// Realtek's Windows driver first (crate::realtek_btnic):
     /// its VID:PID
     pub realtek_driver_chip: Option<(u16, u16)>,
     /// VID:PID of present Broadcom adapters (PatchRAM file names)
@@ -228,6 +231,7 @@ impl HostConfig {
             firmware_dir: None,
             realtek_pid: 0,
             realtek_files: None,
+            realtek_firmware_file: None,
             intel_loader: false,
             mediatek_loader: false,
             qualcomm_loader: false,
@@ -567,6 +571,7 @@ impl BtHost {
                         firmware_dir,
                         realtek_pid,
                         realtek_files,
+                        realtek_firmware_file,
                         intel_loader,
                         mediatek_loader,
                         qualcomm_loader,
@@ -617,6 +622,7 @@ impl BtHost {
                             firmware_dir: firmware_dir.unwrap_or_else(exe_dir),
                             realtek_pid: if tcp { 0 } else { realtek_pid },
                             realtek_files,
+                            realtek_firmware_file,
                             broadcom_ids,
                             battery,
                             voice,
@@ -818,9 +824,11 @@ impl BtHost {
     }
 
     /// The HCI version the controller reports (the Bluetooth core version:
-    /// 12 = 5.3), once it has answered Read Local Version
+    /// 12 = 5.3), once it is the running firmware's: after init, and on a
+    /// Realtek adapter after the download was read back (issue #427)
     pub fn hci_version(&self) -> Option<u8> {
-        self.shared.lock().hci_version
+        let s = self.shared.lock();
+        s.hci_version.filter(|_| s.hci_version_settled)
     }
 
     /// The controller has LE Audio's isochronous channels (its supported
@@ -1615,6 +1623,17 @@ impl BtHost {
             app.voice.start(s, enabled, acl, tx, rx)
         })
         .unwrap_or(Err(HostError::NoAnswer))
+    }
+
+    /// The best voice codec the next audio connections may use (HFP codec
+    /// id: 1 CVSD, 2 mSBC, 3 LC3-SWB; None: Auto, the best both sides
+    /// have). One the headphones lack falls back to the next lower one
+    /// ([`voice::ag_codecs`]); an audio connection open now keeps its codec.
+    pub fn voice_codec(&self, max: Option<u8>) {
+        self.call(JOB_TIMEOUT, move |app, s| {
+            let (enabled, acl) = (app.setup.voice, app.hfp_acl);
+            app.voice.set_max_codec(s, enabled, acl, max)
+        });
     }
 
     /// The stack offers HFP audio ([`HostConfig::voice`])

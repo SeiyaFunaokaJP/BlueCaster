@@ -26,8 +26,8 @@ afterEach(() => {
 });
 
 const DEVICES = [
-  { id: "spk", name: "Speakers", is_default: true, is_virtual: false, mix_rate: null, mix_channels: null, mix_bits: null, capture_name: null },
-  { id: "cable", name: "CABLE Input", is_default: false, is_virtual: true, mix_rate: null, mix_channels: null, mix_bits: null, capture_name: null },
+  { id: "spk", name: "Speakers", is_default: true, is_virtual: false, mix_rate: null, mix_channels: null, mix_bits: null, capture_name: null, capture_rate: null },
+  { id: "cable", name: "CABLE Input", is_default: false, is_virtual: true, mix_rate: null, mix_channels: null, mix_bits: null, capture_name: null, capture_rate: null },
 ];
 const APPS = [{ exe: "Spotify.exe", name: "Spotify" }];
 

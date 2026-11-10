@@ -1,3 +1,10 @@
+---
+title: Headset microphone (developer note)
+layout: default
+nav_exclude: true
+english_only: true
+---
+
 # Headset microphone (developer note)
 
 Status: user-facing since `feat/headset-mic-for-all` (developer mode no
@@ -110,8 +117,8 @@ CLI (`app/src/core/src/cli.rs`, "Headset microphone"):
 `--headset-mic [on|auto]` (headset mode once streaming, alone: on; on an
 `--le-audio` run, the conversational configuration), `--mic-output <name|path.wav>` (a render
 device by id or part of its friendly name, default the Windows default
-output, or a WAV file to write). No flag for the codec: the negotiation
-decides. Development / testing: `--headset-mic-toggle <on_s>,<off_s>`
+output, or a WAV file to write), `--voice-codec <cvsd|msbc|lc3_swb>` and
+`--mic-rate <hz>` (the microphone's codec chosen, below). Development / testing: `--headset-mic-toggle <on_s>,<off_s>`
 switches headset mode on and off at those seconds of a classic stream
 through `Service::set_headset_mic` (`Service::set_voice_offered` makes the
 stack offer voice from the start).
@@ -125,6 +132,56 @@ devices), `ui.headset_mic_no_output` (no output device chosen),
 `error.headset_mic_loop` (the feedback-loop refusal, a status message),
 `status.headset_mic_failed`, `status.headset_mic_output_failed`. Hints stay
 under 120 characters.
+
+## The microphone's codec chosen (issue #86)
+
+With Auto-select (`Settings.auto_codec`) off the user chooses the
+microphone's codec on the Codecs screen; under Auto-select the choice stays
+in the profile and is not used (as the A2DP codec). Profile fields, both
+`#[serde(default)]` and written only when set:
+
+| Field | Meaning |
+|---|---|
+| `voice_codec` | Classic devices: `"cvsd"`, `"msbc"`, `"lc3_swb"`; `""` = none chosen (Auto). The best call codec the voice link may use. |
+| `mic_rate` | LE Audio: the microphone's sampling rate in Hz; 0 = none chosen (Auto). |
+
+- **HFP** (`Profile::voice_codec_in_force` -> `StreamRequest::voice_codec`):
+  the session tells the stack once at its start
+  (`HeadsetMode::offer_codecs` -> `BtHost::voice_codec(Some(hfp_id))`), and
+  `Voice::start` applies it again before each audio connection.
+  `bt_host::voice::ag_codecs(max)` keeps the AG's codecs at or below the one
+  chosen (ids are the quality order: LC3-SWB 3 > mSBC 2 > CVSD 1), set with
+  `hfp_ag_init_codecs` through `bluecaster_hfp_ag_set_codecs`. BTstack then
+  suggests (+BCS) the best of those the headphones listed and CVSD when none
+  is: a codec the headphones lack falls back to the next lower one. A codec
+  negotiated earlier on the same service level connection would be reused
+  (`hfp_ag_setup_audio_connection` skips +BCS once `HFP_CODECS_EXCHANGED`),
+  so the shim sets `HFP_CODECS_RECEIVED_LIST` on an idle connection to
+  negotiate again. The SDP record keeps listing every codec. A stack without
+  voice (battery only) is not touched.
+- A save that changes only the call codec takes the in-place path of headset
+  mode (`only_headset_mic_differs`, `Service::set_headset_mic(mode, output,
+  voice_codec)`): the session offers the new codecs and, when a link is up
+  (or opening) with another codec, closes it; the next tick opens it again
+  (A2DP plays in between). Auto-select turned on or off does the same for
+  the profile in use (`mic_choice_matters`).
+- **LE Audio** (`Profile::mic_rate_in_force` -> `LeRequest::mic_rate` ->
+  `le_audio::plan::StreamRequest::source_rate`): `plan_source` takes the
+  first fitting source preset at that rate, the first fitting one when none
+  is (logged). `SourcePlan::rates` lists the rates of the fitting presets in
+  the order they are tried (Auto's first); the session reports them as
+  `StreamStatus.mic_rates` (`ServiceEvent::MicRates`). A change sets the
+  stream up again (`HeadsetChange::Restart`), as for Auto-select toggled with
+  a rate chosen. The microphone stays mono: no channel choice.
+- UI (`Codecs.tsx`): the call codec cards (while the call link is open)
+  are chosen like the A2DP cards with Auto-select off, and offer to turn it
+  off under Auto-select; the card shown chosen is the codec in use. An LE
+  Audio device whose microphone runs gets a **Microphone** heading and an
+  LC3 card whose "..." chooses the rate among `mic_rates` (Auto with the
+  first one's rate), Mono read only; under Auto-select the rate in use.
+- CLI: `--voice-codec`, `--mic-rate`; emulator: `run_test.py --voice
+  lc3swb-msbc` (the HF offers LC3-SWB, mSBC is chosen) and `--le-audio
+  mic-rate-16k` (16 kHz chosen from 16 / 32 kHz).
 
 ## Auto mode
 

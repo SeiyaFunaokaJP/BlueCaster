@@ -27,7 +27,6 @@ import {
   fitToCodec,
   offeredCodecs,
   isDefaultOrder,
-  isExperimental,
   fixedBitDepth,
   moved,
   offeredBitDepths,
@@ -510,7 +509,7 @@ describe("profiles", () => {
 });
 
 describe("VB-Cable", () => {
-  const device = (name: string, is_virtual = true) => ({ id: name, name, is_virtual, is_default: false, mix_rate: null, mix_channels: null, mix_bits: null, capture_name: null });
+  const device = (name: string, is_virtual = true) => ({ id: name, name, is_virtual, is_default: false, mix_rate: null, mix_channels: null, mix_bits: null, capture_name: null, capture_rate: null });
   it("prefers the standard cable to the 16-channel one", () => {
     const list = [device("Speakers", false), device("CABLE In 16ch (VB-Audio Virtual Cable)"), device("CABLE Input (VB-Audio Virtual Cable)")];
     expect(vbCable(list)?.name).toBe("CABLE Input (VB-Audio Virtual Cable)");
@@ -620,23 +619,6 @@ describe("Auto's order and the fallback (issue #86)", () => {
     expect(effectiveCodec("ldac", [])).toBeNull();
   });
 
-  it("leaves the experimental codecs out while they are off (issue #86)", () => {
-    expect(CODECS.filter((c) => c.experimental).map((c) => c.id).sort()).toEqual(
-      ["aptxhd", "aptxll", "faststream", "opus", "opus05"],
-    );
-    expect(isExperimental("aptxad")).toBe(false);
-    const pw = ["sbc", "aac", "opus", "aptxhd"];
-    expect(autoPick(pw)).toBe("opus");
-    expect(autoPick(pw, false)).toBe("aac");
-    // Chosen while off: the best one that is not experimental
-    expect(effectiveCodec("opus", pw, false)).toBe("aac");
-    expect(effectiveCodec("aptxhd", pw, false)).toBe("aac");
-    // Nor a fallback for another codec
-    expect(effectiveCodec("ldac", pw)).toBe("opus");
-    expect(effectiveCodec("ldac", pw, false)).toBe("aac");
-    expect(effectiveCodec("auto", ["sbc", "faststream"], false)).toBe("sbc");
-  });
-
   it("offers PipeWire's Opus only in developer mode (issue #86)", () => {
     expect(CODECS.filter((c) => developerOnly(c.id)).map((c) => c.id)).toEqual(["opus05"]);
     expect(offeredCodecs(CARD_ORDER, true)).toEqual([...CARD_ORDER]);
@@ -671,14 +653,14 @@ describe("A device's codec order (issue #86 round 8)", () => {
     const known = ["sbc", "aac", "ldac"];
     const aacFirst = cardOrder(["aac"]);
     expect(effectiveCodec("auto", known)).toBe("ldac");
-    expect(effectiveCodec("auto", known, true, aacFirst)).toBe("aac");
+    expect(effectiveCodec("auto", known, aacFirst)).toBe("aac");
     // aptX HD not offered: the first card the device offers
-    expect(effectiveCodec("aptxhd", known, true, cardOrder(["aptxhd", "sbc", "ldac"]))).toBe("sbc");
+    expect(effectiveCodec("aptxhd", known, cardOrder(["aptxhd", "sbc", "ldac"]))).toBe("sbc");
     // The tester's order, SBC XQ first: SBC XQ for an Opus it does not offer
     const earfun = ["sbc", "sbcxq", "aac", "aptx", "aptxad"];
-    expect(effectiveCodec("opus", earfun, true, cardOrder(["sbcxq", "sbc", "aptxad", "aac", "aptx"]))).toBe("sbcxq");
+    expect(effectiveCodec("opus", earfun, cardOrder(["sbcxq", "sbc", "aptxad", "aac", "aptx"]))).toBe("sbcxq");
     // FastStream first: never Auto's pick nor a fallback
-    expect(effectiveCodec("ldac", ["sbc", "faststream"], true, cardOrder(["faststream"]))).toBe("sbc");
+    expect(effectiveCodec("ldac", ["sbc", "faststream"], cardOrder(["faststream"]))).toBe("sbc");
   });
 });
 

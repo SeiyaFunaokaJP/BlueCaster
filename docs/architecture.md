@@ -19,7 +19,7 @@ nav_order: 5
 
 BlueCaster enables LHDC V5, LDAC, aptX Adaptive, aptX HD,
 aptX Low Latency, aptX, Opus, AAC, SBC XQ and SBC Bluetooth audio on Windows
-(and LC3 over LE Audio, experimental). Windows' own Bluetooth stack supports
+(and LC3 over LE Audio). Windows' own Bluetooth stack supports
 only SBC, classic aptX and (Windows 11 only) AAC for A2DP — this tool adds the
 others without requiring a kernel driver.
 
@@ -47,20 +47,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Windows audio: system loopback / virtual device / one app"]
-    ui["bluecaster.exe: window and tray flyout (Tauri + SolidJS)"]
-    subgraph core["bluecaster-core.exe (resident, user mode)"]
-        ctl["Tray menu / IPC server / CLI (--cli)"] --> svc["Core service: connection state machine, codec selection, profiles, reconnect"]
+    ui["bluecaster.exe:<br>window and tray flyout<br>(Tauri + SolidJS)"]
+    src["Windows audio:<br>system loopback / virtual device /<br>one app"]
+    subgraph core["bluecaster-core.exe"]
+        ctl["Tray menu / IPC server /<br>CLI (--cli)"] --> svc["Core service: connection<br>state machine, codec selection,<br>profiles, reconnect"]
         svc --> cap["WASAPI capture"]
-        cap -- PCM --> enc["Encoder pipeline: LDAC / aptX family / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack: HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["Encoder pipeline:<br>LDAC / aptX family / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack:<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
     ui <-->|"per-user named pipe"| ctl
-    svc -.->|"UAC, only to change the driver or import Windows' keys"| drv["bluecaster-driver.exe (elevated): assign / restore WinUSB, read Windows' link keys"]
     src --> cap
-    bt -->|"WinUSB (nusb)"| usb["USB Bluetooth adapter (WinUSB driver)"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB (nusb)"| usb["USB Bluetooth adapter<br>(WinUSB driver)"]
     usb -. Bluetooth .-> hp["Headphones / speakers"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe (elevated):<br>assign / restore WinUSB,<br>read Windows' link keys"]
 ```
 
 - **The core is not a Windows service.** It is an ordinary process of the
@@ -120,11 +119,11 @@ sequenceDiagram
         App->>Ad: Firmware upload
     end
     App->>Sink: ACL connection
-    Note over App,Sink: SSP Just Works on first connect (link key saved)
-    App->>Sink: L2CAP channel, PSM 0x0019 (AVDTP signaling)
+    Note over App,Sink: SSP Just Works on first connect<br>(link key saved)
+    App->>Sink: L2CAP channel, PSM 0x0019<br>(AVDTP signaling)
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: Stream endpoints and codecs
-    App->>Sink: SET_CONFIGURATION (selected codec), OPEN, START
+    App->>Sink: SET_CONFIGURATION<br>(selected codec), OPEN, START
     loop While streaming
         App->>Sink: AVDTP media packets over L2CAP
     end
@@ -156,7 +155,7 @@ code; all other crates have `#![forbid(unsafe_code)]`.
 | 2. Parts | `audio-capture` | WASAPI capture (`wasapi` crate): system loopback, virtual device, one application (process loopback); device and app lists, test tone, per-app volume (Volume Mixer) |
 | 2. Parts | `voice-link` | The headset microphone's audio (developer mode): mono PCM rendered to the chosen output device (WASAPI), the capture downmixed for the uplink, and the CVSD / mSBC / LC3-SWB voice codecs over SCO payloads |
 | 3. Engine | `bt-host` | Runs BTstack on its own thread, driven by commands and typed events: GAP, A2DP Source, AVRCP, SDP, RFCOMM channels for the passthrough (`rfcomm.*`), link keys, a device's SDP services, AFH, firmware loading and chip loaders (`bringup`), the chip probe and chip scripts, HCI capture (`.pklg`), LE Audio (`le/`) |
-| 2. Parts | `le-audio` | LE Audio (experimental): the logic without BTstack or Windows (assigned numbers, LTV, PACS / ASCS PDUs, presets, the CSIP / VCP / MCP / CCP models) |
+| 2. Parts | `le-audio` | LE Audio: the logic without BTstack or Windows (assigned numbers, LTV, PACS / ASCS PDUs, presets, the CSIP / VCP / MCP / CCP models) |
 | 3. Engine | `pipeline` | PCM rings, format conversion, downmix, encoding, media payloads, pacing, ABR |
 | 4. Core | `bluecaster-core` (directory `core`) | The state machine, reconnects, sleep / resume, profiles, settings and the v1 migration, volume sync, the output mute, update check, Realtek firmware download, the receiver test client, statistics, vendor protocols (`vendor/`) |
 | 4. Core | `ipc` | The protocol types shared by core and window (serde; TypeScript types generated with `ts-rs`) and the pipe framing |
@@ -175,8 +174,8 @@ config:
 ---
 flowchart TD
     out["System audio output (loopback / virtual device / one app)"]
-    out --> cap["capture thread: WASAPI, event-driven (usually float32, 44.1–96 kHz)"]
-    cap -->|"lock-free ring (PCM)"| enc["encode thread: conversion, downmix, encoder, media payload + RTP header, ABR"]
+    out --> cap["capture thread:<br>WASAPI, event-driven (usually float32, 44.1–96 kHz)"]
+    cap -->|"lock-free ring (PCM)"| enc["encode thread:<br>conversion, downmix, encoder,<br>media payload + RTP header, ABR"]
     enc -->|"lock-free ring (packets)"| stack["bt-runloop thread: BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → USB Bluetooth adapter → radio"]
     usb -.-> hp["Headphones / speakers"]
@@ -233,7 +232,7 @@ stateDiagram-v2
     Idle --> Connecting: Start
     Connecting --> Streaming: stream started
     Connecting --> Idle: stopped
-    Connecting --> Error: init / connect / codec failure
+    Connecting --> Error: init / connect /<br>codec failure
     Streaming --> Reconnecting: connection lost
     Reconnecting --> Streaming: reconnected
     Reconnecting --> Error: reconnect failed
@@ -270,6 +269,22 @@ The core never runs as administrator: for an assignment or a restore it starts
 the helper with a UAC prompt (`ShellExecuteEx` "runas") and reads its JSON
 result. Listing adapters and their driver needs no elevation.
 
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver (elevated)
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: start with a UAC prompt
+    alt Assign
+        Drv->>Win: DeviceInterfaceGUIDs<br>in Device Parameters
+        Drv->>Win: install winusb.inf (WinUsb Device)
+    else Restore
+        Drv->>Win: remove the device and re-enumerate
+        Win->>Win: picks its best driver again
+    end
+    Drv-->>Core: result (JSON)
+```
+
 ## Key Modules
 
 ### Codec choice (`codec::caps`)
@@ -285,10 +300,6 @@ result. Listing adapters and their driver needs no elevation.
   `codec_forced`) is asked for anyway with no fallback (`RemoteCaps::forcing`),
   and a codec whose card offers more than the remote lists
   (`unlisted_options`) is configured from `RemoteCaps::unlisted`
-- Leaves the experimental codecs (aptX HD, aptX LL, Opus, Opus 05,
-  FastStream) out of Auto and the fallback with the command line's
-  `--no-experimental`; the app always uses them (the `experimental_codecs`
-  setting, from 2.0.2-beta.7's Codecs page, is read as on since issue #86)
 - Streams every A2DP profile as Auto, with Auto's default settings, while
   the `auto_codec` setting is on (Codecs > Auto-select the codec with the
   highest quality, one setting for every device since schema 5); the codec
@@ -323,7 +334,7 @@ result. Listing adapters and their driver needs no elevation.
   LHDC V5, FastStream, Opus, Opus 05, aptX Adaptive) plus SBC (also used by
   SBC XQ) and AAC: 11 in all (BTstack's `MAX_NR_AVDTP_STREAM_ENDPOINTS`)
 - Register SDP records (A2DP Source, AVRCP Controller, AVRCP Target; HFP
-  Audio Gateway, for the battery level only, while that experimental setting
+  Audio Gateway, for the battery level only, while that setting
   is on)
 - Manage SSP pairing (Just Works, General Bonding; link keys persisted)
 - Tear down a half-open connection after a connect timeout so retries work
@@ -414,7 +425,7 @@ administrator) and is deleted when the helper ends.
 | LHDC V5 | lhdcv5-enc (C port of the AOSP encoder) | 400/500/900/1000 kbps (Low/Medium/Medium-High/High), at most the sink's listed maximum, ABR 160–400 kbps | 16/24-bit, 5 ms frames, 2-byte media payload header, RTP header |
 | LDAC | libldac (AOSP) | 330/660/990 kbps | High/Medium/Low (HQ/SQ/MQ) modes, ABR |
 | aptX Adaptive | aptx-adaptive (pure-Rust encoder of AKS-Logic/aptx-adaptive-linux, MIT) | 427 kbps High, 265 kbps Low Latency (R2 sinks: 270); ABR steps down to 364/318 (R2: 270/204) | 48 kHz stereo (96 kHz in High when chosen, to an R2 sink that lists it: 646/340/255 kbps), 24-bit; one codec packet per media packet behind BlueCaster's own RTP header; ABR in High; Auto takes it after LHDC V5 and LDAC |
-| Opus | libopus 1.5.2 | 256 kbps (stereo; mono half) | Experimental; Android's A2DP Opus: 48 kHz, 20 ms frames (10 ms if the sink has only that), constrained VBR capped to the media payload, one frame per packet, 1-byte media payload header, RTP header |
+| Opus | libopus 1.5.2 | 256 kbps (stereo; mono half) | Android's A2DP Opus: 48 kHz, 20 ms frames (10 ms if the sink has only that), constrained VBR capped to the media payload, one frame per packet, 1-byte media payload header, RTP header |
 | aptX HD | libopenaptx | 576 kbps | 24-bit input, fixed rate, RTP header |
 | aptX | libopenaptx | 352/384 kbps (44.1/48 kHz) | 16-bit stereo, no RTP header |
 | aptX LL | libopenaptx | 352 kbps | ~32 ms latency, no RTP header, packets ≤ ~7.5 ms |
@@ -507,10 +518,10 @@ below):
 | `settings.json` | App settings, with a `schema_version`; unknown keys are kept |
 | `profiles.json` | Profiles |
 | `devices\devices.txt` | Known devices |
-| `devices\le_audio_devices.txt` | LE Audio (experimental): the LE Audio entries of the device list |
+| `devices\le_audio_devices.txt` | LE Audio: the LE Audio entries of the device list |
 | `devices\device_codecs.json` | What each classic device offered when it last connected (and whether OPPO earbuds were asked for Hi-Res) |
 | `pairing\link_keys.txt` | Link keys: headphones paired with v1 or 2.0.x reconnect without pairing again |
-| `pairing\le_audio_bonds.tlv`, `pairing\le_audio_csip.txt` | LE Audio (experimental): LE bonds (with the GATT server's persistent CCC values) and coordinated sets |
+| `pairing\le_audio_bonds.tlv`, `pairing\le_audio_csip.txt` | LE Audio: LE bonds (with the GATT server's persistent CCC values) and coordinated sets |
 | `pairing\windows_le_keys.txt`, `pairing\replaced_windows_keys.json` | LE keys taken from Windows until a stack with LE adds them; Windows' keys that **Restore original driver** replaced |
 | `adapters\adapter_caps.json` | What a stack learnt about each adapter (LE Audio support, address, HCI version, Windows' name for it) |
 | `adapters\driver\<instance id>.json` | The previous driver of each adapter WinUSB was assigned to |
@@ -544,8 +555,8 @@ uninstaller and `licenses\` (`licenses\README.txt`, `licenses\bluecaster\LICENSE
 
 ## Important Considerations
 
-- **Adapter compatibility**: Realtek (best tested) and CSR USB adapters; Intel and
-  Broadcom are experimental. Realtek adapters require firmware upload at startup,
+- **Adapter compatibility**: Realtek (best tested), CSR, Intel, Broadcom, MediaTek
+  and others ([Verified Hardware](hardware)). Realtek adapters require firmware upload at startup,
   Intel adapters in bootloader mode too
 - **Pairing**: Uses SSP Just Works with General Bonding. Link keys are persisted
   to a local file, or taken over from Windows' Bluetooth for the adapter

@@ -26,8 +26,6 @@
   --good: #34d399;
   --warn: #fbbf24;
   --bad: #f87171;
-  /* Experimental: amber, text and border (issue #86) */
-  --exp: #f59e0b;
 
   --fs-12: 0.75rem;
   --fs-14: 0.875rem;
@@ -75,7 +73,6 @@
   --disabled-text: rgb(255 255 255 / 0.36);
   --good-text: var(--good);
   --warn-text: var(--warn);
-  --exp-text: var(--warn);
   --bad-text: var(--bad);
   --focus: #eceef3;
   --overlay: rgb(0 0 0 / 0.55);
@@ -100,7 +97,6 @@
   --disabled-text: rgb(0 0 0 / 0.36);
   --good-text: #047857;
   --warn-text: #92400e;
-  --exp-text: #b45309;
   --bad-text: #b91c1c;
   --focus: #15171c;
   --overlay: rgb(20 22 28 / 0.35);
@@ -255,11 +251,6 @@ p {
 .st-running {
   --st: var(--warn);
   --st-text: var(--warn-text);
-}
-/* Experimental: amber, the border in full (issue #86) */
-.st-exp {
-  --st: var(--exp);
-  --st-text: var(--exp-text);
 }
 .st-bad,
 .st-error,
@@ -957,10 +948,13 @@ option {
   border-radius: var(--r);
   background: color-mix(in srgb, var(--warn) 10%, transparent);
 }
+/* Every device (issue #86), scrolling when there are many */
 .paired-list {
   list-style: none;
   margin: 0;
   padding: 0;
+  max-height: 12rem;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: var(--s1);
@@ -1049,9 +1043,6 @@ option {
 .tag[class*="st-"] {
   color: var(--st-text);
   border-color: color-mix(in srgb, var(--st) 55%, transparent);
-}
-.tag.st-exp {
-  border-color: var(--exp);
 }
 .tags {
   display: flex;
@@ -1787,13 +1778,20 @@ option {
   gap: var(--s2);
   min-width: 0;
 }
+/* Close under the codec's details, as their two lines are (issue #86) */
+.device-info > .codec-info + .mic-row,
+.fly-title > .codec-info + .mic-row {
+  margin-top: calc(var(--s1) - var(--s2));
+}
+/* As thin as the codec's details above it (issue #86) */
 .mic-badge {
   display: inline-flex;
   flex: 1;
   align-items: center;
   gap: var(--s1) var(--s2);
   min-width: 0;
-  padding: var(--s1) var(--s2);
+  min-height: 1.5rem;
+  padding: 0 var(--s2);
   border: 1px solid var(--border-strong);
   border-radius: var(--r);
   background: var(--surface-2);
@@ -2281,23 +2279,6 @@ option {
 .codec-card.ro:hover:not(.on) {
   border-color: var(--border);
 }
-/* The call codecs (issue #86): shown only, nothing to click; a red dot on
-   the one open, as on the microphone's line */
-.voice-codecs-title {
-  margin: var(--s3) 0 var(--s2);
-  font-size: var(--fs-14);
-  font-weight: 600;
-}
-.codec-card.voice {
-  cursor: default;
-}
-.codec-card.voice .mic-dot {
-  display: inline-block;
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 50%;
-  background: var(--bad);
-}
 /* The cards are dragged into the device's order. The
    pointer as on any card; the hand only while the button is held or a card
    is dragged (issue #86) */
@@ -2332,6 +2313,13 @@ option {
 }
 .device-codecs .toggle-row {
   padding: 0;
+}
+/* The LE Audio microphone's card under the music ones */
+.device-codecs .codecs-sub {
+  font-size: var(--fs-14);
+  font-weight: 600;
+  color: var(--text-2);
+  margin: 0;
 }
 /* Headset microphone (developer mode): the switch, its output and notes */
 .headset-mic {
@@ -3490,6 +3478,26 @@ option {
   align-items: center;
   gap: var(--s4);
   color: var(--text-2);
+}
+.cable-note-text {
+  flex: 1;
+  min-width: 0;
+}
+.cable-note-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s2);
+}
+.cable-origin {
+  margin-top: var(--s1);
+}
+.source-advice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
 }
 .setup-general .field {
   flex-direction: row;

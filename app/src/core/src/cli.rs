@@ -71,8 +71,6 @@ Usage: bluecaster-core --cli [-d XX:XX:XX:XX:XX:XX] [options]
                         best one it offers (as the app does), instead of an error
   --force-codec         a codec -c the device does not offer is asked for anyway
   --unlisted-options    the codec's settings beyond what the device lists
-  --no-experimental     never use the experimental codecs (aptX HD, aptX LL, Opus,
-                        Opus 05, FastStream: experimental in the README)
   -m <mode>             capture: loopback (default), virtual, app
   --audio-device <id>   render device for -m virtual
   --app <exe>           executable for -m app
@@ -86,7 +84,7 @@ Usage: bluecaster-core --cli [-d XX:XX:XX:XX:XX:XX] [options]
                         mono (dual channel: -c sbcxq)
   --sbc-bitpool <n>     SBC / SBC XQ bitpool (default: by quality)
   --afh <policy>        auto, off or Wi-Fi channels to avoid such as 6,11;
-                        blend-mild, blend-medium, blend-strong (experimental)
+                        blend-mild, blend-medium, blend-strong
   --remote-sink <host[:port]|auto>
                         statistics of a measuring receiver (tools/linux_sink);
                         without -d, stream to that receiver
@@ -99,7 +97,7 @@ Usage: bluecaster-core --cli [-d XX:XX:XX:XX:XX:XX] [options]
                         (docs/chip-support.md), save its report and exit
   --allow-writes        let --script send requests that may change the chip
 
-LE Audio (experimental, LC3 over LE isochronous channels):
+LE Audio (LC3 over LE isochronous channels):
   --le-audio            stream to the LE Audio device -d (BAP unicast, LC3)
   --le-device <address> another device of the group (e.g. the second earbud)
   --le-preset <name>    use only this BAP configuration (e.g. 48_2_2, 16_2_1)
@@ -123,6 +121,13 @@ Headset microphone:
   --mic-output <name|path.wav>
                         the microphone's output device (a part of its name;
                         default: the default output), or a WAV file to write
+  --voice-codec <cvsd|msbc|lc3_swb>
+                        classic devices: the best call codec to use (one the
+                        headphones lack falls back to the next lower one;
+                        default: the best both sides have)
+  --mic-rate <hz>       LE Audio: the microphone's sampling rate (16000,
+                        24000, 32000, 48000; one the headphones do not allow
+                        falls back; default: the first they allow)
 
 Development / testing:
   --hci-tcp <host:port> H4 over TCP to a virtual controller (tools/emu)
@@ -168,8 +173,6 @@ struct Args {
     force_codec: bool,
     /// --unlisted-options: settings beyond what the device lists
     unlisted_options: bool,
-    /// --no-experimental: settings experimental_codecs off
-    no_experimental: bool,
     mode: String,
     audio_device: String,
     app: String,
@@ -188,6 +191,10 @@ struct Args {
     /// --headset-mic [on|auto], --mic-output: headset mode once streaming
     headset_mic: HeadsetMic,
     mic_output: Option<String>,
+    /// --voice-codec: the best call codec (None: Auto)
+    voice_codec: Option<bluecaster_core::VoiceCodec>,
+    /// --mic-rate: the LE Audio microphone's rate (None: Auto)
+    mic_rate: Option<u32>,
     /// --headset-mic-toggle: headset mode on and off at these seconds
     headset_mic_toggle: Option<(u64, u64)>,
     script: Option<PathBuf>,
@@ -263,7 +270,6 @@ fn parse(args: &[String]) -> Result<Args, String> {
         fallback: false,
         force_codec: false,
         unlisted_options: false,
-        no_experimental: false,
         mode: "loopback".into(),
         audio_device: String::new(),
         app: String::new(),
@@ -279,6 +285,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
         services: false,
         headset_mic: HeadsetMic::Off,
         mic_output: None,
+        voice_codec: None,
+        mic_rate: None,
         headset_mic_toggle: None,
         script: None,
         allow_writes: false,
@@ -322,7 +330,6 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--fallback" => a.fallback = true,
             "--force-codec" => a.force_codec = true,
             "--unlisted-options" => a.unlisted_options = true,
-            "--no-experimental" => a.no_experimental = true,
             "-m" => a.mode = value(&mut it, "-m")?.to_lowercase(),
             "--audio-device" => a.audio_device = value(&mut it, "--audio-device")?,
             "--app" => a.app = value(&mut it, "--app")?,
@@ -391,6 +398,16 @@ fn parse(args: &[String]) -> Result<Args, String> {
                 a.headset_mic = mode.unwrap_or(HeadsetMic::On);
             }
             "--mic-output" => a.mic_output = Some(value(&mut it, "--mic-output")?),
+            "--voice-codec" => {
+                let v = value(&mut it, "--voice-codec")?;
+                a.voice_codec = Some(
+                    bluecaster_core::VoiceCodec::from_name(&v).ok_or("--voice-codec takes cvsd, msbc or lc3_swb")?,
+                );
+            }
+            "--mic-rate" => {
+                let v = value(&mut it, "--mic-rate")?;
+                a.mic_rate = Some(v.parse::<u32>().ok().filter(|&hz| hz > 0).ok_or("--mic-rate takes a rate in Hz")?);
+            }
             "--headset-mic-toggle" => {
                 let v = value(&mut it, "--headset-mic-toggle")?;
                 let (on, off) = v
@@ -737,7 +754,6 @@ pub fn run(args: &[String]) -> i32 {
         codec_fallback: a.fallback,
         codec_forced: a.force_codec,
         unlisted_options: a.unlisted_options,
-        experimental_codecs: !a.no_experimental,
         // The command line is a developer's: every codec, as asked
         developer_codecs: true,
         auto_order: codec::AutoOrder::default(),
@@ -758,6 +774,7 @@ pub fn run(args: &[String]) -> i32 {
         le: None,
         headset_mic: if a.headset_mic_toggle.is_none() { a.headset_mic } else { HeadsetMic::Off },
         mic_output: a.mic_output.clone(),
+        voice_codec: a.voice_codec,
     };
 
     let mut code = 0;
@@ -851,7 +868,7 @@ fn stream_session(
             && since.elapsed() >= Duration::from_secs(at)
         {
             toggles.remove(0);
-            let taken = service.set_headset_mic(mode, a.mic_output.clone());
+            let taken = service.set_headset_mic(mode, a.mic_output.clone(), a.voice_codec);
             outln!("Headset mode {} at {at} s{}", mode.as_str(), if taken { "" } else { " (not taken)" });
         }
         if a.remote_sink.is_some() && streaming_since.is_some() && last_summary.elapsed() >= Duration::from_secs(5) {
@@ -901,6 +918,8 @@ fn stream_session(
             Ok(ServiceEvent::Battery(v)) => outln!("Headphone battery: {v}%"),
             Ok(ServiceEvent::BatteryRefused) => outln!("Headphone battery: unknown (HFP refused)"),
             Ok(ServiceEvent::VoiceCodecs(c)) => outln!("Headphone voice codecs: {}", c.join(", ")),
+            // LE Audio runs in le_run, not here
+            Ok(ServiceEvent::MicRates(_)) => {}
             Ok(ServiceEvent::OtherDeviceBack(a)) => outln!("Another device connected: {}", bt_host::addr_str(&a)),
             // The loader's own log lines say it
             Ok(ServiceEvent::Loader(_)) => {}
@@ -1175,7 +1194,7 @@ fn le_run(a: &Args, service: &Service, running: &Arc<AtomicBool>) -> i32 {
     let is_running = || running.load(Ordering::Acquire);
 
     outln!(
-        "\n[LE Audio, experimental] Initializing BTstack ({} transport)...",
+        "\n[LE Audio] Initializing BTstack ({} transport)...",
         if a.hci_tcp.is_none() { "WinUSB" } else { "H4 over TCP" }
     );
     let host = match service.ensure_host() {
@@ -1239,6 +1258,7 @@ fn le_run(a: &Args, service: &Service, running: &Arc<AtomicBool>) -> i32 {
     };
     let (mut request, low_latency, note) = le.request();
     request.conversational = mic_target.is_some();
+    request.source_rate = a.mic_rate;
     host.le_set_low_latency(low_latency);
     if let Some(note) = note {
         outln!("{note}");
@@ -1547,6 +1567,11 @@ mod tests {
         assert_eq!(parse(&args("--cli --headset-mic on")).unwrap().headset_mic, HeadsetMic::On);
         assert_eq!(parse(&args("--cli --headset-mic")).unwrap().headset_mic, HeadsetMic::On);
         assert_eq!(parse(&args("--cli --mic-output")).err().as_deref(), Some("--mic-output needs a value"));
+        // The microphone's codec (run_test.py's voice-limit cases)
+        let a = parse(&args("--cli --headset-mic --voice-codec msbc --mic-rate 16000")).unwrap();
+        assert_eq!((a.voice_codec, a.mic_rate), (Some(bluecaster_core::VoiceCodec::Msbc), Some(16000)));
+        assert!(parse(&args("--cli --voice-codec lc3")).is_err());
+        assert!(parse(&args("--cli --mic-rate x")).is_err());
 
         assert_eq!(parse(&args("--cli --le-device")).err().as_deref(), Some("--le-device needs a value"));
         assert_eq!(parse(&args("--cli --le-preset")).err().as_deref(), Some("--le-preset needs a value"));

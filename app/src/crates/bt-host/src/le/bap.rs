@@ -511,6 +511,43 @@ pub struct Unicast {
     /// Source ASEs (device, ASE) Receiver Start Ready / Stop Ready went to
     start_ready_sent: Vec<(u32, u8)>,
     stop_ready_sent: Vec<(u32, u8)>,
+    /// Devices that rejected the Enable metadata: (device, fallback level)
+    /// they got Enable again with (enable_metadata_level)
+    enable_fallback: Vec<(u32, u8)>,
+}
+
+/// Plainer Enable metadata levels after a rejection (enable_ases)
+const ENABLE_FALLBACK_LEVELS: u8 = 2;
+
+/// The Enable entries (ASE id, metadata) of one device's ASEs. Level 0:
+/// the chosen Streaming Audio Contexts plus the CCID List of the content
+/// control services the modules tie to them. Level 1: one context for
+/// every ASE (the microphone's while there is one), no CCID List. Level 2:
+/// Unspecified, no CCID List.
+fn enable_ases(env: &mut dyn UnicastEnv, plan: &StreamPlan, ases: &[PlannedAse], level: u8) -> Vec<(u8, Vec<u8>)> {
+    let src_contexts = plan.source.as_ref().map_or(0, |s| s.contexts);
+    let mut metadata = |contexts: u16, what: &str| {
+        let (contexts, mut ccids) = match level {
+            0 => (contexts, env.ccids(contexts)),
+            1 => ((if src_contexts != 0 { src_contexts } else { contexts }).isolate_lowest_one(), Vec::new()),
+            _ => (CONTEXT_UNSPECIFIED, Vec::new()),
+        };
+        ccids.sort_unstable();
+        ccids.dedup();
+        let meta = enable_metadata(contexts, &ccids);
+        tracing::debug!("LE Audio: Enable metadata{what} {meta:02X?}");
+        if !ccids.is_empty() || level > 0 {
+            let list: Vec<String> = ccids.iter().map(|c| c.to_string()).collect();
+            tracing::info!(
+                "LE Audio: Enable metadata{what}: contexts 0x{contexts:04x}, CCID list {}",
+                if list.is_empty() { "none".to_string() } else { list.join(",") }
+            );
+        }
+        meta
+    };
+    let meta = metadata(plan.contexts, "");
+    let src_meta = if src_contexts != 0 { metadata(src_contexts, " (microphone)") } else { Vec::new() };
+    ases.iter().map(|a| (a.ase_id, if a.sink { meta.clone() } else { src_meta.clone() })).collect()
 }
 
 /// The planned ASEs (sink and source) of each device, by device id (one CP
@@ -598,6 +635,7 @@ impl Unicast {
         }
         self.start_ready_sent.clear();
         self.stop_ready_sent.clear();
+        self.enable_fallback.clear();
         self.plan = Some(plan);
         self.start_done = Some(done);
         self.starting = true;
@@ -1134,34 +1172,41 @@ impl Unicast {
             s.contexts = src_contexts;
         }
         let plan = plan.clone();
-        // Metadata: Streaming Audio Contexts, plus the CCID List of the
-        // content control services the modules tie to these contexts
-        let mut metadata = |contexts: u16, what: &str| {
-            let mut ccids = env.ccids(contexts);
-            ccids.sort_unstable();
-            ccids.dedup();
-            let meta = enable_metadata(contexts, &ccids);
-            tracing::debug!("LE Audio: Enable metadata{what} {meta:02X?}");
-            if !ccids.is_empty() {
-                let list: Vec<String> = ccids.iter().map(|c| c.to_string()).collect();
-                tracing::info!(
-                    "LE Audio: Enable metadata{what}: contexts 0x{contexts:04x}, CCID list {}",
-                    list.join(",")
-                );
-            }
-            meta
-        };
-        let meta = metadata(contexts, "");
-        let src_meta = if has_source { metadata(src_contexts, " (microphone)") } else { Vec::new() };
         for (dev, ases) in by_device(&plan) {
             if !connected(env, dev) {
                 self.fail(env, "a device is not connected");
                 return false;
             }
-            let ases: Vec<(u8, Vec<u8>)> =
-                ases.iter().map(|a| (a.ase_id, if a.sink { meta.clone() } else { src_meta.clone() })).collect();
+            let level = self.enable_fallback.iter().find(|(d, _)| *d == dev).map_or(0, |&(_, l)| l);
+            let ases = enable_ases(env, &plan, &ases, level);
             env.cp_write(dev, cp_with_metadata(ASE_OP_ENABLE, &ases), "Enable");
         }
+        true
+    }
+
+    /// A device rejected the Enable metadata: Enable again with plainer
+    /// metadata (enable_metadata_level). False when there is no plainer
+    /// level left.
+    fn retry_enable(&mut self, env: &mut dyn UnicastEnv, dev: u32, rejected: &[u8]) -> bool {
+        let level = self.enable_fallback.iter().find(|(d, _)| *d == dev).map_or(0, |&(_, l)| l) + 1;
+        if level > ENABLE_FALLBACK_LEVELS {
+            return false;
+        }
+        let Some(plan) = self.plan.clone() else { return false };
+        let Some(mut ases) = by_device(&plan).remove(&dev) else { return false };
+        // Only the rejected ones: an accepted ASE is Enabling already
+        ases.retain(|a| rejected.contains(&a.ase_id));
+        if ases.is_empty() || !connected(env, dev) {
+            return false;
+        }
+        self.enable_fallback.retain(|(d, _)| *d != dev);
+        self.enable_fallback.push((dev, level));
+        tracing::warn!(
+            "LE Audio: device {dev} rejected the Enable metadata: Enable again with {}",
+            if level == 1 { "one audio context, no CCID list" } else { "the Unspecified context" }
+        );
+        let ases = enable_ases(env, &plan, &ases, level);
+        env.cp_write(dev, cp_with_metadata(ASE_OP_ENABLE, &ases), "Enable");
         true
     }
 
@@ -1478,6 +1523,28 @@ impl Unicast {
             let planned = self.plan.as_ref().is_some_and(|p| p.has_ase(dev.0, ase_id));
             let start_phase =
                 matches!(self.phase, Phase::ConfigCodec | Phase::CreateCig | Phase::ConfigQos | Phase::Enable);
+            // Unsupported / Rejected / Invalid Metadata: some devices refuse
+            // a second context or a CCID list. The whole notification
+            // answers the same write: Enable again when all its failures are
+            // metadata ones.
+            if planned && self.phase == Phase::Enable && op == ASE_OP_ENABLE && self.fail_reason.is_empty() {
+                let entries: Vec<&[u8]> =
+                    (0..count as usize).filter_map(|j| v.get(2 + 3 * j..5 + 3 * j)).filter(|e| e[1] != 0).collect();
+                if entries.iter().all(|e| matches!(e[1], 0x0A..=0x0C)) {
+                    let rejected: Vec<u8> = entries.iter().map(|e| e[0]).collect();
+                    for e in entries.iter().skip(1) {
+                        tracing::warn!(
+                            "LE Audio: {addr}: ASE {} op 0x{op:02x}: response 0x{:02x} reason 0x{:02x}",
+                            e[0],
+                            e[1],
+                            e[2]
+                        );
+                    }
+                    if self.retry_enable(env, dev.0, &rejected) {
+                        return;
+                    }
+                }
+            }
             if planned && start_phase {
                 let why = format!("ASE {ase_id}: op 0x{op:02x} rejected (response 0x{code:02x} reason 0x{reason:02x})");
                 self.fail(env, &why);
@@ -1595,6 +1662,8 @@ mod tests {
         lost: Option<String>,
         /// The last LE Set CIG Parameters
         cig: Option<CigParams>,
+        /// Every ASE Control Point write in full
+        cp: Vec<Vec<u8>>,
     }
 
     impl Fake {
@@ -1607,6 +1676,7 @@ mod tests {
                 can_send: true,
                 lost: None,
                 cig: None,
+                cp: Vec::new(),
             }
         }
         fn take(&mut self) -> Vec<String> {
@@ -1623,6 +1693,7 @@ mod tests {
         }
         fn cp_write(&mut self, device: u32, value: Vec<u8>, what: &'static str) {
             self.log.push(format!("{what} dev {device} {:02x?}", &value[..2.min(value.len())]));
+            self.cp.push(value);
         }
         fn ccids(&mut self, _contexts: u16) -> Vec<u8> {
             vec![2, 1, 2]
@@ -1909,6 +1980,7 @@ mod tests {
             preset,
             requested_contexts: CONTEXT_CONVERSATIONAL,
             contexts: CONTEXT_CONVERSATIONAL,
+            rates: vec![32000],
         });
         plan
     }
@@ -1975,6 +2047,82 @@ mod tests {
         u.on_ase_update(&mut env, LeDeviceId(0), 3);
         assert_eq!(u.phase(), Phase::Release);
         assert_eq!(env.take(), ["disconnect 60", "Release dev 0 [08, 02]"]);
+    }
+
+    #[test]
+    fn rejected_enable_metadata_is_retried_plainer() {
+        let mut env = Fake::new(vec![mic_device(0, 0x40, true)]);
+        let mut u = Unicast::default();
+        let outcome: Outcome = Rc::default();
+        let o = outcome.clone();
+        u.start(&mut env, conversational_plan(false), Box::new(move |r| *o.borrow_mut() = Some(r)));
+        let all = |u: &mut Unicast, env: &mut Fake, state: AseState| {
+            for ase in [1, 3] {
+                env.set_state(0, ase, state);
+                u.on_ase_update(env, LeDeviceId(0), ase);
+            }
+        };
+        all(&mut u, &mut env, AseState::CodecConfigured);
+        u.on_cig_created(&mut env, &cig_created(1, &[0x60]));
+        all(&mut u, &mut env, AseState::QosConfigured);
+        assert_eq!(
+            env.take(),
+            [
+                "Config Codec dev 0 [01, 02]",
+                "cig create 1 (1 CIS)",
+                "Config QoS dev 0 [02, 02]",
+                "Enable dev 0 [03, 02]"
+            ]
+        );
+        let first = env.cp.last().cloned().unwrap();
+        assert!(first.windows(2).any(|w| w == [0x03, META_CCID_LIST]), "a CCID list at first: {first:02x?}");
+        // Both ASEs: Rejected Metadata (as an EarFun answered)
+        u.on_cp_response(&mut env, LeDeviceId(0), &[ASE_OP_ENABLE, 2, 1, 0x0B, 0x00, 3, 0x0B, 0x02]);
+        assert_eq!(env.take(), ["Enable dev 0 [03, 02]"]);
+        assert!(outcome.borrow().is_none(), "not failed");
+        // One context (the microphone's, Conversational), no CCID list
+        let ctx = CONTEXT_CONVERSATIONAL.to_le_bytes();
+        let plain = vec![3, META_STREAMING_CONTEXTS, ctx[0], ctx[1]];
+        assert_eq!(env.cp.last().unwrap(), &cp_with_metadata(ASE_OP_ENABLE, &[(1, plain.clone()), (3, plain)]));
+        // Rejected again: Unspecified
+        u.on_cp_response(&mut env, LeDeviceId(0), &[ASE_OP_ENABLE, 1, 3, 0x0B, 0x02]);
+        let u1 = CONTEXT_UNSPECIFIED.to_le_bytes();
+        assert_eq!(
+            env.cp.last().unwrap(),
+            &cp_with_metadata(ASE_OP_ENABLE, &[(3, vec![3, META_STREAMING_CONTEXTS, u1[0], u1[1]])]),
+            "only the rejected ASE"
+        );
+        assert!(outcome.borrow().is_none());
+        // A third rejection fails the start (reported once the ASEs are
+        // released)
+        env.take();
+        u.on_cp_response(&mut env, LeDeviceId(0), &[ASE_OP_ENABLE, 1, 3, 0x0B, 0x02]);
+        assert!(!env.take().iter().any(|l| l.starts_with("Enable")));
+        assert!(u.phase().stopping(), "stopping, not {}", u.phase().name());
+        assert_eq!(u.fail_reason, "ASE 3: op 0x03 rejected (response 0x0b reason 0x02)");
+    }
+
+    #[test]
+    fn rejected_enable_for_another_reason_fails_at_once() {
+        let mut env = Fake::new(vec![mic_device(0, 0x40, true)]);
+        let mut u = Unicast::default();
+        let outcome: Outcome = Rc::default();
+        let o = outcome.clone();
+        u.start(&mut env, conversational_plan(false), Box::new(move |r| *o.borrow_mut() = Some(r)));
+        for state in [AseState::CodecConfigured, AseState::QosConfigured] {
+            for ase in [1, 3] {
+                env.set_state(0, ase, state);
+                u.on_ase_update(&mut env, LeDeviceId(0), ase);
+            }
+            if state == AseState::CodecConfigured {
+                u.on_cig_created(&mut env, &cig_created(1, &[0x60]));
+            }
+        }
+        env.take();
+        // Metadata on one ASE, Insufficient Resources on the other
+        u.on_cp_response(&mut env, LeDeviceId(0), &[ASE_OP_ENABLE, 2, 1, 0x0B, 0x00, 3, 0x0D, 0x00]);
+        assert!(!env.take().iter().any(|l| l.starts_with("Enable")));
+        assert!(u.phase().stopping(), "stopping, not {}", u.phase().name());
     }
 
     #[test]

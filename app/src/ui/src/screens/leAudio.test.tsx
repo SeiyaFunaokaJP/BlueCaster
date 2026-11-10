@@ -34,7 +34,7 @@ describe("settings", () => {
   it("has no LE Audio or GMAP switch: both are the device's (Codecs)", async () => {
     start("#/settings");
     await screen.findByRole("switch", { name: named(t("ui.settings.developer_mode")) });
-    expect(screen.queryByRole("switch", { name: named(t("settings.le_low_latency")) })).toBeNull();
+    expect(screen.queryByText(t("codec.lc3_ll"))).toBeNull();
   });
 });
 
@@ -42,7 +42,7 @@ describe("Codecs screen", () => {
   /** The LE Audio entry of the earbuds on the Codecs screen */
   const leSection = () => screen.queryByRole("region", { name: "Galaxy Buds2 Pro" });
 
-  it("lists the LE Audio entry, LC3 alone and without settings, only with the setting on", async () => {
+  it("lists the LE Audio entry, LC3 and its low latency card, only with the setting on (issue #86)", async () => {
     start("#/codecs");
     await screen.findByRole("region", { name: "WH-1000XM5" });
     expect(leSection()).toBeNull();
@@ -51,10 +51,20 @@ describe("Codecs screen", () => {
 
     start("#/codecs", "le");
     const le = await screen.findByRole("region", { name: "Galaxy Buds2 Pro" });
+    // The LE Audio tag alone, not "Audio" beside it
     expect(le).toHaveTextContent(t("device.tag_le_audio"));
-    expect(within(le).getByRole("radio", { name: named(t("ui.codec.lc3")) })).toBeChecked();
-    expect(within(le).getAllByRole("radio").filter((r) => !r.closest(".headset-mic"))).toHaveLength(1);
-    expect(within(le).queryByRole("button", { name: /\.\.\.|settings/i })).toBeNull();
+    expect(within(le).queryByText(t("device.tag_audio"))).toBeNull();
+    const radios = within(le).getAllByRole("radio").filter((r) => !r.closest(".headset-mic"));
+    expect(radios.map((r) => (r as HTMLInputElement).value)).toEqual(["lc3", "lc3_ll"]);
+    // Cards like the A2DP ones: three bars each
+    expect(le.querySelectorAll(".codec-card .cbar")).toHaveLength(6);
+    // GMAP low latency is on by default
+    expect(within(le).getByRole("radio", { name: named(t("codec.lc3_ll")) })).toBeChecked();
+    // "..." shows the settings, read only
+    fireEvent.click(within(le).getByRole("button", { name: t("ui.profile.codec_settings", t("codec.lc3")) }));
+    const dialog = await screen.findByRole("dialog", { name: t("ui.profile.codec_settings", t("codec.lc3")) });
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
+    expect(within(dialog).getByText(t("connection.sample_rate"))).toBeInTheDocument();
   });
 
   it("says the adapter cannot stream LE Audio, or is not checked yet (issue #86)", async () => {
@@ -69,12 +79,10 @@ describe("Codecs screen", () => {
     expect(within(unchecked).getByText(t("ui.profile.le_audio_unchecked"))).toBeInTheDocument();
   });
 
-  it("offers GMAP low latency, on by default, saved with the profile", async () => {
+  it("chooses LC3 without GMAP low latency, saved with the profile (issue #86)", async () => {
     const { calls } = start("#/codecs", "le");
     const le = await screen.findByRole("region", { name: "Galaxy Buds2 Pro" });
-    const gmap = within(le).getByRole("switch", { name: t("settings.le_low_latency") });
-    expect(gmap).toBeChecked();
-    fireEvent.click(gmap);
+    fireEvent.click(le.querySelector<HTMLInputElement>('input[value="lc3"]')!);
     await waitFor(() => expect(calls.some((c) => c.method === "profile.save")).toBe(true));
     const saved = (calls.find((c) => c.method === "profile.save")!.params as { profile: Record<string, unknown> }).profile;
     expect(saved).toMatchObject({ name: "Buds (LE Audio)", le_audio: true, le_low_latency: false });
@@ -84,7 +92,7 @@ describe("Codecs screen", () => {
     const { calls } = start("#/codecs", "le");
     await mock!.call("profile.delete", { name: "Buds (LE Audio)" });
     const le = await screen.findByRole("region", { name: "Galaxy Buds2 Pro" });
-    const lc3 = within(le).getByRole("radio", { name: named(t("ui.codec.lc3")) });
+    const lc3 = within(le).getByRole("radio", { name: named(t("codec.lc3_ll")) });
     await waitFor(() => expect(lc3).not.toBeChecked());
     fireEvent.click(lc3);
     await waitFor(() => expect(calls.some((c) => c.method === "profile.save")).toBe(true));
@@ -112,23 +120,45 @@ describe("Codecs screen", () => {
 });
 
 describe("device list", () => {
-  it("lists a dual-mode device twice with LE Audio on, with its tags", async () => {
+  it("lists a dual-mode device once with LE Audio on, as its LE Audio entry (issue #86)", async () => {
     start("#/devices", "le");
     fireEvent.click(await screen.findByRole("button", { name: t("connection.scan") }));
     await screen.findByText(/LE Audio Speaker/);
     const rows = within(screen.getByRole("main"))
       .getAllByText(/Galaxy Buds2 Pro/)
       .map((r) => r.closest(".device-row") as HTMLElement);
-    expect(rows).toHaveLength(2);
-    expect(rows.map((r) => r.dataset.key).sort()).toEqual(["F4:4E:FD:00:11:22", "F4:4E:FD:00:11:22/le"]);
-    const le = rows.find((r) => r.dataset.key!.endsWith("/le"))!;
-    const classic = rows.find((r) => !r.dataset.key!.endsWith("/le"))!;
-    expect(le).toHaveTextContent(t("device.tag_le_audio_set"));
-    expect(classic).toHaveTextContent(t("device.tag_audio"));
-    expect(classic).not.toHaveTextContent(t("device.tag_le_audio"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].dataset.key).toBe("F4:4E:FD:00:11:22/le");
+    expect(rows[0]).toHaveTextContent(t("device.tag_le_audio_set"));
+    const tags = [...rows[0].querySelectorAll(".tag")].map((x) => x.textContent);
+    expect(tags).not.toContain(t("device.tag_audio"));
     const speaker = screen.getByText(/LE Audio Speaker/).closest(".device-row")!;
     expect(speaker).toHaveTextContent(t("device.tag_le_audio"));
     expect(speaker).not.toHaveTextContent(t("device.tag_le_audio_set"));
+  });
+
+  it("adds both sides of a dual-mode device with one Add, and connects it over LE Audio (issue #86)", async () => {
+    const { calls } = start("#/devices", "le");
+    // Neither side saved yet
+    await mock!.call("device.forget", { address: "F4:4E:FD:00:11:22", le_audio: true });
+    await mock!.call("device.forget", { address: "F4:4E:FD:00:11:22" });
+    calls.length = 0;
+    fireEvent.click(await screen.findByRole("button", { name: t("connection.scan") }));
+    await screen.findByText(/LE Audio Speaker/);
+    const row = within(screen.getByRole("main"))
+      .getAllByText(/Galaxy Buds2 Pro/)
+      .map((r) => r.closest(".device-row") as HTMLElement)[0];
+    fireEvent.click(within(row).getByRole("button", { name: t("ui.devices.add") }));
+    await waitFor(() => expect(calls.some((c) => c.method === "stream.start")).toBe(true));
+    const renames = calls.filter((c) => c.method === "device.rename").map((c) => c.params as { le_audio?: boolean });
+    expect(renames.map((r) => r.le_audio === true).sort()).toEqual([false, true]);
+    const made = calls
+      .filter((c) => c.method === "profile.save")
+      .map((c) => (c.params as { profile: { le_audio: boolean; device_address: string } }).profile);
+    expect(made.map((p) => p.le_audio).sort()).toEqual([false, true]);
+    expect(made.every((p) => p.device_address === "F4:4E:FD:00:11:22")).toBe(true);
+    const started = calls.find((c) => c.method === "stream.start")!.params as { profile: string };
+    expect(started.profile).toBe("Galaxy Buds2 Pro LE Audio");
   });
 
   it("hides the LE Audio entries with LE Audio off", async () => {

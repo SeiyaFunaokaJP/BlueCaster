@@ -72,7 +72,7 @@ BlueCaster/
 ├── Cargo.toml              Cargo workspace
 ├── installer/              Release script, Inno Setup script, updater notes (installer/README.md)
 ├── compat/                 MSVC compatibility headers for the AOSP code
-├── docs/                   Documentation (this site) and the design document (v2-design.md)
+├── docs/                   Documentation (this site)
 ├── extern/                 Third-party C libraries (git submodules)
 │   ├── btstack/            BTstack Bluetooth stack
 │   ├── libldac/            AOSP LDAC encoder
@@ -132,7 +132,7 @@ python tools/emu/run_test.py                        # every codec and negotiatio
 | オプション | 説明 |
 |:-------|:------------|
 | `--codecs sbc aac ...` | これらのコーデック（`sbc sbcxq aac aptx aptxhd aptxll ldac lhdcv5 faststream opus opus05`）またはネゴシエーションのケース（サンプルレート、低い bitpool、SBC のフレーム設定、aptX Adaptive、...。`-h` で一覧）だけを試す。既定: すべて |
-| `--le-audio [case ...]` | 代わりに LE Audio（実験的）のケースを実行（既定: すべて） |
+| `--le-audio [case ...]` | 代わりに LE Audio のケースを実行（既定: すべて） |
 | `--scan [case ...]` | 代わりにデバイス検索のケースを実行（`eir`、`name-request`） |
 | `--link [case ...]` | 代わりにリンクのケースを実行（`disconnect`、`device-link`、`device-a2dp`、`device-stream`、`restart-on-link`） |
 | `--duration <s>` | コーデックごとの配信時間（秒。既定 5） |

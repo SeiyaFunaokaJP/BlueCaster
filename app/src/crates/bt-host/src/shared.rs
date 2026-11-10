@@ -34,6 +34,10 @@ pub struct State {
     /// The HCI version the controller reports (Bluetooth core version:
     /// 12 = 5.3), once it has answered Read Local Version
     pub hci_version: Option<u8>,
+    /// `hci_version` is the one of the firmware that runs: init is done and
+    /// a Realtek download, if any, was read back (the first read of an init
+    /// comes before the download, from the ROM code)
+    pub hci_version_settled: bool,
     /// The headphones' battery level in percent (HFP), once they said
     pub battery: Option<u8>,
 

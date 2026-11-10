@@ -39,7 +39,6 @@ const PLAIN_STATUS: Record<string, string> = {
   // Why another codec is used goes on the codec's line (issue #86)
   "status.connected_fallback": "status.connected",
   "status.connected_fallback_in_use": "status.connected",
-  "status.connected_fallback_experimental": "status.connected",
   "status.connected_fallback_developer": "status.connected",
 };
 
@@ -275,11 +274,10 @@ export function codecDetails(info: StreamInfo): string[] {
 }
 
 /** Beside the codec's name when it is not the one chosen: "(Opus is
- *  unsupported)", in use elsewhere, or experimental and off (issue #86); the
+ *  unsupported)", in use elsewhere, or developer mode only (issue #86); the
  *  reason is the core's message, the status line just says "Connected" */
 export function fallbackNoteKey(info: StreamInfo, messageKey: string): string | null {
   if (!info.requested_codec) return null;
-  if (messageKey === "status.connected_fallback_experimental") return "ui.codec.fallback_experimental";
   if (messageKey === "status.connected_fallback_developer") return "ui.codec.fallback_developer";
   return info.requested_in_use ? "ui.codec.fallback_in_use" : "ui.codec.fallback_unsupported";
 }

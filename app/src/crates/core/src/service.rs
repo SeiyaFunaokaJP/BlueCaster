@@ -93,6 +93,40 @@ pub struct ScannedDevice {
     pub le_audio_set: bool,
 }
 
+/// One device, not two (issue #86): a scan that finds the other side
+/// (classic / LE Audio, the same address) of a saved device saves that side
+/// too, under the saved name, so the device stays one entry that "Use LE
+/// Audio when available" connects either way. The sides saved.
+fn save_twins(dir: &std::path::Path, found: &[ScannedDevice]) -> usize {
+    let saved = crate::devices::load_all(dir);
+    let mut n = 0;
+    for d in found {
+        let has = |le: bool| saved.iter().find(|s| s.le_audio == le && s.address.eq_ignore_ascii_case(&d.address));
+        if has(d.le_audio).is_some() {
+            continue;
+        }
+        // The other side saved, and this side found by the scan
+        let Some(other) = has(!d.le_audio) else { continue };
+        let name = if other.name.is_empty() { d.name.as_str() } else { other.name.as_str() };
+        let r = if d.le_audio {
+            crate::devices::save_le(dir, &d.address, name)
+        } else {
+            crate::devices::save(dir, &d.address, name)
+        };
+        match r {
+            Ok(()) => {
+                n += 1;
+                tracing::info!(
+                    "scan: the {} side of a saved device saved with it",
+                    if d.le_audio { "LE Audio" } else { "classic" }
+                );
+            }
+            Err(e) => tracing::warn!("scan: saving the other side of a saved device: {e}"),
+        }
+    }
+    n
+}
+
 impl ScannedDevice {
     fn classic(d: &DiscoveredDevice) -> ScannedDevice {
         ScannedDevice {
@@ -266,6 +300,9 @@ pub enum ServiceEvent {
     /// The voice codecs the headphones listed on their HFP connection
     /// ("cvsd", "msbc", "lc3_swb"; StreamStatus.voice_codecs)
     VoiceCodecs(Vec<String>),
+    /// LE Audio: the microphone's sampling rates the headphones allow (Hz),
+    /// Auto's first (StreamStatus.mic_rates); empty without a microphone
+    MicRates(Vec<u32>),
     /// While the session waited for its headphones that went off, another
     /// saved device connected to the PC (its address): its session may
     /// start instead
@@ -284,6 +321,8 @@ pub struct VoiceChange {
     pub mode: HeadsetMic,
     /// As [`StreamRequest::mic_output`]
     pub mic_output: Option<String>,
+    /// As [`StreamRequest::voice_codec`]
+    pub voice_codec: Option<voice_link::VoiceCodec>,
 }
 
 pub struct ServiceOptions {
@@ -406,6 +445,12 @@ impl Inner {
     /// Headset mode's voice link carries audio (Some) or no longer
     pub fn voice_status(&self, status: Option<ipc::VoiceStatus>) {
         let _ = self.events.lock().unwrap_or_else(|e| e.into_inner()).send(ServiceEvent::Voice(status));
+    }
+
+    /// LE Audio: the microphone rates the headphones allow, Auto's first
+    /// (StreamStatus.mic_rates)
+    pub fn mic_rates(&self, rates: Vec<u32>) {
+        let _ = self.events.lock().unwrap_or_else(|e| e.into_inner()).send(ServiceEvent::MicRates(rates));
     }
 
     pub fn set_unlisted_keeps(&self, keeps: [bool; 2]) {
@@ -541,7 +586,7 @@ impl Inner {
         let mut last = InitFailure::Failed;
         let le_on = self.le_wanted();
         if le_on {
-            tracing::info!("LE Audio (experimental) is on: BTstack starts with LE");
+            tracing::info!("LE Audio is on: BTstack starts with LE");
         }
         for attempt in 1..=attempts {
             if attempt > 1 {
@@ -588,23 +633,25 @@ impl Inner {
             && let Some((vid, pid)) = hci_transport::usb::last_opened()
         {
             crate::adapter::save_le_audio(&self.opts.config_dir, vid, pid, capable);
-            // The address comes with the controller's answer, a moment after init
+            // The address comes with the controller's answer, a moment after
+            // init; a Realtek adapter's version once its download was read
+            // back (issue #427: the first read is the ROM code's)
             let dir = self.opts.config_dir.clone();
             let host = host.clone();
             let _ = std::thread::Builder::new().name("adapter-address".into()).spawn(move || {
-                for _ in 0..20 {
-                    if let Some(a) = host.local_address() {
+                let mut address_saved = false;
+                for _ in 0..40 {
+                    if !address_saved && let Some(a) = host.local_address() {
                         crate::adapter::save_address(&dir, vid, pid, &a);
-                        // Read Local Version is answered before Read BD_ADDR
-                        match host.hci_version() {
-                            Some(v) => crate::adapter::save_hci_version(&dir, vid, pid, v),
-                            None => tracing::debug!("adapter: no HCI version, not saved"),
-                        }
+                        address_saved = true;
+                    }
+                    if address_saved && let Some(v) = host.hci_version() {
+                        crate::adapter::save_hci_version(&dir, vid, pid, v);
                         return;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(250));
                 }
-                tracing::debug!("adapter: no local address after 5 s, not saved");
+                tracing::debug!("adapter: address saved {address_saved}, no HCI version after 10 s, not saved");
             });
         }
     }
@@ -695,11 +742,7 @@ impl Inner {
             } else if self.le_active() != le_wanted {
                 // Turned on or off while streaming or scanning: applied now,
                 // before the next scan or connection (v1)
-                Some(if le_wanted {
-                    "LE Audio (experimental) was turned on"
-                } else {
-                    "LE Audio (experimental) was turned off"
-                })
+                Some(if le_wanted { "LE Audio was turned on" } else { "LE Audio was turned off" })
             } else if (self.voice_wanted.load(Ordering::Acquire) || self.mic_test.needs_voice()) && !h.voice_enabled() {
                 Some("headset mode needs the stack with voice")
             } else if !h.controller_responds(CONTROLLER_PROBE) {
@@ -997,17 +1040,18 @@ fn afh_policy(settings: &Settings) -> &str {
 }
 
 /// The developer overrides (and the health log's interval) count only while
-/// developer mode is on; so does asking classic devices for their LE keys
-/// (issue #86, for the Services popup; it needs LE Audio on as well)
+/// developer mode is on. Classic devices are asked for their LE keys always
+/// (issue #86: one pairing for both, as Windows does; it runs only with LE
+/// Audio on, where SM is set up).
 fn apply_dev_overrides(settings: &Settings) {
-    bt_host::set_ctkd(settings.debug_mode);
+    bt_host::set_ctkd(true);
     codec::dev::set_overrides(if settings.debug_mode { settings.dev_overrides } else { Default::default() });
     crate::vendor::set_overrides(if settings.debug_mode { settings.dev_vendors.clone() } else { Default::default() });
     crate::health::set_every_interval(settings.log().health_every_interval);
     // Developer > Debug, read when the adapter opens next
     let debug = if settings.debug_mode { settings.dev_debug.clone() } else { Default::default() };
     hci_transport::iso_intr::set_config(hci_transport::iso_intr::IsoInterfaceConfig {
-        enabled: debug.mtk_iso_interface,
+        bulk: debug.mtk_iso_bulk,
         pad_to: debug.mtk_iso_pad.into(),
     });
     let command = bt_host::debug_command::parse(&debug.mtk_command).unwrap_or_else(|e| {
@@ -1157,12 +1201,12 @@ impl Service {
         if old.le_audio_experimental != new_le && host.is_some() && self.inner.le_active() != self.inner.le_wanted() {
             if self.is_running() || self.is_scanning() {
                 tracing::info!(
-                    "LE Audio (experimental) turned {}: BTstack restarts before the next scan or connection",
+                    "LE Audio turned {}: BTstack restarts before the next scan or connection",
                     if new_le { "on" } else { "off" }
                 );
             } else {
                 tracing::info!(
-                    "LE Audio (experimental) turned {}: stopping BTstack, the next scan or connection starts it anew",
+                    "LE Audio turned {}: stopping BTstack, the next scan or connection starts it anew",
                     if new_le { "on" } else { "off" }
                 );
                 self.inner.shutdown_host();
@@ -1253,7 +1297,8 @@ impl Service {
         true
     }
 
-    /// Headset mode off, on or auto for the classic stream running, the
+    /// Headset mode off, on or auto, its output and the best call codec
+    /// (`voice_codec`, None: Auto) for the classic stream running, the
     /// link kept (the session's next tick). False when none streams, LE
     /// Audio runs, or the stack was started without voice (on or auto): the
     /// caller starts the stream again instead.
@@ -1264,7 +1309,12 @@ impl Service {
     /// has ended (never the session thread itself, which takes no
     /// `control`), and the stream is then not Streaming; so without a
     /// stream streaming it answers at once.
-    pub fn set_headset_mic(&self, mode: HeadsetMic, mic_output: Option<String>) -> bool {
+    pub fn set_headset_mic(
+        &self,
+        mode: HeadsetMic,
+        mic_output: Option<String>,
+        voice_codec: Option<voice_link::VoiceCodec>,
+    ) -> bool {
         let on = mode.is_on();
         if !self.is_running() || self.state() != StreamState::Streaming {
             return false;
@@ -1281,6 +1331,7 @@ impl Service {
             Some(req) if req.le.is_none() => {
                 req.headset_mic = mode;
                 req.mic_output = mic_output.clone();
+                req.voice_codec = voice_codec;
             }
             _ => return false,
         }
@@ -1288,7 +1339,8 @@ impl Service {
         // voice (ensure_host restarts only for voice wanted and missing), a
         // stack started later goes without it.
         self.inner.voice_wanted.store(on, Ordering::Release);
-        *self.inner.voice_change.lock().unwrap_or_else(|e| e.into_inner()) = Some(VoiceChange { mode, mic_output });
+        *self.inner.voice_change.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(VoiceChange { mode, mic_output, voice_codec });
         self.inner.tick.1.notify_all();
         true
     }
@@ -1805,6 +1857,7 @@ impl Service {
             }
             le_found = found;
             list.extend(entries);
+            save_twins(&self.inner.opts.config_dir, &list);
         }
         self.inner.notify(StreamState::Idle, Msg::with("status.scan_complete", &[&(classic.len() + le_found)]));
         Ok(list)
@@ -1919,6 +1972,34 @@ mod tests {
         assert_eq!(reconnect_after_restart(true, false, last()), None);
         assert_eq!(reconnect_after_restart(false, true, last()), None);
         assert_eq!(reconnect_after_restart(false, false, None), None);
+    }
+
+    #[test]
+    fn a_scan_saves_the_other_side_of_a_saved_device() {
+        let dir = std::env::temp_dir().join(format!("bluecaster-twins-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(crate::paths::devices_dir(&dir)).unwrap();
+        crate::devices::save(&dir, "AA:BB:CC:DD:EE:01", "Buds").unwrap();
+        let found = |address: &str, le_audio| ScannedDevice {
+            address: address.into(),
+            name: String::new(),
+            rssi: -50,
+            class_of_device: 0,
+            audio: true,
+            le_audio,
+            le_audio_set: false,
+        };
+        let list =
+            [found("AA:BB:CC:DD:EE:01", false), found("aa:bb:cc:dd:ee:01", true), found("AA:BB:CC:DD:EE:02", true)];
+        // The LE Audio side of the saved one, under its name; not the stranger
+        assert_eq!(save_twins(&dir, &list), 1);
+        let le = crate::devices::load_le(&dir);
+        assert_eq!(le.len(), 1);
+        assert!(le[0].address.eq_ignore_ascii_case("AA:BB:CC:DD:EE:01"));
+        assert_eq!(le[0].name, "Buds");
+        // Once
+        assert_eq!(save_twins(&dir, &list), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn service() -> Service {
@@ -2036,7 +2117,7 @@ mod tests {
         let s = std::sync::Arc::new(service());
         *s.last_request.lock().unwrap() = Some(StreamRequest { headset_mic: HeadsetMic::On, ..request() });
         // No session: at once
-        assert!(!s.set_headset_mic(HeadsetMic::Off, None));
+        assert!(!s.set_headset_mic(HeadsetMic::Off, None, None));
         s.inner.running.store(true, Ordering::Release);
         s.inner.notify(StreamState::Streaming, Msg::new("status.connected"));
         s.inner.voice_wanted.store(true, Ordering::Release);
@@ -2052,15 +2133,18 @@ mod tests {
             held_rx.recv().unwrap();
             t
         };
-        assert!(s.set_headset_mic(HeadsetMic::Off, None));
+        assert!(s.set_headset_mic(HeadsetMic::Off, None, Some(voice_link::VoiceCodec::Msbc)));
         holder.join().unwrap();
         // Off: no longer wanted (the running stack keeps its voice)
         assert!(!s.inner.voice_wanted.load(Ordering::Acquire));
-        assert_eq!(s.inner.take_voice_change(), Some(VoiceChange { mode: HeadsetMic::Off, mic_output: None }));
-        assert_eq!(s.last_request.lock().unwrap().as_ref().unwrap().headset_mic, HeadsetMic::Off);
+        let codec = Some(voice_link::VoiceCodec::Msbc);
+        let change = VoiceChange { mode: HeadsetMic::Off, mic_output: None, voice_codec: codec };
+        assert_eq!(s.inner.take_voice_change(), Some(change));
+        let last = s.last_request.lock().unwrap().clone().unwrap();
+        assert_eq!((last.headset_mic, last.voice_codec), (HeadsetMic::Off, codec));
         // On and Auto need a stack with voice: none runs here
-        assert!(!s.set_headset_mic(HeadsetMic::On, Some("{cable}".into())));
-        assert!(!s.set_headset_mic(HeadsetMic::Auto, Some("{cable}".into())));
+        assert!(!s.set_headset_mic(HeadsetMic::On, Some("{cable}".into()), None));
+        assert!(!s.set_headset_mic(HeadsetMic::Auto, Some("{cable}".into()), None));
         assert!(!s.inner.voice_wanted.load(Ordering::Acquire));
     }
 

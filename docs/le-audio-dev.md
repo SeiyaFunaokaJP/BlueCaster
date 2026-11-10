@@ -5,11 +5,11 @@ nav_exclude: true
 english_only: true
 ---
 
-# LE Audio (experimental) - developer note
+# LE Audio - developer note
 
 BlueCaster can stream to LE Audio devices as a **BAP unicast client** (audio
 source): LC3 over Connected Isochronous Streams (CIS), on the same BTstack
-session and WinUSB adapter as A2DP. It is **experimental**, used only for a
+session and WinUSB adapter as A2DP. It is used only for a
 device's LE Audio entry (or `--le-audio` in CLI mode). `le_audio_experimental`
 in `settings.json` (on by default, no switch in the window) turns the LE side
 off altogether. With the setting off none of the LE code runs and HCI init is that of a build
@@ -102,7 +102,9 @@ the GATT client or the GATT server runs on the **BTstack thread**, through an
    SM pairing / re-encryption (a bond the device lost is deleted and pairing
    repeated once) -> **`on_encrypted`** -> GATT discovery into
    `LeDevice::services` (skipped when the device's Database Hash matches the
-   one kept with its services in `le_gatt_cache.txt`) -> PACS / ASCS reads and notifications ->
+   one kept with its services in `le_gatt_cache.txt`, or when it has no usable
+   Database Hash but Service Changed: a Service Changed indication or a failed
+   setup drops the kept list) -> PACS / ASCS reads and notifications ->
    **`on_gatt_ready`** -> the device id. On timeout / cancel the connect is
    cancelled; a link that still comes up afterwards is disconnected.
 5. `le_start_stream(devices, request, silence)`: **`prepare_group`** (worker)
@@ -262,7 +264,9 @@ preset (C->P) and adds a source direction (P->C) to the CIS plan
   32_1_1, 24_2_1, 24_1_1, 16_2_1, 16_1_1`; those with the sink preset's frame
   duration first) that every such device's Source PAC records allow;
   GMAP low latency with UGTs that all have the Source feature puts the `_gs`
-  presets first
+  presets first; `source_rate` (the rate chosen, `--mic-rate`) takes the
+  first of those at that rate, the first at any rate when none is;
+  `SourcePlan::rates` lists the rates that fit, Auto's first
 - source contexts: Conversational (GMAP: Game + Conversational), chosen
   from the Available Source Contexts; the sink ASEs also ask for
   Conversational next to Media where available (CCP's `add_ccids` then adds
@@ -477,7 +481,7 @@ CLI) and a group of UGTs with the Sink feature,
 `adjust_stream_request` puts `48_3_gr, 48_4_gr, 48_1_gr, 48_2_gr, 32_1_gr,
 32_2_gr` first with the Game context (Media when Game is not available).
 
-**BAS (Battery Service client, `bas.rs`, experimental).** Reads each
+**BAS (Battery Service client, `bas.rs`).** Reads each
 device's Battery Level and follows its notifications; with a set of earbuds
 the lowest level is reported (`HostEvent::Battery`, "BAS: device N: battery
 X% (reported Y%)"). Emulator option `--bas L[,L2]`, `--bas-change S:L`.
@@ -567,7 +571,20 @@ Users with the setting off get the behaviour of a build without LE:
   Audio is off still advertise over LE for their app). Emulator scan case
   `le-audio` (`run_test.py --scan le-audio`).
 - **Devices and profiles.** A dual-mode device has two entries (classic and
-  LE Audio, same address); an LE scan never marks a classic entry. LE Audio
+  LE Audio, same address) in the core; an LE scan never marks a classic
+  entry. The UI shows them as one (issue #86, `lib/profile.ts`
+  `listedDevices`): with the setting on, the LE Audio entry stands for
+  both, Add / Rename / Forget act on both and Add makes both profiles; a
+  scan that finds the other side of a saved device saves it too
+  (`service.rs` `save_twins`). Turning the setting on or off while a device
+  streams restarts the stack and starts the device's profile of the other
+  kind (`state.rs` `le_switched_profile`, an LE profile made from the
+  classic one when missing). CTKD runs whenever SM is up, not only in
+  developer mode, so a classic pairing brings the LE keys.
+- **Conversational contexts.** With the microphone, the sink ASEs name the
+  source contexts alone (Conversational), not Media | Conversational: EarFun
+  earbuds answered that Enable with Rejected Metadata. A conversational
+  start that fails is retried once without the microphone. LE Audio
   entries are saved in `le_audio_devices.txt` so that `devices.txt` stays
   readable by older versions; `addr|name|le` lines of earlier prototypes are
   still read and moved. With the setting off the UI does not list LE Audio
@@ -610,7 +627,7 @@ Users with the setting off get the behaviour of a build without LE:
   scanning in the emulator. The aarch64 build of the LE code has not been
   checked.
 
-## TODO (before LE Audio can leave "experimental")
+## TODO
 
 Collected from the v1 profile branches (2026-10-16) and the v2 port
 (2026-10-18). Everything so far is verified only against the Bumble

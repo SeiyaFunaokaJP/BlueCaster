@@ -53,6 +53,25 @@ nav_order: 2.7
 
 通訊協定版本必須完全一致。讓版本 1 仍可運作的新增功能，改由 `features` 公告（請參閱 [相容性](#compatibility)）。
 
+```mermaid
+sequenceDiagram
+    participant C as 用戶端
+    participant B as bluecaster-core
+    C->>B: hello (protocol 1)
+    alt 協定相符
+        B-->>C: welcome (features)
+        B-->>C: snapshot (完整狀態，rev)
+        loop 連線期間（順序不定）
+            B-->>C: event (rev + 1)
+            C->>B: request (id)
+            B-->>C: response (相同 id)
+        end
+        B-->>C: bye (核心關閉時)
+    else 協定不符，或 5 秒內沒有 hello
+        B-->>C: reject, 關閉管道
+    end
+```
+
 ## 狀態與事件 {#state-and-events}
 
 ```json

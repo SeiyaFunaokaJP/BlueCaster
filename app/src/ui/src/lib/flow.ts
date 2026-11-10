@@ -117,8 +117,8 @@ const RULES: Rule[] = [
 ];
 
 const START = "stream: device ";
-/** An LE Audio stream's first line */
-const LE_START = "LE Audio (experimental) stream to ";
+/** An LE Audio stream's first line (with "(experimental)" in older logs) */
+const LE_START = /^LE Audio (\(experimental\) )?stream to /;
 const STOP = "streaming stopped";
 const ERROR_STATE = "state Error: ";
 
@@ -157,7 +157,7 @@ export class FlowTracker {
   /** Takes one log line; true if the flow changed */
   feed(line: LogLine): boolean {
     const t = line.message;
-    const start = t.includes(START) ? START : t.startsWith(LE_START) ? LE_START : null;
+    const start = t.includes(START) ? START : (LE_START.exec(t)?.[0] ?? null);
     if (start) {
       this.session = {
         id: this.nextId++,

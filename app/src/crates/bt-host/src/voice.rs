@@ -174,6 +174,18 @@ pub fn codec_key(id: u8) -> Option<&'static str> {
     }
 }
 
+/// The voice codecs the AG offers (HFP codec ids, best first) when the
+/// best one asked for is `max` (None: Auto, every codec). The ids are also
+/// the quality order (1 CVSD, 2 mSBC, 3 LC3-SWB), and BTstack takes the
+/// first one the headphones listed, CVSD when none is: a codec chosen that
+/// the headphones lack falls back to the next lower one they have.
+pub fn ag_codecs(max: Option<u8>) -> Vec<u8> {
+    [HFP_CODEC_LC3_SWB, HFP_CODEC_MSBC, HFP_CODEC_CVSD]
+        .into_iter()
+        .filter(|&c| max.is_none_or(|m| c <= m.max(HFP_CODEC_CVSD)))
+        .collect()
+}
+
 /// The HFP microphone gain (+VGM, 0..15) given on every voice link: the
 /// highest, as the headphones' own default is often low and nothing else
 /// raises the level on its way to apps (issue #86)
@@ -216,6 +228,14 @@ pub(crate) struct Voice {
     /// Failed sends since the last one that went
     failures_in_row: u32,
     received: u64,
+    /// The best codec asked for (HFP codec id; None: Auto), see [`ag_codecs`]
+    max_codec: Option<u8>,
+    /// The codecs BTstack's AG offers (None: those of its setup, every
+    /// one): set only when they change, so Auto never touches BTstack
+    offered: Option<Vec<u8>>,
+    /// The codecs changed since the last audio connection asked for: the
+    /// next one negotiates again (BTstack would reuse a codec it has)
+    renegotiate: bool,
 }
 
 impl Voice {
@@ -260,6 +280,32 @@ impl Voice {
         self.controller_sco_len = Some(b.sco_packet_length);
     }
 
+    /// The HFP AG was set up (again): it offers every codec of its setup
+    /// until the next audio connection asks for those chosen
+    pub fn on_ag_init(&mut self) {
+        self.offered = None;
+        self.renegotiate = ag_codecs(self.max_codec) != ag_codecs(None);
+    }
+
+    /// [`crate::BtHost::voice_codec`] on the BTstack thread: the codecs
+    /// offered from now on (`acl`: the service level connection, which
+    /// negotiates again on its next audio connection)
+    pub fn set_max_codec(&mut self, stack: &Stack, enabled: bool, acl: Option<u16>, max: Option<u8>) {
+        if self.max_codec != max {
+            tracing::info!(
+                "HFP: voice codec {}",
+                max.map_or("Auto".to_string(), |m| format!("{} at most", codec_name(m)))
+            );
+        }
+        self.max_codec = max;
+        let want = ag_codecs(max);
+        if enabled && *self.offered.get_or_insert_with(|| ag_codecs(None)) != want {
+            stack.hfp_ag_set_codecs(acl.unwrap_or(0xFFFF), &want);
+            self.offered = Some(want);
+            self.renegotiate = true;
+        }
+    }
+
     /// [`crate::BtHost::voice_start`] on the BTstack thread
     pub fn start(
         &mut self,
@@ -271,6 +317,13 @@ impl Voice {
     ) -> Result<(), HostError> {
         self.check(enabled, acl, stack.transport_is_h2())?;
         let Some(acl) = acl else { return Err(HostError::NotConnected) };
+        // Other codecs asked for since: negotiated again, in case an
+        // earlier audio connection settled on one of the old ones
+        if std::mem::take(&mut self.renegotiate) {
+            let want = ag_codecs(self.max_codec);
+            stack.hfp_ag_set_codecs(acl, &want);
+            self.offered = Some(want);
+        }
         let status = stack.hfp_ag_audio_connect(acl);
         if status != 0 {
             tracing::info!("HFP: audio connection refused by BTstack (0x{status:02x})");
@@ -512,6 +565,16 @@ mod tests {
         assert_eq!(parse_sco(&p), Some((0x0123, 2, &[9u8, 8, 7][..])));
         assert_eq!(parse_sco(&[0x23, 0x01, 4, 1, 2]), None);
         assert_eq!(parse_sco(&[0x23]), None);
+    }
+
+    #[test]
+    fn ag_codecs_go_down_from_the_one_chosen() {
+        assert_eq!(ag_codecs(None), [3, 2, 1]);
+        assert_eq!(ag_codecs(Some(HFP_CODEC_LC3_SWB)), [3, 2, 1]);
+        assert_eq!(ag_codecs(Some(HFP_CODEC_MSBC)), [2, 1]);
+        assert_eq!(ag_codecs(Some(HFP_CODEC_CVSD)), [1]);
+        // An unknown id below CVSD still leaves CVSD
+        assert_eq!(ag_codecs(Some(0)), [1]);
     }
 
     #[test]

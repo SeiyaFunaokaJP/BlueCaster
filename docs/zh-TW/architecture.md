@@ -20,7 +20,7 @@ nav_order: 4
 
 BlueCaster 讓 Windows 能使用 LHDC V5、LDAC、aptX Adaptive、aptX HD、
 aptX Low Latency、aptX、Opus、AAC、SBC XQ 與 SBC 藍牙音訊
-（以及透過 LE Audio 的 LC3，實驗性）。Windows 本身的藍牙堆疊在 A2DP 上
+（以及透過 LE Audio 的 LC3）。Windows 本身的藍牙堆疊在 A2DP 上
 只支援 SBC、傳統 aptX 與（僅限 Windows 11）AAC — 本工具不需核心驅動程式
 即可加入其他轉碼器。
 
@@ -47,20 +47,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Windows 音訊: 系統回送 / 虛擬裝置 / 單一應用程式"]
-    ui["bluecaster.exe: 視窗與系統匣快顯視窗 (Tauri + SolidJS)"]
-    subgraph core["bluecaster-core.exe (常駐，使用者模式)"]
-        ctl["系統匣選單 / IPC 伺服器 / CLI (--cli)"] --> svc["核心服務: 連線狀態機、轉碼器選擇、設定檔、重新連線"]
+    ui["bluecaster.exe:<br>視窗與系統匣快顯視窗<br>(Tauri + SolidJS)"]
+    src["Windows 音訊:<br>系統回送 / 虛擬裝置 /<br>單一應用程式"]
+    subgraph core["bluecaster-core.exe"]
+        ctl["系統匣選單 / IPC 伺服器 /<br>CLI (--cli)"] --> svc["核心服務:<br>連線狀態機、轉碼器選擇、<br>設定檔、重新連線"]
         svc --> cap["WASAPI 擷取"]
-        cap -- PCM --> enc["編碼器管線: LDAC / aptX 系列 / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack: HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["編碼器管線:<br>LDAC / aptX 系列 / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack:<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
     ui <-->|"每位使用者專屬的具名管道"| ctl
-    svc -.->|"UAC，僅用於變更驅動程式或匯入 Windows 的金鑰"| drv["bluecaster-driver.exe (提高權限): 指派 / 還原 WinUSB、讀取 Windows 的連結金鑰"]
     src --> cap
-    bt -->|"WinUSB (nusb)"| usb["USB 藍牙介面卡 (WinUSB 驅動程式)"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB (nusb)"| usb["USB 藍牙介面卡<br>(WinUSB 驅動程式)"]
     usb -. 藍牙 .-> hp["耳機 / 喇叭"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe (提高權限):<br>指派 / 還原 WinUSB、<br>讀取 Windows 的連結金鑰"]
 ```
 
 - **核心不是 Windows 服務。** 它是已登入使用者的一般處理程序，因為 WASAPI
@@ -108,16 +107,16 @@ sequenceDiagram
     participant App as BlueCaster (BTstack)
     participant Ad as USB 介面卡
     participant Sink as 耳機
-    App->>Ad: 透過 WinUSB 開啟，HCI reset / 初始化
+    App->>Ad: 透過 WinUSB 開啟，<br>HCI reset / 初始化
     opt Realtek、Intel、Broadcom
         App->>Ad: 上傳韌體
     end
     App->>Sink: ACL 連線
-    Note over App,Sink: 首次連線時進行 SSP Just Works（儲存連結金鑰）
-    App->>Sink: L2CAP 通道，PSM 0x0019 (AVDTP 信令)
+    Note over App,Sink: 首次連線時進行 SSP Just Works<br>（儲存連結金鑰）
+    App->>Sink: L2CAP 通道，PSM 0x0019<br>(AVDTP 信令)
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: 串流端點與轉碼器
-    App->>Sink: SET_CONFIGURATION (所選轉碼器)、OPEN、START
+    App->>Sink: SET_CONFIGURATION<br>(所選轉碼器)、OPEN、START
     loop 串流期間
         App->>Sink: 透過 L2CAP 傳送 AVDTP 媒體封包
     end
@@ -147,7 +146,7 @@ HCI Reset（仍處於 bootloader 的控制器除外），讓下一個工作階�
 | 2. 元件 | `audio-capture` | WASAPI 擷取（`wasapi` crate）：系統回送、虛擬裝置、單一應用程式（處理程序回送）；裝置與應用程式清單、測試音、各應用程式的音量（音量混音程式） |
 | 2. 元件 | `voice-link` | 耳機麥克風的音訊（開發人員模式）：向所選輸出裝置播放單聲道 PCM（WASAPI）、為上行方向將擷取縮混為單聲道，以及基於 SCO 酬載的語音轉碼器 CVSD / mSBC / LC3-SWB |
 | 3. 引擎 | `bt-host` | 在專用執行緒上執行 BTstack，由命令與具型別的事件驅動：GAP、A2DP Source、AVRCP、SDP、供轉送使用的 RFCOMM 通道（`rfcomm.*`）、連結金鑰、裝置的 SDP 服務、AFH、韌體載入與晶片載入程式（`bringup`）、晶片探測與晶片指令碼、HCI 擷取（`.pklg`）、LE Audio（`le/`） |
-| 2. 元件 | `le-audio` | LE Audio（實驗性）：不依賴 BTstack 或 Windows 的邏輯（assigned numbers、LTV、PACS / ASCS PDU、預設組合、CSIP / VCP / MCP / CCP 模型） |
+| 2. 元件 | `le-audio` | LE Audio：不依賴 BTstack 或 Windows 的邏輯（assigned numbers、LTV、PACS / ASCS PDU、預設組合、CSIP / VCP / MCP / CCP 模型） |
 | 3. 引擎 | `pipeline` | PCM 環形緩衝區、格式轉換、降混、編碼、媒體酬載、送出節奏控制、ABR |
 | 4. 核心 | `bluecaster-core`（目錄 `core`） | 狀態機、重新連線、睡眠 / 恢復、設定檔、設定與 v1 移轉、音量同步、輸出靜音、更新檢查、Realtek 韌體下載、接收器測試用戶端、統計資料、廠商協定（`vendor/`） |
 | 4. 核心 | `ipc` | 核心與視窗共用的通訊協定型別（serde；TypeScript 型別以 `ts-rs` 產生）與管道的訊框處理 |
@@ -166,8 +165,8 @@ config:
 ---
 flowchart TD
     out["系統音訊輸出 (回送 / 虛擬裝置 / 單一應用程式)"]
-    out --> cap["capture 執行緒: WASAPI，事件驅動 (通常為 float32，44.1–96 kHz)"]
-    cap -->|"無鎖環形緩衝區 (PCM)"| enc["encode 執行緒: 轉換、降混、編碼器、媒體酬載 + RTP 標頭、ABR"]
+    out --> cap["capture 執行緒:<br>WASAPI，事件驅動 (通常為 float32，44.1–96 kHz)"]
+    cap -->|"無鎖環形緩衝區 (PCM)"| enc["encode 執行緒:<br>轉換、降混、編碼器、媒體酬載 + RTP 標頭、ABR"]
     enc -->|"無鎖環形緩衝區 (封包)"| stack["bt-runloop 執行緒: BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → USB 藍牙介面卡 → 無線電"]
     usb -.-> hp["耳機 / 喇叭"]
@@ -219,7 +218,7 @@ stateDiagram-v2
     Idle --> Connecting: 開始
     Connecting --> Streaming: 串流已開始
     Connecting --> Idle: 已停止
-    Connecting --> Error: 初始化 / 連線 / 轉碼器失敗
+    Connecting --> Error: 初始化 / 連線 /<br>轉碼器失敗
     Streaming --> Reconnecting: 連線中斷
     Reconnecting --> Streaming: 已重新連線
     Reconnecting --> Error: 重新連線失敗
@@ -253,6 +252,22 @@ Windows 8 以上內建由 Microsoft 簽署的 WinUSB 驅動程式（`winusb.inf`
 （`ShellExecuteEx` "runas"）啟動輔助程式，並讀取其 JSON 結果。列出介面卡及其
 驅動程式不需要提高權限。
 
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver（提高權限）
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: 透過 UAC 提示啟動
+    alt 指派
+        Drv->>Win: 在 Device Parameters<br>寫入 DeviceInterfaceGUIDs
+        Drv->>Win: 安裝 winusb.inf（WinUsb Device）
+    else 還原
+        Drv->>Win: 移除裝置並重新列舉
+        Win->>Win: 重新選擇最合適的驅動程式
+    end
+    Drv-->>Core: 結果（JSON）
+```
+
 ## 主要模組 {#key-modules}
 
 ### 轉碼器選擇 (`codec::caps`) {#codec-choice-codeccaps}
@@ -262,10 +277,6 @@ Windows 8 以上內建由 Microsoft 簽署的 WinUSB 驅動程式（`winusb.inf`
 - 選擇轉碼器：「自動」會選用遠端提供的音質最高的轉碼器；若要求的轉碼器不在
   遠端提供的清單中，會改用「自動」會選擇的同一個轉碼器（設定檔自 issue #86 起
   一律如此；命令列只在加上 `--fallback` 時），否則視為錯誤
-- 命令列加上 `--no-experimental` 時，「自動」與替代選擇不會使用實驗性轉碼器
-  （aptX HD、aptX LL、Opus、Opus 05、FastStream）；應用程式一律會使用它們
-  （自 issue #86 起，2.0.2-beta.7 的「編解碼器」頁面帶來的 `experimental_codecs`
-  設定一律視為開啟）
 - `auto_codec` 設定開啟時（**編解碼器 > 自動選擇支援的音質最高的編解碼器**，
   自 schema 5 起是適用於所有裝置的單一設定），每個 A2DP 設定檔都以「自動」
   及其預設設定串流；為裝置選擇的轉碼器會保留在其設定檔中，供關閉時使用
@@ -295,7 +306,7 @@ Windows 8 以上內建由 Microsoft 簽署的 WinUSB 驅動程式（`winusb.inf`
 - 註冊串流端點：廠商轉碼器（LDAC、aptX HD、aptX、aptX LL、
   LHDC V5、FastStream、Opus、Opus 05、aptX Adaptive）以及 SBC（SBC XQ 也使用）
   與 AAC：共 11 個（BTstack 的 `MAX_NR_AVDTP_STREAM_ENDPOINTS`）
-- 註冊 SDP 記錄（A2DP Source、AVRCP Controller、AVRCP Target；在該實驗性
+- 註冊 SDP 記錄（A2DP Source、AVRCP Controller、AVRCP Target；在該
   設定開啟時，另有僅用於電量的 HFP Audio Gateway）
 - 管理 SSP 配對（Just Works、General Bonding；保存連結金鑰）
 - 連線逾時後拆除半開的連線，讓重試能正常運作
@@ -365,7 +376,7 @@ Windows 中的名稱儲存。開發人員模式會顯示裝置的連結金鑰與
 | LHDC V5 | lhdcv5-enc（AOSP 編碼器的 C 語言移植版） | 400/500/900/1000 kbps（低/中/中高/高），不超過接收端列出的最大值，ABR 160–400 kbps | 16/24 位元、5 ms 訊框、2 位元組媒體酬載標頭、RTP 標頭 |
 | LDAC | libldac (AOSP) | 330/660/990 kbps | 高/中/低（HQ/SQ/MQ）模式、ABR |
 | aptX Adaptive | aptx-adaptive（AKS-Logic/aptx-adaptive-linux 的純 Rust 編碼器，MIT） | 高 427 kbps、低延遲 265 kbps（R2 接收端：270）；ABR 降至 364/318（R2：270/204） | 48 kHz 立體聲（選擇時，對列出 96 kHz 的 R2 接收端於高品質使用 96 kHz：646/340/255 kbps）、24 位元；每個媒體封包一個轉碼器封包，前面為 BlueCaster 自己的 RTP 標頭；高品質時 ABR；「自動」排在 LHDC V5 與 LDAC 之後選用 |
-| Opus | libopus 1.5.2 | 256 kbps（立體聲；單聲道為一半） | 實驗性；Android 的 A2DP Opus：48 kHz、20 ms 訊框（接收端只支援 10 ms 時為 10 ms）、上限為媒體酬載大小的受限 VBR、每個封包一個訊框、1 位元組媒體酬載標頭、RTP 標頭 |
+| Opus | libopus 1.5.2 | 256 kbps（立體聲；單聲道為一半） | Android 的 A2DP Opus：48 kHz、20 ms 訊框（接收端只支援 10 ms 時為 10 ms）、上限為媒體酬載大小的受限 VBR、每個封包一個訊框、1 位元組媒體酬載標頭、RTP 標頭 |
 | aptX HD | libopenaptx | 576 kbps | 24 位元輸入、固定位元率、RTP 標頭 |
 | aptX | libopenaptx | 352/384 kbps (44.1/48 kHz) | 16 位元立體聲、無 RTP 標頭 |
 | aptX LL | libopenaptx | 352 kbps | 約 32 ms 延遲、無 RTP 標頭、封包 ≤ 約 7.5 ms |
@@ -453,10 +464,10 @@ BlueCaster 自己的 12 位元組 RTP 標頭（BTstack 不另加）：酬載類�
 | `settings.json` | 應用程式設定，附 `schema_version`；未知的鍵會保留 |
 | `profiles.json` | 設定檔 |
 | `devices\devices.txt` | 已知裝置 |
-| `devices\le_audio_devices.txt` | LE Audio（實驗性）：裝置清單中的 LE Audio 項目 |
+| `devices\le_audio_devices.txt` | LE Audio：裝置清單中的 LE Audio 項目 |
 | `devices\device_codecs.json` | 每個傳統藍牙裝置上次連線時提供的內容（以及是否曾向 OPPO 耳機要求 Hi-Res） |
 | `pairing\link_keys.txt` | 連結金鑰：與 v1 或 2.0.x 配對過的耳機不需重新配對即可重新連線 |
-| `pairing\le_audio_bonds.tlv`、`pairing\le_audio_csip.txt` | LE Audio（實驗性）：LE 綁定資訊（含 GATT 伺服器持久保存的 CCC 值）以及協調集 |
+| `pairing\le_audio_bonds.tlv`、`pairing\le_audio_csip.txt` | LE Audio：LE 綁定資訊（含 GATT 伺服器持久保存的 CCC 值）以及協調集 |
 | `pairing\windows_le_keys.txt`、`pairing\replaced_windows_keys.json` | 從 Windows 接手的 LE 金鑰（直到啟用 LE 的協定堆疊將其加入）；**還原原始驅動程式** 取代掉的 Windows 金鑰 |
 | `adapters\adapter_caps.json` | 堆疊對每個介面卡得知的資訊（是否支援 LE Audio、位址、HCI 版本、Windows 中的名稱） |
 | `adapters\driver\<instance id>.json` | 每個曾指派 WinUSB 的介面卡先前使用的驅動程式 |
@@ -489,8 +500,8 @@ BlueCaster 自己的 12 位元組 RTP 標頭（BTstack 不另加）：酬載類�
 
 ## 重要注意事項 {#important-considerations}
 
-- **介面卡相容性**：Realtek（測試最完整）與 CSR USB 介面卡；Intel 與
-  Broadcom 為實驗性。Realtek 介面卡在啟動時需要上傳韌體，
+- **介面卡相容性**：Realtek（測試最完整）、CSR、Intel、Broadcom、
+  MediaTek 等（[已驗證的硬體](hardware)）。Realtek 介面卡在啟動時需要上傳韌體，
   處於 bootloader 模式的 Intel 介面卡亦同
 - **配對**：使用 SSP Just Works 搭配 General Bonding。連結金鑰保存於
   本機檔案，或從該介面卡的 Windows 藍牙接手

@@ -49,9 +49,13 @@ import {
 import { Button, Dialog, Field, IconButton, Select, Toggle } from "./controls";
 import { Icon } from "./Icon";
 
+/** What a card shows of its codec: the call codecs and LE Audio's LC3 have
+ *  cards like the A2DP ones (issue #86) */
+export type CardSpec = Pick<CodecSpec, "label" | "bars"> & { id: string };
+
 /** One codec choice with its three comparison bars, and "..." for its settings */
 export function CodecCard(props: {
-  spec: CodecSpec;
+  spec: CardSpec;
   /** The radio group: one per device */
   group: string;
   selected: boolean;

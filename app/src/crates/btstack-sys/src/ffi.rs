@@ -35,6 +35,7 @@ unsafe extern "C" {
     pub fn bluecaster_hfp_ag_audio_connect(acl_handle: u16) -> u8;
     pub fn bluecaster_hfp_ag_audio_release(acl_handle: u16) -> u8;
     pub fn bluecaster_hfp_ag_remote_codecs(acl_handle: u16, out: *mut u8, max: u8) -> u8;
+    pub fn bluecaster_hfp_ag_set_codecs(acl_handle: u16, codecs: *const u8, codecs_nr: u8) -> u8;
     pub fn bluecaster_hfp_ag_set_speaker_gain(acl_handle: u16, gain: u8) -> u8;
     pub fn bluecaster_hfp_ag_set_microphone_gain(acl_handle: u16, gain: u8) -> u8;
     pub fn bluecaster_sco_send(sco_handle: u16, payload: *const u8, len: u16) -> u8;
@@ -182,6 +183,8 @@ unsafe extern "C" {
     pub fn btstack_chipset_realtek_set_product_id(id: u16);
     pub fn btstack_chipset_realtek_set_firmware_folder_path(path: *const c_char);
     pub fn btstack_chipset_realtek_set_config_folder_path(path: *const c_char);
+    /// csrc/realtek.c: a firmware file instead of the folder's (NULL: none)
+    pub fn bluecaster_realtek_set_firmware_file(path: *const c_char);
     /// csrc/realtek.c: the Realtek chipset opening the .bin files
     pub fn bluecaster_realtek_instance() -> *const core::ffi::c_void;
     pub fn btstack_chipset_bcm_set_hcd_file_path(path: *const c_char);

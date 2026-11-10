@@ -11,7 +11,7 @@ has_toc: false
 모든 코덱을 지원하는 Windows용 Bluetooth A2DP 오디오 스트리밍 도구
 {: .fs-6 .fw-300 }
 
-저렴한 USB 동글이나 많은 노트북의 내장 어댑터처럼, Windows에서는 기본 코덱만 쓰는 평범한 Bluetooth 어댑터를 Hi-Fi 송신기로 바꿉니다. **LHDC V5, LDAC, aptX Adaptive**를 최대 96 kHz(LHDC V5는 192 kHz)로, 그 밖에 **aptX, AAC, SBC XQ, SBC**를 지원합니다. 실험적: **aptX HD, aptX Low Latency, Opus, FastStream, LE Audio(LC3)**. 어댑터 설정은 BlueCaster가 직접 하며, 클릭 한 번으로 Windows에 되돌릴 수 있습니다([작동 방식](architecture)).
+저렴한 USB 동글이나 많은 노트북의 내장 어댑터처럼, Windows에서는 기본 코덱만 쓰는 평범한 Bluetooth 어댑터를 Hi-Fi 송신기로 바꿉니다. **LHDC V5, LDAC, aptX Adaptive**를 최대 96 kHz(LHDC V5는 192 kHz)로, 그 밖에 **aptX HD, aptX, aptX Low Latency, Opus, AAC, SBC XQ, SBC, FastStream**과 LE Audio(LC3)를 지원합니다. 어댑터 설정은 BlueCaster가 직접 하며, 클릭 한 번으로 Windows에 되돌릴 수 있습니다([작동 방식](architecture)).
 
 ![BlueCaster's Codecs screen, streaming LDAC 990 kbps / 48 kHz to Sony WH-1000XM4](../images/app_sample.png)
 
@@ -27,17 +27,17 @@ has_toc: false
 | LHDC V5 | 400/500/900/1000 kbps, ABR 160--400 kbps | 44.1/48/96/192 kHz | 16/24 bit | -- |
 | LDAC | 330/660/990 kbps | 44.1--96 kHz | 16/24/32 bit | 약 200 ms |
 | aptX Adaptive | 265/427 kbps (96 kHz: 646) | 48/96 kHz | 24 bit | -- |
-| Opus 🧪 | 256 kbps | 48 kHz | 16 bit | -- |
-| aptX HD 🧪 | 576 kbps | 44.1/48 kHz | 24 bit | 약 150 ms |
+| Opus | 256 kbps | 48 kHz | 16 bit | -- |
+| aptX HD | 576 kbps | 44.1/48 kHz | 24 bit | 약 150 ms |
 | aptX | 352/384 kbps | 44.1/48 kHz | 16 bit | -- |
-| aptX Low Latency 🧪 | 352 kbps | 44.1/48 kHz | 16 bit | 약 32 ms |
+| aptX Low Latency | 352 kbps | 44.1/48 kHz | 16 bit | 약 32 ms |
 | AAC | 최대 256 kbps | 44.1/48 kHz | 16 bit | 약 150 ms |
 | SBC XQ | 약 385/505/552 kbps | 44.1/48 kHz | 16 bit | 약 150 ms |
 | SBC | 최대 약 345 kbps | 44.1/48 kHz | 16 bit | 약 150 ms |
-| FastStream 🧪 | 198/216 kbps | 44.1/48 kHz | 16 bit | -- |
-| Opus 05 🧪 | 256 kbps | 48 kHz | 16 bit | -- |
-| LC3 (LE 오디오) 🧪 | 채널당 32--124 kbps | 16/24/32/48 kHz | 16 bit | 약 140 ms |
-| LC3 저지연 (LE 오디오 GMAP) 🧪 | 채널당 64--96 kbps | 32/48 kHz | 16 bit | 약 30 ms |
+| FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | -- |
+| Opus 05 | 256 kbps | 48 kHz | 16 bit | -- |
+| LC3 (LE 오디오) | 채널당 32--124 kbps | 16/24/32/48 kHz | 16 bit | 약 140 ms |
+| LC3 저지연 (LE 오디오 GMAP) | 채널당 64--96 kbps | 32/48 kHz | 16 bit | 약 30 ms |
 
 ### 플랫폼별 코덱 지원 (헤드폰으로 전송)
 
@@ -46,33 +46,33 @@ has_toc: false
 | LHDC V5 | ❌ | ❌ | ❌ | ✅ |
 | LDAC | ❌ | ❌ | ✅ | ✅ |
 | aptX Adaptive | ❌ | ❌ | ❌ | ✅ |
-| Opus (Android의 A2DP Opus) | ❌ | ❌ | ✅ PipeWire 1.2 이상 (`opus_g`); Ubuntu 24.04(PipeWire 1.0.5)에는 없음 | 🧪 실험적 |
-| aptX HD | ❌ | ❌ | ✅ | 🧪 실험적 |
+| Opus (Android의 A2DP Opus) | ❌ | ❌ | ✅ PipeWire 1.2 이상 (`opus_g`); Ubuntu 24.04(PipeWire 1.0.5)에는 없음 | ✅ |
+| aptX HD | ❌ | ❌ | ✅ | ✅ |
 | aptX | ✅ | ✅ | ✅ | ✅ |
-| aptX Low Latency | ❌ | ❌ | ✅ | 🧪 실험적 |
+| aptX Low Latency | ❌ | ❌ | ✅ | ✅ |
 | AAC | ❌ | ✅ | ❌ Ubuntu 패키지에 포함되지 않음 | ✅ |
 | SBC XQ | ❌ | ❌ | ✅ | ✅ (SBC에서 듀얼 채널을 허용하는 수신 장치, bitpool 29 이상) |
 | SBC | ✅ | ✅ | ✅ | ✅ |
-| FastStream | ❌ | ❌ | ✅ | 🧪 실험적 (음악 전용, 직접 선택한 경우) |
-| Opus 05 (PipeWire 자체 Opus) | ❌ | ❌ | ✅ PipeWire 0.3.57 이상 (`opus_05`, PipeWire 기기로만) | 🧪 실험적 (직접 선택한 경우, 개발자 모드 전용) |
-| LC3 (LE 오디오, BAP 유니캐스트) | ❌ | ✅ Bluetooth 하드웨어와 드라이버가 LE 오디오를 지원하는 PC에서만 | ✅ PipeWire BAP `lc3` (BlueZ LE 오디오) | 🧪 실험적 (장치의 LE 오디오 항목, 게이밍 헤드셋에서는 GMAP 저지연, ISO를 지원하는 Bluetooth 5.2 어댑터 필요, [사용법](usage#le-audio)) |
+| FastStream | ❌ | ❌ | ✅ | ✅ (음악 전용, 직접 선택한 경우) |
+| Opus 05 (PipeWire 자체 Opus) | ❌ | ❌ | ✅ PipeWire 0.3.57 이상 (`opus_05`, PipeWire 기기로만) | ✅ (직접 선택한 경우, 개발자 모드 전용) |
+| LC3 (LE 오디오, BAP 유니캐스트) | ❌ | ✅ Bluetooth 하드웨어와 드라이버가 LE 오디오를 지원하는 PC에서만 | ✅ PipeWire BAP `lc3` (BlueZ LE 오디오) | ✅ (장치의 LE 오디오 항목, 게이밍 헤드셋에서는 GMAP 저지연, ISO를 지원하는 Bluetooth 5.2 어댑터 필요, [사용법](usage#le-audio)) |
 
-✅ 지원 · 🧪 실험적 · ❌ 미지원. 모든 열은 전송 측(PC → 헤드폰) 기준입니다. "기본"은 BlueCaster 없이 OS 자체 Bluetooth 오디오를 사용하는 경우이며, Ubuntu 열은 Ubuntu 26.04의 PipeWire 코덱 구성(`libspa-0.2-bluetooth`)입니다.
+✅ 지원 · ❌ 미지원. 모든 열은 전송 측(PC → 헤드폰) 기준입니다. "기본"은 BlueCaster 없이 OS 자체 Bluetooth 오디오를 사용하는 경우이며, Ubuntu 열은 Ubuntu 26.04의 PipeWire 코덱 구성(`libspa-0.2-bluetooth`)입니다.
 
 {: .warning }
-**aptX HD와 aptX Low Latency는 실험적 기능입니다.** Android / PipeWire 구현을 따르며 인코딩/디코딩 왕복 테스트를 통과했지만, 실제 헤드폰에서는 아직 검증되지 않았습니다. 표의 지연 시간은 일반적인 수치이며 BlueCaster로 측정한 값이 아닙니다.
+**aptX HD와 aptX Low Latency**는 Android / PipeWire 구현을 따르며 인코딩/디코딩 왕복 테스트를 통과했지만, 실제 헤드폰에서는 아직 검증되지 않았습니다. 표의 지연 시간은 일반적인 수치이며 BlueCaster로 측정한 값이 아닙니다.
 
 {: .warning }
 **LHDC V5 정보.** Google이 Android 17(AOSP, Apache-2.0)에 추가한 LHDC V5 인코더의 C 포팅 버전을 사용합니다. 이 포팅 버전은 AOSP Rust 인코더와 비트 단위로 일치함을 확인했으며, A2DP 시그널링은 Android의 `a2dp_vendor_lhdcv5`를 따릅니다. 한 사용자가 v1.1.1-beta.1에서 실제 LHDC V5 헤드폰으로 1000 kbps / 192 kHz 작동을 확인했으며([#50](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/50)), v2도 같은 인코더를 사용합니다. 손실 압축 LHDC V5만 지원합니다. LHDC V2/V3(구형 헤드폰)와 무손실 "LHDC-RAW" 모드는 오픈 소스 인코더가 없습니다. 자동 모드에서 LHDC V5의 우선순위는 LDAC보다 높은 1순위입니다.
 
 {: .warning }
-**Opus는 실험적 기능입니다.** Android의 A2DP Opus 벤더 코덱(Android 13 이상, 벤더 ID 0x000000E0 Google)으로, 48 kHz, 20 ms 프레임이며 Android가 요청하는 대로 256 kbps 스테레오(표준 192, 모바일 128 kbps)로 libopus 1.5.2를 사용해 인코딩합니다. 가상 싱크를 상대로 한 엔드투엔드 테스트는 통과했지만, 실제 Opus 헤드폰에서는 아직 검증되지 않았습니다. 자동 모드에서 Opus의 우선순위는 aptX Adaptive보다 낮고 aptX HD보다 높습니다.
+**Opus**는 Android의 A2DP Opus 벤더 코덱(Android 13 이상, 벤더 ID 0x000000E0 Google)으로, 48 kHz, 20 ms 프레임이며 Android가 요청하는 대로 256 kbps 스테레오(표준 192, 모바일 128 kbps)로 libopus 1.5.2를 사용해 인코딩합니다. 가상 싱크를 상대로 한 엔드투엔드 테스트는 통과했지만, 실제 Opus 헤드폰에서는 아직 검증되지 않았습니다. 자동 모드에서 Opus의 우선순위는 aptX Adaptive보다 낮고 aptX HD보다 높습니다.
 
 {: .warning }
-**Opus 05는 실험적 기능이며 실제 기기에서는 확인하지 않았습니다.** PipeWire 고유의 A2DP Opus 벤더 코덱(벤더 ID 0x000005F1, 코덱 0x1005, PipeWire의 `opus_05`)으로, 구현한 곳이 PipeWire뿐이므로 수신 장치는 A2DP 싱크로 동작하는 PipeWire PC여야 합니다. BlueCaster는 스테레오 음악 방향만 보냅니다(5.1 / 7.1과 복귀 채널 없음). 48 kHz, 10 ms 프레임(싱크가 20 ms만 지원하면 20 ms), 인코더와 비트레이트는 Opus와 같으며 싱크의 상한으로 제한합니다. 자동 선택은 이를 고르지 않으므로 **코덱** 화면에서 또는 `-c opus05`로 선택하십시오. PipeWire와 같은 기능을 제공하는 가상 싱크를 상대로 한 엔드투엔드 테스트는 통과했지만, 실제 PipeWire 수신 장치로는 시험하지 않았습니다. A2DP 싱크로서의 PipeWire는 Opus 05를 0.3.57부터, Android의 Opus(`opus_g`)를 1.2.0부터 디코딩합니다. Ubuntu 24.04 LTS는 PipeWire 1.0.5(Opus 05만), Ubuntu 25.10(1.4.7)과 26.04 LTS(1.6.2)는 둘 다 제공합니다. 어느 쪽도 BlueCaster로는 아직 확인하지 않았습니다.
+**Opus 05**는 PipeWire 고유의 A2DP Opus 벤더 코덱(벤더 ID 0x000005F1, 코덱 0x1005, PipeWire의 `opus_05`)으로, 구현한 곳이 PipeWire뿐이므로 수신 장치는 A2DP 싱크로 동작하는 PipeWire PC여야 합니다. BlueCaster는 스테레오 음악 방향만 보냅니다(5.1 / 7.1과 복귀 채널 없음). 48 kHz, 10 ms 프레임(싱크가 20 ms만 지원하면 20 ms), 인코더와 비트레이트는 Opus와 같으며 싱크의 상한으로 제한합니다. 자동 선택은 이를 고르지 않으므로 **코덱** 화면에서 또는 `-c opus05`로 선택하십시오. PipeWire와 같은 기능을 제공하는 가상 싱크를 상대로 한 엔드투엔드 테스트는 통과했지만, 실제 PipeWire 수신 장치로는 시험하지 않았습니다. A2DP 싱크로서의 PipeWire는 Opus 05를 0.3.57부터, Android의 Opus(`opus_g`)를 1.2.0부터 디코딩합니다. Ubuntu 24.04 LTS는 PipeWire 1.0.5(Opus 05만), Ubuntu 25.10(1.4.7)과 26.04 LTS(1.6.2)는 둘 다 제공합니다. 어느 쪽도 BlueCaster로는 아직 확인하지 않았습니다.
 
 {: .warning }
-**SBC XQ**는 Sony WH-1000XM4로 검증되었습니다(듀얼 채널, 48 kHz에서 bitpool 43, 552 kbps). 이 구성을 거부하는 싱크에는 일반 SBC로 다시 연결합니다. **FastStream은 실험적 기능입니다.** 가상 싱크를 상대로 한 엔드투엔드 테스트는 통과했지만 실제 FastStream 헤드폰으로는 시험하지 않았습니다. 음악 방향만 지원하며, 자동 선택은 이를 고르지 않습니다.
+**SBC XQ**는 Sony WH-1000XM4로 검증되었습니다(듀얼 채널, 48 kHz에서 bitpool 43, 552 kbps). 이 구성을 거부하는 싱크에는 일반 SBC로 다시 연결합니다. **FastStream**은 가상 싱크를 상대로 한 엔드투엔드 테스트는 통과했지만 실제 FastStream 헤드폰으로는 시험하지 않았습니다. 음악 방향만 지원하며, 자동 선택은 이를 고르지 않습니다.
 
 {: .note }
 **기본 aptX만 필요하십니까?** Windows 10의 기본 Bluetooth 스택은 이미 기본 aptX를 지원하므로(aptX HD, aptX LL, aptX Adaptive는 미지원) 이 경우 BlueCaster가 필요하지 않습니다. BlueCaster는 주로 LHDC V5, LDAC, aptX Adaptive, aptX HD, aptX Low Latency에 유용합니다.
@@ -133,7 +133,7 @@ flowchart TD
     s2["가상 장치"]
     s3["응용 프로그램 (프로세스 루프백)"]
     s1 & s2 & s3 --> cap["WASAPI 루프백 캡처 (PCM)"]
-    cap --> enc["오디오 인코더: LDAC / aptX 계열 / LHDC V5 / Opus / AAC / SBC"]
+    cap --> enc["오디오 인코더:<br>LDAC / aptX 계열 / LHDC V5 / Opus / AAC / SBC"]
     enc --> bt["BTstack: A2DP Source → AVDTP → L2CAP → HCI"]
     bt --> usb["WinUSB → USB Bluetooth 어댑터"]
     usb -.-> hp["헤드폰"]
@@ -143,8 +143,8 @@ BlueCaster는 Windows Bluetooth 스택을 완전히 우회합니다. [BTstack](h
 
 ## 주요 기능
 
-- **다중 코덱**: LHDC V5, LDAC, aptX Adaptive, aptX, AAC, SBC XQ, SBC 및 (실험적) aptX HD / aptX Low Latency / Opus / Opus 05 / FastStream, 자동 협상
-- **LE 오디오 (실험적)**: LE 오디오 헤드폰과 이어폰으로 LC3 전송(BAP 유니캐스트, 한 쌍의 양쪽 이어폰, 헤드셋 음량, 미디어 버튼, GMAP 저지연). Bluetooth 5.2의 등시성 채널을 지원하는 어댑터가 필요합니다. Bluetooth 에뮬레이터로만 시험했고 실제 LE 오디오 헤드폰으로는 아직 확인하지 않았습니다([사용법](usage#le-audio) 참조)
+- **다중 코덱**: LHDC V5, LDAC, aptX Adaptive, aptX, AAC, aptX HD, aptX Low Latency, Opus, Opus 05, FastStream, SBC XQ, SBC, 자동 협상
+- **LE 오디오**: LE 오디오 헤드폰과 이어폰으로 LC3 전송(BAP 유니캐스트, 한 쌍의 양쪽 이어폰, 헤드셋 음량, 미디어 버튼, GMAP 저지연). Bluetooth 5.2의 등시성 채널을 지원하는 어댑터가 필요합니다. 지금까지 MediaTek MT7925와 Bluetooth 에뮬레이터로 시험했습니다([사용법](usage#le-audio) 참조)
 - **세 가지 캡처 모드**: 시스템 루프백, 가상 오디오 장치 라우팅, 또는 한 응용 프로그램의 출력
 - **창, 트레이, CLI**: 설정과 진단을 위한 창, 평소 연결에 쓰는 트레이 플라이아웃과 메뉴, 그리고 명령줄 ([사용법](usage) 참조)
 - **앱 내 WinUSB 할당**: 어댑터에 WinUSB 드라이버를 할당하고 원래 드라이버를 복원하며, Zadig가 필요 없습니다 ([설정](setup#winusb) 참조). Windows가 이 어댑터로 페어링한 헤드폰은 다시 페어링하지 않고 연결됩니다

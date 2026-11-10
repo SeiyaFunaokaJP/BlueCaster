@@ -1,4 +1,4 @@
-//! Qualcomm (Atheros) USB rampatch and NVM download (experimental)
+//! Qualcomm (Atheros) USB rampatch and NVM download
 //!
 //! A Qualcomm USB Bluetooth chip (QCA61x4 / QCA9377 "ROME", WCN6855
 //! "FastConnect 6900") runs its ROM after power-up. Before it is used, the

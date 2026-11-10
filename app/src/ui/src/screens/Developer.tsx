@@ -81,13 +81,14 @@ const NO_OVERRIDES: DevOverrides = {
 
 /** Developer > Debug: experiments for one adapter's transport (issue #86) */
 export const NO_DEBUG: DevDebug = {
-  mtk_iso_interface: false,
+  mtk_iso_bulk: false,
   mtk_iso_pad: 0,
   mtk_command: "",
   mtk_iso_queue: 0,
   mtk_command_before_reset: false,
   mtk_register: "",
   le_keys_to_windows: false,
+  realtek_driver_firmware: false,
 };
 
 export function Developer() {
@@ -100,6 +101,7 @@ export function Developer() {
     const s = settings();
     return (
       !s.volume_mixer &&
+      !s.all_audio_devices &&
       JSON.stringify(s.dev_overrides) === JSON.stringify(NO_OVERRIDES) &&
       !vendorsActive(s.dev_vendors) &&
       JSON.stringify(s.dev_log) === JSON.stringify(DEFAULT_LOG) &&
@@ -109,6 +111,7 @@ export function Developer() {
   const resetAll = () =>
     void saveSettings(app, {
       volume_mixer: false,
+      all_audio_devices: false,
       dev_overrides: { ...NO_OVERRIDES },
       dev_vendors: {},
       dev_log: { ...DEFAULT_LOG },
@@ -149,6 +152,13 @@ export function Developer() {
               hint={t("ui.dev.volume_mixer_hint")}
               checked={settings().volume_mixer}
               onChange={(v) => void saveSettings(app, { volume_mixer: v })}
+            />
+          </Section>
+          <Section title={t("ui.nav.devices")}>
+            <Toggle
+              label={t("ui.dev.all_audio_devices")}
+              checked={settings().all_audio_devices}
+              onChange={(v) => void saveSettings(app, { all_audio_devices: v })}
             />
           </Section>
           <Section title={t("update.check")}>
@@ -422,9 +432,9 @@ function Overrides(props: {
   );
 }
 
-/** Experiments for one adapter: MediaTek LE Audio over the adapter's
- *  interrupt interface, with optional padding, and one HCI command sent
- *  after start-up (read when the adapter opens next) */
+/** Experiments for one adapter: MediaTek LE Audio kept on the bulk
+ *  endpoint, another padding or queue, and one HCI command sent after
+ *  start-up (read when the adapter opens next) */
 function Debug(props: {
   value: DevDebug;
   save: (v: DevDebug) => Promise<boolean>;
@@ -442,9 +452,9 @@ function Debug(props: {
       />
       <Section title={t("ui.dev.mtk_section")}>
         <Toggle
-          label={t("ui.dev.mtk_iso_interface")}
-          checked={props.value.mtk_iso_interface}
-          onChange={(v) => set({ mtk_iso_interface: v })}
+          label={t("ui.dev.mtk_iso_bulk")}
+          checked={props.value.mtk_iso_bulk}
+          onChange={(v) => set({ mtk_iso_bulk: v })}
         />
         <Field label={t("ui.dev.mtk_iso_pad")}>
           {(id, describedBy) => (
@@ -456,9 +466,9 @@ function Debug(props: {
               max="4096"
               step="1"
               aria-describedby={describedBy}
-              disabled={!props.value.mtk_iso_interface}
+              disabled={props.value.mtk_iso_bulk}
               value={props.value.mtk_iso_pad || ""}
-              placeholder={t("ui.dev.off")}
+              placeholder="342"
               onChange={(e) => commitPad(e.currentTarget.value)}
             />
           )}
@@ -518,7 +528,7 @@ function Debug(props: {
               step="1"
               aria-describedby={describedBy}
               value={props.value.mtk_iso_queue || ""}
-              placeholder="2"
+              placeholder="12"
               onChange={(e) =>
                 set({
                   mtk_iso_queue: clampInt(e.currentTarget.value, 0, 12, 0),
@@ -527,6 +537,13 @@ function Debug(props: {
             />
           )}
         </Field>
+      </Section>
+      <Section title={t("ui.dev.realtek_section")}>
+        <Toggle
+          label={t("ui.dev.realtek_driver_firmware")}
+          checked={props.value.realtek_driver_firmware}
+          onChange={(v) => set({ realtek_driver_firmware: v })}
+        />
       </Section>
       <Section title={t("ui.dev.keys_section")}>
         <Toggle
