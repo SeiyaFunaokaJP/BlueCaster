@@ -8,6 +8,13 @@ export function mixerShown(s: Pick<Settings, "developer_mode" | "volume_mixer"> 
   return !!s?.developer_mode && s.volume_mixer;
 }
 
+/** The Output and Input Source lists offer every device (each output, the
+ *  16-channel cable, the other side's cable): Developer > Show every audio
+ *  device on, in developer mode (issue #86: the lists read as chaos) */
+export function allAudioDevices(s: Pick<Settings, "developer_mode" | "all_audio_devices"> | undefined): boolean {
+  return !!s?.developer_mode && s.all_audio_devices;
+}
+
 /** Changes some settings: the core takes the whole object and sends it back as an event */
 export function saveSettings(app: AppContext, patch: Partial<Settings>): Promise<boolean> {
   return applySettings(app, patch).then((r) => r !== null);

@@ -11,6 +11,7 @@
 import { createEffect, createMemo, createResource, createSignal, createUniqueId, on, onCleanup, onMount, Show } from "solid-js";
 import { createStore, unwrap } from "solid-js/store";
 import { useApp } from "../app/context";
+import { allAudioDevices } from "../app/settings";
 import { t } from "../i18n";
 import { codecSpec } from "../lib/codecs";
 import type { AudioApp, AudioDevice, Device, Profile, Snapshot } from "../ipc/types";
@@ -25,6 +26,7 @@ import {
   entryBase,
   followedName,
   formatMismatch,
+  headsetMode,
   hifiCable,
   isVbCable,
   normalizeProfile,
@@ -121,11 +123,17 @@ export function DeviceSettings(props: { device: Device }) {
     setSaving(false);
   };
 
+  /** The device the microphone plays into, while it is on: not offered as
+   *  the source (issue #86) */
+  const micDevice = () => {
+    const p = audioEntries(snap()).find((x) => x.key === deviceKey(props.device))?.profile;
+    return p && headsetMode(p) !== "off" ? p.mic_device_id : "";
+  };
   /** The sound devices (the Windows default first), the virtual devices
    *  and the playing apps in one list (issue #86: no "Loopback") */
   const sources = createMemo((): Option<string>[] => {
     const p = shown();
-    const c = captureChoices(p, devices() ?? [], apps() ?? [], appSupport() !== "no", snap().settings.developer_mode);
+    const c = captureChoices(p, devices() ?? [], apps() ?? [], appSupport() !== "no", allAudioDevices(snap().settings), micDevice());
     const virtual: Option<string>[] = c.virtual.map((o) => ({ ...o, group: t("capture.virtual") }));
     if (virtual.length === 0 && noVirtual()) {
       virtual.push({ value: "virtual:", label: t("capture.no_virtual_device"), group: t("capture.virtual"), disabled: true });

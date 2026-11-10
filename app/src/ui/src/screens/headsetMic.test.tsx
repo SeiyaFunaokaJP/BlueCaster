@@ -119,6 +119,8 @@ describe("Input Source on Audio Devices", () => {
   it("recommends the Hi-Fi Cable over VB-Cable for the sound, and swaps them", async () => {
     const { core } = start("#/devices", "voice");
     const wh = await deviceEntry(/WH-1000XM5/);
+    // The microphone off: VB-Cable is free to be the source
+    fireEvent.click(mode(wh, "off"));
     const source = () => within(wh).getByLabelText(t("capture.mode")) as HTMLSelectElement;
     await within(source()).findByRole("option", { name: "CABLE Input (VB-Audio Virtual Cable)" });
     fireEvent.change(source(), { target: { value: `virtual:${CABLE}` } });
@@ -150,11 +152,17 @@ describe("Input Source on Audio Devices", () => {
     await waitFor(() => expect(wh.textContent).toContain(t("capture.hifi_rates_differ", 48000, 44100)));
   });
 
-  it("adds the 16-channel cable's own name in developer mode, not a second CABLE Output", async () => {
+  it("adds the 16-channel cable's own name with every device shown, not a second CABLE Output", async () => {
     const { core } = start("#/devices", "voice");
     const wh = await deviceEntry(/WH-1000XM5/);
+    // Developer mode alone keeps the short list (issue #86)
     await core.request("settings.set", {
       settings: { ...core.state.snap!.settings, developer_mode: true },
+    });
+    await waitFor(() => expect(micSelect(wh).value).toBe(CABLE));
+    expect(micSelect(wh).querySelector("optgroup")).toBeNull();
+    await core.request("settings.set", {
+      settings: { ...core.state.snap!.settings, developer_mode: true, all_audio_devices: true },
     });
     await waitFor(() => {
       const labels = [...micSelect(wh).options].map((o) => o.textContent);
@@ -265,9 +273,32 @@ describe("Input Source on Audio Devices", () => {
     expect(micSelect(wh).value).toBe(CABLE);
   });
 
-  it("refuses the device the output source plays from", async () => {
+  it("lists only the cables a microphone can use, without the output source's", async () => {
     start("#/devices", "voice");
     const wh = await deviceEntry(/WH-1000XM5/);
+    await waitFor(() => expect(micSelect(wh).value).toBe(CABLE));
+    const source = within(wh).getByLabelText(t("capture.mode")) as HTMLSelectElement;
+    const values = (s: HTMLSelectElement) => [...s.options].map((o) => o.value);
+    // The microphone's cable is not offered as the source (issue #86)
+    await waitFor(() => expect(values(source)).toContain(`virtual:${VOICEMEETER}`));
+    expect(values(source)).not.toContain(`virtual:${CABLE}`);
+    expect(values(source)).not.toContain("virtual:{0.0.0.00000000}.{cable16}");
+    fireEvent.change(micSelect(wh), { target: { value: VOICEMEETER } });
+    await waitFor(() => expect(values(source)).toContain(`virtual:${CABLE}`));
+    expect(values(source)).not.toContain(`virtual:${VOICEMEETER}`);
+    // The source's cable leaves the microphone's list instead of being disabled
+    fireEvent.change(source, { target: { value: `virtual:${CABLE}` } });
+    await waitFor(() => expect(values(micSelect(wh))).not.toContain(CABLE));
+    expect(values(micSelect(wh))).toEqual([VOICEMEETER]);
+    expect([...micSelect(wh).options].some((o) => o.disabled)).toBe(false);
+  });
+
+  it("refuses the device the output source plays from", async () => {
+    const { core } = start("#/devices", "voice");
+    const wh = await deviceEntry(/WH-1000XM5/);
+    await core.request("settings.set", {
+      settings: { ...core.state.snap!.settings, developer_mode: true, all_audio_devices: true },
+    });
     await waitFor(() => expect(micSelect(wh).value).toBe(CABLE));
     const source = within(wh).getByLabelText(
       t("capture.mode"),
@@ -316,7 +347,7 @@ describe("Input Source on Audio Devices", () => {
     const { core } = start("#/devices", "voice");
     const wh = await deviceEntry(/WH-1000XM5/);
     await core.request("settings.set", {
-      settings: { ...core.state.snap!.settings, developer_mode: true },
+      settings: { ...core.state.snap!.settings, developer_mode: true, all_audio_devices: true },
     });
     const source = within(wh).getByLabelText(
       t("capture.mode"),
