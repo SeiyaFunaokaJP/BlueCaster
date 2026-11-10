@@ -191,6 +191,8 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
     include_alphas: false,
     media_keys: true,
     auto_reconnect: true,
+    vb_cable_note_hidden: false,
+    hifi_cable_note_hidden: false,
     volume_sync: true,
     mute_output: false,
     volume_mixer: false,
@@ -539,6 +541,7 @@ export function sampleSnapshot(scenario: MockScenario = "normal"): Snapshot {
       { id: "huawei", name: "Huawei", options: [] },
       { id: "oppo", name: "OPPO", options: ["every_connection"] },
     ],
+    vb_cable_bundled: true,
   };
 }
 
@@ -591,6 +594,7 @@ const CABLE: AudioDevice = {
   mix_channels: 2,
   mix_bits: 24,
   capture_name: "CABLE Output (VB-Audio Virtual Cable)",
+  capture_rate: 48000,
 };
 /** VB-Audio Hi-Fi Cable (MockCore.hifiCable) */
 const HIFI_CABLE: AudioDevice = {
@@ -602,6 +606,7 @@ const HIFI_CABLE: AudioDevice = {
   mix_channels: 2,
   mix_bits: 24,
   capture_name: "Hi-Fi Cable Output (VB-Audio Hi-Fi Cable)",
+  capture_rate: 48000,
 };
 
 const AUDIO_DEVICES: AudioDevice[] = [
@@ -614,6 +619,7 @@ const AUDIO_DEVICES: AudioDevice[] = [
     mix_channels: 16,
     mix_bits: 24,
     capture_name: "CABLE Output (VB-Audio Virtual Cable)",
+    capture_rate: 48000,
   },
   {
     id: "{0.0.0.00000000}.{speakers}",
@@ -624,6 +630,7 @@ const AUDIO_DEVICES: AudioDevice[] = [
     mix_channels: 2,
     mix_bits: 32,
     capture_name: null,
+    capture_rate: null,
   },
   CABLE,
   {
@@ -635,6 +642,7 @@ const AUDIO_DEVICES: AudioDevice[] = [
     mix_channels: 8,
     mix_bits: 32,
     capture_name: "Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)",
+    capture_rate: 48000,
   },
   {
     id: "{0.0.0.00000000}.{display}",
@@ -645,6 +653,7 @@ const AUDIO_DEVICES: AudioDevice[] = [
     mix_channels: 2,
     mix_bits: 32,
     capture_name: null,
+    capture_rate: null,
   },
 ];
 
@@ -1458,13 +1467,17 @@ export class MockCore implements Transport {
       case "adapter.download_firmware":
         return this.downloadFirmware(String(p.file));
       case "audio.devices": {
-        const all = this.hifiCable ? [...AUDIO_DEVICES, HIFI_CABLE] : AUDIO_DEVICES;
+        const hifi = { ...HIFI_CABLE, capture_rate: this.hifiCaptureRate };
+        const all = this.hifiCable ? [...AUDIO_DEVICES, hifi] : AUDIO_DEVICES;
         const list = this.noVirtual ? all.filter((d) => !d.is_virtual) : all;
         const def = this.defaultOutput;
         return def === null ? list : list.map((d) => ({ ...d, is_default: d.id === def }));
       }
       case "audio.apps":
         return AUDIO_APPS;
+      case "audio.install_vb_cable":
+        this.noVirtual = false;
+        return true;
       case "audio.mixer":
         return this.mixer;
       case "audio.mixer_set":
@@ -1671,6 +1684,9 @@ export class MockCore implements Transport {
   noVirtual = false;
   /** VB-Audio Hi-Fi Cable installed (?hificable): the microphone's second cable */
   hifiCable = false;
+  /** The sample rate of the Hi-Fi Cable's recording side (its playback
+   *  side runs at 48 kHz) */
+  hifiCaptureRate = 48000;
   /** Now and then the capture falls behind (?capturedrops): audio dropped at capture */
   captureDrops = false;
   /** Windows' default output (audio.devices), if not the speakers */

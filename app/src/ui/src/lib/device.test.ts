@@ -42,6 +42,7 @@ const audio = (id: string, is_default: boolean, mix_rate: number | null, mix_bit
   mix_channels: 2,
   mix_bits,
   capture_name: null,
+  capture_rate: null,
 });
 
 describe("addresses", () => {

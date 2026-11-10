@@ -212,6 +212,14 @@ a modified version of libopenaptx):
 
 See bluecaster\LICENSE and third-party\THIRD_PARTY_LICENSES.md for the
 terms of each component; third-party\rust-crates.txt lists the Rust crates.
+
+VB-CABLE
+--------
+The vb-cable folder next to the programs holds VB-Audio's VB-CABLE driver
+pack, unmodified. BlueCaster installs it only when asked (Install VB-CABLE).
+VB-CABLE is not part of BlueCaster. Origin: www.vb-cable.com. VB-CABLE is a
+donationware, all participations are welcome. Its terms are in
+vb-cable\readme.txt and at https://vb-audio.com/Services/licensing.htm.
 "@ | Set-Content -Encoding utf8NoBOM (Join-Path $licDir 'README.txt')
 
 # --- bluecaster.exe: Tauri's configuration plus the updater key ---
@@ -233,13 +241,36 @@ foreach ($name in 'bluecaster', 'bluecaster-core', 'bluecaster-driver') {
     Copy-Item (Join-Path $release "$name.exe") $pkgDir
 }
 Copy-Item -Recurse (Join-Path $docDir '*') $pkgDir
+
+# --- VB-CABLE, AS IS: the app installs it on request (Audio Devices) ---
+# VB-Audio allows the unmodified package to be distributed and installed
+# silently with an application, as long as the user can tell it is VB-Audio's
+# donationware (https://vb-audio.com/Services/licensing.htm): the app says so
+# beside its Install button. Pinned by hash; a new pack is a deliberate change.
+# Never sign or otherwise touch these files.
+$cache = Join-Path $repo 'target/installer-cache'
+$vbCableZip = Join-Path $cache 'VBCABLE_Driver_Pack46.zip'
+$vbCableSha256 = 'BC44E8974191A5A2427D6C979E2DAB08DBB09925F3F435DFA2F0BA3E45B6EB90'
+if (-not (Test-Path -LiteralPath $vbCableZip)) {
+    New-Item -ItemType Directory -Force $cache | Out-Null
+    Invoke-WebRequest 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack46.zip' -OutFile "$vbCableZip.part"
+    Move-Item -Force "$vbCableZip.part" $vbCableZip
+}
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $vbCableZip).Hash -ne $vbCableSha256) {
+    throw "$vbCableZip is not the pinned VB-CABLE pack: delete it and build again, or update the hash"
+}
+$vbCableDir = Join-Path $pkgDir 'vb-cable'
+Expand-Archive -Force -LiteralPath $vbCableZip -DestinationPath $vbCableDir
+$sig = Get-AuthenticodeSignature -LiteralPath (Join-Path $vbCableDir 'VBCABLE_Setup_x64.exe')
+if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=BUREL VINCENT') {
+    throw "VB-CABLE's setup is not signed by VB-Audio ($($sig.Status))"
+}
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $zip = Join-Path $OutDir "$pkgName-$archName-portable.zip"
 if (Test-Path $zip) { Remove-Item -Force $zip }
 Compress-Archive -Path $pkgDir -DestinationPath $zip
 
 # --- WebView2 bootstrapper (Evergreen), embedded for PCs without WebView2 ---
-$cache = Join-Path $repo 'target/installer-cache'
 $webView2Setup = Join-Path $cache 'MicrosoftEdgeWebview2Setup.exe'
 if (-not (Test-Path -LiteralPath $webView2Setup)) {
     New-Item -ItemType Directory -Force $cache | Out-Null

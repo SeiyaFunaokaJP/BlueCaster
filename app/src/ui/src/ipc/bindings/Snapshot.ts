@@ -54,4 +54,9 @@ crashes: Array<CrashReport>,
 /**
  * The vendors with protocols of their own (developer mode's overrides)
  */
-vendors: Array<VendorInfo>, };
+vendors: Array<VendorInfo>, 
+/**
+ * The VB-CABLE package is beside the core (release builds), so
+ * audio.install_vb_cable can install it
+ */
+vb_cable_bundled: boolean, };

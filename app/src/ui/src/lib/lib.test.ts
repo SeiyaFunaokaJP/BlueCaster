@@ -510,7 +510,7 @@ describe("profiles", () => {
 });
 
 describe("VB-Cable", () => {
-  const device = (name: string, is_virtual = true) => ({ id: name, name, is_virtual, is_default: false, mix_rate: null, mix_channels: null, mix_bits: null, capture_name: null });
+  const device = (name: string, is_virtual = true) => ({ id: name, name, is_virtual, is_default: false, mix_rate: null, mix_channels: null, mix_bits: null, capture_name: null, capture_rate: null });
   it("prefers the standard cable to the 16-channel one", () => {
     const list = [device("Speakers", false), device("CABLE In 16ch (VB-Audio Virtual Cable)"), device("CABLE Input (VB-Audio Virtual Cable)")];
     expect(vbCable(list)?.name).toBe("CABLE Input (VB-Audio Virtual Cable)");
