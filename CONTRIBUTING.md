@@ -39,7 +39,7 @@ cd app/src/ui && pnpm install && pnpm build && cd ../../..
 cargo build --release -p bluecaster-ui
 ```
 
-**Before a pull request:** `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and in `app/src/ui` `pnpm exec tsc --noEmit` and `pnpm exec vitest run`; `pwsh ./build.ps1 -Test` builds and runs them all (with `cargo fmt --check`), plus `python tools/check_lang.py`. The design is described in [docs/v2-design.md](docs/v2-design.md) (Japanese).
+**Before a pull request:** `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and in `app/src/ui` `pnpm exec tsc --noEmit` and `pnpm exec vitest run`; `pwsh ./build.ps1 -Test` builds and runs them all (with `cargo fmt --check`), plus `python tools/check_lang.py`.
 
 ## Pull Requests
 

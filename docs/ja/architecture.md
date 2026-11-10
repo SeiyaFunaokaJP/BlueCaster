@@ -42,20 +42,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Windows の音声: システムループバック / 仮想デバイス / アプリ単位"]
-    ui["bluecaster.exe: ウィンドウとトレイのフライアウト（Tauri + SolidJS）"]
-    subgraph core["bluecaster-core.exe（常駐、ユーザーモード）"]
-        ctl["トレイのメニュー / IPC サーバー / CLI (--cli)"] --> svc["コアサービス: 接続の状態機械、コーデック選択、プロファイル、再接続"]
+    ui["bluecaster.exe:<br>ウィンドウと<br>トレイのフライアウト<br>（Tauri + SolidJS）"]
+    src["Windows の音声:<br>システムループバック /<br>仮想デバイス / アプリ単位"]
+    subgraph core["bluecaster-core.exe<br>（常駐、ユーザーモード）"]
+        ctl["トレイのメニュー /<br>IPC サーバー / CLI (--cli)"] --> svc["コアサービス:<br>接続の状態機械、コーデック選択、<br>プロファイル、再接続"]
         svc --> cap["WASAPI キャプチャ"]
-        cap -- PCM --> enc["エンコード経路: LDAC / aptX 系 / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack: HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["エンコード経路:<br>LDAC / aptX 系 / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack:<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
     ui <-->|"ユーザーごとの名前付きパイプ"| ctl
-    svc -.->|"UAC（ドライバーの変更と Windows のキーの取り込みのときだけ）"| drv["bluecaster-driver.exe（昇格）: WinUSB の割り当て / 復元、Windows のリンクキーの読み取り"]
     src --> cap
-    bt -->|"WinUSB (nusb)"| usb["USB Bluetooth アダプター（WinUSB ドライバー）"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB (nusb)"| usb["USB Bluetooth アダプター<br>（WinUSB ドライバー）"]
     usb -. Bluetooth .-> hp["ヘッドホン / スピーカー"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe（昇格）:<br>WinUSB の割り当て / 復元、<br>Windows のリンクキーの読み取り"]
 ```
 
 - **コアは Windows サービスではありません。** サインインしたユーザーの普通のプロセスとして動きます。WASAPI ループバックで取り込むのは、そのユーザーのセッションの音だからです。セッションごとの mutex で 1 つだけに保ち、もう一度起動するとウィンドウが開きます。

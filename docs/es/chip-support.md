@@ -11,9 +11,6 @@ BlueCaster controla por sí mismo el adaptador Bluetooth (WinUSB), así que tien
 
 Esta página describe cómo añadir uno. Necesita un adaptador con ese chip; los mantenedores no lo tienen. Aunque no escriba código, puede ayudar: los pasos 1 y 2 dan el informe que necesita quien lo escriba.
 
-{: .note }
-El diseño que hay detrás y lo que sigue pendiente están en la [nota para desarrolladores](../chip-bringup-dev).
-
 ## Contenido
 {: .no_toc .text-delta }
 

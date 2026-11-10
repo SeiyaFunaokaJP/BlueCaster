@@ -1,7 +1,7 @@
 //! The microphone test (Diagnostics > Microphone): records a few seconds of
 //! the headset microphone over the voice link of the classic stream and
 //! plays them back to the headphones, with the level while it records and
-//! plays (docs/headset-mic-dev.md, "Microphone test").
+//! plays.
 //!
 //! The test only asks for the voice link: the session's headset mode
 //! ([`crate::voice::HeadsetMode`]) opens it while [`MicTest::wanted`],

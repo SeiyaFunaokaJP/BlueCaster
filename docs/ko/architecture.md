@@ -48,20 +48,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Windows 오디오: 시스템 루프백 / 가상 장치 / 한 응용 프로그램"]
-    ui["bluecaster.exe: 창과 트레이 플라이아웃 (Tauri + SolidJS)"]
-    subgraph core["bluecaster-core.exe (상주, 사용자 모드)"]
-        ctl["트레이 메뉴 / IPC 서버 / CLI (--cli)"] --> svc["코어 서비스: 연결 상태 머신, 코덱 선택, 프로필, 다시 연결"]
+    ui["bluecaster.exe:<br>창과 트레이 플라이아웃<br>(Tauri + SolidJS)"]
+    src["Windows 오디오:<br>시스템 루프백 / 가상 장치 /<br>한 응용 프로그램"]
+    subgraph core["bluecaster-core.exe<br>(상주, 사용자 모드)"]
+        ctl["트레이 메뉴 / IPC 서버 /<br>CLI (--cli)"] --> svc["코어 서비스:<br>연결 상태 머신, 코덱 선택,<br>프로필, 다시 연결"]
         svc --> cap["WASAPI 캡처"]
-        cap -- PCM --> enc["인코더 파이프라인: LDAC / aptX 계열 / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack: HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["인코더 파이프라인:<br>LDAC / aptX 계열 / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack:<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
     ui <-->|"사용자별 named pipe"| ctl
-    svc -.->|"UAC, 드라이버 변경이나 Windows 키 가져오기 때만"| drv["bluecaster-driver.exe (관리자 권한): WinUSB 할당 / 복원, Windows 링크 키 읽기"]
     src --> cap
-    bt -->|"WinUSB (nusb)"| usb["USB Bluetooth 어댑터 (WinUSB 드라이버)"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB (nusb)"| usb["USB Bluetooth 어댑터<br>(WinUSB 드라이버)"]
     usb -. Bluetooth .-> hp["헤드폰 / 스피커"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe (관리자 권한):<br>WinUSB 할당 / 복원,<br>Windows 링크 키 읽기"]
 ```
 
 - **코어는 Windows 서비스가 아닙니다.** WASAPI 루프백은 로그인한 사용자 세션의

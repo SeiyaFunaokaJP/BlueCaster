@@ -48,20 +48,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Windows-Audio: System-Loopback / virtuelles Gerät / eine App"]
-    ui["bluecaster.exe: Fenster und Flyout im Infobereich (Tauri + SolidJS)"]
-    subgraph core["bluecaster-core.exe (resident, Benutzermodus)"]
-        ctl["Menü im Infobereich / IPC-Server / CLI (--cli)"] --> svc["Kerndienst: Verbindungszustandsautomat, Codec-Auswahl, Profile, Neuverbindung"]
+    ui["bluecaster.exe:<br>Fenster und Flyout<br>im Infobereich<br>(Tauri + SolidJS)"]
+    src["Windows-Audio:<br>System-Loopback /<br>virtuelles Gerät / eine App"]
+    subgraph core["bluecaster-core.exe<br>(resident, Benutzermodus)"]
+        ctl["Menü im Infobereich /<br>IPC-Server / CLI (--cli)"] --> svc["Kerndienst:<br>Verbindungszustandsautomat,<br>Codec-Auswahl, Profile,<br>Neuverbindung"]
         svc --> cap["WASAPI-Aufnahme"]
-        cap -- PCM --> enc["Encoder-Pipeline: LDAC / aptX-Familie / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack: HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["Encoder-Pipeline:<br>LDAC / aptX-Familie / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack:<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
     ui <-->|"Named Pipe pro Benutzer"| ctl
-    svc -.->|"UAC, nur zum Ändern des Treibers oder zum Import der Schlüssel von Windows"| drv["bluecaster-driver.exe (mit Administratorrechten): WinUSB zuweisen / wiederherstellen, Link Keys von Windows lesen"]
     src --> cap
-    bt -->|"WinUSB (nusb)"| usb["USB-Bluetooth-Adapter (WinUSB-Treiber)"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB (nusb)"| usb["USB-Bluetooth-Adapter<br>(WinUSB-Treiber)"]
     usb -. Bluetooth .-> hp["Kopfhörer / Lautsprecher"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe<br>(mit Administratorrechten):<br>WinUSB zuweisen / wiederherstellen,<br>Link Keys von Windows lesen"]
 ```
 
 - **Der Kern ist kein Windows-Dienst.** Er ist ein gewöhnlicher Prozess des

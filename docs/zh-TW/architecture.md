@@ -47,20 +47,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Windows 音訊: 系統回送 / 虛擬裝置 / 單一應用程式"]
-    ui["bluecaster.exe: 視窗與系統匣快顯視窗 (Tauri + SolidJS)"]
-    subgraph core["bluecaster-core.exe (常駐，使用者模式)"]
-        ctl["系統匣選單 / IPC 伺服器 / CLI (--cli)"] --> svc["核心服務: 連線狀態機、轉碼器選擇、設定檔、重新連線"]
+    ui["bluecaster.exe:<br>視窗與系統匣快顯視窗<br>(Tauri + SolidJS)"]
+    src["Windows 音訊:<br>系統回送 / 虛擬裝置 /<br>單一應用程式"]
+    subgraph core["bluecaster-core.exe<br>(常駐，使用者模式)"]
+        ctl["系統匣選單 / IPC 伺服器 /<br>CLI (--cli)"] --> svc["核心服務:<br>連線狀態機、轉碼器選擇、<br>設定檔、重新連線"]
         svc --> cap["WASAPI 擷取"]
-        cap -- PCM --> enc["編碼器管線: LDAC / aptX 系列 / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack: HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["編碼器管線:<br>LDAC / aptX 系列 / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack:<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
     ui <-->|"每位使用者專屬的具名管道"| ctl
-    svc -.->|"UAC，僅用於變更驅動程式或匯入 Windows 的金鑰"| drv["bluecaster-driver.exe (提高權限): 指派 / 還原 WinUSB、讀取 Windows 的連結金鑰"]
     src --> cap
-    bt -->|"WinUSB (nusb)"| usb["USB 藍牙介面卡 (WinUSB 驅動程式)"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB (nusb)"| usb["USB 藍牙介面卡<br>(WinUSB 驅動程式)"]
     usb -. 藍牙 .-> hp["耳機 / 喇叭"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe (提高權限):<br>指派 / 還原 WinUSB、<br>讀取 Windows 的連結金鑰"]
 ```
 
 - **核心不是 Windows 服務。** 它是已登入使用者的一般處理程序，因為 WASAPI

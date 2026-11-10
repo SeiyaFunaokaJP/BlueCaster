@@ -10,9 +10,6 @@ BlueCaster drives the Bluetooth adapter itself (WinUSB), so it has to do what th
 
 This page is the procedure for adding one. You need an adapter with that chip; the maintainers do not have them. Even without writing code, you can help: steps 1 and 2 give the report a contributor needs.
 
-{: .note }
-The design behind this, and what is still open, is in the [developer note](chip-bringup-dev).
-
 ## Table of contents
 {: .no_toc .text-delta }
 

@@ -42,20 +42,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Windows 音频：系统环回 / 虚拟设备 / 单个应用"]
-    ui["bluecaster.exe：窗口和托盘浮出窗口（Tauri + SolidJS）"]
-    subgraph core["bluecaster-core.exe（常驻，用户模式）"]
-        ctl["托盘菜单 / IPC 服务器 / CLI（--cli）"] --> svc["核心服务：连接状态机、编解码器选择、配置文件、重新连接"]
+    ui["bluecaster.exe：<br>窗口和托盘浮出窗口<br>（Tauri + SolidJS）"]
+    src["Windows 音频：<br>系统环回 / 虚拟设备 /<br>单个应用"]
+    subgraph core["bluecaster-core.exe<br>（常驻，用户模式）"]
+        ctl["托盘菜单 / IPC 服务器 /<br>CLI（--cli）"] --> svc["核心服务：<br>连接状态机、编解码器选择、<br>配置文件、重新连接"]
         svc --> cap["WASAPI 捕获"]
-        cap -- PCM --> enc["编码器流水线：LDAC / aptX 系列 / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack：HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["编码器流水线：<br>LDAC / aptX 系列 / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack：<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
     ui <-->|"每个用户的命名管道"| ctl
-    svc -.->|"UAC，仅用于更改驱动程序或导入 Windows 的密钥"| drv["bluecaster-driver.exe（提升权限）：分配 / 恢复 WinUSB，读取 Windows 的链接密钥"]
     src --> cap
-    bt -->|"WinUSB（nusb）"| usb["USB Bluetooth 适配器（WinUSB 驱动程序）"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB（nusb）"| usb["USB Bluetooth 适配器<br>（WinUSB 驱动程序）"]
     usb -. Bluetooth .-> hp["耳机 / 音箱"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe（提升权限）：<br>分配 / 恢复 WinUSB，<br>读取 Windows 的链接密钥"]
 ```
 
 - **核心不是 Windows 服务。** 它是已登录用户的普通进程，因为 WASAPI 环回捕获的是该用户会话的音频。每个会话的互斥体保证只有一个实例；再次启动它会打开窗口。

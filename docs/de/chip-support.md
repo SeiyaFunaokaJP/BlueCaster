@@ -11,9 +11,6 @@ BlueCaster steuert den Bluetooth-Adapter selbst (WinUSB) und muss daher erledige
 
 Diese Seite beschreibt, wie man einen solchen Loader hinzufügt. Sie brauchen dafür einen Adapter mit dem betreffenden Chip; die Maintainer haben keinen. Auch ohne selbst Code zu schreiben, können Sie helfen: Die Schritte 1 und 2 liefern den Bericht, den ein Entwickler braucht.
 
-{: .note }
-Das Konzept dahinter und die offenen Punkte stehen in der [Entwicklernotiz](../chip-bringup-dev).
-
 ## Inhalt
 {: .no_toc .text-delta }
 

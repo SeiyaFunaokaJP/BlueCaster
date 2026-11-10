@@ -48,20 +48,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Audio de Windows: loopback del sistema / dispositivo virtual / una aplicación"]
-    ui["bluecaster.exe: ventana y panel desplegable de la bandeja (Tauri + SolidJS)"]
-    subgraph core["bluecaster-core.exe (residente, modo de usuario)"]
-        ctl["Menú de la bandeja / servidor IPC / CLI (--cli)"] --> svc["Servicio del núcleo: máquina de estados de la conexión, selección de códec, perfiles, reconexión"]
+    ui["bluecaster.exe:<br>ventana y panel desplegable<br>de la bandeja<br>(Tauri + SolidJS)"]
+    src["Audio de Windows:<br>loopback del sistema /<br>dispositivo virtual /<br>una aplicación"]
+    subgraph core["bluecaster-core.exe<br>(residente, modo de usuario)"]
+        ctl["Menú de la bandeja /<br>servidor IPC / CLI (--cli)"] --> svc["Servicio del núcleo:<br>máquina de estados de la conexión,<br>selección de códec, perfiles,<br>reconexión"]
         svc --> cap["Captura WASAPI"]
-        cap -- PCM --> enc["Canal de codificación: LDAC / familia aptX / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack: HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["Canal de codificación:<br>LDAC / familia aptX / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack:<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
     ui <-->|"canalización con nombre por usuario"| ctl
-    svc -.->|"UAC, solo para cambiar el controlador o importar las claves de Windows"| drv["bluecaster-driver.exe (elevado): asignar / restaurar WinUSB, leer las claves de enlace de Windows"]
     src --> cap
-    bt -->|"WinUSB (nusb)"| usb["Adaptador Bluetooth USB (controlador WinUSB)"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB (nusb)"| usb["Adaptador Bluetooth USB<br>(controlador WinUSB)"]
     usb -. Bluetooth .-> hp["Auriculares / altavoces"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe (elevado):<br>asignar / restaurar WinUSB,<br>leer las claves de enlace de Windows"]
 ```
 
 - **El núcleo no es un servicio de Windows.** Es un proceso normal del

@@ -48,20 +48,19 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Audio Windows : bouclage système / périphérique virtuel / une application"]
-    ui["bluecaster.exe : fenêtre et volet de la zone de notification (Tauri + SolidJS)"]
-    subgraph core["bluecaster-core.exe (résident, mode utilisateur)"]
-        ctl["Menu de la zone de notification / serveur IPC / CLI (--cli)"] --> svc["Service du cœur : machine à états de la connexion, choix du codec, profils, reconnexion"]
+    ui["bluecaster.exe :<br>fenêtre et volet de la<br>zone de notification<br>(Tauri + SolidJS)"]
+    src["Audio Windows :<br>bouclage système /<br>périphérique virtuel /<br>une application"]
+    subgraph core["bluecaster-core.exe<br>(résident, mode utilisateur)"]
+        ctl["Menu de la zone de notification /<br>serveur IPC / CLI (--cli)"] --> svc["Service du cœur :<br>machine à états de la connexion,<br>choix du codec, profils,<br>reconnexion"]
         svc --> cap["Capture WASAPI"]
-        cap -- PCM --> enc["Pipeline d'encodage : LDAC / famille aptX / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack : HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["Pipeline d'encodage :<br>LDAC / famille aptX / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack :<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
     ui <-->|"canal nommé par utilisateur"| ctl
-    svc -.->|"UAC, uniquement pour changer le pilote ou importer les clés de Windows"| drv["bluecaster-driver.exe (élevé) : attribuer / restaurer WinUSB, lire les clés de liaison de Windows"]
     src --> cap
-    bt -->|"WinUSB (nusb)"| usb["Adaptateur Bluetooth USB (pilote WinUSB)"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB (nusb)"| usb["Adaptateur Bluetooth USB<br>(pilote WinUSB)"]
     usb -. Bluetooth .-> hp["Casque / enceintes"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe (élevé) :<br>attribuer / restaurer WinUSB,<br>lire les clés de liaison de Windows"]
 ```
 
 - **Le cœur n'est pas un service Windows.** C'est un processus ordinaire de
