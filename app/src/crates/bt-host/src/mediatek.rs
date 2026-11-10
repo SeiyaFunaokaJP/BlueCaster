@@ -274,9 +274,6 @@ pub struct Loader {
     total_chunks: usize,
     /// Sections sent; 0 at the end: the chip had the firmware already
     sent_sections: usize,
-    /// A silent Read Local Version means the firmware runs already (WinUSB
-    /// on a chip the OEM driver loaded): go on to HCI init, no error
-    proceed_on_silence: bool,
 }
 
 impl Loader {
@@ -294,14 +291,7 @@ impl Loader {
             done_chunks: 0,
             total_chunks: 0,
             sent_sections: 0,
-            proceed_on_silence: false,
         }
-    }
-
-    /// See proceed_on_silence.
-    pub fn proceed_on_silence(mut self) -> Loader {
-        self.proceed_on_silence = true;
-        self
     }
 
     fn read_version(&mut self, tries: u8) -> Vec<Action> {
@@ -560,15 +550,15 @@ impl ChipLoader for Loader {
                 tracing::info!("mediatek: no answer to Read Local Version, sending it again");
                 self.read_version(tries + 1)
             }
-            State::Version { .. } if self.proceed_on_silence => {
-                // Not proof that the firmware runs (HCI Reset stays unanswered
-                // too): the ROM may be waiting for its download, so go on to
-                // the chip ID register, over endpoint 0, and the normal path
+            State::Version { .. } => {
+                // WinUSB on a chip the OEM driver had (MT7921): no answer at
+                // all. Not proof that the firmware runs (HCI Reset stays
+                // unanswered too): the ROM may wait for its download, so read
+                // the chip ID over endpoint 0 and take the normal path
                 tracing::info!("mediatek: no answer to Read Local Version, reading the chip ID to download");
                 self.state = State::ChipId;
                 vec![Action::UsbControl(read_register(REGISTER_CHIP_ID))]
             }
-            State::Version { .. } => self.finish(Err(LoadError::Timeout("Read Local Version"))),
             // The next read of the pending event
             state @ State::Waiting { .. } => {
                 self.state = state;
@@ -973,8 +963,18 @@ mod tests {
         assert_eq!(r.opcodes(), [OP_READ_LOCAL_VERSION, OP_READ_LOCAL_VERSION]);
         let r = run(&mut Chip { lost_versions: 1, ..Chip::new() }, files(&[10]));
         assert_eq!(r.result, Ok(Outcome::Loaded { firmware: NAME.into(), detail: None }));
-        let r = run(&mut Chip { lost_versions: 2, ..Chip::new() }, files(&[10]));
-        assert_eq!(r.result, Err(LoadError::Timeout("Read Local Version")));
+    }
+
+    /// Read Local Version never answered (MT7921 under WinUSB): the chip ID,
+    /// then the normal download
+    #[test]
+    fn a_chip_silent_to_the_version_is_downloaded_anyway() {
+        let mut chip = Chip { lost_versions: u32::MAX, ..Chip::new() };
+        let r = run(&mut chip, files(&[10]));
+        assert_eq!(r.result, Ok(Outcome::Loaded { firmware: NAME.into(), detail: None }));
+        assert_eq!(r.opcodes()[..2], [OP_READ_LOCAL_VERSION, OP_READ_LOCAL_VERSION]);
+        assert!(r.opcodes()[2..].iter().all(|&o| o == OP_WMT));
+        assert!(chip.bluetooth_on);
     }
 
     #[test]

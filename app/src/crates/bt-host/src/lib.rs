@@ -169,9 +169,6 @@ pub struct HostConfig {
     pub intel_loader: bool,
     /// Run the MediaTek MT79xx firmware download first (experimental)
     pub mediatek_loader: bool,
-    /// MediaTek: the firmware is resident already (the OEM driver loaded it):
-    /// no Read Local Version probe, straight to HCI init
-    pub mediatek_skip_download: bool,
     /// Run the Qualcomm rampatch and NVM download first (experimental)
     pub qualcomm_loader: bool,
     /// Run the download of a Realtek chip whose firmware comes from
@@ -233,7 +230,6 @@ impl HostConfig {
             realtek_files: None,
             intel_loader: false,
             mediatek_loader: false,
-            mediatek_skip_download: false,
             qualcomm_loader: false,
             realtek_driver_chip: None,
             broadcom_ids: Vec::new(),
@@ -573,7 +569,6 @@ impl BtHost {
                         realtek_files,
                         intel_loader,
                         mediatek_loader,
-                        mediatek_skip_download,
                         qualcomm_loader,
                         realtek_driver_chip,
                         broadcom_ids,
@@ -653,11 +648,6 @@ impl BtHost {
                             // loader is done at once if the firmware runs
                             stack.install_transport(backend);
                             app.start_intel_loader(stack);
-                        } else if mediatek_loader && mediatek_skip_download && !tcp {
-                            // Firmware resident already: the chip does not answer
-                            // the loader's Read Local Version probe under WinUSB
-                            tracing::info!("MediaTek adapter: firmware download skipped, HCI init");
-                            app.setup_hci_and_power_on(stack, Some(backend));
                         } else if mediatek_loader && !tcp {
                             // MediaTek's ROM refuses HCI until its RAM
                             // code is downloaded and Bluetooth switched on
