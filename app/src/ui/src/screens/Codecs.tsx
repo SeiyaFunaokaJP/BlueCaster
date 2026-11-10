@@ -36,7 +36,10 @@
 // headphones list otherwise), and the LE Audio microphone's "..." chooses
 // its rate among those the headphones allow (the profile's mic_rate, 0 =
 // Auto). The choice stays in the profile while Auto-select is on. The
-// microphone stays mono.
+// microphone stays mono. The call codec cards say which the headphones
+// list (CVSD always) while the unsupported ones show. While the call link
+// opens again with another codec (A2DP in between) or the LE Audio stream
+// is set up again for another rate, the microphone's cards stay, waiting.
 // A codec's "..." applies each change at once (issue #86): the codec in use
 // is saved, which starts the stream again but for the bitpools, which the
 // encoder takes as the slider moves; another codec's settings are only kept
@@ -74,6 +77,7 @@ import {
   moved,
   type CodecId,
   type CodecSpec,
+  type CodecSupport,
 } from "../lib/codecs";
 import {
   audioEntries,
@@ -481,7 +485,7 @@ function DeviceCodecs(props: {
     if (values) void apply(values);
   };
   onCleanup(saveNow);
-  const locked = () => busy() || settling();
+  const locked = () => busy() || settling() || reopening() !== null;
   const titleId = () => `codecs-${e().key.replace(/[^0-9A-Za-z]/g, "")}`;
   const leSupport = () => snap().adapter.le_audio;
   const state = () => entryState(snap(), e());
@@ -492,22 +496,81 @@ function DeviceCodecs(props: {
     const v = ours() ? snap().stream.voice : null;
     return v?.link === "hfp" ? v.codec : null;
   };
-  const callOpen = () => !e().le_audio && callCodec() !== null;
-  const callCards = () => {
-    const listed = ours() ? snap().stream.voice_codecs : [];
-    return VOICE_CARDS.filter((c) => c.id === callCodec() || listed.includes(c.id) || !props.hide);
-  };
   // LE Audio: the microphone's rate while it runs (none: it does not)
   const leMicRate = () => {
     const v = ours() ? snap().stream.voice : null;
     return e().le_audio && v?.link === "le" ? v.rate : null;
   };
+  const micUp = () => (e().le_audio ? leMicRate() !== null : callCodec() !== null);
+  // The microphone's codec chosen (or Auto-select switched) closes the call
+  // link and opens it again with A2DP in between, or sets the LE Audio
+  // stream up again: its cards stay until it is back (issue #86: the music
+  // cards flashed up meanwhile, the LE microphone's "..." closed). `to`:
+  // the call codec shown chosen meanwhile; `rate`: the LE microphone's.
+  const [reopening, setReopening] = createSignal<{ to: string; rate: number } | null>(null);
+  let reopenTimer: ReturnType<typeof setTimeout> | undefined;
+  let wentDown = false;
+  const endReopen = () => {
+    clearTimeout(reopenTimer);
+    setReopening(null);
+  };
+  onCleanup(() => clearTimeout(reopenTimer));
+  const awaitReopen = (to: string, rate = 0) => {
+    clearTimeout(reopenTimer);
+    wentDown = false;
+    setReopening({ to, rate });
+    // Not closed soon: nothing to wait for (it kept what it had)
+    reopenTimer = setTimeout(() => {
+      if (!wentDown) return endReopen();
+      reopenTimer = setTimeout(endReopen, SETTLE_MAX_MS);
+    }, 2000);
+  };
+  createEffect(() => {
+    if (!reopening()) return;
+    // A classic stream stays while its call link opens again: gone, it stopped
+    if (!e().le_audio && !ours()) return endReopen();
+    if (!micUp()) wentDown = true;
+    else if (wentDown) endReopen();
+  });
+  const callOpen = () => !e().le_audio && (callCodec() !== null || reopening() !== null);
+  // The rates the headphones allow, kept while the stream is set up again
+  const [lastMicRates, setLastMicRates] = createSignal<readonly number[]>([]);
+  createEffect(() => {
+    const r = ours() ? snap().stream.mic_rates : [];
+    if (r.length > 0) setLastMicRates(r);
+  });
+  const micRates = () => {
+    const r = ours() ? snap().stream.mic_rates : [];
+    return r.length > 0 || !reopening() ? r : lastMicRates();
+  };
+  const micRateShown = () => leMicRate() ?? (e().le_audio ? reopening()?.rate || null : null);
+  const listedCalls = () => (ours() ? snap().stream.voice_codecs : []);
+  // CVSD needs no listing: every headset has it
+  const callSupported = (id: string) => id === "cvsd" || listedCalls().includes(id);
+  const callCards = () => VOICE_CARDS.filter((c) => c.id === callCodec() || callSupported(c.id) || !props.hide);
+  // Like the music cards: tagged only while the unsupported ones show
+  const callSupport = (id: string): CodecSupport | null =>
+    props.hide ? null : callSupported(id) ? "offered" : "not_offered";
+  // Auto-select switched while the microphone runs with a codec chosen: it
+  // opens again (Auto's or the one chosen, as the core)
+  const micChosen = () => (e().le_audio ? shown().mic_rate !== 0 : shown().voice_codec !== "");
+  createEffect(
+    on(
+      () => props.auto,
+      () => {
+        if (micUp() && micChosen()) awaitReopen(callCodec() ?? "", leMicRate() ?? 0);
+      },
+      { defer: true },
+    ),
+  );
   // The microphone's codec chosen (issue #86): the call link (or the LE
   // stream) opens again with it
   const saveMic = async (patch: Partial<Pick<Profile, "voice_codec" | "mic_rate">>) => {
     setBusy(true);
-    await queued(() => saveMicCodec(app, e(), patch));
+    if (micUp()) awaitReopen(patch.voice_codec ?? "", leMicRate() ?? 0);
+    const ok = await queued(() => saveMicCodec(app, e(), patch));
     setBusy(false);
+    if (!ok) endReopen();
   };
   const saveLowLatency = async (on: boolean) => {
     if (e().profile && shown().le_low_latency === on) return;
@@ -718,7 +781,7 @@ function DeviceCodecs(props: {
                       ? "lc3_ll"
                       : "lc3"
                     : ""
-                  : (callCodec() ?? "")
+                  : (callCodec() ?? reopening()?.to ?? "")
               }
               disabled={locked()}
               // LE Audio: LC3 or its low latency configuration, from the
@@ -728,6 +791,7 @@ function DeviceCodecs(props: {
               onPick={(id) => void (e().le_audio ? saveLowLatency(id === "lc3_ll") : saveMic({ voice_codec: id }))}
               onLocked={(id) => props.onLocked(() => void saveMic({ voice_codec: id }))}
               mono={!e().le_audio}
+              support={e().le_audio ? undefined : callSupport}
               note={
                 <Show when={e().le_audio && leSupport() !== true}>
                   <Banner kind="warn">
@@ -737,7 +801,7 @@ function DeviceCodecs(props: {
               }
             />
             {/* The LE Audio microphone while it runs: its rate in its "..." */}
-            <Show when={leMicRate()}>
+            <Show when={micRateShown()}>
               {(rate) => (
                 <>
                   <h3 class="codecs-sub">{t("ui.diag.mic_title")}</h3>
@@ -753,7 +817,7 @@ function DeviceCodecs(props: {
                         ? undefined
                         : {
                             value: shown().mic_rate,
-                            rates: ours() ? snap().stream.mic_rates : [],
+                            rates: micRates(),
                             onChange: (r) => void saveMic({ mic_rate: r }),
                           }
                     }
@@ -912,6 +976,8 @@ function FixedCards(props: {
   /** One channel: shown in "..." */
   mono?: boolean;
   rateChoice?: { value: number; rates: readonly number[]; onChange: (rate: number) => void };
+  /** Each card's tag (none: untagged) */
+  support?: (id: string) => CodecSupport | null;
   note?: JSX.Element;
 }) {
   const app = useApp();
@@ -956,7 +1022,7 @@ function FixedCards(props: {
               selected={props.picked === c.id}
               disabled={props.disabled}
               readOnly={props.readOnly || !props.onPick}
-              support={null}
+              support={props.support?.(c.id) ?? null}
               onPick={() => props.onPick?.(c.id)}
               onReadOnly={(settings) => (settings ? setOpen(c) : props.onLocked?.(c.id))}
               onSettings={() => setOpen(c)}

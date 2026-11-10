@@ -669,9 +669,13 @@ describe("call codecs on Codecs (issue #86)", () => {
     expect(dialog).toHaveTextContent("16 kHz");
     expect(dialog).toHaveTextContent("64 kbps");
     fireEvent.keyDown(dialog, { key: "Escape" });
-    // All three with the toggle off
+    // All three with the toggle off, each saying whether the headphones list it
     fireEvent.click(screen.getByRole("switch", { name: t("ui.profile.codecs_hide") }));
     await waitFor(() => expect(radios().map((r) => r.value)).toEqual(["lc3_swb", "msbc", "cvsd"]));
+    const tag = (v: string) => radios().find((r) => r.value === v)!.closest("label")!.querySelector(".codec-card-tags");
+    expect(tag("lc3_swb")).toHaveTextContent(t("ui.profile.codec_not_supported"));
+    expect(tag("msbc")).toHaveTextContent(t("ui.profile.codec_supported"));
+    expect(tag("cvsd")).toHaveTextContent(t("ui.profile.codec_supported"));
   });
 
   it("is not there for a device not connected", async () => {
@@ -691,11 +695,26 @@ describe("call codecs on Codecs (issue #86)", () => {
       expect(r).toBeTruthy();
       return r!;
     });
+    // The music cards never show while the call link opens again (A2DP
+    // plays in between)
+    let musicShown = false;
+    const watch = new MutationObserver(() => {
+      if (wh.querySelector('input[value="ldac"]')) musicShown = true;
+    });
+    watch.observe(wh, { childList: true, subtree: true });
     fireEvent.click(cvsd);
     await waitFor(() => expect(saves().at(-1)).toMatchObject({ voice_codec: "cvsd", codec: "ldac" }));
+    await waitFor(() => expect(core.state.snap?.stream.voice).toBeNull());
+    const radio = (v: string) => wh.querySelector<HTMLInputElement>(`input[value="${v}"]`);
+    // Meanwhile: the one chosen, waiting
+    expect(radio("cvsd")).toBeChecked();
+    expect(radio("cvsd")).toBeDisabled();
     // The link takes it
     await waitFor(() => expect(core.state.snap?.stream.voice?.codec).toBe("cvsd"));
-    await waitFor(() => expect(wh.querySelector<HTMLInputElement>('input[value="cvsd"]')).toBeChecked());
+    await waitFor(() => expect(radio("cvsd")).toBeChecked());
+    await waitFor(() => expect(radio("cvsd")).not.toBeDisabled());
+    watch.disconnect();
+    expect(musicShown).toBe(false);
   });
 
   it("shows the link's call codec under Auto-select and offers to turn it off", async () => {
@@ -753,6 +772,9 @@ describe("LE Audio microphone on Codecs (issue #86)", () => {
     fireEvent.change(select, { target: { value: "16000" } });
     await waitFor(() => expect(saves().at(-1)).toMatchObject({ le_audio: true, mic_rate: 16000 }));
     await waitFor(() => expect(core.state.snap?.stream.voice?.rate).toBe(16000));
+    // The dialog stays open with the rate chosen
+    expect(dialog).toBeInTheDocument();
+    await waitFor(() => expect((within(dialog).getByRole("combobox") as HTMLSelectElement).value).toBe("16000"));
   });
 
   it("shows the rate in use under Auto-select, nothing to choose", async () => {

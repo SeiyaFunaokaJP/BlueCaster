@@ -1342,8 +1342,18 @@ export class MockCore implements Transport {
         if (st.state === "streaming" && st.profile === original) {
           const voice = this.voiceOf(profile.name);
           if (JSON.stringify(voice) !== JSON.stringify(st.voice ?? null)) {
-            this.snap.stream = { ...st, profile: profile.name, voice };
+            // Another call codec: the call link closes, A2DP plays in
+            // between, then it opens again with the new one (as the core)
+            const reopen = voice?.link === "hfp" && st.voice?.link === "hfp";
+            this.snap.stream = { ...st, profile: profile.name, voice: reopen ? null : voice };
             this.emit({ kind: "stream", value: this.snap.stream });
+            if (reopen)
+              this.later(300, () => {
+                const now = this.snap.stream;
+                if (now.state !== "streaming" || now.profile !== profile.name) return;
+                this.snap.stream = { ...now, voice: this.voiceOf(profile.name) };
+                this.emit({ kind: "stream", value: this.snap.stream });
+              });
           }
         }
         return null;
