@@ -1,0 +1,16 @@
+# The commit of each submodule under extern/ that BlueCaster's bindings,
+# event layouts and source patches are written for. The -sys crates' build
+# scripts stop when a checkout is at another commit, typically a submodule
+# left behind by a pull (git submodule update --init --recursive).
+#
+# Updating a submodule: change its line here in the same commit.
+# Building another version on purpose: put that commit here, or * to skip the
+# check for that library; nothing then guarantees that it matches.
+#
+# name        commit                                    version
+btstack       51e11ce3692abfe31b4ee3d66cffdeb1ae1626f2  v1.8.3
+fdk-aac       a68a51aa45d86a43c7b228e3d45624af09dcdd8d  v3.0.0
+lhdcv5-enc    3f9d1980fa9c57cdfb78792f9455a7dbac50edda  main
+libldac       eeee1a3f5f8df1282e3a6d297085885fd886737b  android-15.0.0_r36-4-geeee1a3
+libopenaptx   2459ed4686eaef0a19dfa3f330a960813c5f60de  0.2.0
+opus          22244de5a79bd1d6d623c32e72bf1954b56235be  v1.6.1

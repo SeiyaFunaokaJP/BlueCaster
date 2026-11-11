@@ -54,6 +54,8 @@ cargo build --release -p bluecaster-ui
 git submodule update --init --recursive
 ```
 
+Run it again after a pull that updates a library. The build stops when a library under `extern/` is not at the commit listed in `extern/versions.txt`, and its message says how to build another version anyway.
+
 ## Project Structure
 
 ```

@@ -16,6 +16,7 @@ decoder = []
 
 [build-dependencies]
 cc.workspace = true
+extern-version.workspace = true
 
 [dev-dependencies]
 # The round-trip test decodes what the codec crate's AacEncoder produces

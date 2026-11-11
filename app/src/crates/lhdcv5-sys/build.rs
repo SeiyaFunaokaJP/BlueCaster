@@ -36,6 +36,7 @@ fn main() {
         "LHDC V5 encoder not found at {} (git submodule update --init extern/lhdcv5-enc)",
         dir.display()
     );
+    extern_version::check(&manifest, "lhdcv5-enc", &dir);
 
     let mut build = cc::Build::new();
     build

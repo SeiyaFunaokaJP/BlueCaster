@@ -55,6 +55,8 @@ cargo build --release -p bluecaster-ui
 git submodule update --init --recursive
 ```
 
+拉取了更新函式庫的提交之後也要再執行一次。若 `extern/` 下的函式庫不在 `extern/versions.txt` 所列的提交上，建置會停止，並在訊息中說明如何仍以其他版本建置。
+
 ## 專案結構 {#project-structure}
 
 ```

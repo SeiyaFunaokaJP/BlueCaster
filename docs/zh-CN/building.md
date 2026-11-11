@@ -55,6 +55,8 @@ cargo build --release -p bluecaster-ui
 git submodule update --init --recursive
 ```
 
+拉取了更新库的提交之后也要再运行一次。如果 `extern/` 下的库不在 `extern/versions.txt` 所列的提交上，构建会停止，并在消息中说明如何仍用其他版本构建。
+
 ## 项目结构 {#project-structure}
 
 ```

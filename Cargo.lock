@@ -486,6 +486,7 @@ name = "btstack-sys"
 version = "3.0.0-beta.3.alpha.5"
 dependencies = [
  "cc",
+ "extern-version",
  "tracing",
 ]
 
@@ -1180,6 +1181,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "extern-version"
+version = "3.0.0-beta.3.alpha.5"
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1200,6 +1205,7 @@ version = "3.0.0-beta.3.alpha.5"
 dependencies = [
  "cc",
  "codec",
+ "extern-version",
 ]
 
 [[package]]
@@ -2268,6 +2274,7 @@ name = "ldac-sys"
 version = "3.0.0-beta.3.alpha.5"
 dependencies = [
  "cc",
+ "extern-version",
 ]
 
 [[package]]
@@ -2282,6 +2289,7 @@ name = "lhdcv5-sys"
 version = "3.0.0-beta.3.alpha.5"
 dependencies = [
  "cc",
+ "extern-version",
 ]
 
 [[package]]
@@ -2860,6 +2868,7 @@ name = "openaptx-sys"
 version = "3.0.0-beta.3.alpha.5"
 dependencies = [
  "cc",
+ "extern-version",
 ]
 
 [[package]]
@@ -2879,6 +2888,7 @@ name = "opus-sys"
 version = "3.0.0-beta.3.alpha.5"
 dependencies = [
  "cc",
+ "extern-version",
 ]
 
 [[package]]

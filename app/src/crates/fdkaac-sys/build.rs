@@ -31,6 +31,7 @@ fn main() {
     let fdk = std::path::absolute(&fdk).unwrap();
     let cmake = fdk.join("CMakeLists.txt");
     assert!(cmake.exists(), "fdk-aac not found at {} (git submodule update --init extern/fdk-aac)", fdk.display());
+    extern_version::check(&manifest, "fdk-aac", &fdk);
     let cmake_text = std::fs::read_to_string(&cmake).unwrap();
     let includes = include_dirs(&cmake_text);
     assert!(

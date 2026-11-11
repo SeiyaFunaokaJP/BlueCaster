@@ -55,6 +55,8 @@ cargo build --release -p bluecaster-ui
 git submodule update --init --recursive
 ```
 
+Vuelva a ejecutarlo después de un pull que actualice una biblioteca. La compilación se detiene si una biblioteca de `extern/` no está en el commit indicado en `extern/versions.txt`, y el mensaje explica cómo compilar de todos modos con otra versión.
+
 ## Estructura del proyecto {#project-structure}
 
 ```

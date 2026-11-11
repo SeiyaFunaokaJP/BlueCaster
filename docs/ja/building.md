@@ -55,6 +55,8 @@ cargo build --release -p bluecaster-ui
 git submodule update --init --recursive
 ```
 
+ライブラリを更新する pull の後も実行してください。`extern/` のライブラリが `extern/versions.txt` に書かれたコミットでないとビルドは止まり、それでも別のバージョンでビルドする方法をメッセージで示します。
+
 ## プロジェクト構成 {#project-structure}
 
 ```

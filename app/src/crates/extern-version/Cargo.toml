@@ -1,0 +1,10 @@
+[package]
+name = "extern-version"
+description = "Build-time check that a C library under extern/ is the commit listed in extern/versions.txt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
