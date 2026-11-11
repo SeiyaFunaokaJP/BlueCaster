@@ -947,10 +947,17 @@ impl Unicast {
         // (sink ASEs: C->P, source ASEs: P->C); framing and PHY for all
         let mut range = [(0u32, 0xFF_FFFFu32); 2];
         let src = plan.source.as_ref();
-        let mut latency = [
-            plan.preset.max_transport_latency_ms,
-            src.map_or(plan.preset.max_transport_latency_ms, |s| s.preset.max_transport_latency_ms),
-        ];
+        // One max transport latency for both directions, the larger of the
+        // two presets: the controller picks one ISO interval for the whole
+        // CIG, and a lower one for the microphone (32_2_2: 95 ms next to
+        // 48_6_2: 100 ms) made a MediaTek controller give up its 30 ms
+        // interval for 10 ms, where the earbuds refused the second CIS
+        // (0x1E, issue #86). The servers' preferences still cap each
+        // direction below.
+        let shared = src.map_or(plan.preset.max_transport_latency_ms, |s| {
+            s.preset.max_transport_latency_ms.max(plan.preset.max_transport_latency_ms)
+        });
+        let mut latency = [shared; 2];
         let mut phy = plan.phy;
         let mut framing = plan.preset.framing | src.map_or(0, |s| s.preset.framing);
         for pa in plan.ases() {
@@ -2028,6 +2035,23 @@ mod tests {
         plan
     }
 
+    #[test]
+    fn the_microphone_shares_the_media_latency_within_the_server_preference() {
+        // A source ASE that allows less keeps its own cap
+        let mut d = mic_device(0, 0x40, true);
+        d.ases[1].pref_max_latency_ms = 60;
+        let mut env = Fake::new(vec![d]);
+        let mut u = Unicast::default();
+        u.start(&mut env, conversational_plan(false), Box::new(|_| {}));
+        env.take();
+        for (ase, state) in [(1, AseState::CodecConfigured), (3, AseState::CodecConfigured)] {
+            env.set_state(0, ase, state);
+            u.on_ase_update(&mut env, LeDeviceId(0), ase);
+        }
+        let cig = env.cig.clone().unwrap();
+        assert_eq!((cig.max_transport_latency_c_to_p, cig.max_transport_latency_p_to_c), (100, 60));
+    }
+
     fn mic_device(id: u32, acl: u16, sink: bool) -> LeDevice {
         let mut d = device(id, acl, if sink { &[1] } else { &[] }, CONTEXT_MEDIA);
         d.available_source_contexts = CONTEXT_CONVERSATIONAL;
@@ -2054,7 +2078,8 @@ mod tests {
         assert_eq!(env.take(), ["cig create 1 (1 CIS)"]);
         let cig = env.cig.clone().unwrap();
         assert_eq!((cig.sdu_interval_c_to_p, cig.sdu_interval_p_to_c), (10000, 10000));
-        assert_eq!((cig.max_transport_latency_c_to_p, cig.max_transport_latency_p_to_c), (100, 10));
+        // One max transport latency for the CIG: the larger (issue #86)
+        assert_eq!((cig.max_transport_latency_c_to_p, cig.max_transport_latency_p_to_c), (100, 100));
         assert_eq!((cig.cis[0].max_sdu_c_to_p, cig.cis[0].max_sdu_p_to_c), (155, 80));
         assert_eq!((cig.cis[0].rtn_c_to_p, cig.cis[0].rtn_p_to_c), (13, 2));
         u.on_cig_created(&mut env, &cig_created(1, &[0x60]));
