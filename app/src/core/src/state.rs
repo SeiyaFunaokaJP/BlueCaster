@@ -3401,6 +3401,8 @@ impl CoreState {
                                 mix_bits: mix.map(|m| m.bits),
                                 id: d.id,
                                 name: d.name,
+                                short_name: d.short_name,
+                                adapter_name: d.adapter_name,
                                 is_default: d.is_default,
                                 is_virtual: d.is_virtual,
                                 capture_name: d.capture_name,
@@ -3739,6 +3741,8 @@ mod tests {
         let dev = |id: &str, name: &str, virt: bool| audio_capture::DeviceInfo {
             id: id.into(),
             name: name.into(),
+            short_name: None,
+            adapter_name: None,
             is_default: false,
             is_virtual: virt,
             capture_name: None,
