@@ -175,6 +175,11 @@ pub struct AdapterState {
     /// (issue #81)
     #[serde(default)]
     pub rom_firmware: bool,
+    /// No adapter on WinUSB, but a USB device Windows cannot read, after
+    /// BlueCaster used an adapter: most likely that adapter with its chip
+    /// hung, back only after a power cycle (issue #86)
+    #[serde(default)]
+    pub hung: bool,
     /// A radio Windows' own Bluetooth runs beside the adapter BlueCaster uses:
     /// the two may interfere (issue #86). None: no such radio
     #[ts(optional = nullable)]

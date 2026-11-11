@@ -35,7 +35,7 @@ import {
   driverText,
   usableFirst,
 } from "./Adapter";
-import { entryState, V1Running } from "./Home";
+import { AdapterHung, entryState, V1Running } from "./Home";
 import { BatteryLowChoice, ThemeChoice } from "./Settings";
 
 export function needsSetup(snap: Snapshot): boolean {
@@ -225,12 +225,15 @@ function StepAdapter(props: { chosen: AdapterInfo | null; onChoose: (id: string)
   };
   return (
     <div class="stack">
+      <AdapterHung />
       <Show
         when={adapters().length > 0}
         fallback={
-          <Banner kind="warn" title={t("firmware.no_adapters")}>
-            {t("ui.adapter.none_hint")}
-          </Banner>
+          <Show when={!app.core.state.snap!.adapter.hung}>
+            <Banner kind="warn" title={t("firmware.no_adapters")}>
+              {t("ui.adapter.none_hint")}
+            </Banner>
+          </Show>
         }
       >
         <div class="choice-list" role="radiogroup" aria-label={t("firmware.detected_adapters")}>

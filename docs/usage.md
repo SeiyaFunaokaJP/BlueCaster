@@ -642,6 +642,15 @@ If the adapter sends nothing back after it is opened (it does not answer HCI Res
 
 To keep an adapter from getting stuck, BlueCaster resets its USB pipes when it opens it and sends HCI Reset when it closes it.
 
+### Windows Cannot Read the Bluetooth Adapter {#adapter-hung}
+
+If BlueCaster stops unexpectedly while the adapter is busy, the adapter's chip can hang. Windows then lists it as "Unknown USB Device (Device Descriptor Request Failed)" in Device Manager, and BlueCaster shows "Windows cannot read the Bluetooth adapter".
+
+The chip recovers only when it loses power:
+
+- A USB adapter: unplug it and plug it back in.
+- A built-in adapter: hold **Shift** while choosing **Shut down**, then turn the PC back on. A restart, or a shut down with Fast Startup, keeps the chip powered.
+
 ### Pairing Problems After Updating
 
 BlueCaster pairs using SSP (Just Works) with **General Bonding**, and the link keys are saved so the headphones can reconnect without pairing again (v2 reads the link keys of v1). If you paired the headphones with an older BlueCaster build and they no longer connect, remove the BlueCaster pairing on the headphones (see the headphones' manual for clearing the pairing list) and pair again.

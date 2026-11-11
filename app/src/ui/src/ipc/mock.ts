@@ -435,6 +435,7 @@ export function sampleSnapshot(scenario: MockScenario = "normal"): Snapshot {
       le_audio:
         scenario === "le_unsupported" ? false : scenario === "le" ? true : null,
       rom_firmware: false,
+      hung: false,
     },
     devices: fresh
       ? []
@@ -1724,6 +1725,18 @@ export class MockCore implements Transport {
 
   setOtherRadio(radio: Snapshot["adapter"]["other_radio"]) {
     this.snap.adapter.other_radio = radio;
+  }
+  /** The adapter hung after a crash (issue #86): gone from the list, an
+   *  unknown USB device in its place, the stack's start failed */
+  setHung() {
+    this.snap.adapter = {
+      ...this.snap.adapter,
+      adapters: [],
+      hung: true,
+      status: "error",
+      error: { key: "error.btstack_init", args: [] },
+    };
+    this.emit({ kind: "adapter", value: this.snap.adapter });
   }
   /** The MediaTek adapter of the first run on WinUSB, with its loader */
   useMediaTek() {
@@ -3176,6 +3189,8 @@ export function mockFromUrl(): MockCore {
   mock.noVirtual = q.has("novirtual");
   mock.hifiCable = q.has("hificable");
   mock.captureDrops = q.has("capturedrops");
+  // ?hung: the adapter hung after a crash (issue #86)
+  if (q.has("hung")) mock.setHung();
   // ?winpaired: headphones Windows paired through the adapter (the setup's import)
   if (q.has("winpaired")) {
     mock.windowsPaired = ["00:A2:D0:00:00:02", "38:18:4C:00:00:07"];

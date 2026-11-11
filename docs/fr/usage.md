@@ -640,6 +640,15 @@ Si l'adaptateur ne renvoie rien après son ouverture (il ne répond pas à HCI R
 
 Pour éviter qu'un adaptateur ne reste bloqué, BlueCaster réinitialise ses pipes USB à l'ouverture et envoie HCI Reset à la fermeture.
 
+### Windows ne peut pas lire l'adaptateur Bluetooth {#adapter-hung}
+
+Si BlueCaster s'arrête de façon inattendue pendant que l'adaptateur travaille, la puce de l'adaptateur peut rester bloquée. Windows l'affiche alors dans le Gestionnaire de périphériques comme « Périphérique USB inconnu (échec de la demande de descripteur de périphérique) », et BlueCaster affiche « Windows ne peut pas lire l'adaptateur Bluetooth ».
+
+La puce ne revient qu'une fois privée d'alimentation :
+
+- Un adaptateur USB : débranchez-le et rebranchez-le.
+- Un adaptateur intégré : maintenez **Maj** en choisissant **Arrêter**, puis rallumez le PC. Un redémarrage, ou un arrêt avec le Démarrage rapide, laisse la puce alimentée.
+
 ### Problèmes d'association après une mise à jour
 
 BlueCaster s'associe en SSP (Just Works) avec **General Bonding**, et les clés de liaison sont enregistrées pour que le casque puisse se reconnecter sans nouvelle association (la v2 lit les clés de liaison de la v1). Si vous avez associé le casque avec une ancienne version de BlueCaster et qu'il ne se connecte plus, supprimez l'association BlueCaster sur le casque (voir le manuel du casque pour effacer la liste d'association) et associez-le de nouveau.

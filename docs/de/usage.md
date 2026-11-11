@@ -640,6 +640,15 @@ Sendet der Adapter nach dem Öffnen nichts zurück (er antwortet nicht auf HCI R
 
 Damit ein Adapter nicht hängen bleibt, setzt BlueCaster beim Öffnen seine USB-Pipes zurück und sendet beim Schließen HCI Reset.
 
+### Windows kann den Bluetooth-Adapter nicht lesen {#adapter-hung}
+
+Bricht BlueCaster unerwartet ab, während der Adapter arbeitet, kann sein Chip hängen bleiben. Windows führt ihn dann im Geräte-Manager als „Unbekanntes USB-Gerät (Fehler beim Anfordern einer Gerätebeschreibung)“, und BlueCaster zeigt „Windows kann den Bluetooth-Adapter nicht lesen“ an.
+
+Der Chip erholt sich erst, wenn er stromlos wird:
+
+- Ein USB-Adapter: abziehen und wieder einstecken.
+- Ein eingebauter Adapter: **Umschalttaste** gedrückt halten, **Herunterfahren** wählen und den PC wieder einschalten. Ein Neustart oder ein Herunterfahren mit Schnellstart lässt den Chip unter Strom.
+
 ### Kopplungsprobleme nach einem Update
 
 BlueCaster koppelt per SSP (Just Works) mit **General Bonding**, und die Link Keys werden gespeichert, sodass sich die Kopfhörer ohne erneutes Koppeln wieder verbinden können (v2 liest die Link Keys von v1). Haben Sie die Kopfhörer mit einer älteren BlueCaster-Version gekoppelt und verbinden sie sich nicht mehr, entfernen Sie die BlueCaster-Kopplung an den Kopfhörern (wie die Kopplungsliste gelöscht wird, steht in der Anleitung der Kopfhörer) und koppeln Sie erneut.
