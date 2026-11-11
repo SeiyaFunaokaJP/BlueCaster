@@ -22,7 +22,7 @@ repository. The Rust crates are pinned in `Cargo.lock`, the JavaScript packages 
 |-----------|----------------|----------------|-----------|-------|----|
 | libldac (AOSP) | `android-15.0.0_r36-4-geeee1a3` (commit `eeee1a3`) | Apache-2.0 | Sony Corporation | LDAC audio encoding | `bluecaster-core.exe` |
 | libopenaptx | 0.2.0 (tag `0.2.0`, commit `2459ed4`) | LGPL-2.1-or-later | Aurelien Jacobs, Pali Rohár | aptX / aptX HD / aptX LL audio encoding (decoding in `bluecaster_decode`, §14) | `bluecaster-core.exe` |
-| fdk-aac | `v2.0.3-158-gd8e6b1a` (commit `d8e6b1a`) | FDK-AAC | Fraunhofer-Gesellschaft | AAC-LC audio encoding (decoding in `bluecaster_decode`, §14) | `bluecaster-core.exe` |
+| fdk-aac | `v3.0.0` (commit `a68a51a`) | FDK-AAC | Fraunhofer-Gesellschaft | AAC-LC audio encoding (decoding in `bluecaster_decode`, §14) | `bluecaster-core.exe` |
 | BTstack | `v1.8.3` (commit `51e11ce36`) | LicenseRef-BTstack (BSD-3-Clause-style **with a non-commercial clause**) | BlueKitchen GmbH; Matthias Ringwald | User-mode Bluetooth stack | `bluecaster-core.exe` |
 | Bluedroid SBC encoder, ported to Rust | ported from BTstack `51e11ce36` (`3rd-party/bluedroid/encoder/`) | Apache-2.0 | Broadcom Corporation | SBC audio encoding (`app/src/crates/codec/src/sbc/`) | `bluecaster-core.exe` |
 | Bluedroid SBC encoder and decoder (C, bundled in BTstack) | as in BTstack `51e11ce36` (`3rd-party/bluedroid/`) | Apache-2.0 | Broadcom Corporation; The Android Open Source Project; Open Interface North America, Inc. | mSBC voice codec of the headset microphone, §5 | `bluecaster-core.exe` |
@@ -195,7 +195,7 @@ some jurisdictions. Users should evaluate patent implications independently.
 ## 3. fdk-aac (Fraunhofer FDK AAC Codec Library)
 
 - **Source**: <https://github.com/mstorsjo/fdk-aac>
-- **Version**: `v2.0.3-158-gd8e6b1a` (commit `d8e6b1a`)
+- **Version**: `v3.0.0` (commit `a68a51a`)
 - **Path in project**: `extern/fdk-aac/` (git submodule)
 - **License**: Software License for The Fraunhofer FDK AAC Codec Library for Android
   (`extern/fdk-aac/NOTICE`, shipped as `licenses/third-party/fdk-aac-NOTICE.txt`)
@@ -637,7 +637,7 @@ same pinned versions as above:
 | Library | Pinned version | License (SPDX) | Parts used | License verified in the pinned source |
 |---------|----------------|----------------|------------|---------------------------------------|
 | Bluedroid SBC decoder | as in BTstack `51e11ce36` | Apache-2.0 | `3rd-party/bluedroid/decoder` (CMake target `sbc_decoder`) | Every `decoder/srce/*.c` and `decoder/include/*.h` carries the Apache-2.0 header |
-| fdk-aac | commit `d8e6b1a` | FDK-AAC | AAC decoder (`libAACdec`, `libMpegTPDec` and shared modules) | `NOTICE` covers "encoding and decoding"; every `libAACdec` / `libMpegTPDec` source carries the same license header |
+| fdk-aac | commit `a68a51a` | FDK-AAC | AAC decoder (`libAACdec`, `libMpegTPDec` and shared modules) | `NOTICE` covers "encoding and decoding"; every `libAACdec` / `libMpegTPDec` source carries the same license header |
 | libopenaptx | 0.2.0 (commit `2459ed4`) | LGPL-2.1-or-later | `aptx_decode_sync()` | `COPYING` is LGPL 2.1; `openaptx.c` / `openaptx.h` headers state LGPL 2.1 or later |
 | liblc3 (lc3-google) | as in BTstack `51e11ce36` | Apache-2.0 | LC3 decoder for `--le-audio` (CMake target `lc3`, the whole library) | `LICENSE` is Apache-2.0; every `src/*.c` / `include/*.h` carries the Apache-2.0 header (Google LLC) |
 | libopus | 1.5.2 (commit `ddbe483`) | BSD-3-Clause | Opus decoder (its own CMake build, `add_subdirectory(extern/opus)`, target `opus`) | `COPYING` is BSD-3-Clause; the `celt/`, `silk/` and `src/` sources carry the same BSD license header |

@@ -163,7 +163,7 @@ Les bibliothèques C sont des sous-modules git ; les crates Rust et les paquets 
 | micro-ecc | inclus dans BTstack (`3rd-party/micro-ecc`) | celle de BTstack | BSD-2-Clause |
 | libldac (AOSP) | sous-module git | android-15.0.0_r36-4-geeee1a3 | Apache-2.0 |
 | libopenaptx | sous-module git | 0.2.0 (ne pas mettre à jour) | LGPL-2.1+ |
-| fdk-aac | sous-module git | v2.0.3-158-gd8e6b1a | FDK AAC License |
+| fdk-aac | sous-module git | v3.0.0 | FDK AAC License |
 | Encodeur LHDC V5 | sous-module git | celle du sous-module | Apache-2.0 |
 | libopus | sous-module git | v1.5.2 | BSD-3-Clause |
 | Tauri, SolidJS, crates Rust | Cargo / pnpm | `Cargo.lock`, `pnpm-lock.yaml` | MIT / Apache-2.0 et autres (`licenses/third-party/rust-crates.txt` dans la version publiée) |

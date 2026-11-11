@@ -163,7 +163,7 @@ C 라이브러리는 git 서브모듈이며, Rust 크레이트와 UI의 npm 패�
 | micro-ecc | BTstack에 포함 (`3rd-party/micro-ecc`) | BTstack과 동일 | BSD-2-Clause |
 | libldac (AOSP) | git submodule | android-15.0.0_r36-4-geeee1a3 | Apache-2.0 |
 | libopenaptx | git submodule | 0.2.0 (업데이트 금지) | LGPL-2.1+ |
-| fdk-aac | git submodule | v2.0.3-158-gd8e6b1a | FDK AAC License |
+| fdk-aac | git submodule | v3.0.0 | FDK AAC License |
 | LHDC V5 encoder | git submodule | 고정된 버전 | Apache-2.0 |
 | libopus | git submodule | v1.5.2 | BSD-3-Clause |
 | Tauri, SolidJS, Rust 크레이트 | Cargo / pnpm | `Cargo.lock`, `pnpm-lock.yaml` | MIT / Apache-2.0 등 (릴리스의 `licenses/third-party/rust-crates.txt`) |
