@@ -510,7 +510,7 @@ describe("every screen renders", () => {
     start("", { window: "flyout" });
     expect(await screen.findByRole("button", { name: "Connect" })).toBeInTheDocument();
     // Beside Connect, not in a row of its own (issue #86)
-    const open = screen.getByRole("button", { name: "Open app" });
+    const open = screen.getByRole("button", { name: "Open BlueCaster" });
     expect(open.closest(".fly-actions")).not.toBeNull();
     expect(document.querySelector(".fly-foot")).toBeNull();
   });

@@ -5,7 +5,8 @@
 // that the user can tell it is their donationware, so its origin is said
 // beside the button (https://vb-audio.com/Services/licensing.htm). Where the
 // download fails, VB-Audio's page is offered instead. The Hi-Fi Cable is
-// only linked. Each suggestion can be closed; Settings keeps both.
+// only linked. The pages show one line and keep the rest in a dialog;
+// Settings keeps both cables.
 
 import { createSignal, type JSX, Show } from "solid-js";
 import { useApp } from "../app/context";
@@ -14,7 +15,7 @@ import { t } from "../i18n";
 import type { AudioDevice } from "../ipc/types";
 import { LINKS } from "../lib/links";
 import { hifiCable, vbCable } from "../lib/profile";
-import { Button, IconButton } from "./controls";
+import { Button, Dialog, IconButton } from "./controls";
 import { Icon } from "./Icon";
 
 /** VB-Audio's name for it, and that it is donationware: a link to its site */
@@ -38,7 +39,7 @@ function Origin(props: { text: string; url: string }) {
 
 /** VB-CABLE's Install button, and VB-Audio's page once it failed.
  *  `onInstalled` once it is among Windows' outputs. */
-export function VbCableInstall(props: { onInstalled?: () => void }) {
+function VbCableInstall(props: { onInstalled?: () => void }) {
   const app = useApp();
   const { core } = app;
   const [busy, setBusy] = createSignal(false);
@@ -80,7 +81,7 @@ export function VbCableInstall(props: { onInstalled?: () => void }) {
   );
 }
 
-export function VbCableNote(props: { onInstalled?: () => void; onClose?: () => void }) {
+function VbCableNote(props: { onInstalled?: () => void }) {
   return (
     <div class="setup-note cable-note">
       <div class="cable-note-text">
@@ -89,15 +90,12 @@ export function VbCableNote(props: { onInstalled?: () => void; onClose?: () => v
       </div>
       <div class="cable-note-actions">
         <VbCableInstall onInstalled={props.onInstalled} />
-        <Show when={props.onClose}>
-          <IconButton icon="dismiss" label={t("modal.close")} onClick={() => props.onClose?.()} />
-        </Show>
       </div>
     </div>
   );
 }
 
-export function HifiCableNote(props: { onClose?: () => void }) {
+function HifiCableNote() {
   const { core } = useApp();
   return (
     <div class="setup-note cable-note">
@@ -109,40 +107,44 @@ export function HifiCableNote(props: { onClose?: () => void }) {
         <Button icon="open" onClick={() => core.transport.openUrl(LINKS.hifiCable)}>
           {t("hificable.download")}
         </Button>
-        <Show when={props.onClose}>
-          <IconButton icon="dismiss" label={t("modal.close")} onClick={() => props.onClose?.()} />
-        </Show>
       </div>
     </div>
   );
 }
 
-/** The suggestions for the cables Windows does not have (`devices`: its
- *  outputs, null until read), each until closed. `wrap` puts each in its
- *  own card (Audio Devices). */
-export function CableNotes(props: { devices: readonly AudioDevice[] | null; reload: () => void; wrap?: boolean }) {
+/** One amber line while a cable is missing (`devices`: Windows' outputs,
+ *  null until read), until closed; Learn more opens the suggestions for the
+ *  missing ones (issue #86: the notes made the pages too busy). */
+export function CableNotes(props: { devices: readonly AudioDevice[] | null; reload: () => void }) {
   const app = useApp();
   const s = () => app.core.state.snap!.settings;
-  const noVb = () => props.devices !== null && vbCable(props.devices) === null && !s().vb_cable_note_hidden;
-  const noHifi = () => props.devices !== null && hifiCable(props.devices) === null && !s().hifi_cable_note_hidden;
-  const card = (note: () => JSX.Element) =>
-    props.wrap ? <section class="card device-note">{note()}</section> : note();
+  const [open, setOpen] = createSignal(false);
+  const noVb = () => props.devices !== null && vbCable(props.devices) === null;
+  const noHifi = () => props.devices !== null && hifiCable(props.devices) === null;
+  const shown = () => (noVb() && !s().vb_cable_note_hidden) || (noHifi() && !s().hifi_cable_note_hidden);
   return (
-    <>
-      <Show when={noHifi()}>
-        {card(() => (
-          <HifiCableNote onClose={() => void saveSettings(app, { hifi_cable_note_hidden: true })} />
-        ))}
-      </Show>
-      <Show when={noVb()}>
-        {card(() => (
-          <VbCableNote
-            onInstalled={props.reload}
-            onClose={() => void saveSettings(app, { vb_cable_note_hidden: true })}
-          />
-        ))}
-      </Show>
-    </>
+    <Show when={shown()}>
+      <div class="banner banner-warn cable-banner">
+        <Icon name="warning" class="banner-icon" />
+        <span class="cable-banner-text">{t("cables.recommended")}</span>
+        <Button onClick={() => setOpen(true)}>{t("cables.learn_more")}</Button>
+        <IconButton
+          icon="dismiss"
+          label={t("modal.close")}
+          onClick={() => void saveSettings(app, { vb_cable_note_hidden: true, hifi_cable_note_hidden: true })}
+        />
+      </div>
+      <Dialog open={open()} title={t("cables.title")} onCancel={() => setOpen(false)}>
+        <div class="cable-dialog">
+          <Show when={noHifi()}>
+            <HifiCableNote />
+          </Show>
+          <Show when={noVb()}>
+            <VbCableNote onInstalled={props.reload} />
+          </Show>
+        </div>
+      </Dialog>
+    </Show>
   );
 }
 
