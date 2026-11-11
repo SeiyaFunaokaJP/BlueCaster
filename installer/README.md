@@ -142,7 +142,7 @@ earlier versions first, and the app takes their settings over at its first start
   installation replaced here (then `A2DPWB` is deleted), or when `A2DPWB` started v1 (v1's
   uninstaller deletes it). An `A2DPWB` value that starts anything else stays. The uninstaller
   removes `BlueCaster` when it points at that installation.
-- The uninstall wizard has a page with two choices, both on by default:
+- The uninstall wizard has a page with these choices:
   - **Restore the original Bluetooth driver** (on when there are records): the core
     keeps one record per adapter it put on WinUSB in `%APPDATA%\BlueCaster\adapters\driver\` (the
     `assign` result, deleted by **Restore driver**; before 3.0.0 `driver\` in the settings folder,
@@ -160,9 +160,25 @@ earlier versions first, and the app takes their settings over at its first start
     that `BLUECASTER_CONFIG_DIR` names) and the window's own data
     (`%LOCALAPPDATA%\io.github.seiyafunaokajp.bluecaster`), and what 2.0.x may have left of them
     (`%APPDATA%\A2DPWB`, `%LOCALAPPDATA%\io.github.seiyafunaokajp.a2dpwb`).
+  - **Remove VB-CABLE** / **Remove Hi-Fi Cable** (issue #86): shown only when installed, **off** by
+    default (other apps may use them). They run after the core has closed, each with its own UAC
+    prompt, through VB-Audio's own setup without its window:
+    - VB-CABLE: the setup its Uninstall entry names (`HKLM\…\Uninstall\VB:VBCABLE
+      {87459874-1236-4469}`, normally `C:\Program Files\VB\CABLE\VBCABLE_Setup_x64.exe`) with
+      `-u -h` (the counterpart of `-i -h`, which the app installs it with). Removed = that entry
+      has gone.
+    - Hi-Fi Cable (installed when `%WINDIR%\System32\drivers\vbaudio_hfvaio*.sys` exists): its own
+      setup (`VB:VBHIFI` entry, else `C:\Program Files\VB\CABLEHiFi\VBCABLE_Setup_x64.exe`, else
+      the copy in ASIO Bridge's folder) with `-h -u -H`, the arguments ASIO Bridge's setup removes
+      it with. Removed = the driver file has gone. ASIO Bridge itself and its Apps entry stay.
 
-  Silent mode (`/SILENT`, `/VERYSILENT`) shows no page: the adapters stay on WinUSB and the data
-  stays. Updates do not run the uninstaller. The download cache `%TEMP%\A2DPWB_cache` always
+    When one is still there afterwards, the uninstaller says so (close the apps using it, remove it
+    in Settings > Apps, restart). After a removal it offers to restart Windows, as VB-Audio's setup
+    asks. Neither has been run on a machine yet: the flags come from VB-Audio's setups, not their
+    documentation.
+
+  Silent mode (`/SILENT`, `/VERYSILENT`) shows no page: the adapters stay on WinUSB, and the data
+  and the cables stay. Updates do not run the uninstaller. The download cache `%TEMP%\A2DPWB_cache` always
   stays.
 - `/KEEPV1` on the command line leaves v1, a running v1 and the Run value alone. Only for testing
   v2 beside an installed v1 (both use the same settings folder). The core still replaces v1 when it
