@@ -640,6 +640,15 @@ BlueCaster 每天最多检查一次 GitHub Releases（**设置 > 启动时检查
 
 为防止适配器卡住，BlueCaster 在打开适配器时会重置其 USB 管道，在关闭时会发送 HCI Reset。
 
+### Windows 无法读取 Bluetooth 适配器 {#adapter-hung}
+
+如果 BlueCaster 在适配器工作时意外停止，适配器的芯片可能会卡住。此时 Windows 会在设备管理器中将其显示为“未知 USB 设备(设备描述符请求失败)”，BlueCaster 则显示“Windows 无法读取 Bluetooth 适配器”。
+
+芯片只有在断电后才会恢复：
+
+- USB 适配器：拔下后重新插入。
+- 内置适配器：按住 **Shift** 键选择**关机**，然后重新开机。重启，或在启用快速启动时关机，芯片仍会保持通电。
+
 ### 更新后出现配对问题
 
 BlueCaster 使用 SSP（Just Works）和 **General Bonding** 进行配对，并保存链接密钥，这样耳机无需重新配对即可再次连接（v2 会读取 v1 的链接密钥）。如果你曾用较旧的 BlueCaster 版本配对过耳机，且现在无法连接，请在耳机上删除 BlueCaster 的配对信息（清除配对列表的方法请参阅耳机的说明书），然后重新配对。
