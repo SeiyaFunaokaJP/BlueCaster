@@ -2385,7 +2385,15 @@ impl HostApp {
     /// controller that answers; a stall check would take the whole stack down
     /// for one diagnostics reading.
     fn link_command_timeout(&mut self, stack: &Stack) {
-        let Some(opcode) = self.link.overdue(Instant::now()) else { return };
+        let now = Instant::now();
+        let Some(opcode) = self.link.overdue(now) else {
+            // Fired early by the run loop's clock: wait for the rest, or the
+            // unanswered command would hold the slot until the link ends
+            if let Some(rest) = self.link.due_in(now) {
+                stack.timer_start(TIMER_LINK_COMMAND, rest.as_millis() as u32 + 1);
+            }
+            return;
+        };
         // Still held, and only by ours: no answer of any kind came since
         if stack.hci_state() == HciState::Working && !stack.can_send_command_now() {
             stack.release_command_slot(opcode, ERROR_CODE_UNKNOWN_HCI_COMMAND);
