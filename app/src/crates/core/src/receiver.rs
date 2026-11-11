@@ -890,8 +890,12 @@ mod tests {
 
     #[test]
     fn client_reports_refused_and_bad_targets() {
-        // A port nobody listens on
-        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        // A port nobody listens on: bound without listen and held until the
+        // end, so a test running alongside cannot take it (a listener there
+        // would answer "no data from the receiver" instead)
+        let holder = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None).unwrap();
+        holder.bind(&"127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap().into()).unwrap();
+        let port = holder.local_addr().unwrap().as_socket().unwrap().port();
         let client = ReceiverClient::new();
         client.start(&format!("127.0.0.1:{port}"));
         assert!(wait_for(|| client.status().0 == ReceiverStatus::Failed), "no failure: {:?}", client.status());
@@ -905,6 +909,7 @@ mod tests {
         client.start("host:99999");
         assert_eq!(client.status(), (ReceiverStatus::Failed, "invalid address (host or host:port)".into()));
         client.stop();
+        drop(holder);
     }
 
     #[test]
