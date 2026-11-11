@@ -175,6 +175,11 @@ pub struct AdapterState {
     /// (issue #81)
     #[serde(default)]
     pub rom_firmware: bool,
+    /// No adapter on WinUSB, but a USB device Windows cannot read, after
+    /// BlueCaster used an adapter: most likely that adapter with its chip
+    /// hung, back only after a power cycle (issue #86)
+    #[serde(default)]
+    pub hung: bool,
     /// A radio Windows' own Bluetooth runs beside the adapter BlueCaster uses:
     /// the two may interfere (issue #86). None: no such radio
     #[ts(optional = nullable)]
@@ -1909,7 +1914,18 @@ pub enum Method {
 
 pub struct AudioDevice {
     pub id: String,
+    /// Windows' friendly name, which already ends in the adapter's name in
+    /// parentheses: "Speakers (Realtek(R) Audio)"
     pub name: String,
+    /// The endpoint's own name without the adapter's ("Speakers"); None:
+    /// Windows has none
+    #[ts(optional = nullable)]
+    #[serde(default)]
+    pub short_name: Option<String>,
+    /// The adapter's name ("VB-Audio Hi-Fi Cable"); None: Windows has none
+    #[ts(optional = nullable)]
+    #[serde(default)]
+    pub adapter_name: Option<String>,
     pub is_default: bool,
     pub is_virtual: bool,
     /// Windows' shared-mode mix format: what capturing it delivers without

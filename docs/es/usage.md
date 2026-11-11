@@ -640,6 +640,15 @@ Si el adaptador no devuelve nada después de abrirlo (no responde a HCI Reset), 
 
 Para evitar que un adaptador se quede bloqueado, BlueCaster restablece sus canalizaciones USB al abrirlo y envía HCI Reset al cerrarlo.
 
+### Windows no puede leer el adaptador Bluetooth {#adapter-hung}
+
+Si BlueCaster se detiene inesperadamente mientras el adaptador está en uso, el chip del adaptador puede quedarse bloqueado. Windows lo muestra entonces en el Administrador de dispositivos como «Dispositivo USB desconocido (error de solicitud de descriptor de dispositivo)», y BlueCaster muestra «Windows no puede leer el adaptador Bluetooth».
+
+El chip solo se recupera cuando se queda sin alimentación:
+
+- Un adaptador USB: desconéctelo y vuelva a conectarlo.
+- Un adaptador integrado: mantenga pulsada **Mayús** al elegir **Apagar** y vuelva a encender el PC. Al reiniciar, o al apagar con el Inicio rápido activado, el chip sigue alimentado.
+
 ### Problemas de emparejamiento tras actualizar
 
 BlueCaster empareja mediante SSP (Just Works) con **General Bonding**, y las claves de enlace se guardan para que los auriculares puedan reconectarse sin volver a emparejar (la v2 lee las claves de enlace de la v1). Si emparejó los auriculares con una compilación antigua de BlueCaster y ya no se conectan, elimine el emparejamiento de BlueCaster en los auriculares (consulte el manual de los auriculares para borrar la lista de emparejamientos) y vuelva a emparejarlos.

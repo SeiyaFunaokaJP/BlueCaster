@@ -640,6 +640,15 @@ BlueCaster 最多每天檢查一次 GitHub Releases（**設定 > 啟動時檢查
 
 為避免介面卡卡住，BlueCaster 在開啟介面卡時會重設其 USB 管道，關閉時會傳送 HCI Reset。
 
+### Windows 無法讀取藍牙介面卡 {#adapter-hung}
+
+如果 BlueCaster 在介面卡運作時意外停止，介面卡的晶片可能會卡住。此時 Windows 會在裝置管理員中將其顯示為「不明的 USB 裝置 (裝置描述元要求失敗)」，BlueCaster 則顯示「Windows 無法讀取藍牙介面卡」。
+
+晶片只有在斷電後才會恢復：
+
+- USB 介面卡：拔下後重新插入。
+- 內建介面卡：按住 **Shift** 鍵選擇**關機**，然後重新開機。重新啟動，或在啟用快速啟動時關機，晶片仍會保持通電。
+
 ### 更新後的配對問題
 
 BlueCaster 使用 SSP (Just Works) 搭配 **General Bonding** 進行配對，並儲存連結金鑰，讓耳機不需重新配對即可重新連線（v2 會讀取 v1 的連結金鑰）。如果您曾用舊版 BlueCaster 與耳機配對，而耳機已無法連線，請在耳機上移除 BlueCaster 的配對（清除配對清單的方法請參閱耳機說明書），然後重新配對。

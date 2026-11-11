@@ -351,3 +351,15 @@ describe("Firmware loader progress", () => {
     expect(await screen.findByText(/^Intel firmware could not be loaded/)).toHaveTextContent("(no answer");
   });
 });
+
+describe("Hung adapter (issue #86)", () => {
+  it("asks for a power cycle instead of Zadig or the WinUSB driver", async () => {
+    const { mock } = start();
+    await screen.findByRole("heading", { level: 1, name: "Adapters" });
+    mock.setHung();
+    expect(await screen.findByText(t("ui.adapter.hung_title"))).toBeInTheDocument();
+    expect(screen.queryByText(t("firmware.no_adapters"))).toBeNull();
+    expect(screen.queryByText(t("firmware.auto_no_adapter"))).toBeNull();
+    expect(screen.queryByText(t("error.btstack_init"))).toBeNull();
+  });
+});

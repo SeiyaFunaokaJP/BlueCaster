@@ -29,15 +29,25 @@ pub struct Adapter {
 /// `probe_winusb` opens WinUSB-bound ones for a moment (not while the stack
 /// has the adapter open).
 pub fn adapters(probe_winusb: bool) -> Vec<Adapter> {
+    scan(probe_winusb).0
+}
+
+/// `adapters`, and how many USB devices Windows could not read at all
+/// (`UsbDevice::unreadable`): one may be an adapter whose chip hung
+pub fn scan(probe_winusb: bool) -> (Vec<Adapter>, usize) {
     let ids = bt_host::realtek_usb_firmware();
     let devices = match usb_adapters::enumerate(probe_winusb) {
         Ok(d) => d,
         Err(e) => {
             tracing::warn!("cannot list USB devices: {e}");
-            return Vec::new();
+            return (Vec::new(), 0);
         }
     };
-    devices
+    let unreadable = devices.iter().filter(|d| d.unreadable()).count();
+    if unreadable > 0 {
+        tracing::info!("{unreadable} USB device(s) Windows cannot read");
+    }
+    let adapters = devices
         .into_iter()
         .filter_map(|d| {
             let realtek_pid = chips::resolve_realtek_pid(d.vid, d.pid, ids);
@@ -80,7 +90,21 @@ pub fn adapters(probe_winusb: bool) -> Vec<Adapter> {
                 vendor,
             })
         })
-        .collect()
+        .collect();
+    (adapters, unreadable)
+}
+
+/// A USB device Windows cannot read while no adapter is on WinUSB, after a
+/// stack of BlueCaster ran on one: most likely that adapter, its chip hung
+/// (issue #86, after a crash). Only a power cycle brings it back.
+pub fn hung_adapter(unreadable: usize, winusb_present: bool, used_before: bool) -> bool {
+    unreadable > 0 && !winusb_present && used_before
+}
+
+/// A stack of BlueCaster ran on an adapter of this PC at some time (it
+/// remembered the controller's HCI version)
+pub fn used_before(dir: &Path) -> bool {
+    load_caps(dir).values().any(|c| c.hci_version.is_some())
 }
 
 /// Vendor-class (FF/01/01) controllers v1's WinUSB transport knew built in
@@ -612,7 +636,9 @@ mod tests {
         assert_eq!(le_audio(&dir, 0x0BDA, 0xA729), Some(false));
         assert!(std::fs::read_to_string(crate::paths::adapter_caps_file(&dir)).unwrap().contains("\"0BDA:A729\""));
         assert_eq!(hci_version(&dir, 0x0BDA, 0xA729), None);
+        assert!(!used_before(&dir));
         save_hci_version(&dir, 0x0BDA, 0xA729, 10);
+        assert!(used_before(&dir));
         assert_eq!(hci_version(&dir, 0x0BDA, 0xA729), Some(10));
         assert_eq!(hci_version(&dir, 0x8087, 0x0032), None);
         // Windows' read, with its driver's firmware, is kept apart (#427)
@@ -623,6 +649,17 @@ mod tests {
         assert_eq!(address(&dir, 0x0BDA, 0xA729).as_deref(), Some("00:11:22:33:44:55"));
         assert_eq!(le_audio(&dir, 0x0BDA, 0xA729), Some(false));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Issue #86: after a crash the MT7925 showed as an unknown USB device
+    #[test]
+    fn hung_adapter_only_when_ours_is_missing() {
+        assert!(hung_adapter(1, false, true));
+        // An adapter on WinUSB works: the unreadable device is another one
+        assert!(!hung_adapter(1, true, true));
+        // No adapter ever ran here: nothing to say it was ours
+        assert!(!hung_adapter(1, false, false));
+        assert!(!hung_adapter(0, false, true));
     }
 
     #[test]

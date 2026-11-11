@@ -136,6 +136,14 @@ impl UsbDevice {
         }
     }
 
+    /// Windows could not read the device's descriptors: it lists it under
+    /// its placeholder VID 0000 ("Unknown USB Device (Device Descriptor
+    /// Request Failed)") with a problem code. A chip whose firmware hung
+    /// stays so until it loses power (issue #86)
+    pub fn unreadable(&self) -> bool {
+        self.vid == 0 && self.problem_code.is_some()
+    }
+
     /// WinUSB refused to open the device for the probe: another program
     /// (v1, another BlueCaster) holds it
     pub fn in_use(&self) -> bool {
@@ -820,10 +828,16 @@ mod tests {
         };
         assert_eq!(d.driver_kind, DriverKind::Bluetooth);
         assert!(d.looks_like_bluetooth());
+        assert!(!d.unreadable());
         // no driver left at all: the compatible ID still tells
         d.driver = DriverInfo::default();
         d.driver_kind = DriverKind::None;
         assert!(d.looks_like_bluetooth());
+        // Windows could not read it: its placeholder VID, Code 43 (issue #86)
+        d.instance_id = r"USB\VID_0000&PID_0002\5&2C6E2E2E&0&10".into();
+        (d.vid, d.pid) = parse_vid_pid(&d.instance_id).unwrap();
+        d.problem_code = Some(43);
+        assert!(d.unreadable());
     }
 
     /// Read-only enumeration; WinUSB devices in use (e.g. by v1) are only

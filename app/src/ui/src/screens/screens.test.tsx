@@ -294,6 +294,17 @@ describe("Home", () => {
     await waitFor(() => expect(screen.queryByText("Another BlueCaster is running")).toBeNull());
   });
 
+  it("asks for a power cycle when the adapter hung (issue #86)", async () => {
+    start("#/home");
+    await homeCard("WH-1000XM5");
+    expect(screen.queryByText("Windows cannot read the Bluetooth adapter")).toBeNull();
+    mock!.setHung();
+    expect(await screen.findByText("Windows cannot read the Bluetooth adapter")).toBeInTheDocument();
+    expect(screen.getByText(/hold Shift while choosing Shut down/)).toBeInTheDocument();
+    // Not "check the WinUSB driver" beside it
+    expect(screen.queryByText(/Check that it uses the WinUSB driver/)).toBeNull();
+  });
+
   it("shows the cause of an error and a fix", async () => {
     start("#/home", { scenario: "error" });
     const alert = await screen.findByRole("alert");

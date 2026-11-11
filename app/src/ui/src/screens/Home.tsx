@@ -123,6 +123,26 @@ function FirmwareMissing() {
   );
 }
 
+/** The adapter seems hung (issue #86: Windows lists an unknown USB device
+ *  in its place): only a power cycle brings it back. On Home, the Adapter
+ *  screen and in the setup */
+export function AdapterHung() {
+  const { core } = useApp();
+  return (
+    <Show when={core.state.snap?.adapter.hung}>
+      <Banner kind="warn" title={t("ui.adapter.hung_title")}>
+        {t("ui.adapter.hung_text")}
+      </Banner>
+    </Show>
+  );
+}
+
+/** The stack's start-up error while the adapter seems hung: AdapterHung
+ *  tells what to do instead of "check the WinUSB driver" */
+export function hiddenByHung(snap: Snapshot, message: { key: string } | null | undefined): boolean {
+  return snap.adapter.hung === true && !!message?.key.startsWith("error.btstack");
+}
+
 /** v1 still runs (both cannot use the adapter): on Home and in the setup */
 export function V1Running() {
   const { core } = useApp();
@@ -226,7 +246,10 @@ export function Home() {
       </header>
 
       <V1Running />
-      <Show when={error()}>{(e) => <ErrorPanel code={e().code} message={e().message} />}</Show>
+      <AdapterHung />
+      <Show when={!hiddenByHung(snap(), error()?.message) && error()}>
+        {(e) => <ErrorPanel code={e().code} message={e().message} />}
+      </Show>
       <FirmwareMissing />
       <OtherRadio />
       <HiResSet />
