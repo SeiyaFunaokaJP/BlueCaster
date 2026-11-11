@@ -10,7 +10,11 @@ name: string,
  * The endpoint's own name without the adapter's ("Speakers"); None:
  * Windows has none
  */
-short_name?: string | null, is_default: boolean, is_virtual: boolean, 
+short_name?: string | null, 
+/**
+ * The adapter's name ("VB-Audio Hi-Fi Cable"); None: Windows has none
+ */
+adapter_name?: string | null, is_default: boolean, is_virtual: boolean, 
 /**
  * Windows' shared-mode mix format: what capturing it delivers without
  * resampling (None: not known)

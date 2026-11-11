@@ -8,6 +8,7 @@ import { asciiFromFullwidth, parseAddress } from "./format";
 import {
   appCaptureSupportFrom,
   captureDevice,
+  defaultOutputName,
   defaultProfileName,
   deviceKey,
   entryBase,
@@ -43,6 +44,44 @@ const audio = (id: string, is_default: boolean, mix_rate: number | null, mix_bit
   mix_bits,
   capture_name: null,
   capture_rate: null,
+});
+
+describe("Windows default output's name", () => {
+  const out = (id: string, short: string, adapter: string | null, is_virtual: boolean): AudioDevice => ({
+    ...audio(id, false, null, null),
+    name: adapter ? `${short} (${adapter})` : short,
+    short_name: short,
+    adapter_name: adapter,
+    is_virtual,
+  });
+  const hifi = out("hifi", "Hi-Fi Cable Input", "VB-Audio Hi-Fi Cable", true);
+  const cable = out("cable", "CABLE Input", "VB-Audio Virtual Cable", true);
+  const cable16 = out("c16", "CABLE In 16ch", "VB-Audio Virtual Cable", true);
+  const spk = out("spk", "Speakers", "Realtek(R) Audio", false);
+  const tv1 = out("tv1", "VX239", "HD Audio Driver for Display Audio", false);
+  const tv2 = out("tv2", "FS2434", "HD Audio Driver for Display Audio", false);
+  const wdm = out("wdm", "Line", "Yamaha SYNCROOM Driver (WDM)", true);
+  const all = [hifi, cable, cable16, spk, tv1, tv2, wdm];
+
+  it("names a virtual device by its adapter, without Input / Output (issue #86)", () => {
+    expect(defaultOutputName(hifi, all)).toBe("VB-Audio Hi-Fi Cable");
+  });
+
+  it("keeps the device's own name where the adapter would not tell it apart", () => {
+    // Two outputs of one cable
+    expect(defaultOutputName(cable, all)).toBe("CABLE Input");
+    expect(defaultOutputName(cable16, all)).toBe("CABLE In 16ch");
+    expect(defaultOutputName(cable, [hifi, cable, spk])).toBe("VB-Audio Virtual Cable");
+    // Sound devices: display audio and Realtek say nothing of which device
+    expect(defaultOutputName(spk, all)).toBe("Speakers");
+    expect(defaultOutputName(tv1, all)).toBe("VX239");
+  });
+
+  it("never nests parentheses, and falls back to the full name", () => {
+    expect(defaultOutputName(wdm, all)).toBe("Line");
+    expect(defaultOutputName({ ...spk, short_name: null, adapter_name: null }, all)).toBe("Speakers (Realtek(R) Audio)");
+    expect(defaultOutputName({ ...hifi, adapter_name: undefined }, all)).toBe("Hi-Fi Cable Input");
+  });
 });
 
 describe("addresses", () => {

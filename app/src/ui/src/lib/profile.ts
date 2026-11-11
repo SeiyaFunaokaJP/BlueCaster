@@ -218,6 +218,28 @@ export function withCodec(p: Profile, codec: string, values?: CodecValues): Prof
 }
 
 /**
+ * The output device's name inside "Windows default (...)" (issue #86).
+ * Windows' friendly name already ends in "(adapter)", so not that. A
+ * virtual device goes by its adapter ("VB-Audio Hi-Fi Cable": its own
+ * "Hi-Fi Cable Input" reads as a microphone) unless another output has the
+ * same adapter (CABLE Input and CABLE In 16ch) or it holds parentheses; any
+ * other device by its own name ("Speakers": display audio and Realtek
+ * adapters say nothing of which device).
+ */
+export function defaultOutputName(d: AudioDevice, all: readonly AudioDevice[]): string {
+  const adapter = d.adapter_name?.trim();
+  if (
+    d.is_virtual &&
+    adapter &&
+    !/[()]/.test(adapter) &&
+    !all.some((o) => o.id !== d.id && o.adapter_name?.trim() === adapter)
+  ) {
+    return adapter;
+  }
+  return d.short_name?.trim() || d.name;
+}
+
+/**
  * A device profile's name: "<device> | <codec>" (v2's own, as the setup
  * makes it; "<device> LE Audio" for LE Audio) while it has that form, the
  * user's own otherwise. A name another profile has gets " (2)", " (3)"...

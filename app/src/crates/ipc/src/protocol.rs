@@ -1917,6 +1917,10 @@ pub struct AudioDevice {
     #[ts(optional = nullable)]
     #[serde(default)]
     pub short_name: Option<String>,
+    /// The adapter's name ("VB-Audio Hi-Fi Cable"); None: Windows has none
+    #[ts(optional = nullable)]
+    #[serde(default)]
+    pub adapter_name: Option<String>,
     pub is_default: bool,
     pub is_virtual: bool,
     /// Windows' shared-mode mix format: what capturing it delivers without
