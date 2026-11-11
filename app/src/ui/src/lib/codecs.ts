@@ -7,7 +7,8 @@
 // pick them; v2 adds SBC / SBC XQ's adaptive bitpool), 24-bit and 88.2 / 96 kHz only for LDAC and LHDC V5, 192 kHz and
 // "mhq" only for LHDC V5, no quality choice for the aptX family (but aptX
 // Adaptive) or under LHDC V5 ABR, 48 kHz only for Opus and Opus 05, 48 / 96
-// kHz for aptX Adaptive, whose "ll" quality is its low latency mode.
+// kHz for aptX Adaptive, whose "ll" quality is its low latency mode (on
+// the Codecs screen a card of its own, aptX Adaptive LL: issue #86).
 // aptX HD and aptX Adaptive always carry 24-bit (no choice).
 
 import type { Settings } from "../ipc/types";
@@ -20,6 +21,7 @@ export type CodecId =
   | "aptxll"
   | "aptx"
   | "aptxad"
+  | "aptxadll"
   | "lhdcv5"
   | "opus"
   | "aac"
@@ -225,8 +227,47 @@ export const CODECS: CodecSpec[] = [
   },
 ];
 
+/**
+ * aptX Adaptive's low latency mode as a card of its own (issue #86), the
+ * codec cards' only one that is not a codec: chosen, the profile asks for
+ * aptX Adaptive with quality "ll" (what earlier versions saved for it
+ * loads as this card). 48 kHz, 24-bit, its one bit rate; no ABR.
+ */
+export const APTXAD_LL: CodecSpec = {
+  id: "aptxadll",
+  label: "codec.aptx_adaptive_ll",
+  bars: { quality: 3, latency: 5, stability: 3 },
+  qualities: [],
+  fixedKbps: [265, 265],
+  abr: false,
+  hiRes: false,
+  rates: [0, 48000],
+  bits: 24,
+};
+
 export function codecSpec(id: string): CodecSpec {
+  if (id === APTXAD_LL.id) return APTXAD_LL;
   return CODECS.find((c) => c.id === id) ?? CODECS[0];
+}
+
+/** The codec a card is (what the device lists and the core streams):
+ *  aptX Adaptive LL's is aptX Adaptive */
+export function codecKey(card: string): string {
+  return card === APTXAD_LL.id ? "aptxad" : card;
+}
+
+/** The card a profile's codec shows on: aptX Adaptive in Low Latency is
+ *  aptX Adaptive LL's */
+export function cardOf(p: { codec: string; quality: string }): string {
+  return p.codec === "aptxad" && p.quality === "ll" ? APTXAD_LL.id : p.codec;
+}
+
+/** A profile's codec and quality for a card: aptX Adaptive LL's are aptX
+ *  Adaptive and Low Latency, aptX Adaptive's own never Low Latency */
+export function cardCodec<T extends { codec: string; quality: string }>(p: T): T {
+  if (p.codec === APTXAD_LL.id) return { ...p, codec: "aptxad", quality: "ll" };
+  if (p.codec === "aptxad" && p.quality === "ll") return { ...p, quality: "hq" };
+  return p;
 }
 
 /** Translation key of a codec name as the core reports it ("LDAC", "aptX HD") or a profile id */
@@ -267,7 +308,7 @@ export type CodecSupport = "offered" | "not_offered" | "unknown";
 export function codecSupport(codec: string, known: readonly string[], onRequest: readonly string[] = []): CodecSupport {
   if (known.length === 0) return "unknown";
   if (codec === "auto") return "offered";
-  const id = codec.toLowerCase();
+  const id = codecKey(codec).toLowerCase();
   if (known.some((k) => k.toLowerCase() === id)) return "offered";
   return onRequest.includes(id) ? "unknown" : "not_offered";
 }
@@ -345,6 +386,7 @@ export const CARD_ORDER: readonly CodecId[] = [
   "lhdcv5",
   "ldac",
   "aptxad",
+  "aptxadll",
   "opus",
   "opus05",
   "aptxhd",
@@ -363,10 +405,14 @@ export const CARD_ORDER: readonly CodecId[] = [
  * core's AutoOrder::from_keys). Empty: CARD_ORDER.
  */
 export function cardOrder(keys: readonly string[] = []): CodecId[] {
+  const given = keys.map((k) => k.toLowerCase());
   const order: CodecId[] = [];
-  for (const k of [...keys.map((k) => k.toLowerCase()), ...CARD_ORDER]) {
+  for (const k of given) {
     if (CARD_ORDER.includes(k as CodecId) && !order.includes(k as CodecId)) order.push(k as CodecId);
   }
+  // aptX Adaptive LL, new in an order saved before it: beside aptX Adaptive
+  if (!order.includes("aptxadll") && order.includes("aptxad")) order.splice(order.indexOf("aptxad") + 1, 0, "aptxadll");
+  for (const k of CARD_ORDER) if (!order.includes(k)) order.push(k);
   return order;
 }
 
@@ -441,12 +487,13 @@ export interface CodecCaps {
  *  caps are not known (core: RemoteCaps::unlisted). aptX Adaptive's 96 kHz
  *  stays the device's: it needs an R2 bitstream */
 export function unlistedCaps(codec: string, caps: CodecCaps | null): CodecCaps | null {
-  return codec === "aptxad" ? caps : null;
+  return codecKey(codec) === "aptxad" ? caps : null;
 }
 
 /** The caps of `codec` among a device's (null: not known) */
 export function capsOf(caps: readonly CodecCaps[], codec: string): CodecCaps | null {
-  return caps.find((c) => c.codec.toLowerCase() === codec.toLowerCase()) ?? null;
+  const key = codecKey(codec).toLowerCase();
+  return caps.find((c) => c.codec.toLowerCase() === key) ?? null;
 }
 
 /** Whether the device lists a sample rate (anything goes while not known).
@@ -488,7 +535,7 @@ export function autoSampleRate(codec: string, caps: CodecCaps | null): number {
 /** The bit depth Auto streams `codec` with (stream.rs): 24-bit for LDAC,
  *  aptX HD and aptX Adaptive, LHDC V5 when the device lists it, else 16 */
 export function autoBitDepth(codec: string, caps: CodecCaps | null): number {
-  if (codec === "ldac" || codec === "aptxhd" || codec === "aptxad") return 24;
+  if (codec === "ldac" || codec === "aptxhd" || codecKey(codec) === "aptxad") return 24;
   if (codec === "lhdcv5") {
     const listed = caps?.bit_depths ?? [];
     return listed.length === 0 || listed.includes(24) ? 24 : 16;
@@ -521,7 +568,7 @@ export function matchedSampleRate(codec: string, caps: CodecCaps | null, source:
 /** The bit depth Auto streams `codec` with while it matches the PC's
  *  output (developer mode): 16-bit from a 16-bit output, else Auto's */
 export function matchedBitDepth(codec: string, caps: CodecCaps | null, source: number): number {
-  return source <= 16 && codec !== "aptxad" ? 16 : autoBitDepth(codec, caps);
+  return source <= 16 && codecKey(codec) !== "aptxad" ? 16 : autoBitDepth(codec, caps);
 }
 
 /** The bit depths the dialog offers: the codec's, as far as the device
@@ -615,6 +662,8 @@ export function offeredQualities(
 ): { id: string; label: string; kbps?: string }[] {
   const out: { id: string; label: string; kbps?: string }[] = [];
   for (const q of codecSpec(codec).qualities) {
+    // Low Latency is aptX Adaptive LL's card (issue #86)
+    if (codec === "aptxad" && q.id === "ll") continue;
     const kbps = qualityKbps(codec, q.id, sampleRate, maxBitrate);
     if (q.id !== current && kbps && out.some((o) => o.kbps === kbps)) continue;
     out.push({ id: q.id, label: q.label, kbps });

@@ -666,8 +666,11 @@ describe("call codecs on Codecs (issue #86)", () => {
     // "..." shows its settings, read only
     fireEvent.click(within(wh).getByRole("button", { name: t("ui.profile.codec_settings", "mSBC") }));
     const dialog = await screen.findByRole("dialog", { name: t("ui.profile.codec_settings", "mSBC") });
-    expect(dialog).toHaveTextContent("16 kHz");
+    expect(dialog).toHaveTextContent("16000 Hz");
     expect(dialog).toHaveTextContent("64 kbps");
+    // As an A2DP codec's settings
+    for (const label of ["connection.quality", "connection.sample_rate", "connection.bit_depth", "ui.diag.cd_channel_mode"])
+      expect(within(dialog).getByText(t(label))).toBeInTheDocument();
     fireEvent.keyDown(dialog, { key: "Escape" });
     // All three with the toggle off, each saying whether the headphones list it
     fireEvent.click(screen.getByRole("switch", { name: t("ui.profile.codecs_hide") }));
@@ -761,12 +764,12 @@ describe("LE Audio microphone on Codecs (issue #86)", () => {
     const dialog = await openMic();
     expect(dialog).toHaveTextContent(t("ui.diag.cd_mode.mono"));
     // No stereo to choose, no bit rate to show
-    expect(within(dialog).queryByText(t("ui.codecs.bit_rate"))).toBeNull();
+    expect(within(dialog).queryByText(t("connection.quality"))).toBeNull();
     const select = within(dialog).getByRole("combobox") as HTMLSelectElement;
     expect([...select.options].map((o) => o.textContent)).toEqual([
-      t("codec.auto_value", "32 kHz"),
-      "32 kHz",
-      "16 kHz",
+      t("codec.auto_value", "32000 Hz"),
+      "32000 Hz",
+      "16000 Hz",
     ]);
     expect(select.value).toBe("0");
     fireEvent.change(select, { target: { value: "16000" } });
@@ -785,6 +788,6 @@ describe("LE Audio microphone on Codecs (issue #86)", () => {
     await waitFor(() => expect(core.state.snap?.stream.voice?.rate).toBe(32000));
     const dialog = await openMic();
     expect(within(dialog).queryByRole("combobox")).toBeNull();
-    expect(dialog).toHaveTextContent("32 kHz");
+    expect(dialog).toHaveTextContent("32000 Hz");
   });
 });

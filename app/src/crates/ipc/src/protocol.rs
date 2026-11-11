@@ -598,9 +598,9 @@ pub struct Profile {
     /// Settings.le_audio_experimental (error.le_audio_disabled)
     #[serde(default)]
     pub le_audio: bool,
-    /// LE Audio: GMAP low-latency presets with a gaming headset (on by
-    /// default; other headsets get the media configuration either way)
-    #[serde(default = "yes")]
+    /// LE Audio: GMAP low-latency presets with a gaming headset (LC3 LL; off
+    /// by default: LC3); other headsets get the media configuration either way
+    #[serde(default)]
     pub le_low_latency: bool,
     /// Headset mode: the headphones' microphone is
     /// rendered to mic_device_id. "off" (the default) | "on" | "auto";

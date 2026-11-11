@@ -37,7 +37,7 @@ Transforme un adaptateur Bluetooth ordinaire -- une clé USB bon marché ou, sur
 | FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | -- |
 | Opus 05 | 256 kbps | 48 kHz | 16 bit | -- |
 | LC3 (LE Audio) | 32--124 kbps par canal | 16/24/32/48 kHz | 16 bit | ~140 ms |
-| LC3 faible latence (LE Audio GMAP) | 64--96 kbps par canal | 32/48 kHz | 16 bit | ~30 ms |
+| LC3 LL (LE Audio GMAP) | 64--96 kbps par canal | 32/48 kHz | 16 bit | ~30 ms |
 
 ### Codecs pris en charge selon la plateforme (envoi vers le casque)
 
