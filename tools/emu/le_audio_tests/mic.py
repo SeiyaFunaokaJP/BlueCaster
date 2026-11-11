@@ -19,15 +19,15 @@ cases tagged 'mic'. The playback direction is checked as in every case
   - the 1 kHz tone (amplitude 0.5) in every 100 ms block of mic.wav but a
     short gap at the start and the end
 
-  mic-stereo     stereo headset with a microphone: 48_6_2 to it, 32_2_1 from
-                 it, both on the one CIS
+  mic-stereo     stereo headset with a microphone: 48_6_2 to it, 32_2_2 from
+                 it (high reliability as well), both on the one CIS
   mic-earbuds    two earbuds, only the left one with a microphone: its CIS
                  carries both directions, the right one plays only
   mic-mono-16k   mono headset, 16_2_1 both ways (its microphone takes 16 kHz
                  only)
   mic-rate-16k   stereo headset whose microphone takes 16 and 32 kHz, 16 kHz
                  chosen (--mic-rate 16000, the rate chosen with Auto-select
-                 off): 16_2_1 from it instead of 32_2_1
+                 off): 16_2_2 from it instead of 32_2_2
 """
 
 import math
@@ -52,10 +52,10 @@ CASES = [
 
 # What each case's microphone is: (preset, Hz, microphone CIS)
 EXPECTED = {
-    'mic-stereo': ('32_2_1', 32000, 1),
-    'mic-earbuds': ('32_2_1', 32000, 1),
+    'mic-stereo': ('32_2_2', 32000, 1),
+    'mic-earbuds': ('32_2_2', 32000, 1),
     'mic-mono-16k': ('16_2_1', 16000, 1),
-    'mic-rate-16k': ('16_2_1', 16000, 1),
+    'mic-rate-16k': ('16_2_2', 16000, 1),
 }
 
 PREFILL = 2            # BlueCaster's jitter buffer (pipeline le_rx PREFILL_SDUS)

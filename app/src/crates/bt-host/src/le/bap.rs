@@ -381,6 +381,11 @@ const STOP_STEP_TIMEOUT_MS: u32 = 3000;
 /// Bumble sent Idle before Releasing), leaving a stale state that only the
 /// step timeout would end
 const REFRESH_MS: u32 = 500;
+/// After the CIS are up, the ASEs that are not Streaming yet are read again
+/// this often: EarFun earbuds left ASE 2 in Enabling with its CIS up and sent
+/// nothing more (issue #86); the read tells a lost notification from a
+/// server that did not start
+const WAIT_REFRESH_MS: u32 = 2000;
 
 /// Step of the unicast procedure
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -572,6 +577,15 @@ fn ase_of<'e>(env: &'e dyn UnicastEnv, a: &PlannedAse) -> Option<&'e Ase> {
     env.device(a.device_id)?.ase(a.ase_id)
 }
 
+/// How often the ASEs are read again in this step (on_refresh); None: not
+fn refresh_ms(p: Phase) -> Option<u32> {
+    match p {
+        Phase::WaitStreaming => Some(WAIT_REFRESH_MS),
+        Phase::Disable | Phase::Release => Some(REFRESH_MS),
+        _ => None,
+    }
+}
+
 /// All planned ASEs satisfy pred (devices that are gone count as done while
 /// stopping)
 fn all_ases(env: &dyn UnicastEnv, plan: &StreamPlan, stopping: bool, pred: impl Fn(AseState) -> bool) -> bool {
@@ -684,10 +698,9 @@ impl Unicast {
         } else {
             env.arm(UnicastTimer::Step, if p.stopping() { STOP_STEP_TIMEOUT_MS } else { START_STEP_TIMEOUT_MS });
         }
-        if matches!(p, Phase::Disable | Phase::Release) {
-            env.arm(UnicastTimer::Refresh, REFRESH_MS);
-        } else {
-            env.disarm(UnicastTimer::Refresh);
+        match refresh_ms(p) {
+            Some(ms) => env.arm(UnicastTimer::Refresh, ms),
+            None => env.disarm(UnicastTimer::Refresh),
         }
         tracing::info!("LE Audio: unicast: {}", p.name());
         let Some(plan) = self.plan.clone() else { return };
@@ -1358,14 +1371,15 @@ impl Unicast {
         self.enter(env, Phase::Disable);
     }
 
-    /// While stopping: read the ASEs again that did not reach the state the
-    /// step waits for
+    /// While stopping, and while waiting for Streaming: read the ASEs again
+    /// that did not reach the state the step waits for
     pub fn on_refresh(&mut self, env: &mut dyn UnicastEnv) {
         let Some(plan) = self.plan.clone() else { return };
+        let Some(ms) = refresh_ms(self.phase) else { return };
         let done: fn(AseState) -> bool = match self.phase {
+            Phase::WaitStreaming => |s| s == AseState::Streaming,
             Phase::Disable => |s| !matches!(s, AseState::Enabling | AseState::Streaming | AseState::Disabling),
-            Phase::Release => |s| matches!(s, AseState::Idle | AseState::CodecConfigured | AseState::Unknown),
-            _ => return,
+            _ => |s| matches!(s, AseState::Idle | AseState::CodecConfigured | AseState::Unknown),
         };
         for c in plan.ases() {
             if !connected(env, c.device_id) {
@@ -1382,7 +1396,7 @@ impl Unicast {
                 env.read_ase(c.device_id, c.ase_id);
             }
         }
-        env.arm(UnicastTimer::Refresh, REFRESH_MS);
+        env.arm(UnicastTimer::Refresh, ms);
     }
 
     /// The step timer fired
@@ -2329,6 +2343,34 @@ mod tests {
         u.on_ase_update(&mut env, LeDeviceId(1), 1);
         assert_eq!(u.phase(), Phase::RemoveCig);
         // Not stopping in a step that waits for ASEs: nothing to read
+        u.on_refresh(&mut env);
+        assert!(!env.take().iter().any(|l| l.starts_with("read")));
+    }
+
+    #[test]
+    fn an_ase_still_enabling_with_its_cis_up_is_read_again() {
+        // Issue #86: one ASE went Streaming, the other stayed Enabling
+        let mut env = Fake::new(vec![device(0, 0x40, &[1], CONTEXT_MEDIA), device(1, 0x41, &[1], CONTEXT_MEDIA)]);
+        let mut u = Unicast::default();
+        let outcome = start(&mut u, &mut env);
+        both(&mut u, &mut env, AseState::CodecConfigured);
+        u.on_cig_created(&mut env, &cig_created(1, &[0x60, 0x61]));
+        both(&mut u, &mut env, AseState::QosConfigured);
+        both(&mut u, &mut env, AseState::Enabling);
+        u.on_cis_created(&mut env, &cis_created(1, 0x60, 0));
+        u.on_cis_created(&mut env, &cis_created(1, 0x61, 0));
+        env.set_state(0, 1, AseState::Streaming);
+        u.on_ase_update(&mut env, LeDeviceId(0), 1);
+        assert_eq!(u.phase(), Phase::WaitStreaming);
+        env.take();
+        u.on_refresh(&mut env);
+        assert_eq!(env.take(), ["read ASE 1 dev 1"]);
+        // The read finds it Streaming: the stream starts
+        env.set_state(1, 1, AseState::Streaming);
+        u.on_ase_update(&mut env, LeDeviceId(1), 1);
+        assert_eq!(u.phase(), Phase::Streaming);
+        assert_eq!(*outcome.borrow(), Some(Ok(())));
+        // Streaming: nothing to read
         u.on_refresh(&mut env);
         assert!(!env.take().iter().any(|l| l.starts_with("read")));
     }

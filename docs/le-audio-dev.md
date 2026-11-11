@@ -262,7 +262,9 @@ preset (C->P) and adds a source direction (P->C) to the CIS plan
   own that carries P->C only (no SDU of the encode thread, not sent on)
 - the source preset: the first of `source_preset_order` (default `32_2_1,
   32_1_1, 24_2_1, 24_1_1, 16_2_1, 16_1_1`; those with the sink preset's frame
-  duration first) that every such device's Source PAC records allow;
+  duration first; with a high-reliability sink preset, the high-reliability
+  preset of the same rate, frame and octets instead of a low-latency one)
+  that every such device's Source PAC records allow;
   GMAP low latency with UGTs that all have the Source feature puts the `_gs`
   presets first; `source_rate` (the rate chosen, `--mic-rate`) takes the
   first of those at that rate, the first at any rate when none is;

@@ -456,7 +456,11 @@ silent until it is switched off or the adapter fails as a whole.
   `StreamPlan::source: Option<SourcePlan>` and `source_note` (why a
   requested microphone is missing: the stream then plays without it).
 - Source presets: `32_2_1, 32_1_1, 24_2_1, 24_1_1, 16_2_1, 16_1_1`, those
-  with the sink preset's frame duration first; GMAP (UGTs with the Source
+  with the sink preset's frame duration first; next to a high-reliability
+  sink preset (`48_6_2` etc.) the `_2` twin of the same rate and octets
+  (`32_2_2`), so the CIG keeps one latency class (a 10 ms microphone made
+  the controller pick a 10 ms ISO interval, and EarFun refused the second
+  CIS, #86); GMAP (UGTs with the Source
   feature) puts `32_1_gs, 32_2_gs, 48_1_gs, 48_2_gs` first. Contexts:
   Conversational (GMAP: Game + Conversational) on the source ASEs, and next
   to Media on the sink ASEs where available.
