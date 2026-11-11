@@ -30,14 +30,16 @@ fn main() {
     // std::path::absolute, not canonicalize: MSVC does not take \\?\ paths
     let fdk = std::path::absolute(&fdk).unwrap();
     let cmake = fdk.join("CMakeLists.txt");
-    assert!(
-        cmake.exists() && fdk.join("libAACenc/include/aacenc_lib.h").exists(),
-        "fdk-aac not found at {} (git submodule update --init extern/fdk-aac)",
-        fdk.display()
-    );
+    assert!(cmake.exists(), "fdk-aac not found at {} (git submodule update --init extern/fdk-aac)", fdk.display());
     let cmake_text = std::fs::read_to_string(&cmake).unwrap();
     let includes = include_dirs(&cmake_text);
-    assert!(!includes.is_empty(), "no include directories found in {}", cmake.display());
+    assert!(
+        includes.iter().any(|i| fdk.join(i).join("aacenc_lib.h").exists()),
+        "no include directory with aacenc_lib.h found in {}",
+        cmake.display()
+    );
+    // 3.0.0 moved the lib*/ folders to cpp/ and prepends it to the lists
+    let prefix = sources_prefix(&cmake_text);
 
     let decoder = env::var_os("CARGO_FEATURE_DECODER").is_some();
     let mut lists = ENCODER_LISTS.to_vec();
@@ -48,7 +50,7 @@ fn main() {
     for list in lists {
         let files = cmake_list(&cmake_text, list);
         assert!(!files.is_empty(), "{list} not found in {}", cmake.display());
-        sources.extend(files.into_iter().map(|f| fdk.join(f)));
+        sources.extend(files.into_iter().map(|f| fdk.join(format!("{prefix}{f}"))));
     }
 
     let mut build = cc::Build::new();
@@ -76,7 +78,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=FDK_AAC_DIR");
     println!("cargo:rerun-if-changed={}", cmake.display());
     println!("cargo:rerun-if-changed=csrc");
-    for dir in ["libAACenc/include", "libAACdec/include", "libSYS/include"] {
+    for dir in &includes {
         println!("cargo:rerun-if-changed={}", fdk.join(dir).display());
     }
     // For dependents that need the headers (DEP_FDKAAC_ROOT)
@@ -92,7 +94,18 @@ fn cmake_list(text: &str, name: &str) -> Vec<String> {
     body.split_whitespace().filter(|t| t.ends_with(".cpp")).map(str::to_owned).collect()
 }
 
-/// The lib*/include directories of `target_include_directories(fdk-aac ...)`
+/// What `list(TRANSFORM libfdk_aac_SOURCES PREPEND ...)` puts before every
+/// source ("cpp/" since 3.0.0, nothing before)
+fn sources_prefix(text: &str) -> String {
+    let start = "list(TRANSFORM libfdk_aac_SOURCES PREPEND";
+    let Some(pos) = text.find(start) else { return String::new() };
+    let body = &text[pos + start.len()..];
+    body[..body.find(')').unwrap_or(body.len())].trim().to_owned()
+}
+
+/// The include directories of `target_include_directories(fdk-aac ...)`,
+/// relative to the fdk-aac folder ("libSYS/include", "cpp/libSYS/include"
+/// since 3.0.0)
 fn include_dirs(text: &str) -> Vec<String> {
     let start = "target_include_directories(fdk-aac";
     let Some(pos) = text.find(start) else { return Vec::new() };
@@ -102,12 +115,9 @@ fn include_dirs(text: &str) -> Vec<String> {
     let body = &body[..body.find(')').unwrap_or(body.len())];
     body.split_whitespace()
         .map(|t| t.trim_end_matches('>'))
-        .filter_map(|t| {
-            let mut parts = t.rsplit('/');
-            let last = parts.next()?;
-            let lib = parts.next()?;
-            (last == "include" && lib.starts_with("lib")).then(|| format!("{lib}/include"))
-        })
+        .map(|t| t.rsplit_once("${CMAKE_CURRENT_SOURCE_DIR}/").map_or(t, |(_, path)| path))
+        .filter(|t| t.ends_with("/include") && !t.contains('$'))
+        .map(str::to_owned)
         .collect()
 }
 

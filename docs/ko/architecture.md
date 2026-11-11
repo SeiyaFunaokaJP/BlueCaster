@@ -401,7 +401,7 @@ DPAPI로 Windows 사용자별로 암호화됩니다(`win-sys::dpapi`). 다른 �
 | LHDC V5 | lhdcv5-enc (AOSP 인코더의 C 포팅) | 400/500/900/1000 kbps (낮음/중간/중상/높음), 싱크가 알리는 최대값 이하, ABR 160–400 kbps | 16/24비트, 5 ms 프레임, 2바이트 미디어 페이로드 헤더, RTP 헤더 |
 | LDAC | libldac (AOSP) | 330/660/990 kbps | 높음/중간/낮음 (HQ/SQ/MQ) 모드, ABR |
 | aptX Adaptive | aptx-adaptive (AKS-Logic/aptx-adaptive-linux의 순수 Rust 인코더, MIT) | 높음 427 kbps, 저지연 265 kbps (R2 싱크: 270). ABR은 364/318 (R2: 270/204)까지 낮춤 | 48 kHz 스테레오(선택한 경우 이를 알리는 R2 싱크에는 높음에서 96 kHz: 646/340/255 kbps), 24비트. 미디어 패킷당 코덱 패킷 하나, BlueCaster 자체 RTP 헤더. 높음에서 ABR. 자동은 LHDC V5와 LDAC 다음으로 선택 |
-| Opus | libopus 1.5.2 | 256 kbps (스테레오, 모노는 절반) | Android의 A2DP Opus: 48 kHz, 20 ms 프레임(싱크가 10 ms만 지원하면 10 ms), 미디어 페이로드에 맞춘 상한이 있는 constrained VBR, 패킷당 프레임 하나, 1바이트 미디어 페이로드 헤더, RTP 헤더 |
+| Opus | libopus 1.6.1 | 256 kbps (스테레오, 모노는 절반) | Android의 A2DP Opus: 48 kHz, 20 ms 프레임(싱크가 10 ms만 지원하면 10 ms), 미디어 페이로드에 맞춘 상한이 있는 constrained VBR, 패킷당 프레임 하나, 1바이트 미디어 페이로드 헤더, RTP 헤더 |
 | aptX HD | libopenaptx | 576 kbps | 24비트 입력, 고정 비트레이트, RTP 헤더 |
 | aptX | libopenaptx | 352/384 kbps (44.1/48 kHz) | 16비트 스테레오, RTP 헤더 없음 |
 | aptX LL | libopenaptx | 352 kbps | 약 32 ms 지연, RTP 헤더 없음, 패킷 ≤ 약 7.5 ms |

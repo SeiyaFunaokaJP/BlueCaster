@@ -22,16 +22,16 @@ repository. The Rust crates are pinned in `Cargo.lock`, the JavaScript packages 
 |-----------|----------------|----------------|-----------|-------|----|
 | libldac (AOSP) | `android-15.0.0_r36-4-geeee1a3` (commit `eeee1a3`) | Apache-2.0 | Sony Corporation | LDAC audio encoding | `bluecaster-core.exe` |
 | libopenaptx | 0.2.0 (tag `0.2.0`, commit `2459ed4`) | LGPL-2.1-or-later | Aurelien Jacobs, Pali Rohár | aptX / aptX HD / aptX LL audio encoding (decoding in `bluecaster_decode`, §14) | `bluecaster-core.exe` |
-| fdk-aac | `v2.0.3-158-gd8e6b1a` (commit `d8e6b1a`) | FDK-AAC | Fraunhofer-Gesellschaft | AAC-LC audio encoding (decoding in `bluecaster_decode`, §14) | `bluecaster-core.exe` |
-| BTstack | `v1.8.1-6-g5bc5cbdbe` (commit `5bc5cbdbe`) | LicenseRef-BTstack (BSD-3-Clause-style **with a non-commercial clause**) | BlueKitchen GmbH; Matthias Ringwald | User-mode Bluetooth stack | `bluecaster-core.exe` |
-| Bluedroid SBC encoder, ported to Rust | ported from BTstack `5bc5cbdbe` (`3rd-party/bluedroid/encoder/`) | Apache-2.0 | Broadcom Corporation | SBC audio encoding (`app/src/crates/codec/src/sbc/`) | `bluecaster-core.exe` |
-| Bluedroid SBC encoder and decoder (C, bundled in BTstack) | as in BTstack `5bc5cbdbe` (`3rd-party/bluedroid/`) | Apache-2.0 | Broadcom Corporation; The Android Open Source Project; Open Interface North America, Inc. | mSBC voice codec of the headset microphone, §5 | `bluecaster-core.exe` |
-| rijndael (bundled in BTstack) | as in BTstack `5bc5cbdbe` (`3rd-party/rijndael/`) | Public domain | Philip J. Erdelsky | AES (used by BTstack) | `bluecaster-core.exe` |
-| tinydir (bundled in BTstack) | as in BTstack `5bc5cbdbe` (`3rd-party/tinydir/`) | BSD-2-Clause | tinydir authors | Directory listing in BTstack's Broadcom chipset driver | `bluecaster-core.exe` |
-| liblc3 (lc3-google, bundled in BTstack) | as in BTstack `5bc5cbdbe` (`3rd-party/lc3-google/`) | Apache-2.0 | Google LLC | LC3 encoding for the experimental LE Audio support (decoding in `bluecaster_decode`, §14), §17 | `bluecaster-core.exe` |
-| micro-ecc (bundled in BTstack) | as in BTstack `5bc5cbdbe` (`3rd-party/micro-ecc/`) | BSD-2-Clause | Kenneth MacKay | P-256 for LE Secure Connections (experimental LE Audio), §18 | `bluecaster-core.exe` |
+| fdk-aac | `v3.0.0` (commit `a68a51a`) | FDK-AAC | Fraunhofer-Gesellschaft | AAC-LC audio encoding (decoding in `bluecaster_decode`, §14) | `bluecaster-core.exe` |
+| BTstack | `v1.8.3` (commit `51e11ce36`) | LicenseRef-BTstack (BSD-3-Clause-style **with a non-commercial clause**) | BlueKitchen GmbH; Matthias Ringwald | User-mode Bluetooth stack | `bluecaster-core.exe` |
+| Bluedroid SBC encoder, ported to Rust | ported from BTstack `51e11ce36` (`3rd-party/bluedroid/encoder/`) | Apache-2.0 | Broadcom Corporation | SBC audio encoding (`app/src/crates/codec/src/sbc/`) | `bluecaster-core.exe` |
+| Bluedroid SBC encoder and decoder (C, bundled in BTstack) | as in BTstack `51e11ce36` (`3rd-party/bluedroid/`) | Apache-2.0 | Broadcom Corporation; The Android Open Source Project; Open Interface North America, Inc. | mSBC voice codec of the headset microphone, §5 | `bluecaster-core.exe` |
+| rijndael (bundled in BTstack) | as in BTstack `51e11ce36` (`3rd-party/rijndael/`) | Public domain | Philip J. Erdelsky | AES (used by BTstack) | `bluecaster-core.exe` |
+| tinydir (bundled in BTstack) | as in BTstack `51e11ce36` (`3rd-party/tinydir/`) | BSD-2-Clause | tinydir authors | Directory listing in BTstack's Broadcom chipset driver | `bluecaster-core.exe` |
+| liblc3 (lc3-google, bundled in BTstack) | as in BTstack `51e11ce36` (`3rd-party/lc3-google/`) | Apache-2.0 | Google LLC | LC3 encoding for the experimental LE Audio support (decoding in `bluecaster_decode`, §14), §17 | `bluecaster-core.exe` |
+| micro-ecc (bundled in BTstack) | as in BTstack `51e11ce36` (`3rd-party/micro-ecc/`) | BSD-2-Clause | Kenneth MacKay | P-256 for LE Secure Connections (experimental LE Audio), §18 | `bluecaster-core.exe` |
 | LHDC-V5-Encoder (C port of the AOSP LHDC V5 encoder) | commit `3f9d198` | Apache-2.0; `src/lhdcv5_fft.c` BSD-3-Clause | The Android Open Source Project; Mark Borgerding (KISS FFT) | LHDC V5 audio encoding, §8 | `bluecaster-core.exe` |
-| libopus | 1.5.2 (tag `v1.5.2`, commit `ddbe483`) | BSD-3-Clause | Xiph.Org, Skype Limited, Octasic, Jean-Marc Valin, Timothy B. Terriberry, CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo, Mozilla, Amazon | Opus audio encoding (decoding in `bluecaster_decode`, §14), §16 | `bluecaster-core.exe` |
+| libopus | 1.6.1 (tag `v1.6.1`, commit `22244de`) | BSD-3-Clause | Xiph.Org, Skype Limited, Octasic, Jean-Marc Valin, Timothy B. Terriberry, CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo, Mozilla, Amazon | Opus audio encoding (decoding in `bluecaster_decode`, §14), §16 | `bluecaster-core.exe` |
 | aptx-adaptive (AKS-Logic/aptx-adaptive-linux, vendored) | upstream commit `25099004b2d3` (2026-10-22), crate 0.1.0 | MIT | Prateek Mittal (AKS-Logic) | aptX Adaptive encoding (experimental), §19 | `bluecaster-core.exe` |
 | HFreebuds (protocol description, packet cutting and test vectors) | commit `dab1f7e` | MIT | N2K02 | Huawei earbuds' sound quality mode (`app/src/crates/core/src/vendor/huawei.rs`), §20 | `bluecaster-core.exe` |
 | LHDC-Switch (protocol use, packet cutting and test vector) | commit `b33a758` | MIT | LHDC Switch contributors | OPPO earbuds' Hi-Res mode (`app/src/crates/core/src/vendor/oppo.rs`), §21 | `bluecaster-core.exe` |
@@ -195,7 +195,7 @@ some jurisdictions. Users should evaluate patent implications independently.
 ## 3. fdk-aac (Fraunhofer FDK AAC Codec Library)
 
 - **Source**: <https://github.com/mstorsjo/fdk-aac>
-- **Version**: `v2.0.3-158-gd8e6b1a` (commit `d8e6b1a`)
+- **Version**: `v3.0.0` (commit `a68a51a`)
 - **Path in project**: `extern/fdk-aac/` (git submodule)
 - **License**: Software License for The Fraunhofer FDK AAC Codec Library for Android
   (`extern/fdk-aac/NOTICE`, shipped as `licenses/third-party/fdk-aac-NOTICE.txt`)
@@ -237,7 +237,7 @@ the NOTICE, or from the patent owners) is the user's responsibility.
 ## 4. BTstack (Bluetooth Stack)
 
 - **Source**: <https://github.com/bluekitchen/btstack>
-- **Version**: `v1.8.1-6-g5bc5cbdbe` (commit `5bc5cbdbe`)
+- **Version**: `v1.8.3` (commit `51e11ce36`)
 - **Path in project**: `extern/btstack/` (git submodule), built unmodified by
   `app/src/crates/btstack-sys/build.rs`: `src/` (without the audio, LC3, HID,
   SLIP and UART transport files), the classic profiles A2DP / AVDTP / AVRCP / SDP
@@ -292,7 +292,7 @@ a commercial BTstack license from BlueKitchen GmbH.
 ## 5. Bluedroid SBC Encoder (ported to Rust)
 
 - **Source**: `extern/btstack/3rd-party/bluedroid/encoder/` (originally from AOSP
-  Bluedroid), as contained in BTstack commit `5bc5cbdbe`
+  Bluedroid), as contained in BTstack commit `51e11ce36`
 - **Path in project**: `app/src/crates/codec/src/sbc/` — the fixed-point encoder
   translated from C to Rust. Each ported file carries the Broadcom copyright and
   the Apache-2.0 notice and states that it was ported
@@ -336,7 +336,7 @@ No obligations.
 ## 7. tinydir (bundled in BTstack)
 
 - **Source**: `extern/btstack/3rd-party/tinydir/tinydir.h` (header-only), as
-  contained in BTstack commit `5bc5cbdbe`
+  contained in BTstack commit `51e11ce36`
 - **License**: BSD 2-Clause (the header's license comment)
 - **Copyright**: Copyright (c) 2013-2021, tinydir authors (Cong Xu, Lautis Sun,
   Baudouin Feildel, Andargor)
@@ -636,11 +636,11 @@ same pinned versions as above:
 
 | Library | Pinned version | License (SPDX) | Parts used | License verified in the pinned source |
 |---------|----------------|----------------|------------|---------------------------------------|
-| Bluedroid SBC decoder | as in BTstack `5bc5cbdbe` | Apache-2.0 | `3rd-party/bluedroid/decoder` (CMake target `sbc_decoder`) | Every `decoder/srce/*.c` and `decoder/include/*.h` carries the Apache-2.0 header |
-| fdk-aac | commit `d8e6b1a` | FDK-AAC | AAC decoder (`libAACdec`, `libMpegTPDec` and shared modules) | `NOTICE` covers "encoding and decoding"; every `libAACdec` / `libMpegTPDec` source carries the same license header |
+| Bluedroid SBC decoder | as in BTstack `51e11ce36` | Apache-2.0 | `3rd-party/bluedroid/decoder` (CMake target `sbc_decoder`) | Every `decoder/srce/*.c` and `decoder/include/*.h` carries the Apache-2.0 header |
+| fdk-aac | commit `a68a51a` | FDK-AAC | AAC decoder (`libAACdec`, `libMpegTPDec` and shared modules) | `NOTICE` covers "encoding and decoding"; every `libAACdec` / `libMpegTPDec` source carries the same license header |
 | libopenaptx | 0.2.0 (commit `2459ed4`) | LGPL-2.1-or-later | `aptx_decode_sync()` | `COPYING` is LGPL 2.1; `openaptx.c` / `openaptx.h` headers state LGPL 2.1 or later |
-| liblc3 (lc3-google) | as in BTstack `5bc5cbdbe` | Apache-2.0 | LC3 decoder for `--le-audio` (CMake target `lc3`, the whole library) | `LICENSE` is Apache-2.0; every `src/*.c` / `include/*.h` carries the Apache-2.0 header (Google LLC) |
-| libopus | 1.5.2 (commit `ddbe483`) | BSD-3-Clause | Opus decoder (its own CMake build, `add_subdirectory(extern/opus)`, target `opus`) | `COPYING` is BSD-3-Clause; the `celt/`, `silk/` and `src/` sources carry the same BSD license header |
+| liblc3 (lc3-google) | as in BTstack `51e11ce36` | Apache-2.0 | LC3 decoder for `--le-audio` (CMake target `lc3`, the whole library) | `LICENSE` is Apache-2.0; every `src/*.c` / `include/*.h` carries the Apache-2.0 header (Google LLC) |
+| libopus | 1.6.1 (commit `22244de`) | BSD-3-Clause | Opus decoder (its own CMake build, `add_subdirectory(extern/opus)`, target `opus`) | `COPYING` is BSD-3-Clause; the `celt/`, `silk/` and `src/` sources carry the same BSD license header |
 
 It does **not** link BTstack (HCI / L2CAP / AVDTP parsing is its own code),
 so the BTstack non-commercial clause (§4) does not apply to it. The Bluedroid
@@ -743,7 +743,7 @@ When changing `requirements.txt`, re-check and update this table.
 ## 16. libopus (Xiph.Org Opus Codec)
 
 - **Source**: <https://github.com/xiph/opus> (mirror of <https://gitlab.xiph.org/xiph/opus>)
-- **Version**: 1.5.2 (tag `v1.5.2`, commit `ddbe483`)
+- **Version**: 1.6.1 (tag `v1.6.1`, commit `22244de`)
 - **Path in project**: `extern/opus/` (git submodule)
 - **License**: BSD-3-Clause (`COPYING`, shipped as `licenses/third-party/opus-COPYING.txt`)
 - **SPDX**: `BSD-3-Clause`
@@ -811,7 +811,7 @@ no terms of its own.
 
 - **Source**: `extern/btstack/3rd-party/lc3-google/` (Google's liblc3, as
   vendored by BTstack)
-- **Version**: as contained in BTstack commit `5bc5cbdbe`
+- **Version**: as contained in BTstack commit `51e11ce36`
 - **License**: Apache License 2.0 (`LICENSE`, and the header of every source file)
 - **Copyright**: Copyright 2022 Google LLC
 - **SPDX**: `Apache-2.0`
@@ -839,7 +839,7 @@ Bluetooth product is covered by Bluetooth qualification (§12).
 ## 18. micro-ecc (bundled in BTstack)
 
 - **Source**: `extern/btstack/3rd-party/micro-ecc/` (`uECC.c`)
-- **Version**: as contained in BTstack commit `5bc5cbdbe`
+- **Version**: as contained in BTstack commit `51e11ce36`
 - **License**: BSD 2-Clause (`LICENSE.txt`)
 - **Copyright**: Copyright (c) 2014, Kenneth MacKay
 - **SPDX**: `BSD-2-Clause`

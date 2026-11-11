@@ -701,6 +701,10 @@ void bluecaster_gap_setup(uint32_t class_of_device, uint16_t page_timeout, const
     /* SSP: Just Works (no display, no keyboard), General Bonding without MITM */
     gap_ssp_set_io_capability(SSP_IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
     gap_ssp_set_authentication_requirement(SSP_IO_AUTHREQ_MITM_PROTECTION_NOT_REQUIRED_GENERAL_BONDING);
+    /* BTstack 1.8.2 changed these defaults (auto accept off, key size 16):
+     * kept as they were, so that pairing and older sinks behave as before */
+    gap_ssp_set_auto_accept(1);
+    gap_set_required_encryption_key_size(7);
     strncpy(local_name, (name && name[0]) ? name : "BlueCaster", sizeof(local_name) - 1);
     local_name[sizeof(local_name) - 1] = 0;
     gap_set_local_name(local_name);
@@ -1116,6 +1120,10 @@ int bluecaster_le_init(void) {
     sm_init();
     sm_set_io_capabilities(IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
     sm_set_authentication_requirements(SM_AUTHREQ_SECURE_CONNECTION | SM_AUTHREQ_BONDING);
+    /* BTstack 1.8.2 changed these defaults (Secure Connections Only, key
+     * size 16 only): kept as they were (legacy pairing allowed, 7..16) */
+    sm_set_secure_connections_only_mode(false);
+    sm_set_encryption_key_size_range(7, 16);
     memset(&sm_event_registration, 0, sizeof(sm_event_registration));
     sm_event_registration.callback = &handler_sm;
     sm_add_event_handler(&sm_event_registration);

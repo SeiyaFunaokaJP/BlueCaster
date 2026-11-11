@@ -156,16 +156,16 @@ C 程式庫是 git 子模組；Rust crate 與 UI 的 npm 套件由 Cargo 與 pnp
 
 | 程式庫 | 方式 | 固定版本 | 授權 |
 |:--------|:-------|:---------------|:--------|
-| BTstack | git 子模組 | v1.8.1-6-g5bc5cbdbe | BTstack License（類似 BSD-3-Clause，附非商業條款） |
+| BTstack | git 子模組 | v1.8.3 | BTstack License（類似 BSD-3-Clause，附非商業條款） |
 | Bluedroid SBC codec | 編碼器移植為 Rust；解碼器（測試、工具）取自 BTstack 隨附的副本 | 同 BTstack | Apache-2.0 |
 | rijndael | 隨附於 BTstack（`3rd-party/rijndael`） | 同 BTstack | 公眾領域 |
 | liblc3 (lc3-google) | 隨附於 BTstack（`3rd-party/lc3-google`） | 同 BTstack | Apache-2.0 |
 | micro-ecc | 隨附於 BTstack（`3rd-party/micro-ecc`） | 同 BTstack | BSD-2-Clause |
 | libldac (AOSP) | git 子模組 | android-15.0.0_r36-4-geeee1a3 | Apache-2.0 |
 | libopenaptx | git 子模組 | 0.2.0（請勿更新） | LGPL-2.1+ |
-| fdk-aac | git 子模組 | v2.0.3-158-gd8e6b1a | FDK AAC License |
+| fdk-aac | git 子模組 | v3.0.0 | FDK AAC License |
 | LHDC V5 編碼器 | git 子模組 | 依固定的版本 | Apache-2.0 |
-| libopus | git 子模組 | v1.5.2 | BSD-3-Clause |
+| libopus | git 子模組 | v1.6.1 | BSD-3-Clause |
 | Tauri、SolidJS、Rust crate | Cargo / pnpm | `Cargo.lock`、`pnpm-lock.yaml` | MIT / Apache-2.0 等（發行版本中的 `licenses/third-party/rust-crates.txt`） |
 
 {: .warning }

@@ -246,6 +246,14 @@ impl LinkTracker {
         Some(opcode)
     }
 
+    /// How long our command still has before [`overdue`](Self::overdue)
+    /// counts it: the run loop timer can fire a little before `Instant`
+    /// says the time is up
+    pub fn due_in(&self, now: Instant) -> Option<Duration> {
+        let (_, at) = self.in_flight?;
+        COMMAND_TIMEOUT.checked_sub(now.saturating_duration_since(at)).filter(|d| !d.is_zero())
+    }
+
     /// A command the controller did not take: unknown ones are not sent
     /// again
     fn refused(&mut self, opcode: u16, status: u8) {
@@ -541,7 +549,13 @@ mod tests {
         t.in_flight = Some((HCI_OPCODE_READ_REMOTE_VERSION_INFORMATION, sent));
         t.reads.push_back((LinkRead::LinkQuality, 0x0B));
         assert_eq!(t.overdue(sent + COMMAND_TIMEOUT / 2), None);
+        // A timer that fired early waits for the rest
+        let early = sent + COMMAND_TIMEOUT - Duration::from_micros(300);
+        assert_eq!(t.overdue(early), None);
+        assert_eq!(t.due_in(early), Some(Duration::from_micros(300)));
+        assert_eq!(t.due_in(sent + COMMAND_TIMEOUT), None);
         assert_eq!(t.overdue(sent + COMMAND_TIMEOUT), Some(HCI_OPCODE_READ_REMOTE_VERSION_INFORMATION));
+        assert_eq!(t.due_in(sent + COMMAND_TIMEOUT), None);
         // Once only, the other readings stay queued, never asked again
         assert_eq!(t.overdue(sent + COMMAND_TIMEOUT * 2), None);
         assert_eq!(t.reads, [(LinkRead::LinkQuality, 0x0B)]);

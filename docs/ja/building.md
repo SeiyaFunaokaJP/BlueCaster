@@ -156,16 +156,16 @@ C のライブラリは git サブモジュールです。Rust のクレート�
 
 | ライブラリ | 取得方法 | 固定バージョン | ライセンス |
 |:--------|:-------|:---------------|:--------|
-| BTstack | git サブモジュール | v1.8.1-6-g5bc5cbdbe | BTstack License（非商用条項付きの BSD-3-Clause 類似ライセンス） |
+| BTstack | git サブモジュール | v1.8.3 | BTstack License（非商用条項付きの BSD-3-Clause 類似ライセンス） |
 | Bluedroid SBC コーデック | エンコーダーは Rust に移植。デコーダー（テスト、ツール）は BTstack 同梱のもの | BTstack に準拠 | Apache-2.0 |
 | rijndael | BTstack に同梱（`3rd-party/rijndael`） | BTstack に準拠 | パブリックドメイン |
 | liblc3 (lc3-google) | BTstack に同梱（`3rd-party/lc3-google`） | BTstack に準拠 | Apache-2.0 |
 | micro-ecc | BTstack に同梱（`3rd-party/micro-ecc`） | BTstack に準拠 | BSD-2-Clause |
 | libldac (AOSP) | git サブモジュール | android-15.0.0_r36-4-geeee1a3 | Apache-2.0 |
 | libopenaptx | git サブモジュール | 0.2.0（更新しないこと） | LGPL-2.1+ |
-| fdk-aac | git サブモジュール | v2.0.3-158-gd8e6b1a | FDK AAC License |
+| fdk-aac | git サブモジュール | v3.0.0 | FDK AAC License |
 | LHDC V5 エンコーダー | git サブモジュール | 固定したコミット | Apache-2.0 |
-| libopus | git サブモジュール | v1.5.2 | BSD-3-Clause |
+| libopus | git サブモジュール | v1.6.1 | BSD-3-Clause |
 | Tauri、SolidJS、Rust のクレート | Cargo / pnpm | `Cargo.lock`、`pnpm-lock.yaml` | MIT / Apache-2.0 など（リリースの `licenses/third-party/rust-crates.txt`） |
 
 {: .warning }

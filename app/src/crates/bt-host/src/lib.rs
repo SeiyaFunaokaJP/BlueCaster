@@ -1483,7 +1483,6 @@ impl BtHost {
             tracing::debug!("drop ACL: no link to drop");
             return;
         }
-        tracing::info!("dropping the ACL link");
         if self.shared.wait(timeout, false, |s| s.acl_down) != Wait::Done {
             tracing::warn!("no Disconnection Complete within {} ms", timeout.as_millis());
         }
