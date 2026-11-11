@@ -18,6 +18,11 @@
 //! which BTstack gives for every BIS of the BIG in BIS order once all of
 //! them have room (the last one completes the round).
 //!
+//! BTstack (1.8.3) refuses the CIS request with Command Disallowed until
+//! the CIG is active, which is only after the ISO data paths are set up;
+//! the stream can start before that (the ASE reaches Streaming in the same
+//! moment as the CIS), so a refused request is asked again 1 ms later.
+//!
 //! No allocation per round: a sent set goes back to the queue's pool
 //! ([`le_audio::sdu_queue::SduQueue::recycle`]) when the next round starts,
 //! and the silence of an underrun is copied into a spare set.
@@ -25,7 +30,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
-use btstack_sys::consts::ERROR_CODE_SUCCESS;
+use btstack_sys::consts::{ERROR_CODE_COMMAND_DISALLOWED, ERROR_CODE_SUCCESS};
 use btstack_sys::events;
 use btstack_sys::{HighTimerResolution, Stack};
 use le_audio::sdu_queue::{QueueStats, SduSet, SendCounters, SendGuard};
@@ -38,6 +43,10 @@ pub const QUEUE_DEPTH: u8 = 2;
 
 /// The run loop timer of the send guard
 pub(crate) const TIMER_ISO: u32 = 4;
+
+/// A CIS request refused while the CIG is not active yet is asked again
+/// after this many ms
+const CIG_NOT_ACTIVE_RETRY_MS: u32 = 1;
 
 /// SDUs queued per CIS on a MediaTek controller (issue #86, measured on an
 /// MT7925: with [`QUEUE_DEPTH`] it completed the first three ISO packets
@@ -96,8 +105,8 @@ fn queue_depth_within(iso_packets: u8, cis: usize, limit: u8) -> u8 {
 pub(crate) trait IsoOut {
     fn time_ms(&self) -> u32;
     fn set_queue(&self, packets: u8);
-    /// CIS can-send-now for every CIS of the CIG of `cis`
-    fn request_can_send(&self, cis: u16);
+    /// CIS can-send-now for every CIS of the CIG of `cis`: BTstack's status
+    fn request_can_send(&self, cis: u16) -> u8;
     /// BIS can-send-now for every BIS of the BIG
     fn request_bis_can_send(&self, _big: u8) {}
     fn send(&self, cis: u16, sequence_number: u16, sdu: &[u8]) -> u8;
@@ -114,8 +123,8 @@ impl IsoOut for Stack {
         self.set_num_iso_packets_to_queue(packets);
     }
 
-    fn request_can_send(&self, cis: u16) {
-        self.request_cis_can_send_now(cis);
+    fn request_can_send(&self, cis: u16) -> u8 {
+        self.request_cis_can_send_now(cis)
     }
 
     fn request_bis_can_send(&self, big: u8) {
@@ -170,6 +179,8 @@ pub struct IsoSender {
     guard_waits: u64,
     guard_due_ms: Option<u32>,
     guard_late_ms: u32,
+    /// CIS requests asked again because the CIG was not active yet
+    cig_retries: u32,
     /// Published for BtHost::le_stream_stats
     stats_out: Arc<Mutex<LeStreamStats>>,
 }
@@ -225,6 +236,7 @@ impl IsoSender {
         self.guard_waits = 0;
         self.guard_due_ms = None;
         self.guard_late_ms = 0;
+        self.cig_retries = 0;
         self.publish();
         out.set_queue(queue_depth);
         self.timer_resolution = Some(HighTimerResolution::new());
@@ -267,6 +279,9 @@ impl IsoSender {
                 self.guard_waits,
                 self.guard_late_ms
             );
+        }
+        if self.cig_retries > 0 {
+            tracing::info!("LE Audio: asked {} time(s) again for the CIG to become active", self.cig_retries);
         }
     }
 
@@ -460,7 +475,7 @@ impl IsoSender {
         self.alive.iter().zip(&self.served).all(|(&alive, &served)| !alive || served)
     }
 
-    fn request_events(&self, out: &dyn IsoOut) {
+    fn request_events(&mut self, out: &dyn IsoOut) {
         if let Some(big) = self.big {
             out.request_bis_can_send(big);
             return;
@@ -468,7 +483,13 @@ impl IsoSender {
         // BTstack requests CAN_SEND_NOW for every CIS of the CIG from any of
         // its handles: take one that is still up
         if let Some(i) = self.alive.iter().position(|&a| a) {
-            out.request_can_send(self.cis_handles[i]);
+            let status = out.request_can_send(self.cis_handles[i]);
+            if status == ERROR_CODE_COMMAND_DISALLOWED {
+                // The CIG is not active yet (ISO data paths being set up)
+                self.cig_retries += 1;
+                tracing::debug!("LE Audio: CIG not active yet, asking again in {CIG_NOT_ACTIVE_RETRY_MS} ms");
+                out.timer_start(CIG_NOT_ACTIVE_RETRY_MS);
+            }
         }
     }
 
@@ -507,6 +528,8 @@ mod tests {
     struct Fake {
         now: Cell<u32>,
         log: RefCell<Vec<String>>,
+        /// CIS requests still refused with Command Disallowed (CIG not active)
+        refuse: Cell<u32>,
     }
 
     impl Fake {
@@ -522,8 +545,13 @@ mod tests {
         fn set_queue(&self, packets: u8) {
             self.log.borrow_mut().push(format!("queue {packets}"));
         }
-        fn request_can_send(&self, cis: u16) {
+        fn request_can_send(&self, cis: u16) -> u8 {
             self.log.borrow_mut().push(format!("request {cis:x}"));
+            if self.refuse.get() > 0 {
+                self.refuse.set(self.refuse.get() - 1);
+                return ERROR_CODE_COMMAND_DISALLOWED;
+            }
+            ERROR_CODE_SUCCESS
         }
         fn request_bis_can_send(&self, big: u8) {
             self.log.borrow_mut().push(format!("request BIG {big}"));
@@ -624,6 +652,25 @@ mod tests {
         assert_eq!(queue_depth_within(64, 2, QUEUE_DEPTH), 2);
         assert_eq!(queue_depth_within(3, 2, QUEUE_DEPTH), 1);
         assert_eq!(queue_depth_within(1, 2, QUEUE_DEPTH), 0);
+    }
+
+    #[test]
+    fn request_refused_before_the_cig_is_active_is_asked_again() {
+        let out = Fake::default();
+        out.refuse.set(2);
+        let mut s = IsoSender::new(Arc::new(Mutex::new(LeStreamStats::default())));
+        let q: SharedSduQueue = Arc::new(Mutex::new(SduQueue::new()));
+        q.lock().unwrap().configure(2, vec![vec![0xEE; 4]]);
+        s.start(&out, &[0x60], q, 10_000, 2);
+        assert_eq!(out.take(), ["queue 2", "request 60", "timer 1"]);
+        s.on_timer(&out);
+        assert_eq!(out.take(), ["request 60", "timer 1"]);
+        // Active now: no further retry
+        s.on_timer(&out);
+        assert_eq!(out.take(), ["request 60"]);
+        s.on_cis_can_send_now(&out, &can_send(0x60, true));
+        assert_eq!(out.take(), ["send 60 #0 ee", "request 60"]);
+        assert_eq!(s.cig_retries, 2);
     }
 
     #[test]

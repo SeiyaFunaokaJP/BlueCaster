@@ -155,7 +155,7 @@ The C libraries are git submodules; Rust crates and the UI's npm packages are fe
 
 | Library | Method | Pinned version | License |
 |:--------|:-------|:---------------|:--------|
-| BTstack | git submodule | v1.8.1-6-g5bc5cbdbe | BTstack License (BSD-3-Clause-style with a non-commercial clause) |
+| BTstack | git submodule | v1.8.3 | BTstack License (BSD-3-Clause-style with a non-commercial clause) |
 | Bluedroid SBC codec | encoder ported to Rust; the decoder (tests, tools) from BTstack's copy | as in BTstack | Apache-2.0 |
 | rijndael | bundled in BTstack (`3rd-party/rijndael`) | as in BTstack | Public domain |
 | liblc3 (lc3-google) | bundled in BTstack (`3rd-party/lc3-google`) | as in BTstack | Apache-2.0 |

@@ -156,7 +156,7 @@ C 程式庫是 git 子模組；Rust crate 與 UI 的 npm 套件由 Cargo 與 pnp
 
 | 程式庫 | 方式 | 固定版本 | 授權 |
 |:--------|:-------|:---------------|:--------|
-| BTstack | git 子模組 | v1.8.1-6-g5bc5cbdbe | BTstack License（類似 BSD-3-Clause，附非商業條款） |
+| BTstack | git 子模組 | v1.8.3 | BTstack License（類似 BSD-3-Clause，附非商業條款） |
 | Bluedroid SBC codec | 編碼器移植為 Rust；解碼器（測試、工具）取自 BTstack 隨附的副本 | 同 BTstack | Apache-2.0 |
 | rijndael | 隨附於 BTstack（`3rd-party/rijndael`） | 同 BTstack | 公眾領域 |
 | liblc3 (lc3-google) | 隨附於 BTstack（`3rd-party/lc3-google`） | 同 BTstack | Apache-2.0 |

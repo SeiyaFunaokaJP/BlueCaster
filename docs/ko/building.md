@@ -156,7 +156,7 @@ C 라이브러리는 git 서브모듈이며, Rust 크레이트와 UI의 npm 패�
 
 | 라이브러리 | 방식 | 고정 버전 | 라이선스 |
 |:-----------|:-----|:----------|:---------|
-| BTstack | git submodule | v1.8.1-6-g5bc5cbdbe | BTstack License (비상업적 조항이 있는 BSD-3-Clause 형식) |
+| BTstack | git submodule | v1.8.3 | BTstack License (비상업적 조항이 있는 BSD-3-Clause 형식) |
 | Bluedroid SBC codec | 인코더는 Rust로 포팅, 디코더(테스트, 도구)는 BTstack에 포함된 사본 사용 | BTstack과 동일 | Apache-2.0 |
 | rijndael | BTstack에 포함 (`3rd-party/rijndael`) | BTstack과 동일 | Public domain |
 | liblc3 (lc3-google) | BTstack에 포함 (`3rd-party/lc3-google`) | BTstack과 동일 | Apache-2.0 |

@@ -156,7 +156,7 @@ C のライブラリは git サブモジュールです。Rust のクレート�
 
 | ライブラリ | 取得方法 | 固定バージョン | ライセンス |
 |:--------|:-------|:---------------|:--------|
-| BTstack | git サブモジュール | v1.8.1-6-g5bc5cbdbe | BTstack License（非商用条項付きの BSD-3-Clause 類似ライセンス） |
+| BTstack | git サブモジュール | v1.8.3 | BTstack License（非商用条項付きの BSD-3-Clause 類似ライセンス） |
 | Bluedroid SBC コーデック | エンコーダーは Rust に移植。デコーダー（テスト、ツール）は BTstack 同梱のもの | BTstack に準拠 | Apache-2.0 |
 | rijndael | BTstack に同梱（`3rd-party/rijndael`） | BTstack に準拠 | パブリックドメイン |
 | liblc3 (lc3-google) | BTstack に同梱（`3rd-party/lc3-google`） | BTstack に準拠 | Apache-2.0 |

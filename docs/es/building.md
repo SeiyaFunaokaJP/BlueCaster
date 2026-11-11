@@ -156,7 +156,7 @@ Las bibliotecas en C son submódulos de git; Cargo y pnpm descargan los crates d
 
 | Biblioteca | Método | Versión fijada | Licencia |
 |:--------|:-------|:---------------|:--------|
-| BTstack | submódulo de git | v1.8.1-6-g5bc5cbdbe | Licencia de BTstack (tipo BSD-3-Clause con una cláusula no comercial) |
+| BTstack | submódulo de git | v1.8.3 | Licencia de BTstack (tipo BSD-3-Clause con una cláusula no comercial) |
 | Códec SBC de Bluedroid | codificador portado a Rust; el decodificador (pruebas, herramientas), de la copia incluida en BTstack | la de BTstack | Apache-2.0 |
 | rijndael | incluido en BTstack (`3rd-party/rijndael`) | la de BTstack | Dominio público |
 | liblc3 (lc3-google) | incluido en BTstack (`3rd-party/lc3-google`) | la de BTstack | Apache-2.0 |

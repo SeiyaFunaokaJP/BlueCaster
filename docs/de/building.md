@@ -156,7 +156,7 @@ Die C-Bibliotheken sind Git-Submodule; Rust-Crates und die npm-Pakete der Oberfl
 
 | Bibliothek | Methode | Feste Version | Lizenz |
 |:--------|:-------|:---------------|:--------|
-| BTstack | Git-Submodul | v1.8.1-6-g5bc5cbdbe | BTstack License (BSD-3-Clause-artig mit einer Klausel gegen kommerzielle Nutzung) |
+| BTstack | Git-Submodul | v1.8.3 | BTstack License (BSD-3-Clause-artig mit einer Klausel gegen kommerzielle Nutzung) |
 | Bluedroid-SBC-Codec | Encoder nach Rust portiert; der Decoder (Tests, Werkzeuge) aus der Kopie in BTstack | wie in BTstack | Apache-2.0 |
 | rijndael | in BTstack enthalten (`3rd-party/rijndael`) | wie in BTstack | Gemeinfrei (Public Domain) |
 | liblc3 (lc3-google) | in BTstack enthalten (`3rd-party/lc3-google`) | wie in BTstack | Apache-2.0 |

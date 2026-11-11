@@ -156,7 +156,7 @@ Les bibliothèques C sont des sous-modules git ; les crates Rust et les paquets 
 
 | Bibliothèque | Méthode | Version figée | Licence |
 |:--------|:-------|:---------------|:--------|
-| BTstack | sous-module git | v1.8.1-6-g5bc5cbdbe | BTstack License (de type BSD-3-Clause avec une clause non commerciale) |
+| BTstack | sous-module git | v1.8.3 | BTstack License (de type BSD-3-Clause avec une clause non commerciale) |
 | Codec SBC Bluedroid | encodeur porté en Rust ; le décodeur (tests, outils) provient de la copie de BTstack | celle de BTstack | Apache-2.0 |
 | rijndael | inclus dans BTstack (`3rd-party/rijndael`) | celle de BTstack | Domaine public |
 | liblc3 (lc3-google) | inclus dans BTstack (`3rd-party/lc3-google`) | celle de BTstack | Apache-2.0 |
