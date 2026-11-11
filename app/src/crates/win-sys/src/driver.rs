@@ -16,7 +16,8 @@
 //!    and select its "WinUsb Device" model (install section WINUSB)
 //! 4. DiInstallDevice
 //!
-//! Restoring: DiUninstallDevice, then CM_Reenumerate_DevNode on the parent
+//! Restoring: CM_Query_And_Remove_SubTree (the stop, timed on its own) and
+//! DiUninstallDevice, then CM_Reenumerate_DevNode on the parent
 //! (the hub): the device comes back as new and Windows ranks its drivers
 //! again, picking BTHUSB or the vendor driver. WinUSB was a manual choice
 //! (winusb.inf matches only `USB\MS_COMP_WINUSB`), so it is not picked
@@ -35,9 +36,10 @@
 use std::time::{Duration, Instant};
 
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
-    CM_Get_Parent, CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW, CM_REENUMERATE_ASYNCHRONOUS, CM_Reenumerate_DevNode,
-    CR_SUCCESS, DI_ENUMSINGLEINF, DI_FLAGSEX_ALLOWEXCLUDEDDRVS, DI_NEEDREBOOT, DI_NEEDRESTART, DICS_FLAG_GLOBAL,
-    DICS_PROPCHANGE, DIF_PROPERTYCHANGE, DIIDFLAG_NOFINISHINSTALLUI, DIREG_DEV, DiInstallDevice, DiUninstallDevice,
+    CM_Get_Parent, CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW, CM_Query_And_Remove_SubTreeW,
+    CM_REENUMERATE_ASYNCHRONOUS, CM_REMOVE_NO_RESTART, CM_REMOVE_UI_NOT_OK, CM_Reenumerate_DevNode, CR_SUCCESS,
+    DI_ENUMSINGLEINF, DI_FLAGSEX_ALLOWEXCLUDEDDRVS, DI_NEEDREBOOT, DI_NEEDRESTART, DICS_FLAG_GLOBAL, DICS_PROPCHANGE,
+    DIF_PROPERTYCHANGE, DIIDFLAG_NOFINISHINSTALLUI, DIREG_DEV, DiInstallDevice, DiUninstallDevice, PNP_VETO_TYPE,
     SP_CLASSINSTALL_HEADER, SP_DEVINFO_DATA, SP_DEVINSTALL_PARAMS_W, SP_DRVINFO_DATA_V2_W, SP_DRVINFO_DETAIL_DATA_W,
     SP_PROPCHANGE_PARAMS, SPDIT_CLASSDRIVER, SPDRP_CLASSGUID, SetupDiBuildDriverInfoList, SetupDiCallClassInstaller,
     SetupDiCreateDevRegKeyW, SetupDiDestroyDriverInfoList, SetupDiEnumDriverInfoW, SetupDiGetDeviceInstallParamsW,
@@ -763,12 +765,16 @@ fn undo_assign(
 /// restart is needed
 fn uninstall_and_reenumerate(set: &DevInfoSet, data: &SP_DEVINFO_DATA, instance_id: &str) -> Result<bool, DriverError> {
     // The parent (the hub port) must be found before the device is gone
-    let parent = locate(instance_id).and_then(|dev| {
+    let devnode = locate(instance_id);
+    let parent = devnode.and_then(|dev| {
         let mut parent = 0u32;
         // SAFETY: valid devinst and out pointer.
         (unsafe { CM_Get_Parent(&mut parent, dev, 0) } == CR_SUCCESS).then_some(parent)
     });
     tracing::debug!("driver: uninstalling {instance_id} (parent devnode {parent:?})");
+    if let Some(devnode) = devnode {
+        stop_device(devnode);
+    }
     let mut reboot = BOOL(0);
     let start = Instant::now();
     // SAFETY: valid set and element; no window, default flags (the driver
@@ -793,6 +799,42 @@ fn uninstall_and_reenumerate(set: &DevInfoSet, data: &SP_DEVINFO_DATA, instance_
         }
     }
     Ok(reboot.as_bool())
+}
+
+/// Takes the running device out before DiUninstallDevice, which otherwise
+/// does it inside: done apart, the log shows whether a slow restore (issue
+/// #86, MediaTek) is spent stopping the WinUSB stack or in the uninstall
+/// itself, and who refuses the removal if anyone does. A refusal is only
+/// logged: DiUninstallDevice still runs and asks for a restart if needed.
+fn stop_device(devnode: u32) {
+    let mut veto = PNP_VETO_TYPE(0);
+    let mut name = [0u16; 260];
+    let start = Instant::now();
+    // SAFETY: a devinst from CM_Locate_DevNode; out pointer and buffer valid
+    // for the call. No UI; the device stays removed until it is uninstalled.
+    let cr = unsafe {
+        CM_Query_And_Remove_SubTreeW(
+            devnode,
+            Some(&mut veto),
+            Some(&mut name),
+            CM_REMOVE_UI_NOT_OK | CM_REMOVE_NO_RESTART,
+        )
+    };
+    let ms = start.elapsed().as_millis();
+    if cr == CR_SUCCESS {
+        tracing::info!("driver: device stopped in {ms} ms");
+        return;
+    }
+    // App and service names are logged; device instance IDs and paths are not
+    let name = crate::autostart::utf16_string(&name);
+    let by = if name.is_empty() {
+        "-"
+    } else if name.contains('\\') {
+        "a device or file"
+    } else {
+        name.as_str()
+    };
+    tracing::info!("driver: stopping the device refused after {ms} ms: CR {}, veto type {}, by {by}", cr.0, veto.0);
 }
 
 /// Asks Windows to look for devices under `devinst` again, without waiting:
