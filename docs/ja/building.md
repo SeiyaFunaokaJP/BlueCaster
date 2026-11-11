@@ -165,7 +165,7 @@ C のライブラリは git サブモジュールです。Rust のクレート�
 | libopenaptx | git サブモジュール | 0.2.0（更新しないこと） | LGPL-2.1+ |
 | fdk-aac | git サブモジュール | v3.0.0 | FDK AAC License |
 | LHDC V5 エンコーダー | git サブモジュール | 固定したコミット | Apache-2.0 |
-| libopus | git サブモジュール | v1.5.2 | BSD-3-Clause |
+| libopus | git サブモジュール | v1.6.1 | BSD-3-Clause |
 | Tauri、SolidJS、Rust のクレート | Cargo / pnpm | `Cargo.lock`、`pnpm-lock.yaml` | MIT / Apache-2.0 など（リリースの `licenses/third-party/rust-crates.txt`） |
 
 {: .warning }

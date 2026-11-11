@@ -282,7 +282,7 @@ Windows Audio Session API で音声をリアルタイムに取り込みます。
 | LHDC V5 | lhdcv5-enc（AOSP エンコーダーの C 移植） | 400/500/900/1000 kbps（Low/Medium/Medium-High/High）、シンクが通知する最大以下、ABR 160–400 kbps | 16/24 bit、5 ms フレーム、2 バイトのメディアペイロードヘッダー、RTP ヘッダー |
 | LDAC | libldac (AOSP) | 330/660/990 kbps | High/Medium/Low（HQ/SQ/MQ）モード、ABR |
 | aptX Adaptive | aptx-adaptive（AKS-Logic/aptx-adaptive-linux の純 Rust のエンコーダー、MIT） | High 427 kbps、Low Latency 265 kbps（R2 のシンク: 270）。ABR で 364/318 に下がる（R2: 270/204） | 48 kHz ステレオ（選んだときは、96 kHz を通知する R2 のシンクへ High で 96 kHz: 646/340/255 kbps）、24 bit。メディアパケット 1 つにコーデックのパケット 1 つ、BlueCaster 自身の RTP ヘッダー付き。High で ABR。自動では LHDC V5 と LDAC の次に選ぶ |
-| Opus | libopus 1.5.2 | 256 kbps（ステレオ。モノラルは半分） | Android の A2DP Opus: 48 kHz、20 ms フレーム（シンクが 10 ms だけならそれ）、メディアペイロードに収まる上限付きの制約付き VBR、1 パケットに 1 フレーム、1 バイトのメディアペイロードヘッダー、RTP ヘッダー |
+| Opus | libopus 1.6.1 | 256 kbps（ステレオ。モノラルは半分） | Android の A2DP Opus: 48 kHz、20 ms フレーム（シンクが 10 ms だけならそれ）、メディアペイロードに収まる上限付きの制約付き VBR、1 パケットに 1 フレーム、1 バイトのメディアペイロードヘッダー、RTP ヘッダー |
 | aptX HD | libopenaptx | 576 kbps | 24 bit 入力、固定レート、RTP ヘッダー |
 | aptX | libopenaptx | 352/384 kbps（44.1/48 kHz） | 16 bit ステレオ、RTP ヘッダーなし |
 | aptX LL | libopenaptx | 352 kbps | 約 32 ms の遅延、RTP ヘッダーなし、パケットは約 7.5 ms 以下 |

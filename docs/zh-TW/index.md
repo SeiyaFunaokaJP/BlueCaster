@@ -66,7 +66,7 @@ has_toc: false
 **關於 LHDC V5。** 它使用 Google 加入 Android 17 的 LHDC V5 編碼器（AOSP，Apache-2.0）的 C 語言移植版；此移植版已與 AOSP 的 Rust 編碼器比對驗證為位元完全一致，A2DP 訊號則依照 Android 的 `a2dp_vendor_lhdcv5`。已有使用者在 v1.1.1-beta.1 上以實際的 LHDC V5 耳機驗證，可在 1000 kbps / 192 kHz 下運作（[#50](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/50)）；v2 使用相同的編碼器。僅支援有損的 LHDC V5：LHDC V2/V3（較舊的耳機）與無損的「LHDC-RAW」模式沒有開放原始碼的編碼器。在「自動」模式下，LHDC V5 的優先順序最高，高於 LDAC。
 
 {: .warning }
-**Opus** 是 Android 的 A2DP Opus 廠商轉碼器（Android 13 以上，廠商 ID 0x000000E0 Google）：48 kHz、20 ms 訊框，依 Android 的要求以 256 kbps 立體聲傳送（標準 192 kbps、行動 128 kbps），使用 libopus 1.5.2 編碼。它通過了針對虛擬接收端的端對端測試，但尚未在實際的 Opus 耳機上驗證。在「自動」模式下，其優先順序低於 aptX Adaptive，高於 aptX HD。
+**Opus** 是 Android 的 A2DP Opus 廠商轉碼器（Android 13 以上，廠商 ID 0x000000E0 Google）：48 kHz、20 ms 訊框，依 Android 的要求以 256 kbps 立體聲傳送（標準 192 kbps、行動 128 kbps），使用 libopus 1.6.1 編碼。它通過了針對虛擬接收端的端對端測試，但尚未在實際的 Opus 耳機上驗證。在「自動」模式下，其優先順序低於 aptX Adaptive，高於 aptX HD。
 
 {: .warning }
 **Opus 05** 是 PipeWire 自有的 A2DP Opus 廠商轉碼器（廠商 ID 0x000005F1，轉碼器 0x1005；PipeWire 的 `opus_05`），只有 PipeWire 實作了它，因此接收端必須是以 PipeWire 作為 A2DP 接收端的 PC。BlueCaster 只傳送立體聲音樂方向（沒有 5.1 / 7.1，也沒有回傳通道）：48 kHz、10 ms 訊框（接收端只支援 20 ms 時用 20 ms），編碼器與位元率和 Opus 相同，並限制在接收端的上限以內。「自動」不會選擇它；請在 **編解碼器** 畫面或用 `-c opus05` 選擇。它已通過針對提供 PipeWire 能力的虛擬接收端的端對端測試，但尚未在實際的 PipeWire 接收端上試過。作為 A2DP 接收端的 PipeWire 自 0.3.57 起可解碼 Opus 05，自 1.2.0 起可解碼 Android 的 Opus（`opus_g`）：Ubuntu 24.04 LTS 內附 PipeWire 1.0.5（僅 Opus 05），Ubuntu 25.10（1.4.7）與 26.04 LTS（1.6.2）兩者皆有；兩者都尚未用 BlueCaster 驗證。

@@ -165,7 +165,7 @@ Las bibliotecas en C son submódulos de git; Cargo y pnpm descargan los crates d
 | libopenaptx | submódulo de git | 0.2.0 (no actualizar) | LGPL-2.1+ |
 | fdk-aac | submódulo de git | v3.0.0 | FDK AAC License |
 | Codificador LHDC V5 | submódulo de git | la fijada | Apache-2.0 |
-| libopus | submódulo de git | v1.5.2 | BSD-3-Clause |
+| libopus | submódulo de git | v1.6.1 | BSD-3-Clause |
 | Tauri, SolidJS, crates de Rust | Cargo / pnpm | `Cargo.lock`, `pnpm-lock.yaml` | MIT / Apache-2.0 y otras (`licenses/third-party/rust-crates.txt` en la versión publicada) |
 
 {: .warning }

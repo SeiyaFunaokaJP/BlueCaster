@@ -117,7 +117,7 @@ fn check(code: i32) -> Result<i32, Error> {
     if code < 0 { Err(Error(code)) } else { Ok(code) }
 }
 
-/// The libopus version, e.g. "libopus 1.5.2"
+/// The libopus version, e.g. "libopus 1.6.1"
 pub fn version() -> String {
     // SAFETY: returns a static NUL-terminated string
     unsafe { std::ffi::CStr::from_ptr(ffi::opus_get_version_string()) }.to_string_lossy().into_owned()
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn version_is_the_submodule() {
-        assert!(version().starts_with("libopus 1.5"), "{}", version());
+        assert!(version().starts_with("libopus 1.6"), "{}", version());
     }
 
     #[test]

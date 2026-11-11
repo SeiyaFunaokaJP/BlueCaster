@@ -165,7 +165,7 @@ C 库以 git 子模块的形式包含；Rust crate 和 UI 的 npm 软件包由 C
 | libopenaptx | git 子模块 | 0.2.0（请勿更新） | LGPL-2.1+ |
 | fdk-aac | git 子模块 | v3.0.0 | FDK AAC License |
 | LHDC V5 编码器 | git 子模块 | 以固定的版本为准 | Apache-2.0 |
-| libopus | git 子模块 | v1.5.2 | BSD-3-Clause |
+| libopus | git 子模块 | v1.6.1 | BSD-3-Clause |
 | Tauri、SolidJS、Rust crate | Cargo / pnpm | `Cargo.lock`、`pnpm-lock.yaml` | MIT / Apache-2.0 等（见发布包中的 `licenses/third-party/rust-crates.txt`） |
 
 {: .warning }

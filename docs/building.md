@@ -164,7 +164,7 @@ The C libraries are git submodules; Rust crates and the UI's npm packages are fe
 | libopenaptx | git submodule | 0.2.0 (do not update) | LGPL-2.1+ |
 | fdk-aac | git submodule | v3.0.0 | FDK AAC License |
 | LHDC V5 encoder | git submodule | as pinned | Apache-2.0 |
-| libopus | git submodule | v1.5.2 | BSD-3-Clause |
+| libopus | git submodule | v1.6.1 | BSD-3-Clause |
 | Tauri, SolidJS, Rust crates | Cargo / pnpm | `Cargo.lock`, `pnpm-lock.yaml` | MIT / Apache-2.0 and others (`licenses/third-party/rust-crates.txt` in the release) |
 
 {: .warning }
