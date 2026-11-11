@@ -1880,6 +1880,7 @@ impl UnicastEnv for LeCtx<'_> {
                     UnicastTimer::Step => u.on_timeout(env),
                     UnicastTimer::Drop => u.drop_cis(env),
                     UnicastTimer::Refresh => u.on_refresh(env),
+                    UnicastTimer::Remove => u.on_remove_timer(env),
                 });
             }),
         );

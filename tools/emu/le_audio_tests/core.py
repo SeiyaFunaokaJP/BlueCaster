@@ -5,6 +5,9 @@ import re
 
 from .case import MONO_TONES, Case
 
+# bluecaster.log of the cis-refused cases: the CIG removed, then the error
+CIS_REFUSED = r'(?s)CIG 1 removed.*cannot stream: CIS 0x[0-9a-f]+ could not be established \(0x1e\)'
+
 CASES = [
     # One headset, one 2-channel ASE: 1 CIS, LC3 48_6_2 (the best media preset)
     Case('stereo', 'stereo', r'LC3 48000 Hz 10 ms 155 octets, 2 channel\(s\) over 1 CIS'),
@@ -36,6 +39,15 @@ CASES = [
     # A controller with LE but no ISO buffers (LE Read Buffer Size v2: 0):
     # BlueCaster must refuse LE Audio with an error that names ISO
     Case('no-iso-buffers', 'stereo', r'.*', sink_args=['--no-iso-buffers'], expect_error=r'ISO'),
+    # The controller refuses the second of two CIS (0x1E) while the first
+    # comes up (issue #86: BTstack crashed on the refused CIS's handle):
+    # BlueCaster must drop the first CIS, remove the CIG and report the CIS
+    Case('cis-refused', 'earbuds', r'.*', sink_args=['--refuse-cis', '1'], expect_error=CIS_REFUSED),
+    # The same with the first CIS up only after the tear-down reached the
+    # CIG removal: asked of BTstack inside that CIS's event, the removal was
+    # lost (no LE Remove CIG)
+    Case('cis-refused-late', 'earbuds', r'.*', sink_args=['--refuse-cis', '1', '--cis-up-after', '0.5'],
+         expect_error=CIS_REFUSED),
 ]
 
 # The emulator's PACS Sink Audio Locations per sink, in capture order

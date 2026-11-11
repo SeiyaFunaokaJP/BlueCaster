@@ -436,10 +436,12 @@ pub enum UnicastTimer {
     Drop,
     /// Reading the ASEs again while stopping ([`Unicast::on_refresh`])
     Refresh,
+    /// The CIG removal put off in a CIS event ([`Unicast::on_remove_timer`])
+    Remove,
 }
 
 impl UnicastTimer {
-    pub(crate) const ALL: usize = 3;
+    pub(crate) const ALL: usize = 4;
 }
 
 /// What the state machine needs of the LE core
@@ -490,6 +492,8 @@ pub struct Unicast {
     cig_removing: bool,
     /// GAP_SUBEVENT_CIS_CREATED still to come
     cis_pending: usize,
+    /// Inside on_cis_created (BTstack is still handling the CIS event)
+    in_cis_event: bool,
     cis_up: usize,
     /// start() not reported yet
     starting: bool,
@@ -647,6 +651,7 @@ impl Unicast {
         self.cis_to_drop.clear();
         self.cis_dropping.clear();
         env.disarm(UnicastTimer::Drop);
+        env.disarm(UnicastTimer::Remove);
         self.enter(env, Phase::ConfigCodec);
     }
 
@@ -1076,6 +1081,13 @@ impl Unicast {
             );
             return;
         }
+        // ... nor from inside its CIS event: BTstack sets the CIG's state
+        // right after it, which undoes the removal (no LE Remove CIG)
+        if self.in_cis_event && !self.cig_removing {
+            tracing::debug!("LE Audio: CIG removal waits for the end of the CIS event");
+            env.arm(UnicastTimer::Remove, 1);
+            return;
+        }
         if !self.cig_removing {
             let cig_id = self.plan.as_ref().map_or(1, |p| p.cig_id);
             let status = env.cig_remove(cig_id);
@@ -1292,6 +1304,13 @@ impl Unicast {
         }
     }
 
+    /// The CIS event that put the CIG removal off is done
+    pub fn on_remove_timer(&mut self, env: &mut dyn UnicastEnv) {
+        if self.phase == Phase::RemoveCig {
+            self.try_remove_cig(env);
+        }
+    }
+
     /// LE Remove CIG completed
     pub fn on_cig_removed(&mut self, env: &mut dyn UnicastEnv) {
         if !self.cig_removing {
@@ -1312,6 +1331,7 @@ impl Unicast {
         env.disarm(UnicastTimer::Step);
         env.disarm(UnicastTimer::Drop);
         env.disarm(UnicastTimer::Refresh);
+        env.disarm(UnicastTimer::Remove);
         self.waiting_contexts = false;
         self.cis_connected.clear();
         self.cis_to_drop.clear();
@@ -1588,6 +1608,7 @@ impl Unicast {
             return;
         }
         self.cis_pending -= 1;
+        self.in_cis_event = true;
         if ev.status != 0 {
             let why = format!("CIS 0x{:04x} could not be established (0x{:02x})", ev.cis_handle, ev.status);
             if self.phase == Phase::CreateCis {
@@ -1603,8 +1624,14 @@ impl Unicast {
                 ev.cis_handle,
                 ev.iso_interval_1250us
             );
+            if matches!(self.phase, Phase::Release | Phase::RemoveCig) {
+                // Up after Release dropped the others: dropped as they were
+                self.cis_to_drop.push(ev.cis_handle);
+                self.drop_cis(env);
+            }
         }
         self.advance(env);
+        self.in_cis_event = false;
     }
 
     /// An ACL or CIS of the stream went down
@@ -1741,8 +1768,10 @@ mod tests {
             self.log.push(format!("streaming {streaming}"));
         }
         fn arm(&mut self, timer: UnicastTimer, ms: u32) {
-            if timer == UnicastTimer::Drop {
-                self.log.push(format!("arm drop {ms}"));
+            match timer {
+                UnicastTimer::Drop => self.log.push(format!("arm drop {ms}")),
+                UnicastTimer::Remove => self.log.push(format!("arm remove {ms}")),
+                _ => {}
             }
         }
         fn disarm(&mut self, _timer: UnicastTimer) {}
@@ -2225,6 +2254,58 @@ mod tests {
         env2.can_send = true;
         u2.drop_cis(&mut env2);
         assert_eq!(env2.take(), ["disconnect 60", "disconnect 61"]);
+    }
+
+    /// The second CIS refused, the stream torn down as far as the CIG
+    /// removal, which waits for the first CIS's event
+    fn refused_and_waiting_to_remove(u: &mut Unicast, env: &mut Fake) -> Outcome {
+        let outcome = start(u, env);
+        both(u, env, AseState::CodecConfigured);
+        u.on_cig_created(env, &cig_created(1, &[0x60, 0x61]));
+        both(u, env, AseState::QosConfigured);
+        both(u, env, AseState::Enabling);
+        env.take();
+        u.on_cis_created(env, &cis_created(1, 0x61, 0x1E));
+        assert_eq!(u.phase(), Phase::Disable);
+        assert_eq!(env.take(), ["stop sending", "Disable dev 0 [05, 01]", "Disable dev 1 [05, 01]"]);
+        both(u, env, AseState::QosConfigured);
+        assert_eq!(env.take(), ["Release dev 0 [08, 01]", "Release dev 1 [08, 01]"]);
+        both(u, env, AseState::Idle);
+        assert_eq!(u.phase(), Phase::RemoveCig);
+        assert!(env.take().is_empty(), "one CIS event is still to come");
+        outcome
+    }
+
+    #[test]
+    fn a_cis_up_while_the_cig_removal_waits_is_dropped_before_it() {
+        let mut env = Fake::new(vec![device(0, 0x40, &[1], CONTEXT_MEDIA), device(1, 0x41, &[1], CONTEXT_MEDIA)]);
+        let mut u = Unicast::default();
+        let outcome = refused_and_waiting_to_remove(&mut u, &mut env);
+        // BTstack would undo a removal asked for inside this event
+        u.on_cis_created(&mut env, &cis_created(1, 0x60, 0));
+        assert_eq!(env.take(), ["disconnect 60"]);
+        u.on_link_lost(&mut env, 0x60);
+        assert_eq!(env.take(), ["cis down 60", "cig remove 1"]);
+        u.on_cig_removed(&mut env);
+        assert_eq!(u.phase(), Phase::Idle);
+        let r = outcome.borrow().clone().unwrap();
+        assert_eq!(r.unwrap_err(), "CIS 0x0061 could not be established (0x1e)");
+    }
+
+    #[test]
+    fn the_last_cis_refused_while_the_cig_removal_waits_removes_it_after_the_event() {
+        let mut env = Fake::new(vec![device(0, 0x40, &[1], CONTEXT_MEDIA), device(1, 0x41, &[1], CONTEXT_MEDIA)]);
+        let mut u = Unicast::default();
+        refused_and_waiting_to_remove(&mut u, &mut env);
+        u.on_cis_created(&mut env, &cis_created(1, 0x60, 0x1E));
+        assert_eq!(env.take(), ["arm remove 1"]);
+        u.on_remove_timer(&mut env);
+        assert_eq!(env.take(), ["cig remove 1"]);
+        // The timer again changes nothing
+        u.on_remove_timer(&mut env);
+        assert!(env.take().is_empty());
+        u.on_cig_removed(&mut env);
+        assert_eq!(u.phase(), Phase::Idle);
     }
 
     #[test]
