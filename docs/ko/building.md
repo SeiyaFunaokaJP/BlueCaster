@@ -55,6 +55,8 @@ cargo build --release -p bluecaster-ui
 git submodule update --init --recursive
 ```
 
+라이브러리를 업데이트하는 pull 뒤에도 다시 실행하세요. `extern/`의 라이브러리가 `extern/versions.txt`에 적힌 커밋이 아니면 빌드가 멈추고, 그래도 다른 버전으로 빌드하는 방법을 메시지로 알려 줍니다.
+
 ## 프로젝트 구조 {#project-structure}
 
 ```

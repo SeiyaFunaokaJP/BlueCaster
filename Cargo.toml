@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "app/src/crates/extern-version",
     "app/src/crates/btstack-sys",
     "app/src/crates/ldac-sys",
     "app/src/crates/openaptx-sys",
@@ -38,6 +39,7 @@ publish = false
 
 [workspace.dependencies]
 btstack-sys = { path = "app/src/crates/btstack-sys" }
+extern-version = { path = "app/src/crates/extern-version" }
 hci-transport = { path = "app/src/crates/hci-transport" }
 # Members opt in to codecs: core takes "default", the others only what they use
 codec = { path = "app/src/crates/codec", default-features = false }

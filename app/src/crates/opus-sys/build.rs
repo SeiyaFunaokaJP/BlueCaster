@@ -33,6 +33,7 @@ fn main() {
         "libopus not found at {} (git submodule update --init extern/opus)",
         dir.display()
     );
+    extern_version::check(&manifest, "opus", &dir);
 
     let mut sources = Vec::new();
     for (file, list) in LISTS {

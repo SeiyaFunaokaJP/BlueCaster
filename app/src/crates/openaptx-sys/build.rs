@@ -24,6 +24,7 @@ fn main() {
         "libopenaptx not found at {} (git submodule update --init extern/libopenaptx)",
         dir.display()
     );
+    extern_version::check(&manifest, "libopenaptx", &dir);
 
     // Releases up to v1.0.4 were mistakenly built with 0.2.1 (GPL-3.0): check
     // the version in the header before compiling anything

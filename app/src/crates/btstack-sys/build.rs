@@ -119,6 +119,7 @@ fn main() {
         "BTstack not found at {} (git submodule update --init extern/btstack)",
         btstack.display()
     );
+    extern_version::check(&manifest, "btstack", &btstack);
     let csrc = manifest.join("csrc");
 
     let mut build = cc::Build::new();
