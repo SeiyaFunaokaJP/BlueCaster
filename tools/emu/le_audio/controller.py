@@ -24,6 +24,11 @@ between the two controllers of a LocalLink. LeEmuController adds that:
     has no class for, and BTstack then waited for ever.
   - with --no-iso-buffers (le_audio/__init__.py) the "BlueCaster" controller
     reports no ISO buffers in LE Read Buffer Size v2 (LE without ISO).
+  - with --refuse-cis N the central's controller answers the Nth CIS of an
+    LE Create CIS with LE CIS Established, status 0x1E, while the others
+    come up; with --cis-up-after they come up that much later, on the
+    central's side only (the sink has released its ASEs by then and would
+    not accept them).
 
 PacketLoggerSnooper also writes ISO data (PacketLogger types 0x0c / 0x0d),
 which bluecaster_decode --le-audio reads.
@@ -37,7 +42,7 @@ import struct
 import sys
 import time
 
-from bumble import core, hci
+from bumble import core, hci, ll
 from bumble.link import LocalLink
 from bumble.snoop import Snooper
 
@@ -89,6 +94,9 @@ STALL_S = 0.003      # heartbeat later than this: the event loop stalled (timer 
 LATE_LOG_MAX = 20    # late SDU lines per CIS (then every 100th)
 # Names of the controllers that report no ISO buffers (--no-iso-buffers)
 NO_ISO_BUFFERS = set()
+# --refuse-cis / --cis-up-after: (index of the refused CIS in LE Create CIS,
+# seconds until the others are up or None for the usual way), or None
+REFUSE_CIS = None
 
 
 class LeEmuController(EmuController):
@@ -184,6 +192,45 @@ class LeEmuController(EmuController):
                 rtn_p_to_c=command.rtn_p_to_c[i],
             )
         return super().on_hci_le_set_cig_parameters_command(command)
+
+    def on_hci_le_create_cis_command(self, command):
+        handles = list(command.cis_connection_handle)
+        if REFUSE_CIS is None or REFUSE_CIS[0] >= len(handles):
+            return super().on_hci_le_create_cis_command(command)
+        refused, up_after = REFUSE_CIS
+        loop = asyncio.get_running_loop()
+        for i, (cis_handle, acl_handle) in enumerate(zip(handles, command.acl_connection_handle)):
+            if i == refused:
+                continue
+            cis_link = self.central_cis_links[cis_handle]
+            cis_link.acl_connection = self.find_connection_by_handle(acl_handle)
+            if up_after is None:
+                cis_link.acl_connection.send_ll_control_pdu(ll.CisReq(cig_id=cis_link.cig_id, cis_id=cis_link.cis_id))
+            else:
+                loop.call_later(up_after, self.on_le_cis_established, cis_link.cig_id, cis_link.cis_id)
+        self._send_hci_command_status(hci.HCI_COMMAND_STATUS_PENDING, command.op_code)
+        log.info('refusing CIS 0x%04x with 0x1E (--refuse-cis)', handles[refused])
+        self.send_hci_packet(
+            hci.HCI_LE_CIS_Established_Event(
+                status=hci.HCI_ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR,
+                connection_handle=handles[refused],
+                cig_sync_delay=0,
+                cis_sync_delay=0,
+                transport_latency_c_to_p=0,
+                transport_latency_p_to_c=0,
+                phy_c_to_p=0,
+                phy_p_to_c=0,
+                nse=0,
+                bn_c_to_p=0,
+                bn_p_to_c=0,
+                ft_c_to_p=0,
+                ft_p_to_c=0,
+                max_pdu_c_to_p=0,
+                max_pdu_p_to_c=0,
+                iso_interval=0,
+            )
+        )
+        return None
 
     def on_le_cis_established(self, cig_id, cis_id):
         cis_link = next(

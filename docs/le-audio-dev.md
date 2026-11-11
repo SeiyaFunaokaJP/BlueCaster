@@ -353,10 +353,12 @@ controller (H4 over TCP) and one or two sinks on a Bumble `LocalLink`:
 
 It prints `READY 127.0.0.1:P sinks=<addr>[,<addr>]`. Options:
 `--ascs-release-waits-for-cis`, `--drop-link-after S`, `--privacy`,
-`--no-iso-buffers`, `--mic [SINKS]` / `--mic-rates` (a microphone: Source
-PAC 16 / 32 kHz 10 ms, a source ASE, a 1 kHz tone sent from pre-encoded LC3
-frames in `le_audio/mic_frames.py` once BlueCaster wrote Receiver Start
-Ready), and the profiles' own (`--csip-set`, `--vcp`, `--mcp-client`,
+`--no-iso-buffers`, `--refuse-cis N` / `--cis-up-after S` (the controller
+refuses the Nth CIS of LE Create CIS with 0x1E; the others come up, with
+`--cis-up-after` only S seconds later), `--mic [SINKS]` / `--mic-rates` (a
+microphone: Source PAC 16 / 32 kHz 10 ms, a source ASE, a 1 kHz tone sent
+from pre-encoded LC3 frames in `le_audio/mic_frames.py` once BlueCaster
+wrote Receiver Start Ready), and the profiles' own (`--csip-set`, `--vcp`, `--mcp-client`,
 `--ccp`, `--tmap-role`, `--gmap-role`, ...; see each `le_audio/<profile>.py`).
 
 Emulator facts to know:
@@ -392,7 +394,7 @@ tools\emu\.venv\Scripts\python.exe tools\emu\run_test.py --le-audio stereo earbu
 tools\emu\.venv\Scripts\python.exe tools\emu\run_test.py          # the A2DP codecs: must keep passing
 ```
 
-`--le-audio` without names runs all 44 cases; CI runs them after the A2DP set
+`--le-audio` without names runs all 51 cases; CI runs them after the A2DP set
 (`.github/workflows/ci.yml`, emulator job). Each case gets its own config
 folder (`BLUECASTER_CONFIG_DIR=<out>/le-<case>/config`), so nothing touches
 `%APPDATA%\BlueCaster`. Parallel runs need distinct `--base-port`s (each case
@@ -402,7 +404,7 @@ uses its own port from there). Per case `<out>/le-<case>/` has
 
 | File | Cases |
 |------|-------|
-| `core.py` | `stereo`, `two-ase`, `earbuds`, `mono-16k`, `link-loss`, `release-cis`, `contexts-later`, `afh`, `no-iso-buffers` |
+| `core.py` | `stereo`, `two-ase`, `earbuds`, `mono-16k`, `link-loss`, `release-cis`, `contexts-later`, `afh`, `no-iso-buffers`, `cis-refused`, `cis-refused-late` |
 | `privacy.py` | `privacy-rpa` |
 | `csip.py` | `csip-set`, `csip-encrypted-sirk`, `csip-missing-member`, `csip-both-named`, `csip-link-loss`, `csip-lock-denied`, `csip-no-lock` |
 | `vcp.py` | `vcp-set`, `vcp-remote`, `vcp-change-counter`, `vcp-earbuds`, `vcp-press-during-write`, `vcp-press-before-write` |
@@ -600,6 +602,10 @@ Users with the setting off get the behaviour of a build without LE:
   "succeeds" without sending LE Remove CIG); btstack-sys has 4 CIG slots,
   freed when LE Remove CIG is sent, after a failed CIG_CREATED or at power
   off.
+- `gap_cig_remove` inside `GAP_SUBEVENT_CIS_CREATED` is lost: `hci.c` sets
+  the CIG's state right after it emitted the event. `bap.rs` puts the
+  removal off until the event is done (`UnicastTimer::Remove`) and drops a
+  CIS that came up while stopping itself.
 - Only one LE connection can be set up at a time: connect set members one
   after the other.
 - LE ACL buffers can be small (27 bytes in the emulator): GATT writes are
