@@ -41,6 +41,8 @@ sha2 = "0.10"
 [dev-dependencies]
 # le_stream.rs tests: a microphone ring without a stack
 rtrb.workspace = true
+# receiver.rs tests: a port that refuses, held for the whole test
+socket2.workspace = true
 
 [lints]
 workspace = true
