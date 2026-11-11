@@ -814,7 +814,12 @@ impl HostApp {
         let state = stack.acl_state(&addr);
         tracing::debug!("drop ACL: {} {state:?}", addr_str(&addr));
         match state {
-            AclState::Open(handle) => stack.disconnect(handle) == ERROR_CODE_SUCCESS,
+            AclState::Open(handle) => {
+                // Logged here, before HCI Disconnect: its Disconnection
+                // Complete can be logged before the caller's thread goes on
+                tracing::info!("dropping the ACL link");
+                stack.disconnect(handle) == ERROR_CODE_SUCCESS
+            }
             _ => false,
         }
     }
