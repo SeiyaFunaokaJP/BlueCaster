@@ -772,6 +772,7 @@ fn error_json(kind: &str, message: &str) -> Value {
 #[serde(default)]
 struct RecordJson {
     inf_name: String,
+    inf_section: String,
     version: String,
     service: String,
     provider: String,
@@ -783,6 +784,7 @@ impl From<&DriverRecord> for RecordJson {
     fn from(r: &DriverRecord) -> Self {
         RecordJson {
             inf_name: r.inf_name.clone(),
+            inf_section: r.inf_section.clone(),
             version: r.version.clone(),
             service: r.service.clone(),
             provider: r.provider.clone(),
@@ -796,6 +798,7 @@ impl From<RecordJson> for DriverRecord {
     fn from(r: RecordJson) -> Self {
         DriverRecord {
             inf_name: r.inf_name,
+            inf_section: r.inf_section,
             version: r.version,
             service: r.service,
             provider: r.provider,
@@ -1107,6 +1110,7 @@ mod tests {
     fn previous_record_roundtrip() {
         let record = DriverRecord {
             inf_name: "oem28.inf".into(),
+            inf_section: "ibtusb.NT".into(),
             version: "24.40.11.1".into(),
             service: "BTHUSB".into(),
             provider: "Intel Corporation".into(),
