@@ -124,11 +124,11 @@ export function DeviceSettings(props: { device: Device }) {
     setSaving(false);
   };
 
-  /** The device the microphone plays into, while it is on: not offered as
-   *  the source (issue #86) */
+  /** The device the microphone plays into, while it is on (not muted):
+   *  not offered as the source (issue #86) */
   const micDevice = () => {
     const p = audioEntries(snap()).find((x) => x.key === deviceKey(props.device))?.profile;
-    return p && headsetMode(p) !== "off" ? p.mic_device_id : "";
+    return p && !p.mic_muted && headsetMode(p) !== "off" ? p.mic_device_id : "";
   };
   /** The sound devices (the Windows default first), the virtual devices
    *  and the playing apps in one list (issue #86: no "Loopback") */

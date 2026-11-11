@@ -5,21 +5,22 @@
 // that the user can tell it is their donationware, so its origin is said
 // beside the button (https://vb-audio.com/Services/licensing.htm). Where the
 // download fails, VB-Audio's page is offered instead. The Hi-Fi Cable is
-// only linked. The pages show one line and keep the rest in a dialog;
-// Settings keeps both cables.
+// only linked. The pages show one line and keep the rest in a dialog. The
+// line stays while a cable is missing (issue #86: other ways to the
+// microphone only bring bug reports); Developer > Hide the virtual sound
+// devices warning removes it. About names both as VB-Audio's donationware.
 
-import { createSignal, type JSX, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { useApp } from "../app/context";
-import { saveSettings } from "../app/settings";
 import { t } from "../i18n";
-import type { AudioDevice } from "../ipc/types";
+import type { AudioDevice, Settings } from "../ipc/types";
 import { LINKS } from "../lib/links";
 import { hifiCable, vbCable } from "../lib/profile";
-import { Button, Dialog, IconButton } from "./controls";
+import { Button, Dialog } from "./controls";
 import { Icon } from "./Icon";
 
 /** VB-Audio's name for it, and that it is donationware: a link to its site */
-function Origin(props: { text: string; url: string }) {
+export function Origin(props: { text: string; url: string }) {
   const { core } = useApp();
   return (
     <p class="hint cable-origin">
@@ -112,27 +113,29 @@ function HifiCableNote() {
   );
 }
 
+/** The warning hidden on the Developer page (developer mode only) */
+export function cableWarningHidden(
+  s: Pick<Settings, "developer_mode" | "vb_cable_note_hidden" | "hifi_cable_note_hidden">,
+): boolean {
+  return s.developer_mode && (s.vb_cable_note_hidden || s.hifi_cable_note_hidden);
+}
+
 /** One amber line while a cable is missing (`devices`: Windows' outputs,
- *  null until read), until closed; Learn more opens the suggestions for the
- *  missing ones (issue #86: the notes made the pages too busy). */
+ *  null until read); Learn more opens the suggestions for the missing ones
+ *  (issue #86: the notes made the pages too busy). It cannot be closed. */
 export function CableNotes(props: { devices: readonly AudioDevice[] | null; reload: () => void }) {
   const app = useApp();
   const s = () => app.core.state.snap!.settings;
   const [open, setOpen] = createSignal(false);
   const noVb = () => props.devices !== null && vbCable(props.devices) === null;
   const noHifi = () => props.devices !== null && hifiCable(props.devices) === null;
-  const shown = () => (noVb() && !s().vb_cable_note_hidden) || (noHifi() && !s().hifi_cable_note_hidden);
+  const shown = () => (noVb() || noHifi()) && !cableWarningHidden(s());
   return (
     <Show when={shown()}>
       <div class="banner banner-warn cable-banner">
         <Icon name="warning" class="banner-icon" />
         <span class="cable-banner-text">{t("cables.recommended")}</span>
         <Button onClick={() => setOpen(true)}>{t("cables.learn_more")}</Button>
-        <IconButton
-          icon="dismiss"
-          label={t("modal.close")}
-          onClick={() => void saveSettings(app, { vb_cable_note_hidden: true, hifi_cable_note_hidden: true })}
-        />
       </div>
       <Dialog open={open()} title={t("cables.title")} onCancel={() => setOpen(false)}>
         <div class="cable-dialog">
@@ -148,48 +151,12 @@ export function CableNotes(props: { devices: readonly AudioDevice[] | null; relo
   );
 }
 
-/** Settings' rows: either cable, installed or not, also after its suggestion
- *  was closed */
-export function CableSettings() {
-  const app = useApp();
-  const [devices, setDevices] = createSignal<AudioDevice[] | null>(null);
-  const load = () =>
-    app.core
-      .request("audio.devices")
-      .then(setDevices)
-      .catch(() => {});
-  void load();
-  const row = (name: string, installed: () => boolean, action: () => JSX.Element, origin: () => JSX.Element) => (
-    <div class="row">
-      <span class="row-text">
-        <span class="row-label">{name}</span>
-        {origin()}
-      </span>
-      <Show when={devices() !== null}>
-        <Show when={!installed()} fallback={<span class="hint">{t("vbcable.installed")}</span>}>
-          {action()}
-        </Show>
-      </Show>
-    </div>
-  );
+/** About: both cables named as VB-Audio's donationware, with their sites */
+export function CableOrigins() {
   return (
     <>
-      {row(
-        "Hi-Fi Cable",
-        () => hifiCable(devices() ?? []) !== null,
-        () => (
-          <Button icon="open" onClick={() => app.core.transport.openUrl(LINKS.hifiCable)}>
-            {t("hificable.download")}
-          </Button>
-        ),
-        () => <Origin text={t("hificable.origin")} url={LINKS.vbAudioHome} />,
-      )}
-      {row(
-        "VB-CABLE",
-        () => vbCable(devices() ?? []) !== null,
-        () => <VbCableInstall onInstalled={() => void load()} />,
-        () => <Origin text={t("vbcable.origin")} url={LINKS.vbCableHome} />,
-      )}
+      <Origin text={t("hificable.origin")} url={LINKS.vbAudioHome} />
+      <Origin text={t("vbcable.origin")} url={LINKS.vbCableHome} />
     </>
   );
 }

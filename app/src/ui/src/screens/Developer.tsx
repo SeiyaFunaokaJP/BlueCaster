@@ -102,6 +102,8 @@ export function Developer() {
     return (
       !s.volume_mixer &&
       !s.all_audio_devices &&
+      !s.vb_cable_note_hidden &&
+      !s.hifi_cable_note_hidden &&
       JSON.stringify(s.dev_overrides) === JSON.stringify(NO_OVERRIDES) &&
       !vendorsActive(s.dev_vendors) &&
       JSON.stringify(s.dev_log) === JSON.stringify(DEFAULT_LOG) &&
@@ -112,6 +114,8 @@ export function Developer() {
     void saveSettings(app, {
       volume_mixer: false,
       all_audio_devices: false,
+      vb_cable_note_hidden: false,
+      hifi_cable_note_hidden: false,
       dev_overrides: { ...NO_OVERRIDES },
       dev_vendors: {},
       dev_log: { ...DEFAULT_LOG },
@@ -159,6 +163,11 @@ export function Developer() {
               label={t("ui.dev.all_audio_devices")}
               checked={settings().all_audio_devices}
               onChange={(v) => void saveSettings(app, { all_audio_devices: v })}
+            />
+            <Toggle
+              label={t("ui.dev.hide_cable_warning")}
+              checked={settings().vb_cable_note_hidden || settings().hifi_cable_note_hidden}
+              onChange={(v) => void saveSettings(app, { vb_cable_note_hidden: v, hifi_cable_note_hidden: v })}
             />
           </Section>
           <Section title={t("update.check")}>

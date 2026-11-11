@@ -623,6 +623,10 @@ pub struct Profile {
     /// as with headset_mic "off"; headset_mic is kept for unmuting
     #[serde(default)]
     pub mic_muted: bool,
+    /// The microphone output's recording side is Windows' default input
+    /// while the device is connected (on by default)
+    #[serde(default = "yes")]
+    pub mic_default_input: bool,
     /// Classic devices: the call codec chosen on its card with Auto-select
     /// off ("cvsd", "msbc", "lc3_swb"; "" = none chosen, the best both
     /// sides have). The voice link takes it, or the next lower one the
