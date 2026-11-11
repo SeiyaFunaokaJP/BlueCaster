@@ -82,7 +82,7 @@ describe("not in place", () => {
 
   it("is not in the flyout, kept simple (issue #86)", async () => {
     start("", { window: "flyout" });
-    await screen.findByRole("button", { name: /Open app/ });
+    await screen.findByRole("button", { name: /Open BlueCaster/ });
     expect(screen.queryByRole("combobox", { name: "Output Source" })).toBeNull();
   });
 });

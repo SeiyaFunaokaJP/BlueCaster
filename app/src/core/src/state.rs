@@ -560,9 +560,11 @@ fn other_radio(adapters: &[AdapterInfo]) -> Option<OtherRadio> {
     Some(OtherRadio { name: radio.name, paired })
 }
 
-fn adapter_infos(config_dir: &Path, settings: &CoreSettings) -> Vec<AdapterInfo> {
+/// The adapters, and whether one seems hung (AdapterState::hung)
+fn adapter_infos(config_dir: &Path, settings: &CoreSettings) -> (Vec<AdapterInfo>, bool) {
     let radios = win_sys::bt_radios::radios();
-    bluecaster_core::adapter::adapters(false)
+    let (adapters, unreadable) = bluecaster_core::adapter::scan(false);
+    let list: Vec<AdapterInfo> = adapters
         .into_iter()
         .map(|a| {
             // Windows' Bluetooth runs it: what Device Manager shows, kept
@@ -657,7 +659,14 @@ fn adapter_infos(config_dir: &Path, settings: &CoreSettings) -> Vec<AdapterInfo>
                 ),
             }
         })
-        .collect()
+        .collect();
+    let hung = unreadable > 0
+        && bluecaster_core::adapter::hung_adapter(
+            unreadable,
+            list.iter().any(|a| a.driver == DriverKind::Winusb),
+            bluecaster_core::adapter::used_before(config_dir),
+        );
+    (list, hung)
 }
 
 /// What a new adapter list tells about the firmware against the last one
@@ -1637,7 +1646,7 @@ impl CoreState {
         let legacy = settings.legacy_max_media_payload();
         let profiles: Vec<Profile> = profiles::load(&dir).iter().map(|p| to_ipc_profile(p, legacy)).collect();
         let active = Some(settings.last_profile.clone()).filter(|n| profiles.iter().any(|p| &p.name == n));
-        let adapters = adapter_infos(&dir, &settings);
+        let (adapters, hung) = adapter_infos(&dir, &settings);
         warn_invalid_firmware(&dir, &firmware_change(&[], &adapters).invalid);
         let snapshot = Snapshot {
             adapter: AdapterState {
@@ -1647,6 +1656,7 @@ impl CoreState {
                 adapters,
                 error: None,
                 rom_firmware: false,
+                hung,
                 loader: None,
             },
             devices: saved_devices(&dir, &[], &service.device_codecs()),
@@ -1956,6 +1966,11 @@ impl CoreState {
                         a.status = st;
                         a.error = (st == AdapterStatus::Error).then(|| msg(&m));
                         self.publish(Event::Adapter(a));
+                        // The adapter may be gone or hung (issue #86): the
+                        // list anew, so the UI tells which
+                        if st == AdapterStatus::Error {
+                            self.list_adapters();
+                        }
                     }
                 }
                 // A connection learns the device's codecs, also one that
@@ -2250,12 +2265,12 @@ impl CoreState {
     /// now that was missing or invalid
     fn list_adapters(&self) -> (Vec<AdapterInfo>, bool) {
         let (_, s) = self.snapshot();
-        let list = adapter_infos(&self.config_dir(), &self.service.settings());
+        let (list, hung) = adapter_infos(&self.config_dir(), &self.service.settings());
         let change = firmware_change(&s.adapter.adapters, &list);
         warn_invalid_firmware(&paths::firmware_dir(&self.config_dir()), &change.invalid);
         let le_audio = le_audio_now(self.service.le_audio_supported(), &list);
         let other_radio = other_radio(&list);
-        self.publish(Event::Adapter(AdapterState { adapters: list.clone(), le_audio, other_radio, ..s.adapter }));
+        self.publish(Event::Adapter(AdapterState { adapters: list.clone(), le_audio, other_radio, hung, ..s.adapter }));
         (list, change.fixed)
     }
 
@@ -3401,6 +3416,8 @@ impl CoreState {
                                 mix_bits: mix.map(|m| m.bits),
                                 id: d.id,
                                 name: d.name,
+                                short_name: d.short_name,
+                                adapter_name: d.adapter_name,
                                 is_default: d.is_default,
                                 is_virtual: d.is_virtual,
                                 capture_name: d.capture_name,
@@ -3739,6 +3756,8 @@ mod tests {
         let dev = |id: &str, name: &str, virt: bool| audio_capture::DeviceInfo {
             id: id.into(),
             name: name.into(),
+            short_name: None,
+            adapter_name: None,
             is_default: false,
             is_virtual: virt,
             capture_name: None,
@@ -3776,7 +3795,9 @@ mod tests {
     fn list_adapter_infos() {
         let dir = std::env::temp_dir().join(format!("bluecaster-adapter-infos-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        for a in adapter_infos(&dir, &CoreSettings::default()) {
+        let (list, hung) = adapter_infos(&dir, &CoreSettings::default());
+        println!("hung adapter: {hung}");
+        for a in list {
             println!(
                 "{} {:04X}:{:04X} {:?} ({}) address {:?} version {:?} name {:?}",
                 a.instance_id, a.vid, a.pid, a.driver, a.driver_service, a.address, a.bt_version, a.windows_name

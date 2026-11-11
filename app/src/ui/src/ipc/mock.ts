@@ -435,6 +435,7 @@ export function sampleSnapshot(scenario: MockScenario = "normal"): Snapshot {
       le_audio:
         scenario === "le_unsupported" ? false : scenario === "le" ? true : null,
       rom_firmware: false,
+      hung: false,
     },
     devices: fresh
       ? []
@@ -591,6 +592,8 @@ const sameEntry = (
 const CABLE: AudioDevice = {
   id: "{0.0.0.00000000}.{cable}",
   name: "CABLE Input (VB-Audio Virtual Cable)",
+  short_name: "CABLE Input",
+  adapter_name: "VB-Audio Virtual Cable",
   is_default: false,
   is_virtual: true,
   mix_rate: 44100,
@@ -603,6 +606,8 @@ const CABLE: AudioDevice = {
 const HIFI_CABLE: AudioDevice = {
   id: "{0.0.0.00000000}.{hificable}",
   name: "Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)",
+  short_name: "Hi-Fi Cable Input",
+  adapter_name: "VB-Audio Hi-Fi Cable",
   is_default: false,
   is_virtual: true,
   mix_rate: 48000,
@@ -616,6 +621,8 @@ const AUDIO_DEVICES: AudioDevice[] = [
   {
     id: "{0.0.0.00000000}.{cable16}",
     name: "CABLE In 16ch (VB-Audio Virtual Cable)",
+    short_name: "CABLE In 16ch",
+    adapter_name: "VB-Audio Virtual Cable",
     is_default: false,
     is_virtual: true,
     mix_rate: 48000,
@@ -627,6 +634,8 @@ const AUDIO_DEVICES: AudioDevice[] = [
   {
     id: "{0.0.0.00000000}.{speakers}",
     name: "Speakers (Realtek(R) Audio)",
+    short_name: "Speakers",
+    adapter_name: "Realtek(R) Audio",
     is_default: true,
     is_virtual: false,
     mix_rate: 48000,
@@ -639,6 +648,8 @@ const AUDIO_DEVICES: AudioDevice[] = [
   {
     id: "{0.0.0.00000000}.{voicemeeter}",
     name: "Voicemeeter Input (VB-Audio Voicemeeter VAIO)",
+    short_name: "Voicemeeter Input",
+    adapter_name: "VB-Audio Voicemeeter VAIO",
     is_default: false,
     is_virtual: true,
     mix_rate: 48000,
@@ -650,6 +661,8 @@ const AUDIO_DEVICES: AudioDevice[] = [
   {
     id: "{0.0.0.00000000}.{display}",
     name: "M28U (NVIDIA High Definition Audio)",
+    short_name: "M28U",
+    adapter_name: "NVIDIA High Definition Audio",
     is_default: false,
     is_virtual: false,
     mix_rate: 48000,
@@ -1712,6 +1725,18 @@ export class MockCore implements Transport {
 
   setOtherRadio(radio: Snapshot["adapter"]["other_radio"]) {
     this.snap.adapter.other_radio = radio;
+  }
+  /** The adapter hung after a crash (issue #86): gone from the list, an
+   *  unknown USB device in its place, the stack's start failed */
+  setHung() {
+    this.snap.adapter = {
+      ...this.snap.adapter,
+      adapters: [],
+      hung: true,
+      status: "error",
+      error: { key: "error.btstack_init", args: [] },
+    };
+    this.emit({ kind: "adapter", value: this.snap.adapter });
   }
   /** The MediaTek adapter of the first run on WinUSB, with its loader */
   useMediaTek() {
@@ -3164,6 +3189,8 @@ export function mockFromUrl(): MockCore {
   mock.noVirtual = q.has("novirtual");
   mock.hifiCable = q.has("hificable");
   mock.captureDrops = q.has("capturedrops");
+  // ?hung: the adapter hung after a crash (issue #86)
+  if (q.has("hung")) mock.setHung();
   // ?winpaired: headphones Windows paired through the adapter (the setup's import)
   if (q.has("winpaired")) {
     mock.windowsPaired = ["00:A2:D0:00:00:02", "38:18:4C:00:00:07"];

@@ -34,7 +34,7 @@ export function Devices() {
       <header class="page-head">
         <h1>{t("ui.nav.devices")}</h1>
       </header>
-      <CableNotes devices={devices()} reload={() => void load()} wrap />
+      <CableNotes devices={devices()} reload={() => void load()} />
       <AllDevices />
       <DevicePicker manage address="" onPick={() => {}} settings={(d) => <DeviceSettings device={d} />} />
     </div>

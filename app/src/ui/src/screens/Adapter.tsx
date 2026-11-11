@@ -33,6 +33,7 @@ import {
   vendorFirmware,
 } from "../lib/chips";
 import { baseName, chipReportUrl, LINKS, vendorFirmwareUrl } from "../lib/links";
+import { AdapterHung, hiddenByHung } from "./Home";
 
 /** The adapters BlueCaster can use first (WinUSB), the ones without a driver
  *  and then the ones it cannot use at all last */
@@ -228,14 +229,19 @@ export function Adapter() {
           </p>
         )}
       </Show>
-      <Show when={adapter().status === "error" && adapter().error}>{(m) => <ErrorPanel message={m()} />}</Show>
+      <AdapterHung />
+      <Show when={adapter().status === "error" && !hiddenByHung(snap(), adapter().error) && adapter().error}>
+        {(m) => <ErrorPanel message={m()} />}
+      </Show>
 
       <Show
         when={adapter().adapters.length > 0}
         fallback={
-          <Banner kind="warn" title={t("firmware.no_adapters")}>
-            {t("ui.adapter.none_hint")}
-          </Banner>
+          <Show when={!adapter().hung}>
+            <Banner kind="warn" title={t("firmware.no_adapters")}>
+              {t("ui.adapter.none_hint")}
+            </Banner>
+          </Show>
         }
       >
         <For each={sorted()}>
@@ -579,7 +585,12 @@ function FirmwareStatus(props: { status: ChipStatus; embedded?: boolean }): JSX.
     case "non_realtek":
       return <Banner kind="good">{t("firmware.non_realtek")}</Banner>;
     case "auto_no_adapter":
-      return <Banner kind="warn">{t("firmware.auto_no_adapter")}</Banner>;
+      // Not "bind it with Zadig" while the adapter seems hung (AdapterHung says what to do)
+      return (
+        <Show when={!app.core.state.snap?.adapter.hung}>
+          <Banner kind="warn">{t("firmware.auto_no_adapter")}</Banner>
+        </Show>
+      );
     case "auto_unrecognized":
       return <Banner kind="warn">{t("firmware.auto_unrecognized")}</Banner>;
     default:

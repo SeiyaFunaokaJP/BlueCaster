@@ -32,6 +32,12 @@ pub struct DeviceInfo {
     pub id: String,
     /// Friendly name, e.g. "Speakers (Realtek(R) Audio)"
     pub name: String,
+    /// The endpoint's own name without the adapter's, e.g. "Speakers"
+    /// (PKEY_Device_DeviceDesc); None when Windows has none
+    pub short_name: Option<String>,
+    /// The adapter's name, e.g. "VB-Audio Hi-Fi Cable"
+    /// (PKEY_DeviceInterface_FriendlyName); None when Windows has none
+    pub adapter_name: Option<String>,
     /// The default output device (Console role)
     pub is_default: bool,
     /// Looks like a virtual device (VB-Cable, VoiceMeeter, ...): v1's
@@ -58,12 +64,16 @@ pub fn render_devices() -> Result<Vec<DeviceInfo>, CaptureError> {
         let Ok(device) = device else { continue };
         let Ok(id) = device.get_id() else { continue };
         let name = device.get_friendlyname().unwrap_or_default();
+        let short_name = device.get_description().ok().filter(|s| !s.trim().is_empty());
+        let adapter_name = device.get_interface_friendlyname().ok().filter(|s| !s.trim().is_empty());
         let hints = audio_policy::endpoint_hints(&id).unwrap_or_default();
         out.push(DeviceInfo {
             is_default: default_id.as_deref() == Some(id.as_str()),
             is_virtual: is_virtual_device(&name, &hints),
             id,
             name,
+            short_name,
+            adapter_name,
             capture_name: None,
             capture_rate: None,
         });

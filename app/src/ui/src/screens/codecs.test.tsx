@@ -1893,7 +1893,7 @@ describe("a device's capture source (Audio Devices, issue #86)", () => {
     // device too), no "Loopback" (issue #86)
     const first = within(select).getAllByRole("option")[0];
     expect(first).toHaveTextContent(
-      t("capture.loopback_default", "Speakers (Realtek(R) Audio)"),
+      t("capture.loopback_default", "Speakers"),
     );
     expect(first.closest("optgroup")).toBeNull();
     // What the source does, below it, with no info button (issue #86)
