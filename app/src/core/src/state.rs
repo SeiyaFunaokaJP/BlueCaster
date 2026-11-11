@@ -1510,13 +1510,13 @@ fn new_default_input() -> DefaultInput {
 struct NoInputs;
 
 impl bluecaster_core::default_input::InputEndpoints for NoInputs {
-    fn default_input(&self) -> Option<String> {
+    fn default_input(&self, _: bluecaster_core::default_input::Role) -> Option<String> {
         None
     }
     fn capture_side(&self, _: &str) -> Option<String> {
         None
     }
-    fn set_default_input(&self, _: &str) -> bool {
+    fn set_default_input(&self, _: &str, _: bluecaster_core::default_input::Role) -> bool {
         false
     }
 }

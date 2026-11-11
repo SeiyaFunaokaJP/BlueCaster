@@ -131,10 +131,10 @@ pub fn set_default_render_device(id: &str) -> Result<(), CaptureError> {
     })
 }
 
-/// ID of the default capture device (Console role), if there is one
-pub fn default_capture_device() -> Option<String> {
+/// ID of the default capture device for `role`, if there is one
+pub fn default_capture_device(role: audio_policy::EndpointRole) -> Option<String> {
     let _com = com().ok()?;
-    audio_policy::default_capture_endpoint().ok().flatten()
+    audio_policy::default_capture_endpoint(role).ok().flatten()
 }
 
 /// The capture endpoint paired with the render endpoint `id` ("CABLE
@@ -149,15 +149,15 @@ pub fn paired_capture_device(id: &str) -> Option<String> {
         .flatten()
 }
 
-/// Make the capture endpoint `id` the default input device (Console and
-/// Multimedia roles, as [`set_default_render_device`]). Changes the user's
-/// system setting: the caller restores the previous default.
-pub fn set_default_capture_device(id: &str) -> Result<(), CaptureError> {
+/// Make the capture endpoint `id` the default input device for `role`.
+/// Changes the user's system setting: the caller restores the previous
+/// default.
+pub fn set_default_capture_device(id: &str, role: audio_policy::EndpointRole) -> Result<(), CaptureError> {
     if id.is_empty() {
         return Err(CaptureError::DeviceNotFound(String::new()));
     }
     let _com = com()?;
-    audio_policy::set_default_capture_endpoint(id).map_err(|e| {
+    audio_policy::set_default_capture_endpoint(id, role).map_err(|e| {
         if not_found(e.code().0) {
             CaptureError::DeviceNotFound(id.to_owned())
         } else {

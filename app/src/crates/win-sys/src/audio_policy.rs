@@ -5,7 +5,8 @@
 //!   with "switch the default device automatically", as v1's
 //!   audio_device_enum.cpp does).
 //! - [`set_default_capture_endpoint`]: the same for the default input
-//!   device (the headset microphone's cable while connected).
+//!   device, one [`EndpointRole`] at a time (the headset microphone's cable
+//!   while connected).
 //! - [`EndpointVolume`]: master volume and mute of a render endpoint
 //!   (IAudioEndpointVolume), the primitives of volume sync.
 //! - [`session_process_ids`]: the processes that have an audio session, for
@@ -29,7 +30,7 @@ use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{
     AudioSessionStateActive, AudioSessionStateExpired, DEVICE_STATE_ACTIVE, ERole, IAudioSessionControl2,
     IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator, ISimpleAudioVolume, MMDeviceEnumerator, WAVEFORMATEX,
-    eCapture, eConsole, eMultimedia, eRender,
+    eCapture, eCommunications, eConsole, eMultimedia, eRender,
 };
 use windows::Win32::Media::Audio::{PKEY_AudioEndpoint_FormFactor, PKEY_AudioEngine_DeviceFormat};
 use windows::Win32::System::Com::StructuredStorage::{
@@ -198,35 +199,49 @@ pub fn set_default_endpoint(device_id: &str) -> windows::core::Result<()> {
     hr_multimedia.ok()
 }
 
-/// Make the capture endpoint `device_id` the default input device for the
-/// same roles as [`set_default_endpoint`] (Console and Multimedia). COM must
-/// be initialised on the calling thread.
+/// A role Windows keeps a default device for
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EndpointRole {
+    Console,
+    Multimedia,
+    /// What call apps (Teams, Discord, ...) use by default
+    Communications,
+}
+
+impl EndpointRole {
+    pub const ALL: [EndpointRole; 3] = [EndpointRole::Console, EndpointRole::Multimedia, EndpointRole::Communications];
+
+    fn erole(self) -> ERole {
+        match self {
+            EndpointRole::Console => eConsole,
+            EndpointRole::Multimedia => eMultimedia,
+            EndpointRole::Communications => eCommunications,
+        }
+    }
+}
+
+/// Make the capture endpoint `device_id` the default input device for
+/// `role`. COM must be initialised on the calling thread.
 ///
 /// This changes a system-wide user setting.
-pub fn set_default_capture_endpoint(device_id: &str) -> windows::core::Result<()> {
+pub fn set_default_capture_endpoint(device_id: &str, role: EndpointRole) -> windows::core::Result<()> {
     if device_id.is_empty() {
         return Err(windows::Win32::Foundation::E_INVALIDARG.into());
     }
     let policy =
         PolicyConfig::new().inspect_err(|e| tracing::debug!("audio_policy: IPolicyConfig unavailable: {e}"))?;
     let wid: Vec<u16> = device_id.encode_utf16().chain(Some(0)).collect();
-    let hr_console = policy.set_default_endpoint(&wid, eConsole);
-    let hr_multimedia = policy.set_default_endpoint(&wid, eMultimedia);
-    tracing::debug!(
-        "audio_policy: default input {device_id}: eConsole 0x{:08x}, eMultimedia 0x{:08x}",
-        hr_console.0 as u32,
-        hr_multimedia.0 as u32
-    );
-    hr_console.ok()?;
-    hr_multimedia.ok()
+    let hr = policy.set_default_endpoint(&wid, role.erole());
+    tracing::debug!("audio_policy: default input {device_id} ({role:?}): 0x{:08x}", hr.0 as u32);
+    hr.ok()
 }
 
-/// The default capture endpoint (Console role); None when Windows has none.
+/// The default capture endpoint for `role`; None when Windows has none.
 /// COM must be initialised on the calling thread.
-pub fn default_capture_endpoint() -> windows::core::Result<Option<String>> {
+pub fn default_capture_endpoint(role: EndpointRole) -> windows::core::Result<Option<String>> {
     let enumerator = enumerator()?;
     // SAFETY: plain call on a live enumerator.
-    match unsafe { enumerator.GetDefaultAudioEndpoint(eCapture, eConsole) } {
+    match unsafe { enumerator.GetDefaultAudioEndpoint(eCapture, role.erole()) } {
         Ok(device) => endpoint_id(&device).map(Some),
         // E_NOTFOUND: no capture endpoint at all
         Err(e) if e.code().0 as u32 == 0x8007_0490 => Ok(None),
