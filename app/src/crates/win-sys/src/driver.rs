@@ -16,13 +16,19 @@
 //!    and select its "WinUsb Device" model (install section WINUSB)
 //! 4. DiInstallDevice
 //!
-//! Restoring: CM_Query_And_Remove_SubTree (the stop, timed on its own) and
-//! DiUninstallDevice, then CM_Reenumerate_DevNode on the parent
-//! (the hub): the device comes back as new and Windows ranks its drivers
-//! again, picking BTHUSB or the vendor driver. WinUSB was a manual choice
-//! (winusb.inf matches only `USB\MS_COMP_WINUSB`), so it is not picked
-//! again. The driver from before (INF name, version, service) is recorded
-//! by `assign_winusb` and compared after the restore.
+//! Restoring puts the driver recorded by `assign_winusb` (INF name, install
+//! section, class) back the same way, on the running device; Zadig's
+//! library (libwdi) installs like that too and never uninstalls. On a
+//! MediaTek adapter (issue #86) DiUninstallDevice alone took 20 s, while
+//! installing WinUSB took about 2 s. When the recorded driver cannot be
+//! installed (no record, its package gone, another driver after the
+//! install), the device is removed instead: CM_Query_And_Remove_SubTree (the
+//! stop, timed on its own) and DiUninstallDevice, then CM_Reenumerate_DevNode
+//! on the parent (the hub): the device comes back as new and Windows ranks
+//! its drivers again, picking BTHUSB or the vendor driver. WinUSB was a
+//! manual choice (winusb.inf matches only `USB\MS_COMP_WINUSB`), so it is
+//! not picked again. Either way the driver afterwards is compared with the
+//! record.
 //!
 //! Both need administrator rights (`bluecaster-driver.exe`, started elevated);
 //! `driver_state` is read-only and needs none.
@@ -37,14 +43,15 @@ use std::time::{Duration, Instant};
 
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Get_Parent, CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW, CM_Query_And_Remove_SubTreeW,
-    CM_REENUMERATE_ASYNCHRONOUS, CM_REMOVE_NO_RESTART, CM_REMOVE_UI_NOT_OK, CM_Reenumerate_DevNode, CR_SUCCESS,
-    DI_ENUMSINGLEINF, DI_FLAGSEX_ALLOWEXCLUDEDDRVS, DI_NEEDREBOOT, DI_NEEDRESTART, DICS_FLAG_GLOBAL, DICS_PROPCHANGE,
-    DIF_PROPERTYCHANGE, DIIDFLAG_NOFINISHINSTALLUI, DIREG_DEV, DiInstallDevice, DiUninstallDevice, PNP_VETO_TYPE,
-    SP_CLASSINSTALL_HEADER, SP_DEVINFO_DATA, SP_DEVINSTALL_PARAMS_W, SP_DRVINFO_DATA_V2_W, SP_DRVINFO_DETAIL_DATA_W,
-    SP_PROPCHANGE_PARAMS, SPDIT_CLASSDRIVER, SPDRP_CLASSGUID, SetupDiBuildDriverInfoList, SetupDiCallClassInstaller,
-    SetupDiCreateDevRegKeyW, SetupDiDestroyDriverInfoList, SetupDiEnumDriverInfoW, SetupDiGetDeviceInstallParamsW,
-    SetupDiGetDriverInfoDetailW, SetupDiOpenDevRegKey, SetupDiSetClassInstallParamsW, SetupDiSetDeviceInstallParamsW,
-    SetupDiSetDeviceRegistryPropertyW, SetupDiSetSelectedDriverW,
+    CM_REENUMERATE_ASYNCHRONOUS, CM_REMOVE_NO_RESTART, CM_REMOVE_UI_NOT_OK, CM_Reenumerate_DevNode,
+    CMP_WaitNoPendingInstallEvents, CR_SUCCESS, DI_ENUMSINGLEINF, DI_FLAGSEX_ALLOWEXCLUDEDDRVS, DI_NEEDREBOOT,
+    DI_NEEDRESTART, DICS_FLAG_GLOBAL, DICS_PROPCHANGE, DIF_PROPERTYCHANGE, DIIDFLAG_NOFINISHINSTALLUI, DIREG_DEV,
+    DiInstallDevice, DiUninstallDevice, PNP_VETO_TYPE, SP_CLASSINSTALL_HEADER, SP_DEVINFO_DATA, SP_DEVINSTALL_PARAMS_W,
+    SP_DRVINFO_DATA_V2_W, SP_DRVINFO_DETAIL_DATA_W, SP_PROPCHANGE_PARAMS, SPDIT_CLASSDRIVER, SPDRP_CLASSGUID,
+    SetupDiBuildDriverInfoList, SetupDiCallClassInstaller, SetupDiCreateDevRegKeyW, SetupDiDestroyDriverInfoList,
+    SetupDiEnumDriverInfoW, SetupDiGetDeviceInstallParamsW, SetupDiGetDriverInfoDetailW, SetupDiOpenDevRegKey,
+    SetupDiSetClassInstallParamsW, SetupDiSetDeviceInstallParamsW, SetupDiSetDeviceRegistryPropertyW,
+    SetupDiSetSelectedDriverW,
 };
 use windows::Win32::Foundation::{ERROR_INVALID_DEVINST_NAME, ERROR_NO_MORE_ITEMS, ERROR_NO_SUCH_DEVINST, HWND};
 use windows::Win32::System::Registry::{KEY_READ, REG_MULTI_SZ};
@@ -72,6 +79,8 @@ const RESTORE_WAIT: Duration = Duration::from_secs(30);
 const RESTORE_POLL: Duration = Duration::from_millis(250);
 /// How long a restored device's problem code must stay to be the result
 const PROBLEM_SETTLE: Duration = Duration::from_secs(3);
+/// How long a restore waits for driver installs Windows is running already
+const PENDING_INSTALL_WAIT_MS: u32 = 10_000;
 
 /// Which kind of driver owns a device
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,6 +163,9 @@ impl DriverState {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DriverRecord {
     pub inf_name: String,
+    /// Install section as Windows recorded it (`Composite.Dev.NT`); empty in
+    /// records from 3.0.0-beta.3 and earlier
+    pub inf_section: String,
     pub version: String,
     pub service: String,
     pub provider: String,
@@ -165,6 +177,7 @@ impl DriverRecord {
     pub fn from_info(info: &DriverInfo) -> DriverRecord {
         DriverRecord {
             inf_name: info.inf_name.clone(),
+            inf_section: info.inf_section.clone(),
             version: info.version.clone(),
             service: info.service.clone(),
             provider: info.provider.clone(),
@@ -329,7 +342,7 @@ pub fn assign_winusb(instance_id: &str) -> Result<AssignOutcome, DriverError> {
             disconnected: Vec::new(),
         });
     }
-    let inf = winusb_inf_path()?;
+    let inf = inf_path("winusb.inf").map_err(DriverError::WinUsbInfMissing)?;
     // Windows cannot stop its Bluetooth on a radio with a connected device
     // (an audio link above all): the install would hang
     let disconnected = crate::bt_radios::disconnect_through(instance_id);
@@ -459,9 +472,50 @@ pub fn restore(instance_id: &str, previous: Option<&DriverRecord>) -> Result<Res
         now.class_guid,
         previous
     );
-    let reboot_required = uninstall_and_reenumerate(&set, &data, instance_id)?;
-    drop(set);
-    let state = wait_for_driver(instance_id);
+    let started = Instant::now();
+    let in_place = match previous.filter(|p| !p.inf_name.is_empty()) {
+        Some(p) => reinstall_previous(set, data, p),
+        None => {
+            tracing::info!("driver: no record of the driver before; removing the device");
+            InPlace::Failed(set, data)
+        }
+    };
+    let (reboot_required, state) = match in_place {
+        InPlace::Done(reboot) => {
+            let state = wait_for_driver(instance_id);
+            let recorded = state.as_ref().is_some_and(|s| {
+                s.kind != DriverKind::WinUsb
+                    && previous.is_some_and(|p| p.service.eq_ignore_ascii_case(&s.driver.service))
+            });
+            if recorded {
+                remove_interface_guid(instance_id);
+                tracing::info!("driver: put back in place in {} ms", started.elapsed().as_millis());
+                // Read again: the state above still lists the GUID
+                (reboot, driver_state(instance_id).ok().or(state))
+            } else {
+                tracing::warn!(
+                    "driver: after the install {instance_id} is on {:?}, not the recorded driver; removing the device",
+                    state.as_ref().map(|s| s.driver.service.as_str())
+                );
+                let (set, data) = open(instance_id)?;
+                let reboot = uninstall_and_reenumerate(&set, &data, instance_id)?;
+                drop(set);
+                (reboot, wait_for_driver(instance_id))
+            }
+        }
+        InPlace::Hung => {
+            // As in assign_winusb: Windows finishes it at the next restart
+            tracing::warn!(
+                "driver: installing the previous driver did not finish in {INSTALL_LIMIT:?}: restart needed"
+            );
+            (true, driver_state(instance_id).ok())
+        }
+        InPlace::Failed(set, data) => {
+            let reboot = uninstall_and_reenumerate(&set, &data, instance_id)?;
+            drop(set);
+            (reboot, wait_for_driver(instance_id))
+        }
+    };
     let matches_previous = match (previous, &state) {
         (Some(p), Some(s)) => Some(p.matches(&s.driver)),
         _ => None,
@@ -477,6 +531,151 @@ pub fn restore(instance_id: &str, previous: Option<&DriverRecord>) -> Result<Res
         tracing::warn!("driver: {instance_id} did not come back within {RESTORE_WAIT:?}");
     }
     Ok(RestoreOutcome { already_restored: false, reboot_required, state, matches_previous })
+}
+
+/// How putting the recorded driver back in place went
+enum InPlace {
+    /// Installed; whether Windows still asks for a restart
+    Done(bool),
+    /// DiInstallDevice did not return within INSTALL_LIMIT
+    Hung,
+    /// Not installed (the device is given back for the removal)
+    Failed(DevInfoSet, SP_DEVINFO_DATA),
+}
+
+/// Installs the recorded driver on the running device, as `assign_winusb`
+/// installs WinUSB (on a thread for the same reason: Windows may not return)
+fn reinstall_previous(set: DevInfoSet, data: SP_DEVINFO_DATA, previous: &DriverRecord) -> InPlace {
+    let inf = match inf_path(&previous.inf_name) {
+        Ok(inf) => inf,
+        Err(missing) => {
+            tracing::info!("driver: the previous driver's INF is gone ({missing}); removing the device");
+            return InPlace::Failed(set, data);
+        }
+    };
+    let class = parse_guid(&previous.class_guid);
+    wait_for_pending_installs();
+    let record = previous.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let job = InstallJob(set, data);
+    std::thread::spawn(move || {
+        let InstallJob(set, mut data) = job;
+        let mut result = install_previous(&set, &mut data, &inf, &record, class);
+        if let Ok(true) = result {
+            result = Ok(restart_device(&set, &mut data));
+        }
+        let _ = tx.send((result, InstallJob(set, data)));
+    });
+    match rx.recv_timeout(INSTALL_LIMIT) {
+        Ok((Ok(reboot), _)) => InPlace::Done(reboot),
+        Ok((Err(failure), InstallJob(set, data))) => {
+            match failure {
+                Failure::ModelNotFound(class) => tracing::info!(
+                    "driver: {} offers no model of the record (class {class}); removing the device",
+                    previous.inf_name
+                ),
+                Failure::Win32(step, e) => tracing::warn!(
+                    "driver: putting {} back in place: {step} failed: {e} (error {}); removing the device",
+                    previous.inf_name,
+                    crate::usb_adapters::win32_code(&e)
+                ),
+            }
+            InPlace::Failed(set, data)
+        }
+        Err(_) => InPlace::Hung,
+    }
+}
+
+/// The class of the record first (the device is in winusb.inf's class now),
+/// then its model from its INF
+fn install_previous(
+    set: &DevInfoSet,
+    data: &mut SP_DEVINFO_DATA,
+    inf: &[u16; 260],
+    record: &DriverRecord,
+    class: Option<GUID>,
+) -> Result<bool, Failure> {
+    if let Some(class) = class
+        && data.ClassGuid != class
+    {
+        set_class(set, data, class)?;
+    }
+    let found = find_driver(set, data, inf, |section, description| is_recorded_model(record, section, description))?;
+    let Some(mut driver) = found else {
+        return Err(Failure::ModelNotFound(format_guid(&data.ClassGuid)));
+    };
+    install_selected(set, data, &mut driver, &record.inf_name)
+}
+
+/// Whether a model of the record's INF is the recorded driver: by install
+/// section (Windows records it with its .NT decoration: `Composite.Dev.NT`
+/// for the model section `Composite.Dev`), or by description in records
+/// without one
+fn is_recorded_model(record: &DriverRecord, section: &str, description: &str) -> bool {
+    if record.inf_section.is_empty() {
+        return !record.description.is_empty() && record.description == description;
+    }
+    let installed = record.inf_section.to_ascii_lowercase();
+    let section = section.to_ascii_lowercase();
+    !section.is_empty()
+        && (installed == section || installed.strip_prefix(&section).is_some_and(|rest| rest.starts_with(".nt")))
+}
+
+/// Moves the device to another setup class (the class driver list holds
+/// only drivers of the device's class)
+fn set_class(set: &DevInfoSet, data: &mut SP_DEVINFO_DATA, class: GUID) -> Result<(), Failure> {
+    tracing::info!("driver: changing the class from {} to {}", format_guid(&data.ClassGuid), format_guid(&class));
+    // SAFETY: valid set and element; a list that does not exist is no error.
+    let _ = unsafe { SetupDiDestroyDriverInfoList(set.0, Some(data), SPDIT_CLASSDRIVER) };
+    let text: Vec<u16> = multi_sz(&[format_guid(&class)]);
+    let bytes = u16_bytes(&text[..text.len() - 1]); // one string, one terminator
+    // SAFETY: valid set and element; REG_SZ data with its terminator.
+    unsafe { SetupDiSetDeviceRegistryPropertyW(set.0, data, SPDRP_CLASSGUID, Some(&bytes)) }
+        .map_err(step("changing the device class"))?;
+    tracing::debug!("driver: element class now {}", format_guid(&data.ClassGuid));
+    Ok(())
+}
+
+/// `{...}` as `DriverInfo::class_guid` holds it
+fn parse_guid(text: &str) -> Option<GUID> {
+    let inner = text.trim().trim_start_matches('{').trim_end_matches('}');
+    GUID::try_from(inner).ok()
+}
+
+/// As Zadig's library does before installing: lets installs Windows runs
+/// already finish first
+fn wait_for_pending_installs() {
+    let start = Instant::now();
+    // SAFETY: no pointers; waits at most the given time.
+    let r = unsafe { CMP_WaitNoPendingInstallEvents(PENDING_INSTALL_WAIT_MS) };
+    let ms = start.elapsed().as_millis();
+    if r != 0 || ms >= 100 {
+        tracing::info!("driver: waited {ms} ms for installs Windows was running (result {r})");
+    }
+}
+
+/// After a restore in place: BlueCaster's GUID out of DeviceInterfaceGUIDs
+/// (the removal deletes the whole key; in place it would stay)
+fn remove_interface_guid(instance_id: &str) {
+    let Ok((set, data)) = open(instance_id) else { return };
+    // SAFETY: valid set and element; the existing hardware key.
+    let key = unsafe { SetupDiCreateDevRegKeyW(set.0, &data, DICS_FLAG_GLOBAL.0, 0, DIREG_DEV, None, PCWSTR::null()) };
+    let Ok(key) = key else { return };
+    let key = RegKey(key);
+    let guids = match key.query(INTERFACE_GUIDS_VALUE) {
+        Ok(Some((_, d))) => parse_multi_sz(&d),
+        _ => return,
+    };
+    let rest: Vec<String> = guids.iter().filter(|g| !g.eq_ignore_ascii_case(INTERFACE_GUID)).cloned().collect();
+    if rest.len() == guids.len() {
+        return;
+    }
+    let r = if rest.is_empty() {
+        key.delete_value(INTERFACE_GUIDS_VALUE).map(|_| ())
+    } else {
+        key.set(INTERFACE_GUIDS_VALUE, REG_MULTI_SZ, &multi_sz(&rest)).map(|_| ())
+    };
+    tracing::debug!("driver: BlueCaster's {INTERFACE_GUIDS_VALUE} entry removed: {r:?}");
 }
 
 /// A REG_MULTI_SZ value: each string NUL-terminated, then one more NUL
@@ -511,47 +710,45 @@ fn install(
     inf: &[u16; 260],
     class_changed: &mut bool,
 ) -> Result<bool, Failure> {
-    let mut found = find_winusb_driver(set, data, inf)?;
+    let mut found = find_driver(set, data, inf, is_winusb_model)?;
     if found.is_none() && data.ClassGuid != USB_DEVICE_CLASS {
         // The class driver list may hold only drivers of the device's own
         // class. Move the device to winusb.inf's class first, as
         // installing it would; undone by the rollback if this fails.
-        tracing::info!("driver: winusb.inf not offered for class {}; changing the class", format_guid(&data.ClassGuid));
-        // SAFETY: valid set and element; the list is rebuilt below.
-        unsafe { SetupDiDestroyDriverInfoList(set.0, Some(data), SPDIT_CLASSDRIVER) }
-            .map_err(step("SetupDiDestroyDriverInfoList"))?;
-        let class: Vec<u16> = multi_sz(&[format_guid(&USB_DEVICE_CLASS)]);
-        let bytes = u16_bytes(&class[..class.len() - 1]); // one string, one terminator
-        // SAFETY: valid set and element; REG_SZ data with its terminator.
-        unsafe { SetupDiSetDeviceRegistryPropertyW(set.0, data, SPDRP_CLASSGUID, Some(&bytes)) }
-            .map_err(step("changing the device class"))?;
+        tracing::info!("driver: winusb.inf not offered for class {}", format_guid(&data.ClassGuid));
+        set_class(set, data, USB_DEVICE_CLASS)?;
         *class_changed = true;
-        tracing::debug!(
-            "driver: class GUID set to {} (element class now {})",
-            format_guid(&USB_DEVICE_CLASS),
-            format_guid(&data.ClassGuid)
-        );
-        found = find_winusb_driver(set, data, inf)?;
+        found = find_driver(set, data, inf, is_winusb_model)?;
     }
     let Some(mut driver) = found else {
         return Err(Failure::ModelNotFound(format_guid(&data.ClassGuid)));
     };
+    install_selected(set, data, &mut driver, "winusb.inf")
+}
+
+/// Selects `driver` from the element's class driver list and installs it;
+/// returns whether Windows asks for a restart
+fn install_selected(
+    set: &DevInfoSet,
+    data: &mut SP_DEVINFO_DATA,
+    driver: &mut SP_DRVINFO_DATA_V2_W,
+    inf_name: &str,
+) -> Result<bool, Failure> {
     tracing::info!(
-        "driver: selected \"{}\" {} from winusb.inf",
+        "driver: selected \"{}\" {} from {inf_name}",
         crate::autostart::utf16_string(&driver.Description),
         format_driver_version(driver.DriverVersion)
     );
     // SAFETY: the driver came from this element's class driver list.
-    unsafe { SetupDiSetSelectedDriverW(set.0, Some(data), Some(&mut driver)) }
-        .map_err(step("SetupDiSetSelectedDriver"))?;
+    unsafe { SetupDiSetSelectedDriverW(set.0, Some(data), Some(driver)) }.map_err(step("SetupDiSetSelectedDriver"))?;
     tracing::debug!("driver: driver selected; calling DiInstallDevice");
     let started = Instant::now();
     let mut reboot = BOOL(0);
     // SAFETY: valid set, element and its selected driver; no window (no
     // UI is shown with DIIDFLAG_NOFINISHINSTALLUI).
-    unsafe { DiInstallDevice(None, set.0, data, Some(&driver), DIIDFLAG_NOFINISHINSTALLUI, Some(&mut reboot)) }
+    unsafe { DiInstallDevice(None, set.0, data, Some(driver), DIIDFLAG_NOFINISHINSTALLUI, Some(&mut reboot)) }
         .map_err(step("DiInstallDevice"))?;
-    tracing::debug!("driver: DiInstallDevice done in {:?}, reboot {}", started.elapsed(), reboot.as_bool());
+    tracing::info!("driver: installed in {} ms, reboot flag {}", started.elapsed().as_millis(), reboot.as_bool());
     Ok(reboot.as_bool())
 }
 
@@ -600,11 +797,18 @@ fn restart_device(set: &DevInfoSet, data: &mut SP_DEVINFO_DATA) -> bool {
     still
 }
 
-/// Step 3: the class driver list from winusb.inf alone; its WINUSB model
-fn find_winusb_driver(
+fn is_winusb_model(section: &str, _description: &str) -> bool {
+    section.eq_ignore_ascii_case(WINUSB_SECTION)
+}
+
+/// Step 3: the class driver list from one INF alone (winusb.inf, or the
+/// recorded driver's INF for a restore); the first model `wanted` takes by
+/// its install section and description
+fn find_driver(
     set: &DevInfoSet,
     data: &mut SP_DEVINFO_DATA,
     inf: &[u16; 260],
+    wanted: impl Fn(&str, &str) -> bool,
 ) -> Result<Option<SP_DRVINFO_DATA_V2_W>, Failure> {
     let mut params =
         SP_DEVINSTALL_PARAMS_W { cbSize: size_of::<SP_DEVINSTALL_PARAMS_W>() as u32, ..Default::default() };
@@ -638,16 +842,14 @@ fn find_winusb_driver(
             }
             return Err(Failure::Win32("SetupDiEnumDriverInfo", e));
         }
-        let section = driver_section(set, data, &driver);
-        tracing::debug!(
-            "driver: winusb.inf offers \"{}\" (section {section:?})",
-            crate::autostart::utf16_string(&driver.Description)
-        );
-        if section.as_deref().is_some_and(|s| s.eq_ignore_ascii_case(WINUSB_SECTION)) {
+        let section = driver_section(set, data, &driver).unwrap_or_default();
+        let description = crate::autostart::utf16_string(&driver.Description);
+        tracing::debug!("driver: the INF offers \"{description}\" (section {section:?})");
+        if wanted(&section, &description) {
             return Ok(Some(driver));
         }
     }
-    tracing::debug!("driver: no {WINUSB_SECTION} section in the list for class {}", format_guid(&data.ClassGuid));
+    tracing::debug!("driver: no wanted model in the list for class {}", format_guid(&data.ClassGuid));
     Ok(None)
 }
 
@@ -930,22 +1132,26 @@ fn require_usb(instance_id: &str) -> Result<(), DriverError> {
     }
 }
 
-/// `%SystemRoot%\INF\winusb.inf` as SP_DEVINSTALL_PARAMS.DriverPath wants it
-fn winusb_inf_path() -> Result<[u16; 260], DriverError> {
+/// `%SystemRoot%\INF\<name>` as SP_DEVINSTALL_PARAMS.DriverPath wants it;
+/// the error names what is missing
+fn inf_path(name: &str) -> Result<[u16; 260], String> {
+    if name.is_empty() || name.contains(['\\', '/', ':']) {
+        return Err(format!("not an INF name: {name:?}"));
+    }
     let mut dir = [0u16; 260];
     // SAFETY: the buffer length is passed.
     let n = unsafe { GetWindowsDirectoryW(Some(&mut dir)) } as usize;
     if n == 0 || n >= dir.len() {
-        return Err(DriverError::WinUsbInfMissing("%SystemRoot% not found".into()));
+        return Err("%SystemRoot% not found".into());
     }
-    let path = format!(r"{}\INF\winusb.inf", String::from_utf16_lossy(&dir[..n]));
+    let path = format!(r"{}\INF\{name}", String::from_utf16_lossy(&dir[..n]));
     if !std::path::Path::new(&path).is_file() {
-        return Err(DriverError::WinUsbInfMissing(path));
+        return Err(path);
     }
     let mut out = [0u16; 260];
     let units: Vec<u16> = path.encode_utf16().collect();
     if units.len() >= out.len() {
-        return Err(DriverError::WinUsbInfMissing(path));
+        return Err(path);
     }
     out[..units.len()].copy_from_slice(&units);
     Ok(out)
@@ -1010,6 +1216,42 @@ mod tests {
     }
 
     #[test]
+    fn recorded_model_by_section_or_description() {
+        let record = DriverRecord {
+            inf_name: "usb.inf".into(),
+            inf_section: "Composite.Dev.NT".into(),
+            description: "USB Composite Device".into(),
+            ..Default::default()
+        };
+        assert!(is_recorded_model(&record, "Composite.Dev", "anything"));
+        assert!(is_recorded_model(&record, "composite.dev.nt", ""));
+        assert!(!is_recorded_model(&record, "Composite.DevX", "USB Composite Device"));
+        assert!(!is_recorded_model(&record, "Composite", "USB Composite Device"));
+        assert!(!is_recorded_model(&record, "", "USB Composite Device"));
+        // Records from before the section was kept
+        let old = DriverRecord { inf_section: String::new(), ..record };
+        assert!(is_recorded_model(&old, "Composite.Dev", "USB Composite Device"));
+        assert!(!is_recorded_model(&old, "Composite.Dev", "USB Generic Parent"));
+        assert!(!is_recorded_model(&DriverRecord::default(), "Composite.Dev", ""));
+    }
+
+    #[test]
+    fn class_guids_parse() {
+        assert_eq!(parse_guid("{88BAE032-5A81-49F0-BC3D-A4FF138216D6}"), Some(USB_DEVICE_CLASS));
+        assert_eq!(parse_guid("88bae032-5a81-49f0-bc3d-a4ff138216d6"), Some(USB_DEVICE_CLASS));
+        assert_eq!(parse_guid(""), None);
+    }
+
+    #[test]
+    fn inf_names_only() {
+        assert!(inf_path("usb.inf").is_ok());
+        assert!(inf_path("").is_err());
+        assert!(inf_path(r"..\system32\x.inf").is_err());
+        assert!(inf_path("C:x.inf").is_err());
+        assert!(inf_path("oem99999.inf").is_err());
+    }
+
+    #[test]
     fn only_usb_instance_ids_pass_the_guard() {
         assert!(require_usb(r"USB\VID_0BDA&PID_8771\00E04C239987").is_ok());
         assert!(require_usb(r"usb\vid_0bda&pid_8771\1").is_ok());
@@ -1019,7 +1261,7 @@ mod tests {
 
     #[test]
     fn winusb_inf_is_found() {
-        let p = winusb_inf_path().expect("winusb.inf ships with Windows 8 and later");
+        let p = inf_path("winusb.inf").expect("winusb.inf ships with Windows 8 and later");
         let s = crate::autostart::utf16_string(&p);
         assert!(s.to_ascii_lowercase().ends_with(r"\inf\winusb.inf"), "{s}");
     }
