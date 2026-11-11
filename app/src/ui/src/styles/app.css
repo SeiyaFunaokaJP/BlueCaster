@@ -3493,6 +3493,19 @@ option {
 .cable-origin {
   margin-top: var(--s1);
 }
+.cable-banner {
+  flex-wrap: wrap;
+  align-items: center;
+}
+.cable-banner-text {
+  flex: 1 1 16em;
+  min-width: 0;
+}
+.cable-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
 .source-advice {
   display: flex;
   flex-wrap: wrap;
@@ -3617,7 +3630,7 @@ html.win-flyout body {
   margin-inline-end: auto;
   min-width: 0;
 }
-/* "Open app" beside Connect, as tall as it (issue #86) */
+/* "Open BlueCaster" beside Connect, as tall as it (issue #86) */
 .fly-actions {
   display: flex;
   gap: var(--s2);
