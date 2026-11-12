@@ -98,6 +98,7 @@
   "error.connect_auth_failed": "Authentifizierung fehlgeschlagen. Gerät in den Kopplungsmodus versetzen oder die Kopplung auf dem Gerät entfernen und erneut versuchen.",
   "error.pairing_hint": "Verbindung fehlgeschlagen. Sicherstellen, dass das Gerät im Kopplungsmodus ist.",
   "error.le_audio_disabled": "Dieses Audiogerät verwendet LE Audio, das ausgeschaltet ist. Schalte unter Adapter „LE Audio verwenden, wenn verfügbar“ ein.",
+  "error.le_audio_developer": "Dieses Audiogerät verwendet LE Audio, das vorerst nur im Entwicklermodus verfügbar ist.",
   "error.le_audio_unavailable": "LE Audio konnte nicht starten. Dieser Bluetooth-Adapter unterstützt es möglicherweise nicht.",
   "error.le_audio_connect": "LE Audio: keine Verbindung zum Gerät (%s).",
   "error.le_audio_stream": "LE Audio: der Stream konnte nicht eingerichtet werden (%s).",

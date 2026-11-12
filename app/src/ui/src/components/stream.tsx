@@ -673,6 +673,7 @@ const USER_SIDE_ERRORS = new Set([
   "error.codec_sep_in_use",
   "error.no_compatible_codec",
   "error.le_audio_disabled",
+  "error.le_audio_developer",
   "error.le_audio_unavailable",
   "error.le_audio_connect",
   "error.le_audio_capture",

@@ -19,6 +19,7 @@ import {
   REALTEK_CHIPS,
 } from "../lib/chips";
 import { FlowTracker, flowView } from "../lib/flow";
+import { leAudioOn as leOn } from "../lib/profile";
 import type {
   ConnStatus,
   Transport,
@@ -507,10 +508,11 @@ export function sampleSnapshot(scenario: MockScenario = "normal"): Snapshot {
     settings: sampleSettings({
       // The first run: the setup opens by itself
       setup_done: !fresh,
+      // LE Audio counts in developer mode only (issue #86)
       ...(voice
-        ? { le_audio_experimental: true }
+        ? { le_audio_experimental: true, developer_mode: true }
         : le
-          ? { le_audio_experimental: true }
+          ? { le_audio_experimental: true, developer_mode: true }
           : long
             ? { language: "ja" }
             : {}),
@@ -1408,10 +1410,7 @@ export class MockCore implements Transport {
         };
         this.emit({ kind: "settings", value: this.snap.settings });
         let le_audio_deferred = false;
-        if (
-          before.le_audio_experimental !==
-          this.snap.settings.le_audio_experimental
-        ) {
+        if (leOn(before) !== leOn(this.snap.settings)) {
           // As v1: LE is set up when BTstack starts; an idle one stops so that
           // the next scan or connection starts it with the setting
           const st = this.snap.stream.state;
@@ -1420,7 +1419,7 @@ export class MockCore implements Transport {
             st === "connecting" ||
             st === "streaming" ||
             st === "reconnecting";
-          const on = this.snap.settings.le_audio_experimental ? "on" : "off";
+          const on = leOn(this.snap.settings) ? "on" : "off";
           this.log(
             "info",
             "bluecaster_core_exe::state",
@@ -2049,8 +2048,10 @@ export class MockCore implements Transport {
     if (!profile) throw errorInfo("profile.not_found", "profile.none_selected");
     if (profile.le_audio) {
       // The core refuses these when the stream starts (le_stream.rs)
-      const refused = !this.snap.settings.le_audio_experimental
-        ? "error.le_audio_disabled"
+      const refused = !leOn(this.snap.settings)
+        ? this.snap.settings.developer_mode
+          ? "error.le_audio_disabled"
+          : "error.le_audio_developer"
         : profile.capture_mode === "app"
           ? "error.le_audio_capture"
           : null;
@@ -2583,7 +2584,7 @@ export class MockCore implements Transport {
       this.scanStop = () => finish(SCAN_RESULTS);
       this.later(Math.min(seconds, 3) * 1000, () => {
         if (done) return;
-        if (!this.snap.settings.le_audio_experimental) {
+        if (!leOn(this.snap.settings)) {
           finish(SCAN_RESULTS);
           return;
         }

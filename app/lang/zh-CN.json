@@ -98,6 +98,7 @@
   "error.connect_auth_failed": "身份验证失败。请将设备置于配对模式，或在设备上删除配对信息，然后重试。",
   "error.pairing_hint": "连接失败。请确认设备处于配对模式。",
   "error.le_audio_disabled": "此音频设备使用 LE Audio，但 LE Audio 已关闭。请在“适配器”中打开“可用时使用 LE Audio”。",
+  "error.le_audio_developer": "此音频设备使用 LE Audio，目前仅在开发者模式下可用。",
   "error.le_audio_unavailable": "无法启动 LE Audio。此 Bluetooth 适配器可能不支持。",
   "error.le_audio_connect": "LE Audio：无法连接到设备（%s）。",
   "error.le_audio_stream": "LE Audio：无法建立音频流（%s）。",

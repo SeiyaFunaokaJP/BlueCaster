@@ -14,7 +14,7 @@ function start(scenario: MockScenario = "normal") {
   mock = new MockCore({ speed: 0, scenario, onCall: (method, params) => calls.push({ method, params }) });
   const core = createCore(mock);
   render(() => <App core={core} />);
-  return { calls, mock };
+  return { calls, mock, core };
 }
 
 afterEach(() => {
@@ -65,6 +65,13 @@ describe("LE Audio switch (issue #86)", () => {
         settings: { le_audio_experimental: !on },
       }),
     );
+  });
+
+  it("is there in developer mode only", async () => {
+    const { core } = start("le");
+    await screen.findByRole("switch", { name: t("ui.adapter.le_audio") });
+    await core.request("settings.set", { settings: { ...core.state.snap!.settings, developer_mode: false } });
+    await waitFor(() => expect(screen.queryByText(t("ui.adapter.le_audio"))).toBeNull());
   });
 
   it("is not there when no adapter supports it", async () => {
