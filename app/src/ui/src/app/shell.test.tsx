@@ -408,21 +408,23 @@ describe("Audio Devices without a virtual device (issue #86)", () => {
     await waitFor(() => expect(within(dialog).getAllByRole("button", { name: t("cables.download") })).toHaveLength(2));
   });
 
-  it("About: the program, then third-party software with VB-Audio's cables; nothing on Settings", async () => {
+  it("About: the program, then third-party software with the cables' dialog, which names VB-Audio; nothing on Settings", async () => {
     location.hash = "#/about";
     const m = new MockCore({ speed: 0 });
     mock = m;
     render(() => <App core={createCore(m)} />);
     const third = (await screen.findByRole("heading", { name: t("help.third_party_title") })).closest("section") as HTMLElement;
     expect(within(third).getByText(t("help.third_party"))).toBeInTheDocument();
-    expect(within(third).getByText(t("vbcable.origin"), { exact: false })).toBeInTheDocument();
-    expect(within(third).getByText(t("hificable.origin"), { exact: false })).toBeInTheDocument();
+    // VB-Audio's donationware is named in the cables' dialog only
+    expect(within(third).queryByText(t("vbcable.origin"), { exact: false })).toBeNull();
     const about = screen.getByRole("heading", { name: t("help.about_title") }).closest("section") as HTMLElement;
     expect(within(about).queryByText(t("help.third_party"))).toBeNull();
     // The cables' dialog from there
     fireEvent.click(within(third).getByRole("button", { name: t("cables.title") }));
     const dialog = await screen.findByRole("dialog");
     await waitFor(() => expect(within(dialog).getByRole("button", { name: t("cables.uninstall") })).toBeInTheDocument());
+    expect(within(dialog).getByText(t("vbcable.origin"), { exact: false })).toBeInTheDocument();
+    expect(within(dialog).getByText(t("hificable.origin"), { exact: false })).toBeInTheDocument();
     cleanup();
     location.hash = "#/settings";
     m.noVirtual = true;

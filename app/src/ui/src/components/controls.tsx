@@ -444,17 +444,15 @@ export function Dialog(props: {
   const id = createUniqueId();
   let box: HTMLDivElement | undefined;
   let before: Element | null = null;
-  // Over the page beside the navigation and short of its scroll bar: the
-  // dialog lines up with the page's cards (issue #86). No page (the
-  // setup): the window. Measured before the dialog is drawn, again when
-  // the window is resized.
+  // As wide as the page's cards (the page beside the navigation, short of
+  // its scroll bar), centred in the window (issue #86). No page (the
+  // setup): the window's width. Measured before the dialog is drawn, again
+  // when the window is resized.
   const [resized, setResized] = createSignal(0);
-  const area = createMemo(() => {
+  const pageWidth = createMemo(() => {
     resized();
     const c = props.open ? document.querySelector<HTMLElement>(".content") : null;
-    if (!c) return { left: 0, right: 0 };
-    const r = c.getBoundingClientRect();
-    return { left: r.left, right: window.innerWidth - r.left - c.clientWidth };
+    return c ? `${c.clientWidth}px` : "100vw";
   });
   createEffect(() => {
     if (!props.open) return;
@@ -495,7 +493,7 @@ export function Dialog(props: {
       <Portal>
         <div
           class="backdrop"
-          style={{ "--page-left": `${area().left}px`, "--page-right": `${area().right}px` }}
+          style={{ "--page-width": pageWidth() }}
           onClick={(e) => e.target === e.currentTarget && cancel()}
         >
           <div

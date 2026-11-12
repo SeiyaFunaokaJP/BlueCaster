@@ -1,11 +1,11 @@
 // About: the program, its version, licence and where to find the author;
 // then, in a box of its own (issue #86), the third-party software: the
-// libraries' licences and VB-Audio's cables, named as their donationware,
-// with the cables' dialog.
+// libraries' licences and the dialog of VB-Audio's cables, which names them
+// as VB-Audio's donationware.
 
 import { createSignal } from "solid-js";
 import { useApp } from "../app/context";
-import { CablesDialog, Origin } from "../components/CableNotes";
+import { CablesDialog } from "../components/CableNotes";
 import { Button, Section } from "../components/controls";
 import { t } from "../i18n";
 import type { AudioDevice } from "../ipc/types";
@@ -62,8 +62,6 @@ export function About() {
       <Section title={t("help.third_party_title")}>
         <p class="hint">{t("help.binary_license")}</p>
         <p class="hint">{t("help.third_party")}</p>
-        <Origin text={t("hificable.origin")} url={LINKS.vbAudioHome} />
-        <Origin text={t("vbcable.origin")} url={LINKS.vbCableHome} />
         <div class="inline wrap">
           <Button icon="open" kind="subtle" onClick={() => openLicenses()}>
             {t("help.third_party_link")}

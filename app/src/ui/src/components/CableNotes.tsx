@@ -10,7 +10,8 @@
 // (https://vb-audio.com/Services/licensing.htm). The line cannot be closed
 // (issue #86: other ways to the microphone only bring bug reports);
 // Developer > Hide the virtual sound devices warning removes it. About >
-// Third-party software opens the same dialog.
+// Third-party software opens the same dialog, the only place that names
+// the cables' origin.
 
 import { createSignal, Show } from "solid-js";
 import { useApp } from "../app/context";
@@ -22,7 +23,7 @@ import { Button, Dialog } from "./controls";
 import { Icon } from "./Icon";
 
 /** VB-Audio's name for it, and that it is donationware: a link to its site */
-export function Origin(props: { text: string; url: string }) {
+function Origin(props: { text: string; url: string }) {
   const { core } = useApp();
   return (
     <p class="hint cable-origin">
