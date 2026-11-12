@@ -754,7 +754,7 @@ impl VoiceLink {
             let r = Ordering::Relaxed;
             tracing::info!(
                 "voice: {} link down after {} s: sent {} bytes (uplink {} underruns, {} dropped / {} repeated), \
-                 received {} packets ({} bad, {} concealed), microphone {}; frames: stream at byte {} of a frame \
+                 received {} packets ({} bad, {} concealed), microphone {}, {}; frames: stream at byte {} of a frame \
                  when they started, put on a boundary {} time(s), {} packet(s) of zeros while busy",
                 codec.name(),
                 since.elapsed().as_secs(),
@@ -766,6 +766,7 @@ impl VoiceLink {
                 d.map_or(0, |d| d.bad_packets),
                 d.map_or(0, |d| d.concealed),
                 level_text(d.as_ref()),
+                first_sound_text(d.as_ref()),
                 self.phase.first.load(r).saturating_sub(1),
                 self.phase.aligned.load(r),
                 self.phase.busy.load(r)
@@ -1372,6 +1373,18 @@ fn level_text(d: Option<&voice_link::DecoderStats>) -> String {
     match d.and_then(voice_link::DecoderStats::level) {
         Some((peak, rms)) => format!("peak {peak:.1} dBFS, RMS {rms:.1} dBFS"),
         None => "no samples".into(),
+    }
+}
+
+/// When the microphone's sound began, for the log: "first sound after
+/// 950 ms (316 packets, 180 bad)"
+fn first_sound_text(d: Option<&voice_link::DecoderStats>) -> String {
+    match d.and_then(|d| d.first_sound) {
+        Some(f) => format!(
+            "first sound after {} ms ({} packets, {} bad; by status {:?})",
+            f.after_ms, f.packets, f.bad_packets, f.by_status
+        ),
+        None => "no sound".into(),
     }
 }
 

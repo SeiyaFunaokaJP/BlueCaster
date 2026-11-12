@@ -791,6 +791,28 @@ Two fixes came out of it:
    `select_alt` tries up to 10 times 10 ms apart (`SCO_ALT_TRIES`,
    `SCO_ALT_RETRY`); the next runs did not hit it.
 
+### The first second of the microphone (2026-11-13, issue #86)
+
+"Switching is fast, but right after it the microphone does not come
+through for about a second." Measured with Auto, UB500 + WH-1000XM4, mSBC,
+recording CABLE Output with the `level_capture` win-sys example (level of
+every 50 ms) and the link-down summary's `first sound after ...` (the
+decoder's first sample that is not zero, the packets by HCI status until
+then), 3 cycles, the same each time:
+
+| From the recording's start | What |
+|---|---|
+| ~0.15 s | Auto sees it (session tick) |
+| ~0.26 s | eSCO up, microphone rendered to the cable |
+| +0.54 s | ~180 packets with status 2 (no data received): the headphones send nothing |
+| +0.27 s | ~90 good packets of digital silence |
+| ~1.1–1.2 s | the microphone's sound reaches the cable |
+
+About 0.8 s of it is the headphones' microphone starting after the audio
+connection; BlueCaster's part (detection, link, render) is about 0.25 s.
+Not tried: whether call indicators (`+CIEV`) make the headphones start
+sooner.
+
 ## Not verified / hardware checklist
 
 Checked on the UB500 + WH-1000XM4 (mSBC, full speed, one link) so far: 0

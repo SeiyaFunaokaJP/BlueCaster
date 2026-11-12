@@ -26,7 +26,7 @@ mod tap;
 mod uplink;
 mod wav;
 
-pub use codec::{DecoderStats, EncoderStats, VoiceCodec, VoiceDecoder, VoiceEncoder};
+pub use codec::{DecoderStats, EncoderStats, FirstSound, VoiceCodec, VoiceDecoder, VoiceEncoder};
 pub use render::{PcmConsumer, PcmProducer, RenderError, RenderStats, Renderer, pcm_channel};
 pub use tap::MicTap;
 pub use uplink::{UplinkConsumer, UplinkSink, UplinkStats};
