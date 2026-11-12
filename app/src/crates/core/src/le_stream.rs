@@ -458,6 +458,11 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
             host.le_stop_stream();
             mic_refused.set(true);
             asked.conversational = false;
+            // On a new link: right after the refused CIS, EarFun earbuds
+            // left ASE 2 in Enabling on the same link, while a fresh
+            // connection streamed every time (issue #86)
+            host.le_disconnect_all();
+            let ids = connect_devices(&host, &devices, &req.device_name, &stopped)?;
             r = host.le_start_stream(ids, asked, &le_silence_set);
         }
         let r = r.map_err(|e| {

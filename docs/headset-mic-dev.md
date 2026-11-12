@@ -465,6 +465,14 @@ silent until it is switched off or the adapter fails as a whole.
   Conversational (GMAP: Game + Conversational) on the source ASEs, and next
   to Media on the sink ASEs where available.
 - CIG: `max_sdu_p_to_c`, `rtn_p_to_c`, `phy_p_to_c`, the P->C SDU interval.
+  Both directions ask for the larger of the two presets' max transport
+  latency (each still capped by its ASEs' preference): with 95 ms for
+  `32_2_2` next to 100 ms for `48_6_2`, a MediaTek MT7925 left the 30 ms
+  ISO interval it uses for media (98 ms transport latency) for 10 ms, and
+  EarFun earbuds refused the second CIS (#86).
+- A stream with the microphone that fails is set up again without it on a
+  new link (`le_stream.rs`): on the same link the EarFun earbuds left ASE 2
+  in Enabling after the refused CIS.
   Source ASEs go through Config Codec / QoS / Enable; the client writes
   Receiver Start Ready once all CIS are up and Receiver Stop Ready on
   Disable. `IsoSender` gets only CIS with a C->P direction.
