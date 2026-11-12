@@ -208,15 +208,23 @@ records the microphone, and full-quality A2DP otherwise.
   (`audio_capture::mic_recorders` over
   `audio_policy::capture_session_recorders`), to tell an app from a
   Windows meter or "Listen to this device".
-- **The poll** (`voice.rs` `AutoWatch`): on the session tick (200 ms), at
-  most once a second (`AUTO_POLL`); the output is resolved once per mode or
-  output change, not on every poll. A WAV `mic_output` counts as always
+- **The poll** (`voice.rs` `AutoWatch`): on every session tick (200 ms;
+  `AUTO_POLL`, about 2 ms a poll), so little of a recording's start is
+  lost; the output is resolved once per mode or output change, not on
+  every poll. A WAV `mic_output` counts as always
   recorded from (the CLI's test path).
 - **Hysteresis**: the first poll that sees a recording turns the voice link
-  on; it goes back to A2DP only after the polls have seen nobody for 2 s
+  on; it goes back to A2DP only after the polls have seen nobody for 1 s
   (`AUTO_IDLE`), so an app that opens the device again does not bounce the
   link. The link going down by Auto leaves the plain Streaming status (no
   message); `StreamStatus.voice` is None while Auto is idle.
+- **A slow stream after a voice link** (`bt_host::esco_watch`): the bit
+  rate is lowered (`StreamStatus.slow_link`, the warning under the codec)
+  and the first three tries for the full one open a voice link of one
+  second first (`MicTarget::Discard`, asked for by
+  `LinkStats::recover_link`): the PC's audio goes on over it, the
+  receiving half is never armed, so the microphone's packets are dropped
+  undecoded and nothing reaches the microphone output.
 - `held_off` (after a failure or a refusal) is not cleared by Auto's own on
   and off, only by a mode or output change. The headphones hanging up in
   Auto keep the link closed until nobody has recorded (then the next

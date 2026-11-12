@@ -1774,6 +1774,18 @@ option {
 .live-bitpool {
   flex-basis: 100%;
 }
+/* The bit rate lowered for a link that is slow after the microphone (#86) */
+.codec-slow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s1);
+  min-width: 0;
+  font-size: var(--fs-12);
+  color: var(--text-2);
+}
+.codec-slow .icon {
+  flex: none;
+}
 /* A classic device's codec while its microphone is open: paused for the call
    link (issue #86) */
 .codec-info.codec-paused {

@@ -73,6 +73,10 @@ pub struct LinkStats {
     /// lowers its bit rate while set (crate::esco_watch, #86; BTstack
     /// thread writes, the encode thread reads)
     pub slow_link: AtomicBool,
+    /// A short voice link is asked for to put the slow link right
+    /// (crate::esco_watch; the BTstack thread sets it, the session opens
+    /// the link and clears it)
+    pub recover_link: AtomicBool,
     /// The largest controller_backlog since the link sampler last took it
     pub controller_backlog_peak: MaxGauge,
     /// The largest controller_backlog since the stream started

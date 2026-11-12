@@ -496,6 +496,13 @@ pub struct StreamStatus {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub codec_stop: Option<CodecStop>,
+    /// The link carries less since the microphone was used (#86): the bit
+    /// rate in kbps the codec is lowered to until the link is as before
+    /// (info.bitrate_kbps stays the one asked for). Some only while
+    /// streaming.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub slow_link: Option<u32>,
 }
 
 /// Why the stream stopped over its codec (StreamStatus.codec_stop)

@@ -47,4 +47,11 @@ voice?: VoiceStatus | null,
  * An error state the codec caused (issue #86): the device's status
  * line names it in a few words; the message has the whole text
  */
-codec_stop?: CodecStop | null, };
+codec_stop?: CodecStop | null, 
+/**
+ * The link carries less since the microphone was used (#86): the bit
+ * rate in kbps the codec is lowered to until the link is as before
+ * (info.bitrate_kbps stays the one asked for). Some only while
+ * streaming.
+ */
+slow_link?: number | null, };
