@@ -62,11 +62,13 @@ const SUMMARY_EVERY: Duration = Duration::from_secs(10);
 const APP_RECHECK: Duration = Duration::from_secs(1);
 
 /// How often Auto asks whether an application records from the microphone
-/// output's capture side
-const AUTO_POLL: Duration = Duration::from_secs(1);
+/// output's capture side: on every session tick (200 ms). Windows reports a
+/// recording's start and end at once, so this and [`AUTO_IDLE`] are all
+/// the delay there is (issue #86: back to A2DP as fast as to the mic).
+const AUTO_POLL: Duration = Duration::from_millis(200);
 /// How long nobody must record before Auto goes back to A2DP: an app that
 /// opens the device again does not bounce the link
-const AUTO_IDLE: Duration = Duration::from_secs(2);
+const AUTO_IDLE: Duration = Duration::from_millis(500);
 
 /// Auto's view of the recording applications: polled at most every
 /// [`AUTO_POLL`]; recording seen once turns it on, not recording for
@@ -159,7 +161,7 @@ impl AutoWatch {
             if after {
                 tracing::info!("voice: auto: an application records from {what}: {who}");
             } else {
-                tracing::info!("voice: auto: nobody recorded from {what} for {} s", AUTO_IDLE.as_secs());
+                tracing::info!("voice: auto: nobody recorded from {what} for {} ms", AUTO_IDLE.as_millis());
             }
         }
         after
@@ -1251,28 +1253,28 @@ mod tests {
     }
 
     #[test]
-    fn auto_turns_on_at_once_and_off_after_two_idle_seconds() {
+    fn auto_turns_on_at_once_and_off_after_half_a_second_idle() {
         let t0 = Instant::now();
         let at = |ms| t0 + Duration::from_millis(ms);
         let mut w = AutoWatch::default();
         assert!(w.due(t0));
         assert!(!w.seen(false, t0));
-        // Polled at most once a second
-        assert!(!w.due(at(999)));
-        assert!(w.due(at(1000)));
+        // Polled on every session tick
+        assert!(!w.due(at(199)));
+        assert!(w.due(at(200)));
         // Recording: on at the first poll that sees it
-        assert!(w.seen(true, at(1000)));
-        // Nobody for less than two seconds (an app opening the device
+        assert!(w.seen(true, at(200)));
+        // Nobody for less than half a second (an app opening the device
         // again): still on
-        assert!(w.seen(false, at(2000)));
-        assert!(w.seen(false, at(3000)));
-        assert!(w.seen(true, at(3500)));
-        assert!(w.seen(false, at(4500)));
-        assert!(w.seen(false, at(5500)));
-        // Two seconds of nobody: off
-        assert!(!w.seen(false, at(6500)));
-        assert!(!w.seen(false, at(9000)));
-        assert!(w.seen(true, at(10000)));
+        assert!(w.seen(false, at(400)));
+        assert!(w.seen(false, at(600)));
+        assert!(w.seen(true, at(800)));
+        assert!(w.seen(false, at(1000)));
+        assert!(w.seen(false, at(1200)));
+        // Half a second of nobody: off
+        assert!(!w.seen(false, at(1600)));
+        assert!(!w.seen(false, at(2000)));
+        assert!(w.seen(true, at(2200)));
     }
 
     #[test]

@@ -444,8 +444,23 @@ export function Dialog(props: {
   const id = createUniqueId();
   let box: HTMLDivElement | undefined;
   let before: Element | null = null;
+  // Over the page beside the navigation and short of its scroll bar: the
+  // dialog lines up with the page's cards (issue #86). No page (the
+  // setup): the window. Measured before the dialog is drawn, again when
+  // the window is resized.
+  const [resized, setResized] = createSignal(0);
+  const area = createMemo(() => {
+    resized();
+    const c = props.open ? document.querySelector<HTMLElement>(".content") : null;
+    if (!c) return { left: 0, right: 0 };
+    const r = c.getBoundingClientRect();
+    return { left: r.left, right: window.innerWidth - r.left - c.clientWidth };
+  });
   createEffect(() => {
     if (!props.open) return;
+    const onResize = () => setResized((n) => n + 1);
+    window.addEventListener("resize", onResize);
+    onCleanup(() => window.removeEventListener("resize", onResize));
     before = document.activeElement;
     queueMicrotask(() => box?.querySelector<HTMLElement>("[data-autofocus]")?.focus());
     onCleanup(() => {
@@ -478,7 +493,11 @@ export function Dialog(props: {
   return (
     <Show when={props.open}>
       <Portal>
-        <div class="backdrop" onClick={(e) => e.target === e.currentTarget && cancel()}>
+        <div
+          class="backdrop"
+          style={{ "--page-left": `${area().left}px`, "--page-right": `${area().right}px` }}
+          onClick={(e) => e.target === e.currentTarget && cancel()}
+        >
           <div
             class="dialog card"
             role="dialog"

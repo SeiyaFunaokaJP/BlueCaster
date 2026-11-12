@@ -208,13 +208,16 @@ records the microphone, and full-quality A2DP otherwise.
   (`audio_capture::mic_recorders` over
   `audio_policy::capture_session_recorders`), to tell an app from a
   Windows meter or "Listen to this device".
-- **The poll** (`voice.rs` `AutoWatch`): on the session tick (200 ms), at
-  most once a second (`AUTO_POLL`); the output is resolved once per mode or
-  output change, not on every poll. A WAV `mic_output` counts as always
+- **The poll** (`voice.rs` `AutoWatch`): on every session tick (200 ms,
+  `AUTO_POLL`); Windows reports a recording's start and end at once
+  (measured with the `watch_capture` win-sys example), so the poll and the
+  hysteresis below are all the delay there is; the output is resolved
+  once per mode or output change, not on every poll. A WAV `mic_output` counts as always
   recorded from (the CLI's test path).
 - **Hysteresis**: the first poll that sees a recording turns the voice link
-  on; it goes back to A2DP only after the polls have seen nobody for 2 s
-  (`AUTO_IDLE`), so an app that opens the device again does not bounce the
+  on; it goes back to A2DP only after the polls have seen nobody for
+  500 ms (`AUTO_IDLE`, 2 s before issue #86 asked for a faster way
+  back), so an app that opens the device again does not bounce the
   link. The link going down by Auto leaves the plain Streaming status (no
   message); `StreamStatus.voice` is None while Auto is idle.
 - `held_off` (after a failure or a refusal) is not cleared by Auto's own on

@@ -40,7 +40,8 @@ export function Origin(props: { text: string; url: string }) {
   );
 }
 
-/** One cable: its name and origin, Installed, and Install or Uninstall.
+/** One cable: its name with Installed or Not installed, its origin, and
+ *  Install or Uninstall.
  *  `installed` null until Windows' outputs are read. */
 function CableRow(props: {
   name: string;
@@ -78,7 +79,14 @@ function CableRow(props: {
   return (
     <div class="cable-row">
       <div class="cable-row-text">
-        <strong>{props.name}</strong>
+        <div class="cable-row-name">
+          <strong>{props.name}</strong>
+          <Show when={props.installed !== null}>
+            <span class={`tag ${props.installed ? "st-good" : "st-warn"}`}>
+              {t(props.installed ? "cables.installed" : "cables.not_installed")}
+            </span>
+          </Show>
+        </div>
         <Origin text={props.origin} url={props.originUrl} />
       </div>
       <div class="cable-row-actions">
@@ -105,7 +113,6 @@ function CableRow(props: {
               </Show>
             }
           >
-            <span class="muted">{t("cables.installed")}</span>
             <Button busy={busy()} onClick={() => void act(true)}>
               {t("cables.uninstall")}
             </Button>
