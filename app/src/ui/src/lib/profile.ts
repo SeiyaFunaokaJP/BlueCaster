@@ -142,10 +142,15 @@ export function deviceProfile(
   );
 }
 
+/** LE Audio in force: its setting counts only in developer mode (issue
+ *  #86), as the core has it */
+export const leAudioOn = (s: { le_audio_experimental: boolean; developer_mode: boolean }) =>
+  s.le_audio_experimental && s.developer_mode;
+
 /** The saved devices with their profiles, in the saved list's order; LE
- *  Audio entries only with LE Audio (experimental) on. */
+ *  Audio entries only with LE Audio on. */
 export function audioEntries(snap: Pick<Snapshot, "profiles" | "active_profile" | "stream" | "devices" | "settings">): AudioEntry[] {
-  return listedDevices(snap.devices, snap.settings.le_audio_experimental)
+  return listedDevices(snap.devices, leAudioOn(snap.settings))
     .filter((d) => d.saved)
     .map((d) => ({
       key: deviceKey(d),

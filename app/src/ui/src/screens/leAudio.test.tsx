@@ -259,6 +259,17 @@ describe("diagnostics", () => {
     expect(core.state.snap!.stream.message.key).toBe("error.le_audio_disabled");
   });
 
+  it("keeps LE Audio to developer mode: no entries, and its profile says so (issue #86)", async () => {
+    const { core } = start("#/codecs", "le");
+    await waitFor(() => expect(core.state.snap).not.toBeNull());
+    await screen.findByRole("region", { name: "Galaxy Buds2 Pro" });
+    await core.request("settings.set", { settings: { ...core.state.snap!.settings, developer_mode: false } });
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Galaxy Buds2 Pro" })).toBeNull());
+    await core.request("stream.start", { profile: "Buds (LE Audio)" });
+    await waitFor(() => expect(core.state.snap!.stream.state).toBe("error"));
+    expect(core.state.snap!.stream.message.key).toBe("error.le_audio_developer");
+  });
+
   it("shows an LE Audio device's codec as a value, not a disabled list (issue #86)", async () => {
     const { core } = start("#/", "le");
     await waitFor(() => expect(core.state.snap).not.toBeNull());

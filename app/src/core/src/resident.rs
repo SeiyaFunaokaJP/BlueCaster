@@ -263,6 +263,9 @@ async fn sampler(state: Arc<CoreState>) {
         }
         // ABR: the bit rate and SBC bitpool as they move
         state.apply_live_codec(stats.live_codec());
+        // The bit rate lowered while the link is slow after a voice link
+        let slow = stats.slow_link.load(std::sync::atomic::Ordering::Acquire);
+        state.apply_slow_link(stats.live_codec().filter(|_| slow).map(|l| l.bitrate_kbps));
         if !state.link_subscribed() {
             last_link = None;
             continue;

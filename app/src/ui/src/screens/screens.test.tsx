@@ -51,6 +51,27 @@ describe("Home", () => {
     await waitFor(() => expect(screen.queryByText(t("ui.home.hi_res_set"))).toBeNull());
   });
 
+  it("warns on the card and in the sidebar while the bit rate is lowered for a slow link (issue #86)", async () => {
+    start("#/home");
+    const wh = await homeCard("WH-1000XM5");
+    fireEvent.click(within(wh).getByRole("button", { name: "Connect" }));
+    await within(wh).findByRole("button", { name: "Disconnect" });
+    const m = mock as unknown as { snap: Snapshot; emit: (e: unknown) => void };
+    await waitFor(() => expect(m.snap.stream.info).toBeTruthy());
+    expect(screen.queryByText(t("ui.codec.slow_link"))).toBeNull();
+    m.snap.stream = { ...m.snap.stream, slow_link: 330 };
+    m.emit({ kind: "stream", value: m.snap.stream });
+    await waitFor(() => expect(wh.querySelector(".codec-slow")).toHaveTextContent(t("ui.codec.slow_link")));
+    // The bit rate in force, not the one asked for
+    expect(wh.querySelector(".codec-badge")).toHaveTextContent("330 kbps");
+    expect(document.querySelector(".status-pill .codec-slow")).not.toBeNull();
+    // As before again
+    m.snap.stream = { ...m.snap.stream, slow_link: null };
+    m.emit({ kind: "stream", value: m.snap.stream });
+    await waitFor(() => expect(screen.queryByText(t("ui.codec.slow_link"))).toBeNull());
+    expect(wh.querySelector(".codec-badge")).toHaveTextContent("990 kbps");
+  });
+
   it("drops the driver error once the error's own button put the adapter on WinUSB", async () => {
     start("#/home");
     const wh = await homeCard("WH-1000XM5");

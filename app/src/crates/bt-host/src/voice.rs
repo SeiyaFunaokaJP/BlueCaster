@@ -100,6 +100,9 @@ pub enum VoiceEvent {
 pub trait VoiceTx: Send {
     /// Fills `out` completely (the SCO payload of one packet)
     fn fill(&mut self, out: &mut [u8]);
+    /// The last `len` bytes filled were not sent (the send failed): the
+    /// byte stream on the link is that much shorter
+    fn unsent(&mut self, _len: usize) {}
 }
 
 /// Received payloads, on the BTstack thread
@@ -543,6 +546,9 @@ impl Voice {
         } else {
             self.send_errors += 1;
             self.failures_in_row += 1;
+            if length > 3 {
+                tx.unsent(length - 3);
+            }
             if self.send_errors <= 3 {
                 tracing::debug!("SCO send (packet length {length}): 0x{status:02x}");
             }

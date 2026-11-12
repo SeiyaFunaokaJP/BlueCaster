@@ -208,18 +208,27 @@ records the microphone, and full-quality A2DP otherwise.
   (`audio_capture::mic_recorders` over
   `audio_policy::capture_session_recorders`), to tell an app from a
   Windows meter or "Listen to this device".
-- **The poll** (`voice.rs` `AutoWatch`): on every session tick (200 ms,
-  `AUTO_POLL`); Windows reports a recording's start and end at once
-  (measured with the `watch_capture` win-sys example), so the poll and the
-  hysteresis below are all the delay there is; the output is resolved
-  once per mode or output change, not on every poll. A WAV `mic_output` counts as always
+- **The poll** (`voice.rs` `AutoWatch`): on every session tick (200 ms;
+  `AUTO_POLL`, about 2 ms a poll), so little of a recording's start is
+  lost. Windows reports a recording's start and end at once (measured with
+  the `watch_capture` win-sys example), so the poll and the hysteresis
+  below are all the delay there is. The output is resolved once per mode
+  or output change, not on every poll. A WAV `mic_output` counts as always
   recorded from (the CLI's test path).
 - **Hysteresis**: the first poll that sees a recording turns the voice link
   on; it goes back to A2DP only after the polls have seen nobody for
-  500 ms (`AUTO_IDLE`, 2 s before issue #86 asked for a faster way
-  back), so an app that opens the device again does not bounce the
+  500 ms (`AUTO_IDLE`; 2 s, then 1 s, before issue #86 asked for a way
+  back as fast as the way to the microphone), so an app that opens the
+  device again does not bounce the
   link. The link going down by Auto leaves the plain Streaming status (no
   message); `StreamStatus.voice` is None while Auto is idle.
+- **A slow stream after a voice link** (`bt_host::esco_watch`): the bit
+  rate is lowered (`StreamStatus.slow_link`, the warning under the codec)
+  and the first three tries for the full one open a voice link of one
+  second first (`MicTarget::Discard`, asked for by
+  `LinkStats::recover_link`): the PC's audio goes on over it, the
+  receiving half is never armed, so the microphone's packets are dropped
+  undecoded and nothing reaches the microphone output.
 - `held_off` (after a failure or a refusal) is not cleared by Auto's own on
   and off, only by a mode or output change. The headphones hanging up in
   Auto keep the link closed until nobody has recorded (then the next
@@ -418,6 +427,20 @@ can-send-now (TCP / emulator: 60; USB H2: 48 / 24), `VoiceRx::packet` every
 received payload. `Released` comes after `voice_stop`, a release by the
 headphones, the SCO link's HCI Disconnection Complete, or the service level
 connection going down (once: whichever comes first).
+
+**Frames start on a frame boundary of the link (#86).** Over USB a
+transparent SCO packet carries 24 bytes and an mSBC / LC3-SWB frame is 60,
+and the session arms the encoder some packets after the link is up, so the
+first frame used to start 0, 12, 24, 36 or 48 bytes into a frame's length,
+another place on every link. `ShellTx` (core `voice.rs`) counts the bytes
+sent since the link's first one and sends zeros up to the next multiple of
+60 before the encoder's first byte, and again after zeros for a busy slot
+or a packet that was not sent (`VoiceTx::unsent`). The link's last log line
+says where the stream was when the frames started, how often they were put
+on a boundary and how many packets of zeros went out while the slot was
+busy; "SCO link: ..." has the interval and retransmission window of
+Synchronous Connection Complete. The emulator sends 60 bytes a packet, so
+its frames always start on a boundary: the 24-byte case is a unit test.
 
 **The SCO path is checked before BTstack sizes a packet.** On an H2
 transport `hci_get_sco_packet_length_for_connection` asserts that the

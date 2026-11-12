@@ -1871,6 +1871,20 @@ impl CoreState {
         self.update_tray();
     }
 
+    /// The bit rate lowered for a link that is slow since the microphone
+    /// was used (the sampler; None: not lowered): published when it changed
+    pub fn apply_slow_link(&self, kbps: Option<u32>) {
+        let mut g = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        let kbps = kbps.filter(|_| g.1.stream.state == StreamState::Streaming && g.1.stream.info.is_some());
+        if g.1.stream.slow_link == kbps {
+            return;
+        }
+        g.1.stream.slow_link = kbps;
+        g.0 += 1;
+        let event = Event::Stream(g.1.stream.clone());
+        let _ = self.events.send((g.0, Arc::new(event)));
+    }
+
     /// A2DPWB v1 started or exited: published when it changed
     pub fn set_v1_running(&self, on: bool) {
         if self.with_snapshot(|s| s.v1_running) == on {
@@ -1916,7 +1930,7 @@ impl CoreState {
             base
         };
         let le = bluecaster_core::messages::translate(&lang, "device.tag_le_audio", "LE Audio");
-        let shown = tray_profiles(&s.profiles, s.settings.le_audio_experimental);
+        let shown = tray_profiles(&s.profiles, s.settings.le_audio_experimental && s.settings.developer_mode);
         let labels = shown.iter().map(|p| tray_label(device_name(&s.devices, p), p.le_audio, &le)).collect();
         (self.tray)(TrayView {
             streaming,
@@ -2007,6 +2021,7 @@ impl CoreState {
                     stream.battery = None;
                     stream.battery_refused = false;
                     stream.voice = None;
+                    stream.slow_link = None;
                     stream.voice_codecs.clear();
                     stream.mic_rates.clear();
                 }
@@ -2016,6 +2031,7 @@ impl CoreState {
                     stream.battery = None;
                     stream.battery_refused = false;
                     stream.voice = None;
+                    stream.slow_link = None;
                     stream.voice_codecs.clear();
                     stream.mic_rates.clear();
                     if state == CoreStreamState::Idle {
@@ -2490,6 +2506,7 @@ impl CoreState {
             mic_rates: Vec::new(),
             voice: None,
             codec_stop: None,
+            slow_link: None,
         }));
         let service = self.service.clone();
         // A restart for a save waits a moment: a request right behind it
@@ -3182,7 +3199,7 @@ impl CoreState {
                         })?;
                     }
                     let chip = chip_changed(&base, &merged);
-                    let le_toggled = base.le_audio_experimental != merged.le_audio_experimental;
+                    let le_toggled = base.le_audio() != merged.le_audio();
                     let auto_toggled = base.auto_codec != merged.auto_codec;
                     let developer_off = base.debug_mode && !merged.debug_mode;
                     let sync_toggled =
@@ -3286,7 +3303,7 @@ impl CoreState {
                             .filter(|n| restart_after_save(&s.stream, n))
                             .and_then(|n| list.iter().find(|p| p.name == n));
                         if let Some(p) = in_use {
-                            let le_on = me.service.settings().le_audio_experimental;
+                            let le_on = me.service.settings().le_audio();
                             let mut next = le_switched_profile(&list, p, le_on);
                             // An LE Audio side saved (a scan found it) without
                             // its profile yet: one from the classic one
@@ -4779,6 +4796,21 @@ mod tests {
         assert_eq!(state.snapshot().1.stream.info.unwrap().details.unwrap().sbc.unwrap().bitpool, 35);
         // The same again: no event
         state.apply_live_codec(Some(live));
+        assert!(events.try_recv().is_err());
+        // The bit rate lowered for a slow link: beside the one asked for
+        state.apply_slow_link(Some(330));
+        let (_, e) = events.try_recv().unwrap();
+        let Event::Stream(st) = &*e else { panic!("{e:?}") };
+        assert_eq!(st.slow_link, Some(330));
+        state.apply_slow_link(Some(330));
+        assert!(events.try_recv().is_err());
+        state.apply_slow_link(None);
+        assert_eq!(state.snapshot().1.stream.slow_link, None);
+        let _ = events.try_recv();
+        // Not while the link is down
+        set(StreamState::Reconnecting);
+        let _ = events.try_recv();
+        state.apply_slow_link(Some(330));
         assert!(events.try_recv().is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -488,6 +488,12 @@ impl Settings {
         }
     }
 
+    /// LE Audio in force: its setting counts only in developer mode (issue
+    /// #86: off for everyone else until a later version)
+    pub fn le_audio(&self) -> bool {
+        self.le_audio_experimental && self.debug_mode
+    }
+
     /// Whether a stream mutes the default output device
     pub fn mutes_output(&self) -> bool {
         self.mute_output && self.volume_mixer && self.debug_mode
@@ -535,6 +541,16 @@ mod tests {
         // A file without the key gets one of them
         let s: Settings = serde_json::from_str("{}").unwrap();
         assert!(LANGUAGES.contains(&s.language.as_str()));
+    }
+
+    #[test]
+    fn le_audio_counts_only_in_developer_mode() {
+        let mut s = Settings { le_audio_experimental: true, ..Settings::default() };
+        assert!(!s.le_audio());
+        s.debug_mode = true;
+        assert!(s.le_audio());
+        s.le_audio_experimental = false;
+        assert!(!s.le_audio());
     }
 
     #[test]

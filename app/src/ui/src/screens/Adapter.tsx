@@ -607,17 +607,21 @@ export function parseAfhChannels(s: string): string | null {
   return [...new Set(nums)].sort((a, b) => a - b).join(",");
 }
 
-/** LE Audio for the whole stack, as Windows has it (issue #86): only when
- *  an adapter is known to have LE Audio's isochronous channels */
-export function leAudioToggleShown(adapter: { le_audio: boolean | null; adapters: readonly { le_audio: boolean | null }[] }): boolean {
-  return adapter.le_audio === true || adapter.adapters.some((a) => a.le_audio === true);
+/** LE Audio for the whole stack, as Windows has it (issue #86): only in
+ *  developer mode, and when an adapter is known to have LE Audio's
+ *  isochronous channels */
+export function leAudioToggleShown(
+  adapter: { le_audio: boolean | null; adapters: readonly { le_audio: boolean | null }[] },
+  developer: boolean,
+): boolean {
+  return developer && (adapter.le_audio === true || adapter.adapters.some((a) => a.le_audio === true));
 }
 
 function LeAudioToggle() {
   const app = useApp();
   const snap = () => app.core.state.snap!;
   return (
-    <Show when={leAudioToggleShown(snap().adapter)}>
+    <Show when={leAudioToggleShown(snap().adapter, snap().settings.developer_mode)}>
       <section class="card section">
         <Toggle
           label={t("ui.adapter.le_audio")}

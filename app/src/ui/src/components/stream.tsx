@@ -299,6 +299,8 @@ export function CodecBadge(props: { compact?: boolean; aside?: JSX.Element; pick
   const { core } = useApp();
   const paused = () => core.state.snap?.stream.voice?.link === "hfp";
   const info = () => core.state.snap?.stream.info ?? null;
+  // The bit rate lowered while the link is slow after the microphone (#86)
+  const slow = () => core.state.snap?.stream.slow_link ?? null;
   const name = () => {
     const i = info();
     return i ? codecName(i) : "";
@@ -360,7 +362,7 @@ export function CodecBadge(props: { compact?: boolean; aside?: JSX.Element; pick
           <div class="codec-line">
             <span class="codec-badge">
               <span class="num" title={bitrateNote(i())}>
-                {i().bitrate_kbps} kbps
+                {slow() ?? i().bitrate_kbps} kbps
               </span>
               <Show when={!props.compact}>
                 <span class="num">{khz(i().sample_rate)} kHz</span>
@@ -385,6 +387,12 @@ export function CodecBadge(props: { compact?: boolean; aside?: JSX.Element; pick
             </span>
             {props.aside}
           </div>
+          <Show when={slow() !== null && !paused()}>
+            <span class="codec-slow">
+              <Icon name="warning" class="st-warn" />
+              {t("ui.codec.slow_link")}
+            </span>
+          </Show>
         </div>
       )}
     </Show>
@@ -673,6 +681,7 @@ const USER_SIDE_ERRORS = new Set([
   "error.codec_sep_in_use",
   "error.no_compatible_codec",
   "error.le_audio_disabled",
+  "error.le_audio_developer",
   "error.le_audio_unavailable",
   "error.le_audio_connect",
   "error.le_audio_capture",

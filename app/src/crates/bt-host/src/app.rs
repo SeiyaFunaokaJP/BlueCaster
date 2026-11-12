@@ -1077,7 +1077,12 @@ impl HostApp {
             return;
         }
         let completed = (self.streaming && self.media_acl == Some(acl)).then(|| self.media_completed());
-        match self.esco.tick(Instant::now(), completed) {
+        // A voice link of our own only on the link that carries the stream
+        let voice = !keep
+            && self.esco.is_lowered()
+            && self.hfp_acl == Some(acl)
+            && self.voice.check(self.setup.voice, self.hfp_acl, stack.transport_is_h2()).is_ok();
+        match self.esco.tick(Instant::now(), completed, voice) {
             Verdict::Wait => {}
             Verdict::Good { rate } => {
                 tracing::info!("stream after the voice link: {rate} packets/s, as before");
@@ -1097,7 +1102,12 @@ impl HostApp {
             }
             Verdict::Probe => {
                 tracing::info!("stream after the voice link: trying the full bit rate again");
+                self.stats.recover_link.store(false, Ordering::Release);
                 self.stats.slow_link.store(false, Ordering::Release);
+            }
+            Verdict::Recover => {
+                tracing::info!("stream after the voice link: still slow, asking for a short voice link");
+                self.stats.recover_link.store(true, Ordering::Release);
             }
         }
         if self.esco.watching().is_some() {
@@ -1109,6 +1119,7 @@ impl HostApp {
     fn stop_esco_watch(&mut self, stack: &Stack) {
         self.esco.stop();
         stack.timer_stop(TIMER_ESCO_WATCH);
+        self.stats.recover_link.store(false, Ordering::Release);
         self.stats.slow_link.store(false, Ordering::Release);
     }
 
@@ -1520,6 +1531,23 @@ impl HostApp {
                 tracing::debug!("inquiry complete (status {:?})", u8_at(p, 2));
                 self.shared.update(|s| s.inquiry_done = true);
             }
+            // What the voice link runs with on the air (#86: to tell a
+            // link that sounds bad from one that does not)
+            HCI_EVENT_SYNCHRONOUS_CONNECTION_COMPLETE => {
+                let (Some(status), Some(link_type), Some(interval), Some(window), Some(air)) =
+                    (u8_at(p, 2), u8_at(p, 11), u8_at(p, 12), u8_at(p, 13), u8_at(p, 18))
+                else {
+                    return;
+                };
+                if status == 0 {
+                    tracing::info!(
+                        "SCO link: {}, interval {interval} slots, retransmission window {window} slots, rx {} / tx {} bytes, air mode {air}",
+                        if link_type == 2 { "eSCO" } else { "SCO" },
+                        le16(p, 14).unwrap_or(0),
+                        le16(p, 16).unwrap_or(0)
+                    );
+                }
+            }
             HCI_EVENT_DISCONNECTION_COMPLETE => {
                 let (Some(handle), Some(reason)) = (le16(p, 3), u8_at(p, 5)) else { return };
                 let handle = handle & 0x0FFF;
@@ -1540,6 +1568,7 @@ impl HostApp {
                         if self.media_acl == Some(acl) {
                             // The full bit rate again: the voice link may
                             // have put the link right
+                            self.stats.recover_link.store(false, Ordering::Release);
                             self.stats.slow_link.store(false, Ordering::Release);
                             if self.esco.voice_link_ended(Instant::now(), acl) {
                                 stack.timer_start(TIMER_ESCO_WATCH, crate::esco_watch::TICK.as_millis() as u32);

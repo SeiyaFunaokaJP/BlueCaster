@@ -21,6 +21,11 @@
 //! Output"; [`audio_capture::mic_capture_active`], polled once a second) and
 //! goes back to A2DP once nobody has recorded for [`AUTO_IDLE`].
 //!
+//! A stream that came out of a voice link slow (bt_host::esco_watch) gets a
+//! short voice link of its own ([`MicTarget::Discard`]): the stack asks for
+//! it ([`LinkStats::recover_link`]), the PC's audio goes on over it and the
+//! microphone's packets are dropped undecoded.
+//!
 //! Where the microphone goes is decided here for both kinds of device:
 //! [`resolve_mic_output`] (a render endpoint by id or name, a WAV file, the
 //! default output), [`mic_conflict`] (the feedback-loop refusal) and
@@ -62,13 +67,19 @@ const SUMMARY_EVERY: Duration = Duration::from_secs(10);
 const APP_RECHECK: Duration = Duration::from_secs(1);
 
 /// How often Auto asks whether an application records from the microphone
-/// output's capture side: on every session tick (200 ms). Windows reports a
+/// output's capture side: every tick of the session (200 ms), so that
+/// little of a recording's start is lost (#86). Windows reports a
 /// recording's start and end at once, so this and [`AUTO_IDLE`] are all
-/// the delay there is (issue #86: back to A2DP as fast as to the mic).
-const AUTO_POLL: Duration = Duration::from_millis(200);
+/// the delay there is.
+const AUTO_POLL: Duration = Duration::from_millis(150);
 /// How long nobody must record before Auto goes back to A2DP: an app that
-/// opens the device again does not bounce the link
+/// opens the device again does not bounce the link (#86: back to A2DP about
+/// as fast as to the microphone)
 const AUTO_IDLE: Duration = Duration::from_millis(500);
+/// How long the voice link opened for a slow link stays up
+const RECOVERY_UP: Duration = Duration::from_secs(1);
+/// How long it may take to come up
+const RECOVERY_OPEN: Duration = Duration::from_secs(3);
 
 /// Auto's view of the recording applications: polled at most every
 /// [`AUTO_POLL`]; recording seen once turns it on, not recording for
@@ -114,7 +125,7 @@ impl AutoWatch {
     fn look(&mut self, target: Option<&MicTarget>) -> bool {
         let id = match target {
             Some(MicTarget::Wav(_)) => return true,
-            Some(MicTarget::Test) => return false,
+            Some(MicTarget::Test | MicTarget::Discard) => return false,
             Some(MicTarget::Device { id, .. }) => id,
             None => {
                 if !std::mem::replace(&mut self.warned, true) {
@@ -194,6 +205,8 @@ pub enum MicTarget {
     Wav(PathBuf),
     /// Nowhere: only the microphone test listens (headset mode off)
     Test,
+    /// Nowhere, and never decoded: the short voice link for a slow link
+    Discard,
 }
 
 impl MicTarget {
@@ -202,7 +215,7 @@ impl MicTarget {
     pub fn device_id(&self) -> &str {
         match self {
             MicTarget::Device { id, .. } => id,
-            MicTarget::Wav(_) | MicTarget::Test => "",
+            MicTarget::Wav(_) | MicTarget::Test | MicTarget::Discard => "",
         }
     }
 
@@ -227,6 +240,7 @@ impl std::fmt::Display for MicTarget {
             MicTarget::Device { id, name } => write!(f, "{} ({id})", crate::diag::quoted(name)),
             MicTarget::Wav(path) => write!(f, "file {}", path.display()),
             MicTarget::Test => f.write_str("the microphone test only"),
+            MicTarget::Discard => f.write_str("nowhere"),
         }
     }
 }
@@ -269,7 +283,7 @@ pub fn mic_conflict(target: &MicTarget, source: &SourceRequest) -> Option<&'stat
             let default = audio_capture::default_render_device().unwrap_or_default();
             crate::profiles::mic_output_conflicts(source, id, &default)
         }
-        MicTarget::Wav(_) | MicTarget::Test => None,
+        MicTarget::Wav(_) | MicTarget::Test | MicTarget::Discard => None,
     }
 }
 
@@ -301,25 +315,91 @@ struct RxParts {
 
 type Slot<T> = Arc<Mutex<Option<T>>>;
 
+/// Where the frames of mSBC and LC3-SWB sit in the byte stream of a voice
+/// link, for its last log line (#86)
+#[derive(Debug, Default)]
+struct TxPhase {
+    /// Bytes into a frame's length the stream was when the encoder came
+    /// (1 + the offset; 0: no frame sent yet)
+    first: std::sync::atomic::AtomicU32,
+    /// Times zeros were put in to start the frames on a boundary
+    aligned: std::sync::atomic::AtomicU32,
+    /// Packets of zeros sent while the encoder was there but being armed
+    /// or disarmed
+    busy: std::sync::atomic::AtomicU32,
+}
+
 /// The [`VoiceTx`] bt-host holds: silence until armed. What it sends while
 /// armed counts as the link's media (Diagnostics shows the call link as it
 /// shows A2DP).
-struct ShellTx(Slot<TxParts>, Arc<LinkStats>);
+///
+/// SCO over USB sends 24 bytes a packet and the controller cuts the stream
+/// into the air's 60-byte packets from its first byte, so a frame that
+/// starts anywhere else straddles two of them for the whole link (heard as
+/// a steady buzz on some headphones, #86). The frames therefore start on a
+/// multiple of [`voice_link::h2::FRAME_LEN`] bytes since the link's first
+/// byte: zeros go out until then, also after zeros sent for a busy slot or
+/// a packet that was not sent.
+struct ShellTx {
+    parts: Slot<TxParts>,
+    stats: Arc<LinkStats>,
+    /// Bytes sent on the link so far, modulo the frame length
+    sent: usize,
+    /// Zeros are going out up to a frame boundary
+    padding: bool,
+    phase: Arc<TxPhase>,
+}
+
+impl ShellTx {
+    fn new(parts: Slot<TxParts>, stats: Arc<LinkStats>, phase: Arc<TxPhase>) -> ShellTx {
+        ShellTx { parts, stats, sent: 0, padding: false, phase }
+    }
+}
 
 impl VoiceTx for ShellTx {
     fn fill(&mut self, out: &mut [u8]) {
-        match self.0.try_lock() {
+        const FRAME: usize = voice_link::h2::FRAME_LEN;
+        match self.parts.try_lock() {
             Ok(mut parts) => match parts.as_mut() {
                 Some(p) => {
-                    p.encoder.fill(&mut p.uplink, out);
-                    self.1.packets_sent.fetch_add(1, Ordering::Relaxed);
-                    self.1.bytes_sent.fetch_add(out.len() as u64, Ordering::Relaxed);
+                    let mut start = 0;
+                    if p.encoder.codec() != VoiceCodec::Cvsd {
+                        // Where the encoder is in its frame, and the stream
+                        let at = (p.encoder.stats().bytes % FRAME as u64) as usize;
+                        let pad = (at + FRAME - self.sent) % FRAME;
+                        let r = Ordering::Relaxed;
+                        let _ = self.phase.first.compare_exchange(0, 1 + self.sent as u32, r, r);
+                        if pad > 0 && !std::mem::replace(&mut self.padding, true) {
+                            self.phase.aligned.fetch_add(1, r);
+                        }
+                        start = pad.min(out.len());
+                        out[..start].fill(0);
+                        if start == pad {
+                            self.padding = false;
+                        }
+                    }
+                    if start < out.len() {
+                        p.encoder.fill(&mut p.uplink, &mut out[start..]);
+                    }
+                    self.stats.packets_sent.fetch_add(1, Ordering::Relaxed);
+                    self.stats.bytes_sent.fetch_add(out.len() as u64, Ordering::Relaxed);
                 }
                 None => out.fill(0),
             },
             // Being armed or disarmed right now
-            Err(_) => out.fill(0),
+            Err(_) => {
+                out.fill(0);
+                if self.phase.first.load(Ordering::Relaxed) != 0 {
+                    self.phase.busy.fetch_add(1, Ordering::Relaxed);
+                }
+            }
         }
+        self.sent = (self.sent + out.len()) % FRAME;
+    }
+
+    fn unsent(&mut self, len: usize) {
+        const FRAME: usize = voice_link::h2::FRAME_LEN;
+        self.sent = (self.sent + FRAME - len % FRAME) % FRAME;
     }
 }
 
@@ -364,7 +444,7 @@ impl MicOutput {
             MicTarget::Wav(path) => {
                 WavSink::create(path, rate).map(MicOutput::Wav).map_err(|e| format!("{}: {e}", path.display()))
             }
-            MicTarget::Test => {
+            MicTarget::Test | MicTarget::Discard => {
                 let (p, c) = voice_link::pcm_channel(rate as usize / 10);
                 Ok(MicOutput::Test(Some(p), c))
             }
@@ -427,6 +507,8 @@ struct VoiceLink {
     stats: Arc<LinkStats>,
     /// The uplink's counters last added to them
     counted: UplinkStats,
+    /// Where the frames sat in the byte stream (the [`ShellTx`] writes it)
+    phase: Arc<TxPhase>,
 }
 
 impl VoiceLink {
@@ -448,8 +530,10 @@ impl VoiceLink {
             tap,
             stats: stats.clone(),
             counted: UplinkStats::default(),
+            phase: Arc::default(),
         };
-        (link, Box::new(ShellTx(tx, stats.clone())), Box::new(ShellRx(rx, stats)))
+        let shell = ShellTx::new(tx, stats.clone(), link.phase.clone());
+        (link, Box::new(shell), Box::new(ShellRx(rx, stats)))
     }
 
     /// The audio connection is up with `codec`: the microphone output at its
@@ -457,6 +541,22 @@ impl VoiceLink {
     /// the output cannot be opened (the message for the user).
     fn arm(&mut self, codec: VoiceCodec, source: &SourceRequest) -> Result<(), Msg> {
         let rate = codec.rate();
+        if self.target == MicTarget::Discard {
+            // Only the way to the headphones: the receiving half stays
+            // unarmed, so the microphone's packets are dropped as they come
+            let uplink = self.start_uplink(rate, source);
+            *self.tx.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(TxParts { encoder: VoiceEncoder::new(codec), uplink });
+            let now = Instant::now();
+            self.codec = Some((codec, now));
+            self.summary_at = now + SUMMARY_EVERY;
+            tracing::info!(
+                "voice: {} at {rate} Hz, {} ms after asking; microphone dropped, uplink from {source}",
+                codec.name(),
+                now.duration_since(self.asked).as_millis()
+            );
+            return Ok(());
+        }
         let mut output = MicOutput::open(&self.target, rate).map_err(|e| {
             tracing::warn!("voice: cannot open the microphone output {}: {e}", self.target);
             Msg::new("status.headset_mic_output_failed")
@@ -572,8 +672,13 @@ impl VoiceLink {
         })?;
         let mut out = output.producer().ok_or_else(|| Msg::new("status.headset_mic_output_failed"))?;
         out.set_tap(self.tap.clone(), codec.rate());
-        if let Some(parts) = self.rx.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-            parts.out = out;
+        {
+            let mut rx = self.rx.lock().unwrap_or_else(|e| e.into_inner());
+            match rx.as_mut() {
+                Some(parts) => parts.out = out,
+                // Dropped so far (MicTarget::Discard)
+                None => *rx = Some(RxParts { decoder: VoiceDecoder::new(codec), out }),
+            }
         }
         // The old one stops after its producer is gone
         self.output = Some(output);
@@ -600,6 +705,10 @@ impl VoiceLink {
     }
 
     fn status(&self) -> Option<ipc::VoiceStatus> {
+        // The moment of a link for a slow link is not shown as a call
+        if self.target == MicTarget::Discard {
+            return None;
+        }
         let (codec, _) = self.codec?;
         Some(ipc::VoiceStatus {
             codec: codec.name().into(),
@@ -642,9 +751,11 @@ impl VoiceLink {
         if let Some((codec, since)) = self.codec.take() {
             let (e, d) = (tx.as_ref().map(|p| p.encoder.stats()), rx.as_ref().map(|p| p.decoder.stats()));
             let u = tx.as_ref().map(|p| p.uplink.stats()).unwrap_or_default();
+            let r = Ordering::Relaxed;
             tracing::info!(
                 "voice: {} link down after {} s: sent {} bytes (uplink {} underruns, {} dropped / {} repeated), \
-                 received {} packets ({} bad, {} concealed), microphone {}",
+                 received {} packets ({} bad, {} concealed), microphone {}; frames: stream at byte {} of a frame \
+                 when they started, put on a boundary {} time(s), {} packet(s) of zeros while busy",
                 codec.name(),
                 since.elapsed().as_secs(),
                 e.map_or(0, |e| e.bytes),
@@ -654,7 +765,10 @@ impl VoiceLink {
                 d.map_or(0, |d| d.packets),
                 d.map_or(0, |d| d.bad_packets),
                 d.map_or(0, |d| d.concealed),
-                level_text(d.as_ref())
+                level_text(d.as_ref()),
+                self.phase.first.load(r).saturating_sub(1),
+                self.phase.aligned.load(r),
+                self.phase.busy.load(r)
             );
         }
         drop((tx, rx));
@@ -692,6 +806,9 @@ pub(crate) struct HeadsetMode {
     foreign_logged: bool,
     /// The microphone test wants the voice link ([`crate::mic_test`])
     test: bool,
+    /// A short voice link for a slow link is wanted or up
+    /// ([`HeadsetMode::follow_recovery`])
+    recovering: bool,
 }
 
 impl HeadsetMode {
@@ -707,6 +824,7 @@ impl HeadsetMode {
             link: None,
             foreign_logged: false,
             test: false,
+            recovering: false,
         }
     }
 
@@ -719,13 +837,50 @@ impl HeadsetMode {
     /// Whether the voice link should be up now: for headset mode, or for
     /// the microphone test
     fn wanted(&self) -> bool {
-        self.mode_wanted() || self.test
+        self.mode_wanted() || self.test || self.recovering
     }
 
     /// Where the microphone goes on a link opened now: headset mode's
     /// output, or nowhere but the microphone test
     fn target(&self) -> Option<MicTarget> {
-        if self.mode_wanted() { resolve_mic_output(self.mic_output.as_deref()) } else { Some(MicTarget::Test) }
+        if self.mode_wanted() {
+            resolve_mic_output(self.mic_output.as_deref())
+        } else if self.test {
+            Some(MicTarget::Test)
+        } else {
+            Some(MicTarget::Discard)
+        }
+    }
+
+    /// The stack asks for a short voice link (the stream is slow after
+    /// one): opened unless one is up or coming or headset mode gave up,
+    /// and closed [`RECOVERY_UP`] after it came up. The stack tries the
+    /// bit rate alone when none comes.
+    fn follow_recovery(&mut self, host: &BtHost) {
+        if host.stats().recover_link.swap(false, Ordering::AcqRel)
+            && self.link.is_none()
+            && !self.held_off
+            && !self.wanted()
+            && host.voice_check().is_ok()
+        {
+            tracing::info!("voice: the stream is slow after the voice link, opening a short one");
+            self.recovering = true;
+            return;
+        }
+        if !self.recovering {
+            return;
+        }
+        let over = match self.link.as_ref() {
+            Some(link) if link.target == MicTarget::Discard => match link.codec {
+                Some((_, since)) => since.elapsed() >= RECOVERY_UP,
+                None => link.asked.elapsed() >= RECOVERY_OPEN,
+            },
+            // Not opened, or headset mode's own by now
+            _ => true,
+        };
+        if over {
+            self.recovering = false;
+        }
     }
 
     /// The microphone test started or ended (the session's tick)
@@ -824,14 +979,28 @@ impl HeadsetMode {
         // microphone goes to headset mode's output
         if self.mode_wanted()
             && let Some(link) = self.link.as_mut()
-            && link.target == MicTarget::Test
+            && matches!(link.target, MicTarget::Test | MicTarget::Discard)
             && let Some(target) = resolve_mic_output(self.mic_output.as_deref())
             && mic_conflict(&target, source).is_none()
-            && let Err(m) = link.change_output(target)
         {
-            self.held_off = true;
+            let dropped = link.target == MicTarget::Discard;
+            if let Err(m) = link.change_output(target) {
+                self.held_off = true;
+                return self.leave(true, inner, host, a2dp, Some(m));
+            }
+            if dropped {
+                inner.voice_status(link.status());
+            }
+        }
+        // Opened for a slow link, and now the test wants it
+        if self.test
+            && let Some(link) = self.link.as_mut()
+            && link.target == MicTarget::Discard
+            && let Err(m) = link.change_output(MicTarget::Test)
+        {
             return self.leave(true, inner, host, a2dp, Some(m));
         }
+        self.follow_recovery(host);
         if let Some(link) = self.link.as_mut() {
             link.summary();
             link.recheck_app(source);
@@ -850,7 +1019,9 @@ impl HeadsetMode {
         match (self.wanted(), self.link.is_some()) {
             (true, false) if !self.held_off => self.enter(inner, host, source, a2dp),
             (false, true) => {
-                if self.link.as_ref().is_some_and(|l| l.target == MicTarget::Test) {
+                if self.link.as_ref().is_some_and(|l| l.target == MicTarget::Discard) {
+                    tracing::info!("voice: the short voice link is over, back to A2DP");
+                } else if self.link.as_ref().is_some_and(|l| l.target == MicTarget::Test) {
                     tracing::info!("voice: the microphone test ended, back to A2DP");
                 } else if self.mode == HeadsetMic::Auto {
                     tracing::info!("voice: auto: nobody records, back to A2DP");
@@ -979,6 +1150,11 @@ impl HeadsetMode {
                 // (the setting saved again, the stream started again) opens
                 // it again. Auto: also once nobody has recorded for a while.
                 tracing::info!("voice: the headphones closed the audio connection, back to A2DP");
+                // Ours for a slow link: headset mode stays as asked for
+                if self.link.as_ref().is_some_and(|l| l.target == MicTarget::Discard) {
+                    self.recovering = false;
+                    return self.leave(false, inner, host, a2dp, None);
+                }
                 if self.mode == HeadsetMic::Auto {
                     self.hung_up = true;
                 } else {
@@ -995,6 +1171,11 @@ impl HeadsetMode {
                     "voice: the audio connection {} (0x{status:02x}), back to A2DP",
                     if up { "stopped working" } else { "failed" }
                 );
+                // Ours for a slow link: nothing of headset mode failed
+                if link.target == MicTarget::Discard {
+                    self.recovering = false;
+                    return self.leave(up, inner, host, a2dp, None);
+                }
                 self.held_off = true;
                 self.leave(up, inner, host, a2dp, Some(Msg::new("status.headset_mic_failed")))
             }
@@ -1088,7 +1269,9 @@ impl HeadsetMode {
             tracing::warn!("voice: the microphone output {target} feeds the stream ({source}), headset mode refused");
             return self.give_up(inner, Msg::new(key));
         }
-        if target == MicTarget::Test {
+        if target == MicTarget::Discard {
+            tracing::info!("voice: slow link, suspending A2DP and asking for the audio connection");
+        } else if target == MicTarget::Test {
             tracing::info!("voice: microphone test, suspending A2DP and asking for the audio connection");
         } else {
             tracing::info!("voice: headset mode on, suspending A2DP and asking for the audio connection");
@@ -1110,6 +1293,10 @@ impl HeadsetMode {
     }
 
     fn give_up(&mut self, inner: &Inner, msg: Msg) -> Result<(), Msg> {
+        // The link for a slow link: nothing of headset mode failed
+        if std::mem::take(&mut self.recovering) && !self.mode_wanted() && !self.test {
+            return Ok(());
+        }
         self.test_failed(inner, &msg);
         self.held_off = true;
         inner.notify(StreamState::Streaming, msg);
@@ -1259,8 +1446,8 @@ mod tests {
         let mut w = AutoWatch::default();
         assert!(w.due(t0));
         assert!(!w.seen(false, t0));
-        // Polled on every session tick
-        assert!(!w.due(at(199)));
+        // Polled on every tick of the session (200 ms), not more often
+        assert!(!w.due(at(149)));
         assert!(w.due(at(200)));
         // Recording: on at the first poll that sees it
         assert!(w.seen(true, at(200)));
@@ -1270,11 +1457,115 @@ mod tests {
         assert!(w.seen(false, at(600)));
         assert!(w.seen(true, at(800)));
         assert!(w.seen(false, at(1000)));
-        assert!(w.seen(false, at(1200)));
+        assert!(w.seen(false, at(1400)));
         // Half a second of nobody: off
         assert!(!w.seen(false, at(1600)));
-        assert!(!w.seen(false, at(2000)));
-        assert!(w.seen(true, at(2200)));
+        assert!(!w.seen(false, at(9000)));
+        assert!(w.seen(true, at(10000)));
+    }
+
+    /// The bytes `tx` sends in packets of `len`, `packets` of them
+    fn sent(tx: &mut ShellTx, len: usize, packets: usize) -> Vec<u8> {
+        let mut all = Vec::new();
+        for _ in 0..packets {
+            let mut out = vec![0xEE; len];
+            tx.fill(&mut out);
+            all.extend(out);
+        }
+        all
+    }
+
+    /// Where the H2 headers of `stream` are (every one a frame's length
+    /// after the one before)
+    fn headers(stream: &[u8]) -> Vec<usize> {
+        let first = stream.windows(2).position(|w| voice_link::h2::is_header(w[0], w[1])).expect("a frame");
+        (first..stream.len() - 1).step_by(voice_link::h2::FRAME_LEN).collect()
+    }
+
+    fn armed(slot: &Slot<TxParts>, codec: VoiceCodec) {
+        let (_sink, uplink) = UplinkSink::new(codec.rate(), UPLINK_CAPACITY_MS);
+        *slot.lock().unwrap() = Some(TxParts { encoder: VoiceEncoder::new(codec), uplink });
+    }
+
+    #[test]
+    fn frames_start_on_a_frame_boundary_of_the_link_whenever_the_encoder_comes() {
+        // SCO over USB: 24 bytes a packet. Zeros until the session arms the
+        // link, after 1 to 7 packets: the stream is then 24, 48, 12 ... bytes
+        // into a frame's length
+        for before in 1..=7 {
+            let slot: Slot<TxParts> = Default::default();
+            let phase: Arc<TxPhase> = Arc::default();
+            let mut tx = ShellTx::new(slot.clone(), Arc::new(LinkStats::default()), phase.clone());
+            let mut stream = sent(&mut tx, 24, before);
+            assert!(stream.iter().all(|&b| b == 0));
+            armed(&slot, VoiceCodec::Msbc);
+            stream.extend(sent(&mut tx, 24, 50));
+            let at = headers(&stream);
+            assert!(at.len() > 15);
+            for i in at {
+                assert_eq!(i % voice_link::h2::FRAME_LEN, 0, "armed after {before} packets");
+                assert!(voice_link::h2::is_header(stream[i], stream[i + 1]), "a header every 60 bytes");
+            }
+            let first = (before * 24 % 60) as u32;
+            assert_eq!(phase.first.load(Ordering::Relaxed), 1 + first);
+            assert_eq!(phase.aligned.load(Ordering::Relaxed), u32::from(first != 0));
+        }
+    }
+
+    #[test]
+    fn frames_are_back_on_the_boundary_after_zeros_for_a_busy_slot_or_a_packet_not_sent() {
+        let slot: Slot<TxParts> = Default::default();
+        let phase: Arc<TxPhase> = Arc::default();
+        let mut tx = ShellTx::new(slot.clone(), Arc::new(LinkStats::default()), phase.clone());
+        armed(&slot, VoiceCodec::Msbc);
+        let mut stream = sent(&mut tx, 24, 10);
+        // The session holds the slot for one packet: zeros
+        {
+            let _held = slot.lock().unwrap();
+            stream.extend(sent(&mut tx, 24, 1));
+        }
+        assert_eq!(phase.busy.load(Ordering::Relaxed), 1);
+        stream.extend(sent(&mut tx, 24, 20));
+        // A packet the controller did not take is not part of the stream
+        let mut lost = vec![0; 24];
+        tx.fill(&mut lost);
+        tx.unsent(24);
+        stream.extend(sent(&mut tx, 24, 20));
+        // Every header from the last quarter second on sits on a boundary
+        let tail = stream.len() - 15 * 24;
+        let late: Vec<usize> = (tail..stream.len() - 1)
+            .filter(|&i| voice_link::h2::is_header(stream[i], stream[i + 1]) && i % 60 == 0)
+            .collect();
+        assert!(late.len() >= 5, "{late:?}");
+        assert_eq!(phase.aligned.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn cvsd_has_no_frames_to_place() {
+        let slot: Slot<TxParts> = Default::default();
+        let phase: Arc<TxPhase> = Arc::default();
+        let mut tx = ShellTx::new(slot.clone(), Arc::new(LinkStats::default()), phase.clone());
+        sent(&mut tx, 24, 1);
+        armed(&slot, VoiceCodec::Cvsd);
+        sent(&mut tx, 24, 10);
+        assert_eq!(phase.aligned.load(Ordering::Relaxed), 0);
+        assert_eq!(phase.first.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn the_link_for_a_slow_link_goes_nowhere_and_is_no_call() {
+        let h = HeadsetMode::new(HeadsetMic::Auto, Some("mic.wav".into()), None);
+        // Nobody records, no test: a link opened now is the one for a slow link
+        assert_eq!(h.target(), Some(MicTarget::Discard));
+        let (mut link, _tx, mut rx) =
+            VoiceLink::new(MicTarget::Discard, MicTap::default(), Arc::new(LinkStats::default()));
+        link.arm(VoiceCodec::Msbc, &SourceRequest::TestTone).unwrap();
+        // The receiving half is not armed: what the microphone sends is dropped
+        assert!(link.rx.lock().unwrap().is_none());
+        rx.packet(&[0u8; 60], 0);
+        assert_eq!(link.stats.voice_rx_packets.load(Ordering::Relaxed), 0);
+        assert!(link.output.is_none());
+        assert_eq!(link.status(), None);
     }
 
     #[test]

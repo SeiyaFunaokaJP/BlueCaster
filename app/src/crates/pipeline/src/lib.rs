@@ -617,6 +617,9 @@ fn encode_thread(
             let depth = sink.depth() + held;
             abr_round(encoder.as_mut(), &sink, abr_per_packet(kind), queue_before, depth, sent, &mut abr_last);
             publish_live(encoder.as_ref(), &sink, &mut live);
+        } else if reduced {
+            // LDAC reports the lowered bit rate only after a frame at it
+            publish_live(encoder.as_ref(), &sink, &mut live);
         }
     }
     sink.stats().held_ms.store(0, Ordering::Relaxed);
