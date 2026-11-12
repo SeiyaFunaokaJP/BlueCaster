@@ -571,6 +571,7 @@
   "ui.codec.fallback_unsupported": "(%s is unsupported)",
   "ui.codec.fallback_in_use": "(%s is in use)",
   "ui.codec.fallback_developer": "(%s needs developer mode)",
+  "ui.codec.slow_link": "Link slow after microphone use: bit rate lowered",
   "ui.codec.bitpool_live": "bitpool %u/%u",
   "ui.codec.bar_quality": "Sound quality",
   "ui.codec.bar_latency": "Low latency",

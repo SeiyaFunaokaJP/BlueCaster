@@ -571,6 +571,7 @@
   "ui.codec.fallback_unsupported": "（不支持 %s）",
   "ui.codec.fallback_in_use": "（%s 被占用）",
   "ui.codec.fallback_developer": "（%s 需要开发者模式）",
+  "ui.codec.slow_link": "使用麦克风后连接变慢，已降低比特率",
   "ui.codec.bitpool_live": "Bitpool %u/%u",
   "ui.codec.bar_quality": "音质",
   "ui.codec.bar_latency": "低延迟",

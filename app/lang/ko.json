@@ -571,6 +571,7 @@
   "ui.codec.fallback_unsupported": "(%s 미지원)",
   "ui.codec.fallback_in_use": "(%s 사용 중)",
   "ui.codec.fallback_developer": "(%s 개발자 모드 필요)",
+  "ui.codec.slow_link": "마이크 사용 후 연결이 느려져 비트레이트를 낮췄습니다",
   "ui.codec.bitpool_live": "비트풀 %u/%u",
   "ui.codec.bar_quality": "음질",
   "ui.codec.bar_latency": "낮은 지연",
