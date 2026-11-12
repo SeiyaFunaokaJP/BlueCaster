@@ -1520,6 +1520,23 @@ impl HostApp {
                 tracing::debug!("inquiry complete (status {:?})", u8_at(p, 2));
                 self.shared.update(|s| s.inquiry_done = true);
             }
+            // What the voice link runs with on the air (#86: to tell a
+            // link that sounds bad from one that does not)
+            HCI_EVENT_SYNCHRONOUS_CONNECTION_COMPLETE => {
+                let (Some(status), Some(link_type), Some(interval), Some(window), Some(air)) =
+                    (u8_at(p, 2), u8_at(p, 11), u8_at(p, 12), u8_at(p, 13), u8_at(p, 18))
+                else {
+                    return;
+                };
+                if status == 0 {
+                    tracing::info!(
+                        "SCO link: {}, interval {interval} slots, retransmission window {window} slots, rx {} / tx {} bytes, air mode {air}",
+                        if link_type == 2 { "eSCO" } else { "SCO" },
+                        le16(p, 14).unwrap_or(0),
+                        le16(p, 16).unwrap_or(0)
+                    );
+                }
+            }
             HCI_EVENT_DISCONNECTION_COMPLETE => {
                 let (Some(handle), Some(reason)) = (le16(p, 3), u8_at(p, 5)) else { return };
                 let handle = handle & 0x0FFF;

@@ -416,6 +416,20 @@ received payload. `Released` comes after `voice_stop`, a release by the
 headphones, the SCO link's HCI Disconnection Complete, or the service level
 connection going down (once: whichever comes first).
 
+**Frames start on a frame boundary of the link (#86).** Over USB a
+transparent SCO packet carries 24 bytes and an mSBC / LC3-SWB frame is 60,
+and the session arms the encoder some packets after the link is up, so the
+first frame used to start 0, 12, 24, 36 or 48 bytes into a frame's length,
+another place on every link. `ShellTx` (core `voice.rs`) counts the bytes
+sent since the link's first one and sends zeros up to the next multiple of
+60 before the encoder's first byte, and again after zeros for a busy slot
+or a packet that was not sent (`VoiceTx::unsent`). The link's last log line
+says where the stream was when the frames started, how often they were put
+on a boundary and how many packets of zeros went out while the slot was
+busy; "SCO link: ..." has the interval and retransmission window of
+Synchronous Connection Complete. The emulator sends 60 bytes a packet, so
+its frames always start on a boundary: the 24-byte case is a unit test.
+
 **The SCO path is checked before BTstack sizes a packet.** On an H2
 transport `hci_get_sco_packet_length_for_connection` asserts that the
 controller's SCO data packet length holds 3 ms of audio (24 samples × 2

@@ -299,25 +299,91 @@ struct RxParts {
 
 type Slot<T> = Arc<Mutex<Option<T>>>;
 
+/// Where the frames of mSBC and LC3-SWB sit in the byte stream of a voice
+/// link, for its last log line (#86)
+#[derive(Debug, Default)]
+struct TxPhase {
+    /// Bytes into a frame's length the stream was when the encoder came
+    /// (1 + the offset; 0: no frame sent yet)
+    first: std::sync::atomic::AtomicU32,
+    /// Times zeros were put in to start the frames on a boundary
+    aligned: std::sync::atomic::AtomicU32,
+    /// Packets of zeros sent while the encoder was there but being armed
+    /// or disarmed
+    busy: std::sync::atomic::AtomicU32,
+}
+
 /// The [`VoiceTx`] bt-host holds: silence until armed. What it sends while
 /// armed counts as the link's media (Diagnostics shows the call link as it
 /// shows A2DP).
-struct ShellTx(Slot<TxParts>, Arc<LinkStats>);
+///
+/// SCO over USB sends 24 bytes a packet and the controller cuts the stream
+/// into the air's 60-byte packets from its first byte, so a frame that
+/// starts anywhere else straddles two of them for the whole link (heard as
+/// a steady buzz on some headphones, #86). The frames therefore start on a
+/// multiple of [`voice_link::h2::FRAME_LEN`] bytes since the link's first
+/// byte: zeros go out until then, also after zeros sent for a busy slot or
+/// a packet that was not sent.
+struct ShellTx {
+    parts: Slot<TxParts>,
+    stats: Arc<LinkStats>,
+    /// Bytes sent on the link so far, modulo the frame length
+    sent: usize,
+    /// Zeros are going out up to a frame boundary
+    padding: bool,
+    phase: Arc<TxPhase>,
+}
+
+impl ShellTx {
+    fn new(parts: Slot<TxParts>, stats: Arc<LinkStats>, phase: Arc<TxPhase>) -> ShellTx {
+        ShellTx { parts, stats, sent: 0, padding: false, phase }
+    }
+}
 
 impl VoiceTx for ShellTx {
     fn fill(&mut self, out: &mut [u8]) {
-        match self.0.try_lock() {
+        const FRAME: usize = voice_link::h2::FRAME_LEN;
+        match self.parts.try_lock() {
             Ok(mut parts) => match parts.as_mut() {
                 Some(p) => {
-                    p.encoder.fill(&mut p.uplink, out);
-                    self.1.packets_sent.fetch_add(1, Ordering::Relaxed);
-                    self.1.bytes_sent.fetch_add(out.len() as u64, Ordering::Relaxed);
+                    let mut start = 0;
+                    if p.encoder.codec() != VoiceCodec::Cvsd {
+                        // Where the encoder is in its frame, and the stream
+                        let at = (p.encoder.stats().bytes % FRAME as u64) as usize;
+                        let pad = (at + FRAME - self.sent) % FRAME;
+                        let r = Ordering::Relaxed;
+                        let _ = self.phase.first.compare_exchange(0, 1 + self.sent as u32, r, r);
+                        if pad > 0 && !std::mem::replace(&mut self.padding, true) {
+                            self.phase.aligned.fetch_add(1, r);
+                        }
+                        start = pad.min(out.len());
+                        out[..start].fill(0);
+                        if start == pad {
+                            self.padding = false;
+                        }
+                    }
+                    if start < out.len() {
+                        p.encoder.fill(&mut p.uplink, &mut out[start..]);
+                    }
+                    self.stats.packets_sent.fetch_add(1, Ordering::Relaxed);
+                    self.stats.bytes_sent.fetch_add(out.len() as u64, Ordering::Relaxed);
                 }
                 None => out.fill(0),
             },
             // Being armed or disarmed right now
-            Err(_) => out.fill(0),
+            Err(_) => {
+                out.fill(0);
+                if self.phase.first.load(Ordering::Relaxed) != 0 {
+                    self.phase.busy.fetch_add(1, Ordering::Relaxed);
+                }
+            }
         }
+        self.sent = (self.sent + out.len()) % FRAME;
+    }
+
+    fn unsent(&mut self, len: usize) {
+        const FRAME: usize = voice_link::h2::FRAME_LEN;
+        self.sent = (self.sent + FRAME - len % FRAME) % FRAME;
     }
 }
 
@@ -425,6 +491,8 @@ struct VoiceLink {
     stats: Arc<LinkStats>,
     /// The uplink's counters last added to them
     counted: UplinkStats,
+    /// Where the frames sat in the byte stream (the [`ShellTx`] writes it)
+    phase: Arc<TxPhase>,
 }
 
 impl VoiceLink {
@@ -446,8 +514,10 @@ impl VoiceLink {
             tap,
             stats: stats.clone(),
             counted: UplinkStats::default(),
+            phase: Arc::default(),
         };
-        (link, Box::new(ShellTx(tx, stats.clone())), Box::new(ShellRx(rx, stats)))
+        let shell = ShellTx::new(tx, stats.clone(), link.phase.clone());
+        (link, Box::new(shell), Box::new(ShellRx(rx, stats)))
     }
 
     /// The audio connection is up with `codec`: the microphone output at its
@@ -640,9 +710,11 @@ impl VoiceLink {
         if let Some((codec, since)) = self.codec.take() {
             let (e, d) = (tx.as_ref().map(|p| p.encoder.stats()), rx.as_ref().map(|p| p.decoder.stats()));
             let u = tx.as_ref().map(|p| p.uplink.stats()).unwrap_or_default();
+            let r = Ordering::Relaxed;
             tracing::info!(
                 "voice: {} link down after {} s: sent {} bytes (uplink {} underruns, {} dropped / {} repeated), \
-                 received {} packets ({} bad, {} concealed), microphone {}",
+                 received {} packets ({} bad, {} concealed), microphone {}; frames: stream at byte {} of a frame \
+                 when they started, put on a boundary {} time(s), {} packet(s) of zeros while busy",
                 codec.name(),
                 since.elapsed().as_secs(),
                 e.map_or(0, |e| e.bytes),
@@ -652,7 +724,10 @@ impl VoiceLink {
                 d.map_or(0, |d| d.packets),
                 d.map_or(0, |d| d.bad_packets),
                 d.map_or(0, |d| d.concealed),
-                level_text(d.as_ref())
+                level_text(d.as_ref()),
+                self.phase.first.load(r).saturating_sub(1),
+                self.phase.aligned.load(r),
+                self.phase.busy.load(r)
             );
         }
         drop((tx, rx));
@@ -1273,6 +1348,94 @@ mod tests {
         assert!(!w.seen(false, at(6500)));
         assert!(!w.seen(false, at(9000)));
         assert!(w.seen(true, at(10000)));
+    }
+
+    /// The bytes `tx` sends in packets of `len`, `packets` of them
+    fn sent(tx: &mut ShellTx, len: usize, packets: usize) -> Vec<u8> {
+        let mut all = Vec::new();
+        for _ in 0..packets {
+            let mut out = vec![0xEE; len];
+            tx.fill(&mut out);
+            all.extend(out);
+        }
+        all
+    }
+
+    /// Where the H2 headers of `stream` are (every one a frame's length
+    /// after the one before)
+    fn headers(stream: &[u8]) -> Vec<usize> {
+        let first = stream.windows(2).position(|w| voice_link::h2::is_header(w[0], w[1])).expect("a frame");
+        (first..stream.len() - 1).step_by(voice_link::h2::FRAME_LEN).collect()
+    }
+
+    fn armed(slot: &Slot<TxParts>, codec: VoiceCodec) {
+        let (_sink, uplink) = UplinkSink::new(codec.rate(), UPLINK_CAPACITY_MS);
+        *slot.lock().unwrap() = Some(TxParts { encoder: VoiceEncoder::new(codec), uplink });
+    }
+
+    #[test]
+    fn frames_start_on_a_frame_boundary_of_the_link_whenever_the_encoder_comes() {
+        // SCO over USB: 24 bytes a packet. Zeros until the session arms the
+        // link, after 1 to 7 packets: the stream is then 24, 48, 12 ... bytes
+        // into a frame's length
+        for before in 1..=7 {
+            let slot: Slot<TxParts> = Default::default();
+            let phase: Arc<TxPhase> = Arc::default();
+            let mut tx = ShellTx::new(slot.clone(), Arc::new(LinkStats::default()), phase.clone());
+            let mut stream = sent(&mut tx, 24, before);
+            assert!(stream.iter().all(|&b| b == 0));
+            armed(&slot, VoiceCodec::Msbc);
+            stream.extend(sent(&mut tx, 24, 50));
+            let at = headers(&stream);
+            assert!(at.len() > 15);
+            for i in at {
+                assert_eq!(i % voice_link::h2::FRAME_LEN, 0, "armed after {before} packets");
+                assert!(voice_link::h2::is_header(stream[i], stream[i + 1]), "a header every 60 bytes");
+            }
+            let first = (before * 24 % 60) as u32;
+            assert_eq!(phase.first.load(Ordering::Relaxed), 1 + first);
+            assert_eq!(phase.aligned.load(Ordering::Relaxed), u32::from(first != 0));
+        }
+    }
+
+    #[test]
+    fn frames_are_back_on_the_boundary_after_zeros_for_a_busy_slot_or_a_packet_not_sent() {
+        let slot: Slot<TxParts> = Default::default();
+        let phase: Arc<TxPhase> = Arc::default();
+        let mut tx = ShellTx::new(slot.clone(), Arc::new(LinkStats::default()), phase.clone());
+        armed(&slot, VoiceCodec::Msbc);
+        let mut stream = sent(&mut tx, 24, 10);
+        // The session holds the slot for one packet: zeros
+        {
+            let _held = slot.lock().unwrap();
+            stream.extend(sent(&mut tx, 24, 1));
+        }
+        assert_eq!(phase.busy.load(Ordering::Relaxed), 1);
+        stream.extend(sent(&mut tx, 24, 20));
+        // A packet the controller did not take is not part of the stream
+        let mut lost = vec![0; 24];
+        tx.fill(&mut lost);
+        tx.unsent(24);
+        stream.extend(sent(&mut tx, 24, 20));
+        // Every header from the last quarter second on sits on a boundary
+        let tail = stream.len() - 15 * 24;
+        let late: Vec<usize> = (tail..stream.len() - 1)
+            .filter(|&i| voice_link::h2::is_header(stream[i], stream[i + 1]) && i % 60 == 0)
+            .collect();
+        assert!(late.len() >= 5, "{late:?}");
+        assert_eq!(phase.aligned.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn cvsd_has_no_frames_to_place() {
+        let slot: Slot<TxParts> = Default::default();
+        let phase: Arc<TxPhase> = Arc::default();
+        let mut tx = ShellTx::new(slot.clone(), Arc::new(LinkStats::default()), phase.clone());
+        sent(&mut tx, 24, 1);
+        armed(&slot, VoiceCodec::Cvsd);
+        sent(&mut tx, 24, 10);
+        assert_eq!(phase.aligned.load(Ordering::Relaxed), 0);
+        assert_eq!(phase.first.load(Ordering::Relaxed), 0);
     }
 
     #[test]
