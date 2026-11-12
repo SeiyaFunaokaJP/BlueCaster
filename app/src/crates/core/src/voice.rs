@@ -76,14 +76,102 @@ const AUTO_POLL: Duration = Duration::from_millis(150);
 /// opens the device again does not bounce the link (#86: back to A2DP about
 /// as fast as to the microphone)
 const AUTO_IDLE: Duration = Duration::from_millis(500);
+/// How often Auto's watcher thread looks (the default; Developer > Codecs
+/// "only every 200 ms" leaves it to the session tick, [`AUTO_POLL`])
+const AUTO_WATCH_EVERY: Duration = Duration::from_millis(50);
 /// How long the voice link opened for a slow link stays up
 const RECOVERY_UP: Duration = Duration::from_secs(1);
 /// How long it may take to come up
 const RECOVERY_OPEN: Duration = Duration::from_secs(3);
 
-/// Auto's view of the recording applications: polled at most every
-/// [`AUTO_POLL`]; recording seen once turns it on, not recording for
-/// [`AUTO_IDLE`] off again
+/// Wakes the session thread out of its tick wait
+#[derive(Clone)]
+pub(crate) struct Waker(Arc<dyn Fn() + Send + Sync>);
+
+impl Waker {
+    pub(crate) fn new(f: impl Fn() + Send + Sync + 'static) -> Waker {
+        Waker(Arc::new(f))
+    }
+}
+
+impl std::fmt::Debug for Waker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Waker")
+    }
+}
+
+/// Auto's watcher thread: looks at the capture side every
+/// [`AUTO_WATCH_EVERY`] (the endpoints looked up once,
+/// `audio_policy::CaptureSessions`), applies [`AutoWatch::seen`]'s
+/// hysteresis and wakes the session when the answer changes, so the voice
+/// link opens and closes without waiting for the session's tick
+#[derive(Debug)]
+struct Watcher {
+    recording: Arc<std::sync::atomic::AtomicBool>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Watcher {
+    fn start(id: String, what: String, wake: Option<Waker>) -> Watcher {
+        use std::sync::atomic::AtomicBool;
+        let recording = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (r, st) = (recording.clone(), stop.clone());
+        let thread = std::thread::Builder::new()
+            .name("mic-auto-watch".into())
+            .spawn(move || {
+                let Ok(_com) = win_sys::audio_policy::ComApartment::init_mta() else {
+                    tracing::warn!("voice: auto: the watcher cannot use COM");
+                    return;
+                };
+                let sessions = match win_sys::audio_policy::CaptureSessions::open(&id) {
+                    Ok(Some(s)) => s,
+                    Ok(None) => {
+                        tracing::warn!(
+                            "voice: auto: the microphone output {what} has no recording side, headset mode stays off"
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::warn!("voice: auto: cannot tell whether an app records: {e}");
+                        return;
+                    }
+                };
+                tracing::debug!("voice: auto: watching {what} every {} ms", AUTO_WATCH_EVERY.as_millis());
+                let mut h = AutoWatch::default();
+                while !st.load(Ordering::Relaxed) {
+                    let on = h.seen(sessions.active(), Instant::now());
+                    if r.swap(on, Ordering::Relaxed) != on
+                        && let Some(w) = &wake
+                    {
+                        (w.0)();
+                    }
+                    std::thread::sleep(AUTO_WATCH_EVERY);
+                }
+            })
+            .ok();
+        Watcher { recording, stop, thread }
+    }
+
+    fn recording(&self) -> bool {
+        self.recording.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for Watcher {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// Auto's view of the recording applications: by default from its
+/// [`Watcher`] thread; with Developer's "only every 200 ms", polled at most
+/// every [`AUTO_POLL`] on the session tick. Recording seen once turns it
+/// on, not recording for [`AUTO_IDLE`] off again.
 #[derive(Debug, Default)]
 struct AutoWatch {
     /// The microphone output, resolved at the first poll (a device
@@ -96,6 +184,7 @@ struct AutoWatch {
     idle_since: Option<Instant>,
     /// A missing capture side or a failed look-up was logged
     warned: bool,
+    watcher: Option<Watcher>,
 }
 
 impl AutoWatch {
@@ -154,15 +243,27 @@ impl AutoWatch {
         }
     }
 
-    /// Polls when due; returns whether someone records now
-    fn poll(&mut self, mic_output: Option<&str>, now: Instant) -> bool {
-        if !self.due(now) {
-            return self.recording;
-        }
+    /// Polls when due (or reads the watcher); returns whether someone
+    /// records now
+    fn poll(&mut self, mic_output: Option<&str>, now: Instant, wake: Option<&Waker>) -> bool {
         let target = self.target.get_or_insert_with(|| resolve_mic_output(mic_output)).clone();
-        let looked = self.look(target.as_ref());
         let before = self.recording;
-        let after = self.seen(looked, now);
+        let after = match &target {
+            Some(MicTarget::Device { id, .. }) if !codec::dev::overrides().auto_mic_tick_poll => {
+                let what = target.as_ref().map_or(String::new(), |t| t.to_string());
+                let w = self.watcher.get_or_insert_with(|| Watcher::start(id.clone(), what, wake.cloned()));
+                self.recording = w.recording();
+                self.recording
+            }
+            _ => {
+                self.watcher = None;
+                if !self.due(now) {
+                    return self.recording;
+                }
+                let looked = self.look(target.as_ref());
+                self.seen(looked, now)
+            }
+        };
         if after != before {
             let who = match &target {
                 Some(MicTarget::Device { id, .. }) if after => audio_capture::mic_recorders(id).join(", "),
@@ -810,6 +911,8 @@ pub(crate) struct HeadsetMode {
     /// A short voice link for a slow link is wanted or up
     /// ([`HeadsetMode::follow_recovery`])
     recovering: bool,
+    /// Wakes the session when Auto's watcher sees a change
+    waker: Option<Waker>,
 }
 
 impl HeadsetMode {
@@ -826,7 +929,14 @@ impl HeadsetMode {
             foreign_logged: false,
             test: false,
             recovering: false,
+            waker: None,
         }
+    }
+
+    /// Auto's watcher wakes the session through `waker`
+    pub(crate) fn with_waker(mut self, waker: Waker) -> HeadsetMode {
+        self.waker = Some(waker);
+        self
     }
 
     /// Tells the stack which call codecs to offer (at the session's start
@@ -919,7 +1029,7 @@ impl HeadsetMode {
         if self.mode != HeadsetMic::Auto {
             return;
         }
-        if !self.auto.poll(self.mic_output.as_deref(), Instant::now()) {
+        if !self.auto.poll(self.mic_output.as_deref(), Instant::now(), self.waker.as_ref()) {
             self.hung_up = false;
             // The next recording waits for the service level connection
             // afresh
@@ -1589,7 +1699,7 @@ mod tests {
         assert!(w.warned);
         let t0 = Instant::now();
         let mut w = AutoWatch::default();
-        assert!(w.poll(Some("out\\mic.wav"), t0));
+        assert!(w.poll(Some("out\\mic.wav"), t0, None));
         assert_eq!(w.target, Some(Some(MicTarget::Wav("out\\mic.wav".into()))));
     }
 

@@ -6,7 +6,8 @@
 //!     cargo run -p win-sys --example watch_capture -- "CABLE Input" 20
 //!
 //! The first argument is part of the render endpoint's friendly name, the
-//! second the seconds to watch (default 20).
+//! second the seconds to watch (default 20), the third "cached" to poll
+//! with `CaptureSessions` (the endpoints looked up once).
 
 use std::time::{Duration, Instant};
 
@@ -42,7 +43,12 @@ fn main() -> windows::core::Result<()> {
         };
         found
     };
-    println!("watching the capture side of {name} for {secs} s");
+    // "cached": CaptureSessions (looked up once), else a full look-up a poll
+    let cached = match args.next().as_deref() {
+        Some("cached") => win_sys::audio_policy::CaptureSessions::open(&id)?,
+        _ => None,
+    };
+    println!("watching the capture side of {name} for {secs} s ({})", if cached.is_some() { "cached" } else { "full" });
     let t0 = Instant::now();
     let until = t0 + Duration::from_secs(secs);
     let mut last = None;
@@ -50,7 +56,10 @@ fn main() -> windows::core::Result<()> {
     let (mut total, mut polls) = (Duration::ZERO, 0u32);
     while Instant::now() < until {
         let start = Instant::now();
-        let now = win_sys::audio_policy::capture_sessions_active(&id)?;
+        let now = match &cached {
+            Some(c) => Some(c.active()),
+            None => win_sys::audio_policy::capture_sessions_active(&id)?,
+        };
         let took = start.elapsed();
         slowest = slowest.max(took);
         total += took;

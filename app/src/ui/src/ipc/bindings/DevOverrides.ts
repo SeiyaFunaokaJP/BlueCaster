@@ -29,4 +29,9 @@ encode_at_send: boolean,
 /**
  * A link slow after a call keeps the full bit rate (not lowered)
  */
-keep_bitrate_on_slow_link: boolean, };
+keep_bitrate_on_slow_link: boolean, 
+/**
+ * The microphone's Auto looks for recording apps on the session's
+ * tick, not with its own watcher
+ */
+auto_mic_tick_poll: boolean, };

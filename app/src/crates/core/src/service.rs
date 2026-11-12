@@ -497,6 +497,11 @@ impl Inner {
     }
 
     /// Sleeps up to `d`, returning early on a stop
+    /// Ends a session's [`Inner::wait_tick`] now
+    pub(crate) fn wake_tick(&self) {
+        self.tick.1.notify_all();
+    }
+
     pub fn wait_tick(&self, d: Duration) {
         let guard = self.tick.0.lock().unwrap_or_else(|e| e.into_inner());
         if !self.stop_requested() {
