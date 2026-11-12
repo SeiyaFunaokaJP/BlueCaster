@@ -688,7 +688,9 @@ impl VoiceLink {
 
     /// The uplink capture into the link's capture counters, as A2DP's
     /// capture counts: frames captured, silence sent for want of audio, and
-    /// frames lost (no room, or dropped by the drift control)
+    /// frames lost for want of room. Not the drift control's drops: they
+    /// only correct the capture clock against the link's, all through a
+    /// call, and would show the link as "PC busy".
     fn count_uplink(&mut self) {
         let Some(now) = self.tx.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|p| p.uplink.stats()) else {
             return;
@@ -700,7 +702,7 @@ impl VoiceLink {
         };
         add(&s.capture_frames, now.captured, was.captured);
         add(&s.silence_frames, now.zeros, was.zeros);
-        add(&s.capture_dropped_frames, now.overflow + now.dropped, was.overflow + was.dropped);
+        add(&s.capture_dropped_frames, now.overflow, was.overflow);
         self.counted = now;
     }
 
