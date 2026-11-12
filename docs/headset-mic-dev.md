@@ -810,8 +810,10 @@ then), 3 cycles, the same each time:
 
 About 0.8 s of it is the headphones' microphone starting after the audio
 connection; BlueCaster's part (detection, link, render) is about 0.25 s.
-Not tried: whether call indicators (`+CIEV`) make the headphones start
-sooner.
+Neither "call active" (`+CIEV: 2,1` before the audio connection) nor
+voice recognition (`+BVRA: 1`) made them start sooner: the same ~180-210
+packets of status 2 and ~0.27 s of silence, 3 cycles each (tried with a
+temporary result-code call in the shim, not kept).
 
 ## Not verified / hardware checklist
 
