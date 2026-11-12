@@ -33,7 +33,7 @@ import {
 } from "../components/stream";
 import { t, tm } from "../i18n";
 import { IpcError, type AdapterInfo, type Snapshot, type StreamState } from "../ipc/types";
-import { CARD_ORDER, cardOrder, codecSpec, offeredCodecs } from "../lib/codecs";
+import { CARD_ORDER, cardOf, cardOrder, codecSpec, offeredCodecs } from "../lib/codecs";
 import {
   audioEntries,
   codecsOnRequest,
@@ -469,7 +469,7 @@ export function CodecPicker(props: { entry: AudioEntry }) {
   const snap = () => app.core.state.snap!;
   const e = () => props.entry;
   const autoAll = () => snap().settings.auto_codec;
-  const codec = () => (e().profile ?? entryBase(e(), snap().profiles)).codec;
+  const codec = () => cardOf(e().profile ?? entryBase(e(), snap().profiles));
   const order = () => (autoAll() ? [...CARD_ORDER] : cardOrder(e().profile?.codec_order));
   const picked = () => pickedCodec(snap(), e(), autoAll(), order());
   // What it streams with; else Auto's pick, or the one used instead of a

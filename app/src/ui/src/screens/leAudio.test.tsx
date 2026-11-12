@@ -58,13 +58,17 @@ describe("Codecs screen", () => {
     expect(radios.map((r) => (r as HTMLInputElement).value)).toEqual(["lc3", "lc3_ll"]);
     // Cards like the A2DP ones: three bars each
     expect(le.querySelectorAll(".codec-card .cbar")).toHaveLength(6);
-    // GMAP low latency is on by default
-    expect(within(le).getByRole("radio", { name: named(t("codec.lc3_ll")) })).toBeChecked();
-    // "..." shows the settings, read only
+    // LC3 is the default, not LC3 LL (issue #86)
+    expect(le.querySelector('input[value="lc3"]')).toBeChecked();
+    expect(le.querySelector('input[value="lc3_ll"]')).not.toBeChecked();
+    expect(t("codec.lc3_ll")).toBe("LC3 LL");
+    // "..." shows the settings as an A2DP codec's, read only
     fireEvent.click(within(le).getByRole("button", { name: t("ui.profile.codec_settings", t("codec.lc3")) }));
     const dialog = await screen.findByRole("dialog", { name: t("ui.profile.codec_settings", t("codec.lc3")) });
     expect(within(dialog).queryByRole("combobox")).toBeNull();
-    expect(within(dialog).getByText(t("connection.sample_rate"))).toBeInTheDocument();
+    for (const label of ["connection.quality", "connection.sample_rate", "connection.bit_depth"])
+      expect(within(dialog).getByText(t(label))).toBeInTheDocument();
+    expect(within(dialog).getByText(t("bitdepth.16"))).toBeInTheDocument();
   });
 
   it("says the adapter cannot stream LE Audio, or is not checked yet (issue #86)", async () => {
@@ -79,13 +83,19 @@ describe("Codecs screen", () => {
     expect(within(unchecked).getByText(t("ui.profile.le_audio_unchecked"))).toBeInTheDocument();
   });
 
-  it("chooses LC3 without GMAP low latency, saved with the profile (issue #86)", async () => {
+  it("chooses LC3 LL (GMAP low latency) and back to LC3, saved with the profile (issue #86)", async () => {
     const { calls } = start("#/codecs", "le");
     const le = await screen.findByRole("region", { name: "Galaxy Buds2 Pro" });
+    const saves = () =>
+      calls.filter((c) => c.method === "profile.save").map((c) => (c.params as { profile: Record<string, unknown> }).profile);
+    fireEvent.click(le.querySelector<HTMLInputElement>('input[value="lc3_ll"]')!);
+    await waitFor(() => expect(saves()).toHaveLength(1));
+    expect(saves()[0]).toMatchObject({ name: "Buds (LE Audio)", le_audio: true, le_low_latency: true });
+    await waitFor(() => expect(le.querySelector<HTMLInputElement>('input[value="lc3_ll"]')).toBeChecked());
+    await waitFor(() => expect(le.querySelector<HTMLInputElement>('input[value="lc3"]')).not.toBeDisabled());
     fireEvent.click(le.querySelector<HTMLInputElement>('input[value="lc3"]')!);
-    await waitFor(() => expect(calls.some((c) => c.method === "profile.save")).toBe(true));
-    const saved = (calls.find((c) => c.method === "profile.save")!.params as { profile: Record<string, unknown> }).profile;
-    expect(saved).toMatchObject({ name: "Buds (LE Audio)", le_audio: true, le_low_latency: false });
+    await waitFor(() => expect(saves()).toHaveLength(2));
+    expect(saves()[1]).toMatchObject({ name: "Buds (LE Audio)", le_audio: true, le_low_latency: false });
   });
 
   it("makes the LE Audio profile, named after the device, when LC3 is chosen", async () => {

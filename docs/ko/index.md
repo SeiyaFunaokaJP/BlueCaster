@@ -37,7 +37,7 @@ has_toc: false
 | FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | -- |
 | Opus 05 | 256 kbps | 48 kHz | 16 bit | -- |
 | LC3 (LE 오디오) | 채널당 32--124 kbps | 16/24/32/48 kHz | 16 bit | 약 140 ms |
-| LC3 저지연 (LE 오디오 GMAP) | 채널당 64--96 kbps | 32/48 kHz | 16 bit | 약 30 ms |
+| LC3 LL (LE 오디오 GMAP) | 채널당 64--96 kbps | 32/48 kHz | 16 bit | 약 30 ms |
 
 ### 플랫폼별 코덱 지원 (헤드폰으로 전송)
 

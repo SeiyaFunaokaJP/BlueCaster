@@ -155,7 +155,7 @@ export function sampleProfile(over: Partial<Profile> = {}): Profile {
     volume_device_name: "",
     max_media_payload: 1023,
     le_audio: false,
-    le_low_latency: true,
+    le_low_latency: false,
     headset_mic: "off",
     mic_device_id: "",
     mic_device_name: "",

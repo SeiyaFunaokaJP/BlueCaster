@@ -37,7 +37,7 @@ Windows 向け Bluetooth A2DP オーディオストリーミングツール（�
 | FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | -- |
 | Opus 05 | 256 kbps | 48 kHz | 16 bit | -- |
 | LC3（LE Audio） | 1 チャネルあたり 32--124 kbps | 16/24/32/48 kHz | 16 bit | 約 140 ms |
-| LC3 低遅延（LE Audio GMAP） | 1 チャネルあたり 64--96 kbps | 32/48 kHz | 16 bit | 約 30 ms |
+| LC3 LL（LE Audio GMAP） | 1 チャネルあたり 64--96 kbps | 32/48 kHz | 16 bit | 約 30 ms |
 
 ### プラットフォーム別のコーデック対応（ヘッドホンへの送信）
 

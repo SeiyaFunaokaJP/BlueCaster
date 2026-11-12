@@ -35,7 +35,7 @@ Turns an ordinary Bluetooth adapter -- a cheap USB dongle, or on many laptops th
 | FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | -- |
 | Opus 05 | 256 kbps | 48 kHz | 16 bit | -- |
 | LC3 (LE Audio) | 32--124 kbps per channel | 16/24/32/48 kHz | 16 bit | ~140 ms |
-| LC3 low latency (LE Audio GMAP) | 64--96 kbps per channel | 32/48 kHz | 16 bit | ~30 ms |
+| LC3 LL (LE Audio GMAP) | 64--96 kbps per channel | 32/48 kHz | 16 bit | ~30 ms |
 
 ### Codec Support by Platform (Sending to Headphones)
 

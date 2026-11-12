@@ -49,8 +49,8 @@ volume_sync: string, volume_device_id: string, volume_device_name: string, max_m
  */
 le_audio: boolean, 
 /**
- * LE Audio: GMAP low-latency presets with a gaming headset (on by
- * default; other headsets get the media configuration either way)
+ * LE Audio: GMAP low-latency presets with a gaming headset (LC3 LL; off
+ * by default: LC3); other headsets get the media configuration either way
  */
 le_low_latency: boolean, 
 /**
