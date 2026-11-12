@@ -531,6 +531,8 @@ function StepDevice() {
 
   return (
     <div class="stack">
+      {/* At the top, above the paired devices, as on Devices (issue #86) */}
+      <CableNotes devices={devices()} reload={() => void load()} />
       <DevicePicker
         address=""
         classicOnly
@@ -543,7 +545,6 @@ function StepDevice() {
         noScan={running()}
         continuous={!paused()}
       >
-        <CableNotes devices={devices()} reload={() => void load()} />
         <ImportPairings />
       </DevicePicker>
       <Show when={running()}>

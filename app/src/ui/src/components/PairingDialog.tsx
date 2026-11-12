@@ -62,7 +62,6 @@ export function PairingDialog(props: { device: Device | null; onClose: () => voi
       open={props.device !== null}
       title={t("ui.pairing.services")}
       subtitle={props.device ? `${name()} ${props.device.address}` : undefined}
-      wide
       onCancel={() => props.onClose()}
     >
       <Show when={keysOf()}>
