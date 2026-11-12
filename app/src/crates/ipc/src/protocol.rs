@@ -814,6 +814,21 @@ pub struct DevDebug {
     /// A Realtek chip's firmware from Realtek's Windows driver on this PC
     /// instead of the firmware folder's (the RTL8761B, issue #427)
     pub realtek_driver_firmware: bool,
+    /// LE Audio CIG: max transport latency C->P / P->C in ms; 0: as planned
+    pub le_latency_c_to_p_ms: u16,
+    pub le_latency_p_to_c_ms: u16,
+    /// LE Audio CIG: RTN C->P / P->C; None: as planned
+    #[ts(optional = nullable)]
+    pub le_rtn_c_to_p: Option<u8>,
+    #[ts(optional = nullable)]
+    pub le_rtn_p_to_c: Option<u8>,
+    /// LE Audio CIG: interleaved packing
+    pub le_interleaved: bool,
+    /// The LE Audio microphone's preset, taken as it is; empty: as planned
+    pub le_mic_preset: String,
+    /// A stream with the microphone that failed is retried without it on
+    /// the same link
+    pub le_mic_retry_same_link: bool,
 }
 
 /// Developer mode's logging (bluecaster_core::settings::DevLog), in force while

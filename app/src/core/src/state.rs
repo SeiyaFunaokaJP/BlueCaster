@@ -379,6 +379,13 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
             mtk_register: s.dev_debug.mtk_register.clone(),
             le_keys_to_windows: s.dev_debug.le_keys_to_windows,
             realtek_driver_firmware: s.dev_debug.realtek_driver_firmware,
+            le_latency_c_to_p_ms: s.dev_debug.le_latency_c_to_p_ms,
+            le_latency_p_to_c_ms: s.dev_debug.le_latency_p_to_c_ms,
+            le_rtn_c_to_p: s.dev_debug.le_rtn_c_to_p,
+            le_rtn_p_to_c: s.dev_debug.le_rtn_p_to_c,
+            le_interleaved: s.dev_debug.le_interleaved,
+            le_mic_preset: s.dev_debug.le_mic_preset.clone(),
+            le_mic_retry_same_link: s.dev_debug.le_mic_retry_same_link,
         },
         bt_chip_pid: s.bt_chip_pid,
         bt_chip_fw_stem: s.bt_chip_fw_stem.clone(),
@@ -483,6 +490,13 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
         mtk_register: s.dev_debug.mtk_register.trim().to_string(),
         le_keys_to_windows: s.dev_debug.le_keys_to_windows,
         realtek_driver_firmware: s.dev_debug.realtek_driver_firmware,
+        le_latency_c_to_p_ms: s.dev_debug.le_latency_c_to_p_ms.min(4000),
+        le_latency_p_to_c_ms: s.dev_debug.le_latency_p_to_c_ms.min(4000),
+        le_rtn_c_to_p: s.dev_debug.le_rtn_c_to_p.map(|r| r.min(15)),
+        le_rtn_p_to_c: s.dev_debug.le_rtn_p_to_c.map(|r| r.min(15)),
+        le_interleaved: s.dev_debug.le_interleaved,
+        le_mic_preset: s.dev_debug.le_mic_preset.trim().to_string(),
+        le_mic_retry_same_link: s.dev_debug.le_mic_retry_same_link,
     };
     c.bt_chip_pid = s.bt_chip_pid;
     c.bt_chip_fw_stem = s.bt_chip_fw_stem.clone();

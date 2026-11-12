@@ -491,7 +491,9 @@ impl LeGroupHooks for TmapGmapHooks {
         request.contexts = contexts;
         if request.conversational {
             if infos.iter().all(|(_, i)| i.is_some_and(|i| i.ugt_source())) {
-                request.source_preset_order = gmap_source_preset_order(&request.source_preset_order);
+                if !request.source_preset_exact {
+                    request.source_preset_order = gmap_source_preset_order(&request.source_preset_order);
+                }
                 request.source_contexts = CONTEXT_GAME | CONTEXT_CONVERSATIONAL;
                 tracing::info!("LE Audio: GMAP: microphone: {} first", GMAP_SOURCE_PRESET_ORDER.join(", "));
             } else {
