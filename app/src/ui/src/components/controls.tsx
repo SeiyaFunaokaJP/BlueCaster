@@ -435,8 +435,6 @@ export function Dialog(props: {
   /** A warning sign before the title: confirming loses something (issue #86) */
   warn?: boolean;
   busy?: boolean;
-  /** Room for a table whose rows should not wrap */
-  wide?: boolean;
   /** A second way to go on, before the confirm button and the one
    *  recommended: the confirm button then is a plain one */
   extra?: { label: string; icon?: IconName; onClick: () => void };
@@ -482,7 +480,7 @@ export function Dialog(props: {
       <Portal>
         <div class="backdrop" onClick={(e) => e.target === e.currentTarget && cancel()}>
           <div
-            class={props.wide ? "dialog dialog-wide card" : "dialog card"}
+            class="dialog card"
             role="dialog"
             aria-modal="true"
             aria-labelledby={id}
