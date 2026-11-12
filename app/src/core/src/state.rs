@@ -3516,6 +3516,13 @@ impl CoreState {
                 }))
                 .await
             }
+            Method::AudioUninstallCable { hifi } => {
+                blocking(Box::new(move |_| {
+                    let gone = crate::vb_cable::uninstall(hifi)?;
+                    Ok(json(&gone))
+                }))
+                .await
+            }
             Method::AudioApps => {
                 blocking(Box::new(|_| {
                     let list: Vec<AudioApp> = audio_capture::audio_apps()

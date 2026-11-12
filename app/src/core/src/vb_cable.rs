@@ -143,6 +143,114 @@ fn run(setup: &Path) -> Result<(), ErrorInfo> {
     Ok(())
 }
 
+/// VB-Audio's uninstall entries, as the BlueCaster uninstaller reads them
+/// (installer/BlueCaster.iss: RemoveCables). VB-CABLE's setup registers
+/// itself in the 64-bit view. The Hi-Fi Cable comes on its own (its key) or
+/// with ASIO Bridge (32-bit view; the Hi-Fi Cable's setup is in its folder,
+/// or in VB\CABLEHiFi)
+const VB_CABLE_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:VBCABLE {87459874-1236-4469}";
+const HIFI_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:VBHIFI {87459874-1236-4469}";
+const ASIO_BRIDGE_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:ASIOBridge {17359A74-1236-5467}";
+/// Remove without a window: VB-CABLE's setup as community packages run it;
+/// the Hi-Fi Cable's with the arguments ASIO Bridge's setup passes it
+const VB_CABLE_REMOVE: &[&str] = &["-u", "-h"];
+const HIFI_REMOVE: &[&str] = &["-h", "-u", "-H"];
+
+/// The program of an UninstallString: the quoted path, else the string up
+/// to ".exe"
+fn program_of(command: &str) -> Option<PathBuf> {
+    let s = command.trim();
+    let path = match s.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or(rest).to_string(),
+        None => match s.to_ascii_lowercase().find(".exe") {
+            Some(i) => s[..i + 4].to_string(),
+            None => s.to_string(),
+        },
+    };
+    let path = PathBuf::from(path);
+    path.is_file().then_some(path)
+}
+
+fn uninstall_entry(key: &str, view_32: bool) -> Option<PathBuf> {
+    program_of(&win_sys::autostart::hklm_string(key, "UninstallString", view_32)?)
+}
+
+/// The Hi-Fi Cable's driver file is in place
+fn hifi_driver_installed() -> bool {
+    let dir = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| r"C:\Windows".into());
+    std::fs::read_dir(dir.join(r"System32\drivers")).is_ok_and(|list| {
+        list.flatten().any(|f| {
+            let n = f.file_name().to_string_lossy().to_lowercase();
+            n.starts_with("vbaudio_hfvaio") && n.ends_with(".sys")
+        })
+    })
+}
+
+fn hifi_remover() -> Option<PathBuf> {
+    if !hifi_driver_installed() {
+        return None;
+    }
+    if let Some(p) = uninstall_entry(HIFI_KEY, false) {
+        return Some(p);
+    }
+    let pf = std::env::var_os("ProgramW6432")
+        .or_else(|| std::env::var_os("ProgramFiles"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| r"C:\Program Files".into());
+    let copy = pf.join(r"VB\CABLEHiFi").join(SETUP);
+    if copy.is_file() {
+        return Some(copy);
+    }
+    let bridge = uninstall_entry(ASIO_BRIDGE_KEY, true)?;
+    let setup = bridge.parent()?.join(SETUP);
+    setup.is_file().then_some(setup)
+}
+
+fn listed(hifi: bool) -> bool {
+    audio_capture::render_devices().is_ok_and(|list| {
+        list.iter().any(|d| {
+            if hifi {
+                bluecaster_core::profiles::is_hifi_cable(&d.name)
+            } else {
+                bluecaster_core::profiles::is_vb_cable(&d.name, d.is_virtual)
+            }
+        })
+    })
+}
+
+/// Runs VB-Audio's own setup of VB-CABLE or the Hi-Fi Cable (`hifi`) to
+/// remove it, without a window, as administrator, and waits for its output
+/// to go. Ok(false): it is still listed; Windows may need a restart first.
+pub fn uninstall(hifi: bool) -> Result<bool, ErrorInfo> {
+    let name = if hifi { "Hi-Fi Cable" } else { "VB-CABLE" };
+    let failed = || err("vb_cable.uninstall_failed", "error.vb_cable_uninstall_failed");
+    let setup = if hifi { hifi_remover() } else { uninstall_entry(VB_CABLE_KEY, false) };
+    let Some(setup) = setup else {
+        tracing::warn!("{name}: no setup found to remove it");
+        return Err(failed());
+    };
+    let args = if hifi { HIFI_REMOVE } else { VB_CABLE_REMOVE };
+    let code = elevation::run_elevated(&setup, args).map_err(|e| match e {
+        ElevationError::Cancelled => err("vb_cable.uac_cancelled", "error.vb_cable_uninstall_uac_cancelled"),
+        e => {
+            tracing::error!("{name} removal: {e}");
+            failed()
+        }
+    })?;
+    tracing::info!("{name} removal -> exit {code}");
+    let started = Instant::now();
+    loop {
+        if !listed(hifi) {
+            return Ok(true);
+        }
+        if started.elapsed() >= APPEAR_WAIT {
+            tracing::info!("{name}: still among the outputs {APPEAR_WAIT:?} after its removal");
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

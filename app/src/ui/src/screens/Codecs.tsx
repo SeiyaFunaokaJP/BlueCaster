@@ -770,8 +770,8 @@ function DeviceCodecs(props: {
             {e().name || t("device.name_unknown")}
           </h2>
         </div>
+        {/* No "Paired": that is the Audio Devices page's (issue #86) */}
         <span class="tags">
-          <span class="tag">{t("device.tag_saved")}</span>
           {/* LE Audio: that tag alone (issue #86) */}
           <Show when={e().device.audio && !e().le_audio}>
             <span class="tag">{t("device.tag_audio")}</span>

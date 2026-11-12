@@ -94,7 +94,9 @@ describe("the Codecs screen", () => {
     const wh = await section("WH-1000XM5");
     // The name only: the address is on Audio Devices (issue #86)
     expect(wh).not.toHaveTextContent("AC:80:0A:12:34:56");
-    expect(wh).toHaveTextContent(t("device.tag_saved"));
+    // No "Paired" tag: that is for Audio Devices (issue #86)
+    expect(wh.querySelector(".device-codecs-head .tags")).not.toHaveTextContent(t("device.tag_saved"));
+    expect(wh).toHaveTextContent(t("device.tag_audio"));
     expect(within(wh).getByRole("radio", { name: /LDAC/ })).toBeChecked();
     // No Auto card: Auto is one switch for every device (issue #86), off
     // here, not the device's own

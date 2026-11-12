@@ -24,6 +24,8 @@ export const LINKS = {
    *  installed with another application */
   vbCableHome: "https://vb-cable.com/",
   vbAudioHome: "https://vb-audio.com/",
+  /** VB-Audio's terms for its donationware */
+  vbAudioLicensing: "https://vb-audio.com/Services/licensing.htm",
   // On the same page, below VB-CABLE (HiFi-Cable & ASIO-Bridge)
   hifiCable: "https://vb-audio.com/Cable/",
 } as const;

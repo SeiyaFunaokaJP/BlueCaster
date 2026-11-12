@@ -15,7 +15,6 @@ import { allAudioDevices } from "../app/settings";
 import { t } from "../i18n";
 import { codecSpec } from "../lib/codecs";
 import type { AudioApp, AudioDevice, Device, Profile, Snapshot } from "../ipc/types";
-import { LINKS } from "../lib/links";
 import {
   appCaptureSupport,
   audioEntries,
@@ -28,17 +27,13 @@ import {
   followedName,
   formatMismatch,
   headsetMode,
-  hifiCable,
-  isVbCable,
   normalizeProfile,
   profilesOf,
-  vbCable,
   type DeviceFields,
 } from "../lib/profile";
-import { saveHeadsetMic } from "../screens/Codecs";
 import { captureChoices, captureText, captureValue, withCapture } from "./CapturePicker";
 import { InputSource } from "./InputSource";
-import { Banner, Button, Field, IconButton, Select, Toggle, type Option } from "./controls";
+import { Banner, Field, IconButton, Select, Toggle, type Option } from "./controls";
 import { Icon } from "./Icon";
 
 export function DeviceSettings(props: { device: Device }) {
@@ -169,33 +164,6 @@ export function DeviceSettings(props: { device: Device }) {
     });
   };
 
-  // VB-Cable captured for the sound: the Hi-Fi Cable adds less delay, and
-  // VB-Cable is then free for the microphone (recommended, not forced)
-  const capturesVbCable = () => {
-    const d = captureDevice(shown(), devices() ?? []);
-    return !!d && isVbCable(d);
-  };
-  const hifi = () => hifiCable(devices() ?? []);
-  const useHifi = async () => {
-    const h = hifi();
-    if (!h) return;
-    await apply({
-      capture_mode: "virtual",
-      audio_device_id: h.id,
-      audio_device_name: h.name,
-      app_exe: "",
-      app_name: "",
-    });
-    // The microphone, where it played into the Hi-Fi Cable or nowhere, goes
-    // to VB-Cable
-    const vb = vbCable(devices() ?? []);
-    const e = audioEntries(snap()).find((x) => x.key === deviceKey(props.device));
-    const mic = e?.profile?.mic_device_id ?? "";
-    if (vb && e?.profile && !e.le_audio && (mic === "" || mic === h.id)) {
-      await saveHeadsetMic(app, e, { mic_device_id: vb.id, mic_device_name: vb.name });
-    }
-  };
-
   return (
     <div class="device-settings" aria-busy={saving() ? "true" : undefined}>
       <Field label={t("capture.mode")} stacked>
@@ -223,26 +191,6 @@ export function DeviceSettings(props: { device: Device }) {
         </Show>
       </div>
       <FormatWarning fields={shown()} profiles={profiles()} devices={devices()} />
-      <Show when={capturesVbCable()}>
-        <div class="source-advice">
-          <p class="field-warn">
-            <Icon name="warning" />
-            <span>{t("capture.vbcable_delay")}</span>
-          </p>
-          <Show
-            when={hifi()}
-            fallback={
-              <Button icon="open" onClick={() => core.transport.openUrl(LINKS.hifiCable)}>
-                {t("hificable.download")}
-              </Button>
-            }
-          >
-            <Button busy={saving()} onClick={() => void useHifi()}>
-              {t("capture.use_hificable")}
-            </Button>
-          </Show>
-        </div>
-      </Show>
       {/* Whether this Windows can capture one app: only the core knows the
           build for sure (it refuses the stream on an older Windows); the UI
           asks the WebView's client hints */}

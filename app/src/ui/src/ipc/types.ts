@@ -162,6 +162,7 @@ interface Results {
   "audio.devices": AudioDevice[];
   "audio.apps": AudioApp[];
   "audio.install_vb_cable": boolean;
+  "audio.uninstall_cable": boolean;
   "audio.mixer": MixerApp[];
   "diag.capture_start": string;
   "diag.capture_stop": CaptureState | null;
