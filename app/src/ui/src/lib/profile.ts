@@ -9,7 +9,7 @@
 
 import type { CodecValues } from "../ipc/bindings/CodecValues";
 import type { AudioDevice, Device, ParamsOf, Profile, Snapshot } from "../ipc/types";
-import { carryToCodec, fitToCodec, PACKET_DEFAULT, PACKET_MAX, PACKET_MIN, type CodecCaps } from "./codecs";
+import { cardCodec, cardOf, carryToCodec, fitToCodec, PACKET_DEFAULT, PACKET_MAX, PACKET_MIN, type CodecCaps } from "./codecs";
 import { parseAddress } from "./format";
 
 /** What belongs to the audio device rather than the codec: the capture
@@ -93,11 +93,13 @@ export function newProfile(): Profile {
     volume_device_name: "",
     max_media_payload: PACKET_DEFAULT,
     le_audio: false,
-    le_low_latency: true,
+    // LE Audio: LC3 unless LC3 LL is chosen (issue #86)
+    le_low_latency: false,
     headset_mic: "auto",
     mic_device_id: "",
     mic_device_name: "",
     mic_muted: false,
+    mic_default_input: true,
     voice_codec: "",
     mic_rate: 0,
     sbc_bitpool: 0,
@@ -201,20 +203,30 @@ export function codecValues(p: Profile): CodecValues {
   };
 }
 
+/** The settings kept for a codec card (aptX Adaptive LL: those an earlier
+ *  version kept for aptX Adaptive in Low Latency, until it has its own) */
+export function keptFor(p: Pick<Profile, "codec_settings">, card: string): CodecValues | undefined {
+  const kept = p.codec_settings ?? {};
+  if (card === "aptxadll" && !kept[card] && kept.aptxad?.quality === "ll") return kept.aptxad;
+  return kept[card];
+}
+
 /**
- * The profile with `codec` chosen: the settings of the codec it used go to
- * its codec_settings, and `codec` gets `values` (its "..." dialog's), else
- * what it was set to before (issue #86: AAC's VBR came back off), else what
- * carries over from the codec it leaves (carryToCodec)
+ * The profile with the codec of card `codec` chosen: the settings of the
+ * card it used go to its codec_settings, and `codec` gets `values` (its
+ * "..." dialog's), else what it was set to before (issue #86: AAC's VBR came
+ * back off), else what carries over from the codec it leaves (carryToCodec).
+ * aptX Adaptive LL's card is saved as aptX Adaptive in Low Latency.
  */
 export function withCodec(p: Profile, codec: string, values?: CodecValues): Profile {
+  const from = cardOf(p);
   const kept: Record<string, CodecValues> = { ...(p.codec_settings ?? {}) };
-  if (p.codec !== codec) kept[p.codec] = codecValues(p);
-  const back = values ?? kept[codec];
+  const back = values ?? keptFor(p, codec);
+  if (from !== codec) kept[from] = codecValues(p);
   delete kept[codec];
   const base: Profile = { ...p, codec_settings: kept };
   // Values of its own come back as they were; else what carries over from the codec it leaves
-  return back ? fitToCodec({ ...base, ...back, codec }) : carryToCodec(base, codec);
+  return cardCodec(back ? fitToCodec({ ...base, ...back, codec }) : carryToCodec(base, codec));
 }
 
 /**

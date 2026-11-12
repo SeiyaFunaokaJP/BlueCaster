@@ -16,6 +16,7 @@ import {
   autoBitDepth,
   autoSampleRate,
   capsOf,
+  cardOf,
   carryToCodec,
   fixedBitDepth,
   fixedKbpsText,
@@ -382,7 +383,9 @@ export function CodecSettings(props: {
       (s) => {
         if (!s) return;
         const kept = props.kept(s.id);
-        const p = s.id === props.profile.codec || !kept ? props.profile : { ...kept, codec: s.id };
+        // The profile's codec as its card (aptX Adaptive in Low Latency: LL's)
+        const own = { ...props.profile, codec: cardOf(props.profile) };
+        const p = s.id === own.codec || !kept ? own : { ...kept, codec: s.id };
         // From another codec's values: without its ABR or SBC frame setup
         // (SBC and SBC XQ apart, issue #86)
         const from = carryToCodec(codecChoice(p), s.id);

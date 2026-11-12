@@ -162,10 +162,12 @@ pub struct Profile {
     pub sbc_channel_mode: String,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub le_audio: bool,
-    /// LE Audio: GMAP low-latency presets with a gaming headset. On by
-    /// default (written only when off): other headsets get the media
-    /// configuration either way.
-    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    /// LE Audio: GMAP low-latency presets with a gaming headset (the LC3 LL
+    /// card); other headsets get the media configuration either way. Off by
+    /// default since issue #86 (LC3), written only when on: before, on was
+    /// the default and only off was written, so a profile without the key
+    /// that had LC3 LL now has LC3.
+    #[serde(default, skip_serializing_if = "is_false")]
     pub le_low_latency: bool,
     /// Headset mode: "off" | "on" | "auto" ([`HeadsetMic`]; written only
     /// when not off). The headphones' microphone is rendered to
@@ -186,6 +188,11 @@ pub struct Profile {
     /// unmuting (written only when muted)
     #[serde(default, skip_serializing_if = "is_false")]
     pub mic_muted: bool,
+    /// The microphone output's recording side ("CABLE Output") is Windows'
+    /// default input while the device is connected (on by default, written
+    /// only when off; default_input.rs)
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub mic_default_input: bool,
     /// Classic devices: the call codec chosen with Auto-select off
     /// ("cvsd", "msbc", "lc3_swb"; "" = none, written only when chosen):
     /// the best the voice link may use ([`Profile::voice_codec_in_force`])
@@ -243,11 +250,12 @@ impl Default for Profile {
             sbc_allocation: String::new(),
             sbc_channel_mode: String::new(),
             le_audio: false,
-            le_low_latency: true,
+            le_low_latency: false,
             headset_mic: headset_off(),
             mic_device_id: String::new(),
             mic_device_name: String::new(),
             mic_muted: false,
+            mic_default_input: true,
             voice_codec: String::new(),
             mic_rate: 0,
             codec_settings: BTreeMap::new(),
@@ -479,6 +487,14 @@ impl Profile {
         };
         // Only those fields left to differ, and they do
         same == *new && *self != *new
+    }
+
+    /// `new` is this profile with "Set as Windows default input while
+    /// connected" turned and nothing else changed: the stream goes on (the
+    /// core's state follows it, default_input.rs)
+    pub fn only_default_input_differs(&self, new: &Profile) -> bool {
+        self.mic_default_input != new.mic_default_input
+            && Profile { mic_default_input: new.mic_default_input, ..self.clone() } == *new
     }
 
     /// The headset mode as saved, Off while the microphone is muted
@@ -1085,16 +1101,23 @@ mod tests {
         assert!(p.le_audio);
         let r = p.to_request(1023).unwrap();
         assert_eq!(r.device, [0x00, 0xA2, 0xD0, 0x00, 0x00, 0x12]);
-        // GMAP low latency: on unless the profile says otherwise
-        assert_eq!(r.le, Some(bt_host::LeRequest { low_latency: true, ..bt_host::LeRequest::default() }));
+        // GMAP low latency (LC3 LL): off unless the profile says otherwise
+        // (issue #86: LC3 is the default)
+        assert_eq!(r.le, Some(bt_host::LeRequest { low_latency: false, ..bt_host::LeRequest::default() }));
         assert_eq!(r.source, SourceRequest::SystemLoopback);
         // Written back as v1 wrote it; a classic profile has no key
         let out = serde_json::to_value(p).unwrap();
         assert_eq!(out["le_audio"], true);
         assert!(out.get("le_low_latency").is_none());
-        let off = Profile { le_low_latency: false, ..p.clone() };
-        assert!(!off.to_request(1023).unwrap().le.unwrap().low_latency);
-        assert_eq!(serde_json::to_value(&off).unwrap()["le_low_latency"], false);
+        let ll = Profile { le_low_latency: true, ..p.clone() };
+        assert!(ll.to_request(1023).unwrap().le.unwrap().low_latency);
+        assert_eq!(serde_json::to_value(&ll).unwrap()["le_low_latency"], true);
+        // Off as written before stays off
+        let off: Profile = serde_json::from_value(
+            serde_json::json!({"name": "Buds LE Audio", "le_audio": true, "le_low_latency": false}),
+        )
+        .unwrap();
+        assert!(!off.le_low_latency);
         let classic = Profile { le_audio: false, ..p.clone() };
         assert!(serde_json::to_value(&classic).unwrap().get("le_audio").is_none());
         // A bad address is refused as for A2DP

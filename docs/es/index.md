@@ -37,7 +37,7 @@ Convierte un adaptador Bluetooth corriente -- un adaptador USB económico o, en 
 | FastStream | 198/216 kbps | 44.1/48 kHz | 16 bits | -- |
 | Opus 05 | 256 kbps | 48 kHz | 16 bits | -- |
 | LC3 (LE Audio) | 32--124 kbps por canal | 16/24/32/48 kHz | 16 bits | ~140 ms |
-| LC3 baja latencia (LE Audio GMAP) | 64--96 kbps por canal | 32/48 kHz | 16 bits | ~30 ms |
+| LC3 LL (LE Audio GMAP) | 64--96 kbps por canal | 32/48 kHz | 16 bits | ~30 ms |
 
 ### Compatibilidad de códecs por plataforma (envío a los auriculares)
 

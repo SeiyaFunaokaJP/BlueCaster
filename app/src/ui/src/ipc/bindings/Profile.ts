@@ -49,8 +49,8 @@ volume_sync: string, volume_device_id: string, volume_device_name: string, max_m
  */
 le_audio: boolean, 
 /**
- * LE Audio: GMAP low-latency presets with a gaming headset (on by
- * default; other headsets get the media configuration either way)
+ * LE Audio: GMAP low-latency presets with a gaming headset (LC3 LL; off
+ * by default: LC3); other headsets get the media configuration either way
  */
 le_low_latency: boolean, 
 /**
@@ -78,6 +78,11 @@ mic_device_name: string,
  * as with headset_mic "off"; headset_mic is kept for unmuting
  */
 mic_muted: boolean, 
+/**
+ * The microphone output's recording side is Windows' default input
+ * while the device is connected (on by default)
+ */
+mic_default_input: boolean, 
 /**
  * Classic devices: the call codec chosen on its card with Auto-select
  * off ("cvsd", "msbc", "lc3_swb"; "" = none chosen, the best both

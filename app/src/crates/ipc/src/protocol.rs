@@ -598,9 +598,9 @@ pub struct Profile {
     /// Settings.le_audio_experimental (error.le_audio_disabled)
     #[serde(default)]
     pub le_audio: bool,
-    /// LE Audio: GMAP low-latency presets with a gaming headset (on by
-    /// default; other headsets get the media configuration either way)
-    #[serde(default = "yes")]
+    /// LE Audio: GMAP low-latency presets with a gaming headset (LC3 LL; off
+    /// by default: LC3); other headsets get the media configuration either way
+    #[serde(default)]
     pub le_low_latency: bool,
     /// Headset mode: the headphones' microphone is
     /// rendered to mic_device_id. "off" (the default) | "on" | "auto";
@@ -623,6 +623,10 @@ pub struct Profile {
     /// as with headset_mic "off"; headset_mic is kept for unmuting
     #[serde(default)]
     pub mic_muted: bool,
+    /// The microphone output's recording side is Windows' default input
+    /// while the device is connected (on by default)
+    #[serde(default = "yes")]
+    pub mic_default_input: bool,
     /// Classic devices: the call codec chosen on its card with Auto-select
     /// off ("cvsd", "msbc", "lc3_swb"; "" = none chosen, the best both
     /// sides have). The voice link takes it, or the next lower one the
@@ -812,6 +816,21 @@ pub struct DevDebug {
     /// A Realtek chip's firmware from Realtek's Windows driver on this PC
     /// instead of the firmware folder's (the RTL8761B, issue #427)
     pub realtek_driver_firmware: bool,
+    /// LE Audio CIG: max transport latency C->P / P->C in ms; 0: as planned
+    pub le_latency_c_to_p_ms: u16,
+    pub le_latency_p_to_c_ms: u16,
+    /// LE Audio CIG: RTN C->P / P->C; None: as planned
+    #[ts(optional = nullable)]
+    pub le_rtn_c_to_p: Option<u8>,
+    #[ts(optional = nullable)]
+    pub le_rtn_p_to_c: Option<u8>,
+    /// LE Audio CIG: interleaved packing
+    pub le_interleaved: bool,
+    /// The LE Audio microphone's preset, taken as it is; empty: as planned
+    pub le_mic_preset: String,
+    /// A stream with the microphone that failed is retried without it on
+    /// the same link
+    pub le_mic_retry_same_link: bool,
 }
 
 /// Developer mode's logging (bluecaster_core::settings::DevLog), in force while

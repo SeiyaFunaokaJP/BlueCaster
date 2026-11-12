@@ -1066,6 +1066,18 @@ fn apply_dev_overrides(settings: &Settings) {
         None
     });
     bt_host::debug_command::set_register(register);
+    // LE Audio, read when the next stream is set up
+    bt_host::set_cig_overrides(bt_host::CigOverrides {
+        latency_c_to_p_ms: debug.le_latency_c_to_p_ms,
+        latency_p_to_c_ms: debug.le_latency_p_to_c_ms,
+        rtn_c_to_p: debug.le_rtn_c_to_p,
+        rtn_p_to_c: debug.le_rtn_p_to_c,
+        interleaved: debug.le_interleaved,
+    });
+    crate::le_stream::set_debug(crate::le_stream::LeDebug {
+        mic_preset: debug.le_mic_preset.clone(),
+        retry_same_link: debug.le_mic_retry_same_link,
+    });
 }
 
 impl Service {

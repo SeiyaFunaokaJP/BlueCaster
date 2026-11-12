@@ -241,6 +241,25 @@ presentation delay is clamped into every ASE's range, the max transport
 latency capped by the servers' preference; framed ISO when an ASE cannot do
 unframed.
 
+Developer > Debug > LE Audio stream (developer mode, read when the next
+stream is set up; issue #86) replaces some of that for trying what a
+controller does with other values, without a new build:
+
+- max transport latency C->P / P->C and RTN C->P / P->C
+  (`bt_host::CigOverrides`, `bap.rs` `apply_overrides`; Set CIG Parameters
+  and Config QoS get the same values, no server preference caps them,
+  clamped to 5-4000 ms and RTN 0-15), interleaved packing;
+- the microphone preset (`StreamRequest::source_preset_exact`: no
+  high-reliability twin, no GMAP order);
+- the retry without the microphone on the same link instead of a new one
+  (`le_stream.rs`).
+
+The log names them ("LE Audio: Developer > Debug CIG: ...", "LE Audio:
+Developer > Debug: ..."), and the diagnostics' settings.json has them. The
+ISO interval, NSE, BN and FT are the controller's choice: LE Set CIG
+Parameters Test would set them, but BTstack's CIG handling (`gap_cig_create`)
+sends only Set CIG Parameters, and extern/btstack is not patched.
+
 Streaming Audio Contexts (Enable): the requested contexts available on
 every device, else Unspecified if available; evaluated again right before
 Enable, which waits for an Available Audio Contexts notification when

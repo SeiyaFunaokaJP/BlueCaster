@@ -62,6 +62,9 @@ pub struct StreamRequest {
     /// Presets of the source direction, best first (only with
     /// `conversational`)
     pub source_preset_order: Vec<String>,
+    /// `source_preset_order` as given (Developer > Debug's microphone
+    /// preset): no high-reliability twin, no GMAP order
+    pub source_preset_exact: bool,
     /// Streaming Audio Contexts in the Enable of source ASEs (CONTEXT_*)
     pub source_contexts: u16,
     /// The microphone's sampling rate chosen (Hz): the first source preset
@@ -81,6 +84,7 @@ impl Default for StreamRequest {
             prefer_two_channel_ase: true,
             conversational: false,
             source_preset_order: DEFAULT_SOURCE_PRESET_ORDER.iter().map(|s| s.to_string()).collect(),
+            source_preset_exact: false,
             source_contexts: CONTEXT_CONVERSATIONAL,
             source_rate: None,
         }
@@ -533,7 +537,7 @@ fn plan_source(
     // rate, frame and octets). Its 10 ms max transport latency would make
     // the controller pick a 10 ms ISO interval for every CIS of the CIG,
     // and EarFun earbuds refused the second CIS then (0x1E, issue #86).
-    if sink.target_latency == TARGET_LATENCY_HIGH_RELIABILITY {
+    if sink.target_latency == TARGET_LATENCY_HIGH_RELIABILITY && !request.source_preset_exact {
         for p in candidates.iter_mut() {
             if let Some(hr) = presets.presets().iter().find(|q| {
                 q.target_latency == TARGET_LATENCY_HIGH_RELIABILITY
@@ -1044,6 +1048,11 @@ mod tests {
         // 48_6_2 is high reliability: so is the microphone (one latency
         // class per CIG, issue #86)
         assert_eq!((s.preset.name.as_str(), s.preset.rtn, s.preset.max_transport_latency_ms), ("32_2_2", 13, 95));
+        // Developer > Debug's microphone preset is taken as it is
+        let exact =
+            StreamRequest { source_preset_order: vec!["32_2_1".into()], source_preset_exact: true, ..conversational() };
+        let d = with_mic(sink(1, FL | FR, 2, 0x03), FL);
+        assert_eq!(plan(&[d], &exact, EMU_ISO).unwrap().source.unwrap().preset.name, "32_2_1");
         assert_eq!((s.requested_contexts, s.contexts), (CONTEXT_CONVERSATIONAL, CONTEXT_CONVERSATIONAL));
         assert_eq!(s.presentation_delay_us, 40000);
         assert_eq!(p.cis[0].source_ase, Some(SourceDir { ase_id: 3, channels: 1, allocation: FL, octets: 80 }));

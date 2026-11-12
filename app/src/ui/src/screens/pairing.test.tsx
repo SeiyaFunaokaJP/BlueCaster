@@ -189,6 +189,9 @@ describe("device pairing", () => {
     for (let i = 0; i < 2; i++) fireEvent.click(await screen.findByRole("button", { name: t("ui.setup.next") }));
     const row = (await screen.findByText(t("ui.adapter.import_windows"))).closest(".import-pairings") as HTMLElement;
     expect(within(row).getByText(t("ui.devices.import_hint"))).toBeInTheDocument();
+    // The administrator prompt is said in the label itself (issue #86)
+    expect(t("ui.adapter.import_windows")).toMatch(/administrator/);
+    expect(t("ui.devices.import_hint")).not.toMatch(/administrator/);
     // Its button lists them, all ticked; the import asks for administrator rights
     fireEvent.click(within(row).getByRole("button", { name: t("ui.devices.import_one") }));
     const dialog = await screen.findByRole("dialog", { name: t("ui.adapter.import_windows") });

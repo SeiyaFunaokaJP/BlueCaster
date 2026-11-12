@@ -387,6 +387,64 @@ const REFRESH_MS: u32 = 500;
 /// server that did not start
 const WAIT_REFRESH_MS: u32 = 2000;
 
+/// Developer > Debug: LE Set CIG Parameters values that replace what the
+/// plan and the servers' preferences give (Config QoS gets the same), for
+/// trying a controller's ISO interval choice without a new build (issue
+/// #86). Taken as they are: no server preference caps them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CigOverrides {
+    /// Max transport latency C->P in ms; 0: as planned
+    pub latency_c_to_p_ms: u16,
+    /// Max transport latency P->C in ms; 0: as planned
+    pub latency_p_to_c_ms: u16,
+    /// RTN C->P; None: as planned
+    pub rtn_c_to_p: Option<u8>,
+    /// RTN P->C; None: as planned
+    pub rtn_p_to_c: Option<u8>,
+    /// Interleaved packing instead of sequential
+    pub interleaved: bool,
+}
+
+static CIG_OVERRIDES: std::sync::Mutex<CigOverrides> = std::sync::Mutex::new(CigOverrides {
+    latency_c_to_p_ms: 0,
+    latency_p_to_c_ms: 0,
+    rtn_c_to_p: None,
+    rtn_p_to_c: None,
+    interleaved: false,
+});
+
+/// Sets the overrides the next CIG is created with (default: none)
+pub fn set_cig_overrides(o: CigOverrides) {
+    *CIG_OVERRIDES.lock().unwrap_or_else(|e| e.into_inner()) = o;
+}
+
+fn cig_overrides() -> CigOverrides {
+    *CIG_OVERRIDES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Max transport latency (0..=4000 ms) and RTN (0..=15) out of range are
+/// clamped
+fn apply_overrides(o: CigOverrides, latency: &mut [u16; 2], rtn: &mut [u8; 2], packing: &mut u8) -> bool {
+    let mut any = false;
+    for (v, ms) in latency.iter_mut().zip([o.latency_c_to_p_ms, o.latency_p_to_c_ms]) {
+        if ms != 0 {
+            *v = ms.clamp(5, 4000);
+            any = true;
+        }
+    }
+    for (v, r) in rtn.iter_mut().zip([o.rtn_c_to_p, o.rtn_p_to_c]) {
+        if let Some(r) = r {
+            *v = r.min(15);
+            any = true;
+        }
+    }
+    if o.interleaved {
+        *packing = 1;
+        any = true;
+    }
+    any
+}
+
 /// Step of the unicast procedure
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Phase {
@@ -458,6 +516,10 @@ pub trait UnicastEnv {
     /// The CCIDs of the modules for Enable with these contexts
     fn ccids(&mut self, contexts: u16) -> Vec<u8>;
     fn cig_create(&mut self, params: &CigParams) -> u8;
+    /// Developer > Debug's CIG values ([`set_cig_overrides`])
+    fn cig_overrides(&self) -> CigOverrides {
+        cig_overrides()
+    }
     fn cig_remove(&mut self, cig_id: u8) -> u8;
     fn cis_create(&mut self, cig_id: u8, cis_handles: &[u16], acl_handles: &[u16]) -> u8;
     fn can_send_command(&self) -> bool;
@@ -517,6 +579,8 @@ pub struct Unicast {
     cis_dropping: Vec<u16>,
     /// The source direction (P->C): max transport latency
     latency_src_ms: u16,
+    /// RTN C->P and P->C of the CIG (Config QoS sends the same)
+    rtn: [u8; 2],
     /// Source ASEs (device, ASE) Receiver Start Ready / Stop Ready went to
     start_ready_sent: Vec<(u32, u8)>,
     stop_ready_sent: Vec<(u32, u8)>,
@@ -773,7 +837,7 @@ impl Unicast {
                                     framing: self.framing,
                                     phy: self.phy,
                                     max_sdu: dir.sdu_len(),
-                                    rtn: src.preset.rtn,
+                                    rtn: self.rtn[1],
                                     max_transport_latency_ms: self.latency_src_ms,
                                     presentation_delay_us: src.presentation_delay_us,
                                 },
@@ -785,7 +849,7 @@ impl Unicast {
                                     framing: self.framing,
                                     phy: self.phy,
                                     max_sdu: c.sdu_len(plan.preset.octets),
-                                    rtn: plan.preset.rtn,
+                                    rtn: self.rtn[0],
                                     max_transport_latency_ms: self.latency_ms,
                                     presentation_delay_us: plan.presentation_delay_us,
                                 },
@@ -947,10 +1011,17 @@ impl Unicast {
         // (sink ASEs: C->P, source ASEs: P->C); framing and PHY for all
         let mut range = [(0u32, 0xFF_FFFFu32); 2];
         let src = plan.source.as_ref();
-        let mut latency = [
-            plan.preset.max_transport_latency_ms,
-            src.map_or(plan.preset.max_transport_latency_ms, |s| s.preset.max_transport_latency_ms),
-        ];
+        // One max transport latency for both directions, the larger of the
+        // two presets: the controller picks one ISO interval for the whole
+        // CIG, and a lower one for the microphone (32_2_2: 95 ms next to
+        // 48_6_2: 100 ms) made a MediaTek controller give up its 30 ms
+        // interval for 10 ms, where the earbuds refused the second CIS
+        // (0x1E, issue #86). The servers' preferences still cap each
+        // direction below.
+        let shared = src.map_or(plan.preset.max_transport_latency_ms, |s| {
+            s.preset.max_transport_latency_ms.max(plan.preset.max_transport_latency_ms)
+        });
+        let mut latency = [shared; 2];
         let mut phy = plan.phy;
         let mut framing = plan.preset.framing | src.map_or(0, |s| s.preset.framing);
         for pa in plan.ases() {
@@ -986,10 +1057,24 @@ impl Unicast {
             }
         }
         let pd = plan.preset.presentation_delay_us.min(range[0].1).max(range[0].0);
-        let latency_c_to_p = latency[0].max(5);
-        let latency_p_to_c = latency[1].max(5);
+        let mut latency = [latency[0].max(5), latency[1].max(5)];
+        let mut rtn = [plan.preset.rtn, src.map_or(plan.preset.rtn, |s| s.preset.rtn)];
+        let mut packing = 0;
+        let overrides = env.cig_overrides();
+        if apply_overrides(overrides, &mut latency, &mut rtn, &mut packing) {
+            tracing::info!(
+                "LE Audio: Developer > Debug CIG: max latency {} / {} ms, RTN {} / {}, {} packing ({overrides:?})",
+                latency[0],
+                latency[1],
+                rtn[0],
+                rtn[1],
+                if packing != 0 { "interleaved" } else { "sequential" }
+            );
+        }
+        let [latency_c_to_p, latency_p_to_c] = latency;
         self.latency_ms = latency_c_to_p;
         self.latency_src_ms = latency_p_to_c;
+        self.rtn = rtn;
         self.phy = phy;
         self.framing = framing;
         let src_pd = src.map(|s| s.preset.presentation_delay_us.min(range[1].1).max(range[1].0));
@@ -1005,24 +1090,23 @@ impl Unicast {
              presentation delay {pd} us",
             plan.preset.sdu_interval_us(),
             if framing != 0 { "framed" } else { "unframed" },
-            plan.preset.rtn
+            rtn[0]
         );
         if let (Some(s), Some(v)) = (src, src_pd) {
             tracing::info!(
                 "LE Audio: microphone QoS: SDU interval {} us, max latency {latency_p_to_c} ms, RTN {}, presentation \
                  delay {v} us",
                 s.preset.sdu_interval_us(),
-                s.preset.rtn
+                rtn[1]
             );
         }
         let src_interval = src.map_or(plan.preset.sdu_interval_us(), |s| s.preset.sdu_interval_us());
-        let src_rtn = src.map_or(plan.preset.rtn, |s| s.preset.rtn);
         let mut params = CigParams {
             cig_id: plan.cig_id,
             sdu_interval_c_to_p: plan.preset.sdu_interval_us(),
             sdu_interval_p_to_c: src_interval,
             worst_case_sca: 0,
-            packing: 0,
+            packing,
             framing,
             max_transport_latency_c_to_p: latency_c_to_p,
             max_transport_latency_p_to_c: latency_p_to_c,
@@ -1035,8 +1119,8 @@ impl Unicast {
                     max_sdu_p_to_c: c.source_ase.map_or(0, |s| s.sdu_len()),
                     phy_c_to_p: phy,
                     phy_p_to_c: phy,
-                    rtn_c_to_p: plan.preset.rtn,
-                    rtn_p_to_c: if c.source_ase.is_some() { src_rtn } else { plan.preset.rtn },
+                    rtn_c_to_p: rtn[0],
+                    rtn_p_to_c: if c.source_ase.is_some() { rtn[1] } else { rtn[0] },
                 })
                 .collect(),
         };
@@ -1705,6 +1789,7 @@ mod tests {
         cig: Option<CigParams>,
         /// Every ASE Control Point write in full
         cp: Vec<Vec<u8>>,
+        overrides: CigOverrides,
     }
 
     impl Fake {
@@ -1718,6 +1803,7 @@ mod tests {
                 lost: None,
                 cig: None,
                 cp: Vec::new(),
+                overrides: CigOverrides::default(),
             }
         }
         fn take(&mut self) -> Vec<String> {
@@ -1729,6 +1815,9 @@ mod tests {
     }
 
     impl UnicastEnv for Fake {
+        fn cig_overrides(&self) -> CigOverrides {
+            self.overrides
+        }
         fn device(&self, id: u32) -> Option<&LeDevice> {
             self.devices.get(id as usize)
         }
@@ -2028,6 +2117,59 @@ mod tests {
         plan
     }
 
+    #[test]
+    fn the_microphone_shares_the_media_latency_within_the_server_preference() {
+        // A source ASE that allows less keeps its own cap
+        let mut d = mic_device(0, 0x40, true);
+        d.ases[1].pref_max_latency_ms = 60;
+        let mut env = Fake::new(vec![d]);
+        let mut u = Unicast::default();
+        u.start(&mut env, conversational_plan(false), Box::new(|_| {}));
+        env.take();
+        for (ase, state) in [(1, AseState::CodecConfigured), (3, AseState::CodecConfigured)] {
+            env.set_state(0, ase, state);
+            u.on_ase_update(&mut env, LeDeviceId(0), ase);
+        }
+        let cig = env.cig.clone().unwrap();
+        assert_eq!((cig.max_transport_latency_c_to_p, cig.max_transport_latency_p_to_c), (100, 60));
+    }
+
+    #[test]
+    fn developer_cig_overrides_reach_the_cig_and_config_qos() {
+        let mut env = Fake::new(vec![mic_device(0, 0x40, true)]);
+        env.overrides = CigOverrides {
+            latency_c_to_p_ms: 60,
+            latency_p_to_c_ms: 9000,
+            rtn_c_to_p: Some(2),
+            rtn_p_to_c: Some(40),
+            interleaved: true,
+        };
+        let mut u = Unicast::default();
+        u.start(&mut env, conversational_plan(false), Box::new(|_| {}));
+        for ase in [1, 3] {
+            env.set_state(0, ase, AseState::CodecConfigured);
+            u.on_ase_update(&mut env, LeDeviceId(0), ase);
+        }
+        let cig = env.cig.clone().unwrap();
+        // Out of range: clamped (4000 ms, RTN 15)
+        assert_eq!((cig.max_transport_latency_c_to_p, cig.max_transport_latency_p_to_c, cig.packing), (60, 4000, 1));
+        assert_eq!((cig.cis[0].rtn_c_to_p, cig.cis[0].rtn_p_to_c), (2, 15));
+        u.on_cig_created(&mut env, &cig_created(1, &[0x60]));
+        // Config QoS: per ASE 16 bytes after opcode and count; RTN at +10,
+        // max transport latency at +11
+        let qos = env.cp.last().unwrap().clone();
+        let ases: Vec<(u8, u8, u16)> =
+            qos[2..].chunks(16).map(|a| (a[0], a[10], u16::from_le_bytes([a[11], a[12]]))).collect();
+        assert_eq!(ases, [(1, 2, 60), (3, 15, 4000)]);
+    }
+
+    #[test]
+    fn no_developer_overrides_leave_the_plan_as_it_is() {
+        let (mut latency, mut rtn, mut packing) = ([100, 95], [13, 13], 0);
+        assert!(!apply_overrides(CigOverrides::default(), &mut latency, &mut rtn, &mut packing));
+        assert_eq!((latency, rtn, packing), ([100, 95], [13, 13], 0));
+    }
+
     fn mic_device(id: u32, acl: u16, sink: bool) -> LeDevice {
         let mut d = device(id, acl, if sink { &[1] } else { &[] }, CONTEXT_MEDIA);
         d.available_source_contexts = CONTEXT_CONVERSATIONAL;
@@ -2054,7 +2196,8 @@ mod tests {
         assert_eq!(env.take(), ["cig create 1 (1 CIS)"]);
         let cig = env.cig.clone().unwrap();
         assert_eq!((cig.sdu_interval_c_to_p, cig.sdu_interval_p_to_c), (10000, 10000));
-        assert_eq!((cig.max_transport_latency_c_to_p, cig.max_transport_latency_p_to_c), (100, 10));
+        // One max transport latency for the CIG: the larger (issue #86)
+        assert_eq!((cig.max_transport_latency_c_to_p, cig.max_transport_latency_p_to_c), (100, 100));
         assert_eq!((cig.cis[0].max_sdu_c_to_p, cig.cis[0].max_sdu_p_to_c), (155, 80));
         assert_eq!((cig.cis[0].rtn_c_to_p, cig.cis[0].rtn_p_to_c), (13, 2));
         u.on_cig_created(&mut env, &cig_created(1, &[0x60]));

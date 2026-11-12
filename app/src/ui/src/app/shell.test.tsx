@@ -355,12 +355,18 @@ describe("Audio Devices without a virtual device (issue #86)", () => {
     fireEvent.click(screen.getByRole("button", { name: t("vbcable.install") }));
     await waitFor(() => expect(screen.queryByText(t("ui.setup.vbcable_note"))).toBeNull());
     expect(screen.getByText(t("ui.setup.hificable_note"))).toBeInTheDocument();
-    // The line closed: gone, and saved
+    // The line cannot be closed: it stays while a cable is missing (issue #86)
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: t("modal.close") }));
     const line = screen.getByText(t("cables.recommended")).closest(".cable-banner") as HTMLElement;
-    fireEvent.click(within(line).getByRole("button", { name: t("modal.close") }));
+    expect(within(line).queryByRole("button", { name: t("modal.close") })).toBeNull();
+    // Hidden on the Developer page: only while developer mode is on
+    const settings = () => core.state.snap!.settings;
+    await m.call("settings.set", {
+      settings: { ...settings(), vb_cable_note_hidden: true, hifi_cable_note_hidden: true },
+    });
+    expect(screen.getByText(t("cables.recommended"))).toBeInTheDocument();
+    await m.call("settings.set", { settings: { ...settings(), developer_mode: true } });
     await waitFor(() => expect(screen.queryByText(t("cables.recommended"))).toBeNull());
-    expect(core.state.snap!.settings).toMatchObject({ vb_cable_note_hidden: true, hifi_cable_note_hidden: true });
   });
 
   it("offers VB-Audio's page when VB-CABLE cannot be downloaded", async () => {
@@ -376,14 +382,23 @@ describe("Audio Devices without a virtual device (issue #86)", () => {
     expect(screen.getByText(t("ui.setup.vbcable_note"))).toBeInTheDocument();
   });
 
-  it("keeps the cables on Settings after their notes were closed", async () => {
-    location.hash = "#/settings";
+  it("names both cables as VB-Audio's donationware on About, not on Settings", async () => {
+    location.hash = "#/about";
     const m = new MockCore({ speed: 0 });
-    m.noVirtual = true;
     mock = m;
     render(() => <App core={createCore(m)} />);
-    expect(await screen.findByRole("button", { name: t("vbcable.install") })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: t("hificable.download") })).toBeInTheDocument();
+    expect(await screen.findByText(t("vbcable.origin"), { exact: false })).toBeInTheDocument();
+    expect(screen.getByText(t("hificable.origin"), { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "vb-cable.com" })).toBeInTheDocument();
+    // Nothing said about whether they are installed
+    expect(screen.queryByRole("button", { name: t("vbcable.install") })).toBeNull();
+    cleanup();
+    location.hash = "#/settings";
+    m.noVirtual = true;
+    render(() => <App core={createCore(m)} />);
+    await screen.findByRole("heading", { level: 1 });
+    expect(screen.queryByText(t("vbcable.origin"), { exact: false })).toBeNull();
+    expect(screen.queryByRole("button", { name: t("vbcable.install") })).toBeNull();
   });
 });
 

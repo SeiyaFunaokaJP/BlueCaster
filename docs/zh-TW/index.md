@@ -37,7 +37,7 @@ has_toc: false
 | FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | -- |
 | Opus 05 | 256 kbps | 48 kHz | 16 bit | -- |
 | LC3（LE Audio） | 每聲道 32--124 kbps | 16/24/32/48 kHz | 16 bit | 約 140 ms |
-| LC3 低延遲（LE Audio GMAP） | 每聲道 64--96 kbps | 32/48 kHz | 16 bit | 約 30 ms |
+| LC3 LL（LE Audio GMAP） | 每聲道 64--96 kbps | 32/48 kHz | 16 bit | 約 30 ms |
 
 ### 各平台的轉碼器支援（傳送到耳機）
 
