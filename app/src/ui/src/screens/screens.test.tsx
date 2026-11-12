@@ -83,6 +83,7 @@ describe("Home", () => {
     // The codec is chosen right on the card, by name only (issue #86)
     expect(within(wh).getByRole("combobox", { name: "Codec" })).toHaveDisplayValue("LDAC");
     expect(within(wh).getByRole("status")).toHaveTextContent(/^Connected$/);
+    expect(within(wh).getByRole("status").querySelector(".dot")).not.toBeNull();
     // The other device: ready, not connected, its own Connect
     expect(xb).toHaveTextContent("Disconnected");
     expect(xb).not.toHaveTextContent("—");
@@ -316,6 +317,8 @@ describe("Home", () => {
     const { calls } = start("#/home", { scenario: "error" });
     const wh = await homeCard("WH-1000XM5");
     expect(wh).toHaveTextContent("Error");
+    // The red word alone: a red dot read as recording (issue #86)
+    expect(within(wh).getByRole("status").querySelector(".dot")).toBeNull();
     expect(within(wh).queryByRole("button", { name: "Disconnect" })).toBeNull();
     fireEvent.click(within(wh).getByRole("button", { name: "Connect" }));
     await waitFor(() => expect(calls.some((c) => c.method === "stream.start")).toBe(true));

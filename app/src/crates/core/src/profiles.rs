@@ -185,6 +185,11 @@ pub struct Profile {
     /// unmuting (written only when muted)
     #[serde(default, skip_serializing_if = "is_false")]
     pub mic_muted: bool,
+    /// The microphone output's recording side ("CABLE Output") is Windows'
+    /// default input while the device is connected (on by default, written
+    /// only when off; default_input.rs)
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub mic_default_input: bool,
     /// Classic devices: the call codec chosen with Auto-select off
     /// ("cvsd", "msbc", "lc3_swb"; "" = none, written only when chosen):
     /// the best the voice link may use ([`Profile::voice_codec_in_force`])
@@ -247,6 +252,7 @@ impl Default for Profile {
             mic_device_id: String::new(),
             mic_device_name: String::new(),
             mic_muted: false,
+            mic_default_input: true,
             voice_codec: String::new(),
             mic_rate: 0,
             codec_settings: BTreeMap::new(),
@@ -478,6 +484,14 @@ impl Profile {
         };
         // Only those fields left to differ, and they do
         same == *new && *self != *new
+    }
+
+    /// `new` is this profile with "Set as Windows default input while
+    /// connected" turned and nothing else changed: the stream goes on (the
+    /// core's state follows it, default_input.rs)
+    pub fn only_default_input_differs(&self, new: &Profile) -> bool {
+        self.mic_default_input != new.mic_default_input
+            && Profile { mic_default_input: new.mic_default_input, ..self.clone() } == *new
     }
 
     /// The headset mode as saved, Off while the microphone is muted

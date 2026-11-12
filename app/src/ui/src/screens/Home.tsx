@@ -337,7 +337,10 @@ function DeviceCard(props: { entry: AudioEntry; onError: (e: unknown) => void })
               </span>
             </Show>
             <div class={`status-line st-${state()}`} role="status" aria-live="polite">
-              <span class="dot" aria-hidden="true" />
+              {/* No red dot for an error: it read as recording (issue #86) */}
+              <Show when={state() !== "error"}>
+                <span class="dot" aria-hidden="true" />
+              </Show>
               <span>
                 {/* An error's text is in the panel above, with its fix */}
                 {live() ? statusText({ ...stream(), state: state() }) : t("status.ready")}

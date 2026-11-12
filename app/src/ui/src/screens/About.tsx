@@ -1,6 +1,9 @@
-// About: the program, its version, licences and where to find the author.
+// About: the program, its version, licences and where to find the author;
+// VB-Audio's cables named as their donationware (issue #86: moved here from
+// Settings).
 
 import { useApp } from "../app/context";
+import { CableOrigins } from "../components/CableNotes";
 import { Button, Section } from "../components/controls";
 import { t } from "../i18n";
 import { LINKS, thirdPartyUrl } from "../lib/links";
@@ -49,6 +52,9 @@ export function About() {
             {t("help.sponsor")}
           </Button>
         </div>
+      </Section>
+      <Section title={t("cables.title")}>
+        <CableOrigins />
       </Section>
     </div>
   );

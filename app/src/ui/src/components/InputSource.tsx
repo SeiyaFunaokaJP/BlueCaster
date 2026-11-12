@@ -13,7 +13,12 @@
 // device that has no profile yet shows what its first one gets: Auto with
 // VB-CABLE, else the Hi-Fi Cable (the core's default_mic_output). The
 // Hi-Fi Cable with its two sides at different sample rates is said (it may
-// pass nothing then; on one PC it still did).
+// pass nothing then; on one PC it still did). Off here and the microphone's
+// button on the cards are one state (issue #86): a device whose mode is Auto
+// or On is muted by Off and shows Off while muted, so the button can open it
+// again in the same mode. Its recording side becomes Windows' default input
+// while the device is connected unless turned off (the core's
+// default_input.rs), so apps that record from the default microphone open it.
 
 import { createSignal, Show } from "solid-js";
 import { useApp } from "../app/context";
@@ -33,7 +38,7 @@ import {
   vbCable,
 } from "../lib/profile";
 import { saveHeadsetMic } from "../screens/Codecs";
-import { Segmented, Select, type Option } from "./controls";
+import { Segmented, Select, Toggle, type Option } from "./controls";
 import { Icon } from "./Icon";
 
 /** The render endpoint the stream records with this source (the default
@@ -80,7 +85,22 @@ export function InputSource(props: {
         }
       : base;
   };
-  const mode = () => (shown() ? headsetMode(shown()!) : "off");
+  /** The mode saved: what the microphone's button opens again */
+  const saved = (): HeadsetMode => {
+    const p = entry()?.profile;
+    return p ? headsetMode(p) : "off";
+  };
+  /** The mode shown: Off while muted (the cards' button) */
+  const mode = (): HeadsetMode => (!shown() || shown()!.mic_muted ? "off" : headsetMode(shown()!));
+  /** Off mutes a device whose mode is Auto or On, as its button does */
+  const chooseMode = (m: HeadsetMode) => {
+    if (m === mode()) return;
+    void save(
+      m === "off" && saved() !== "off"
+        ? { mic_muted: true }
+        : { headset_mic: m, mic_muted: false },
+    );
+  };
   const chosen = () => shown()?.mic_device_id ?? "";
   /** The output source and what records with it (the other side of the
    *  same cable): the microphone would reach the headphones or be mixed
@@ -195,7 +215,7 @@ export function InputSource(props: {
               label: t(`ui.headset_mic_${m}`),
               disabled: busy(),
             }))}
-            onChange={(m) => void save({ headset_mic: m, mic_muted: false })}
+            onChange={chooseMode}
           />
         </div>
         <div class="inline capture-source">
@@ -208,9 +228,7 @@ export function InputSource(props: {
             onChange={choose}
           />
         </div>
-        <Show when={!entry()?.le_audio}>
-          <p class="hint">{t("ui.headset_mic_quality")}</p>
-        </Show>
+        <p class="hint">{t("ui.headset_mic_quality")}</p>
         <Show when={mode() !== "off" && !chosen()}>
           <p class="field-warn">{t("ui.headset_mic_no_output")}</p>
         </Show>
@@ -234,6 +252,12 @@ export function InputSource(props: {
             <span>{t("capture.mic_is_default_output")}</span>
           </p>
         </Show>
+        <Toggle
+          label={t("capture.mic_default_input")}
+          checked={shown()?.mic_default_input !== false}
+          disabled={busy()}
+          onChange={(v) => void save({ mic_default_input: v })}
+        />
       </div>
     </Show>
   );

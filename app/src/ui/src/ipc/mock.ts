@@ -160,6 +160,7 @@ export function sampleProfile(over: Partial<Profile> = {}): Profile {
     mic_device_id: "",
     mic_device_name: "",
     mic_muted: false,
+    mic_default_input: true,
     voice_codec: "",
     mic_rate: 0,
     sbc_bitpool: 0,

@@ -110,7 +110,10 @@ export function Flyout() {
                 </span>
               </Show>
               <div class={`status-line st-${stream().state}`} role="status" aria-live="polite">
-                <span class="dot" aria-hidden="true" />
+                {/* No red dot for an error, as on Home (issue #86) */}
+                <Show when={stream().state !== "error"}>
+                  <span class="dot" aria-hidden="true" />
+                </Show>
                 <span class="ellipsis">{statusText(stream())}</span>
               </div>
             </div>

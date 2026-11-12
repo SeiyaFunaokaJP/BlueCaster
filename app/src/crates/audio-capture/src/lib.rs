@@ -28,13 +28,15 @@ pub use apps::{
     APP_CAPTURE_MIN_BUILD, AudioApp, app_capture_supported, audio_apps, find_process, process_exited, windows_build,
 };
 pub use devices::{
-    DeviceInfo, EndpointVolume, MixFormat, default_render_device, mic_capture_active, mic_recorders, mix_format,
-    mix_rate, render_devices, set_default_render_device,
+    DeviceInfo, EndpointVolume, MixFormat, default_capture_device, default_render_device, mic_capture_active,
+    mic_recorders, mix_format, mix_rate, paired_capture_device, render_devices, set_default_capture_device,
+    set_default_render_device,
 };
 pub use format::{DEFAULT_RATE, Format, SampleFormat};
 pub use mixer::{MixerApp, SYSTEM_SOUNDS, mixer_apps, set_mixer_app};
 pub use tone::RIGHT_HZ as TEST_TONE_RIGHT_HZ;
 pub use tone::{AMPLITUDE as TEST_TONE_AMPLITUDE, LEFT_HZ as TEST_TONE_LEFT_HZ};
+pub use win_sys::audio_policy::EndpointRole;
 
 /// Where the audio comes from (v1 CaptureMode, plus the test tone)
 #[derive(Clone, Debug, PartialEq, Eq)]
