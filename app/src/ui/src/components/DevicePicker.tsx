@@ -18,6 +18,7 @@ import {
   deviceKey,
   deviceProfile,
   entryBase,
+  leAudioOn,
   listedDevices,
   newProfile,
   normalizeProfile,
@@ -147,7 +148,7 @@ export function DevicePicker(props: {
   const snap = () => app.core.state.snap!;
   // LE Audio entries with the setting on and an adapter known to stream it
   const leListed = () =>
-    snap().settings.le_audio_experimental &&
+    leAudioOn(snap().settings) &&
     snap().adapter.le_audio === true &&
     !props.classicOnly;
   const devices = createMemo(() => {

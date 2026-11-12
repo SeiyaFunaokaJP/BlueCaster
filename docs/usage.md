@@ -607,7 +607,7 @@ How to use it:
 2. On **Codecs**, the device has two cards: **LC3** (chosen by default), the best LC3 configuration the headphones accept, and **LC3 LL**, which uses shorter LC3 frames with headsets that support GMAP's game role; other headsets get the media configuration either way. **...** shows the rate and bit rate while it plays. Earlier versions had LC3 LL as the default and did not save it when chosen, so a device that had it now starts with LC3; one set to LC3 keeps it. Only sound devices and virtual devices can be captured.
 3. **Input Source** on **Audio Devices** sends the earbuds' microphone to the PC as well, while playback keeps its LC3 quality (see [Audio Devices](#audio-devices); `--headset-mic` in CLI mode).
 
-LE Audio is off by default. Turn on **Use LE Audio when available** on **Adapters** to use it; the switch is there only when the adapter supports LE Audio, and Bluetooth restarts when you change it. A device that is connected then connects again at once, over LE Audio or over its classic connection.
+LE Audio is off, and for now available only in developer mode. There, turn on **Use LE Audio when available** on **Adapters** to use it; the switch is there only when the adapter supports LE Audio, and Bluetooth restarts when you change it. A device that is connected then connects again at once, over LE Audio or over its classic connection.
 
 In CLI mode: `--le-audio -d <address>` streams to an LE Audio device, `--le-device <address>` adds another device of the group (the second earbud), `--le-scan` lists the LE Audio devices nearby, and `--le-low-latency` / `--le-preset <name>` choose the configuration (`bluecaster-core.exe --cli -h` lists all LE options).
 

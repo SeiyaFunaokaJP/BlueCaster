@@ -98,6 +98,7 @@
   "error.connect_auth_failed": "인증에 실패했습니다. 장치를 페어링 모드로 전환하거나 장치에서 페어링을 삭제한 후 다시 시도하십시오.",
   "error.pairing_hint": "연결하지 못했습니다. 장치가 페어링 모드인지 확인하십시오.",
   "error.le_audio_disabled": "이 오디오 기기는 LE Audio를 사용하지만 LE Audio가 꺼져 있습니다. 어댑터에서 \"사용 가능한 경우 LE Audio 사용\"을 켜세요.",
+  "error.le_audio_developer": "이 오디오 기기는 LE Audio를 사용하지만, LE Audio는 현재 개발자 모드에서만 사용할 수 있습니다.",
   "error.le_audio_unavailable": "LE 오디오를 시작할 수 없습니다. 이 Bluetooth 어댑터가 지원하지 않을 수 있습니다.",
   "error.le_audio_connect": "LE 오디오: 기기에 연결할 수 없습니다 (%s).",
   "error.le_audio_stream": "LE 오디오: 스트림을 설정할 수 없습니다 (%s).",

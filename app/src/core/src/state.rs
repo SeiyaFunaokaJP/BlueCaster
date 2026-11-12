@@ -1916,7 +1916,7 @@ impl CoreState {
             base
         };
         let le = bluecaster_core::messages::translate(&lang, "device.tag_le_audio", "LE Audio");
-        let shown = tray_profiles(&s.profiles, s.settings.le_audio_experimental);
+        let shown = tray_profiles(&s.profiles, s.settings.le_audio_experimental && s.settings.developer_mode);
         let labels = shown.iter().map(|p| tray_label(device_name(&s.devices, p), p.le_audio, &le)).collect();
         (self.tray)(TrayView {
             streaming,
@@ -3182,7 +3182,7 @@ impl CoreState {
                         })?;
                     }
                     let chip = chip_changed(&base, &merged);
-                    let le_toggled = base.le_audio_experimental != merged.le_audio_experimental;
+                    let le_toggled = base.le_audio() != merged.le_audio();
                     let auto_toggled = base.auto_codec != merged.auto_codec;
                     let developer_off = base.debug_mode && !merged.debug_mode;
                     let sync_toggled =
@@ -3286,7 +3286,7 @@ impl CoreState {
                             .filter(|n| restart_after_save(&s.stream, n))
                             .and_then(|n| list.iter().find(|p| p.name == n));
                         if let Some(p) = in_use {
-                            let le_on = me.service.settings().le_audio_experimental;
+                            let le_on = me.service.settings().le_audio();
                             let mut next = le_switched_profile(&list, p, le_on);
                             // An LE Audio side saved (a scan found it) without
                             // its profile yet: one from the classic one

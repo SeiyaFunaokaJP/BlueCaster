@@ -394,9 +394,10 @@ pub(crate) fn stream_request(le: &LeRequest) -> (LeStreamRequest, bool) {
 }
 
 /// Why a session refuses an LE request before BTstack is touched
-pub(crate) fn refusal(le_enabled: bool, source: &SourceRequest) -> Option<&'static str> {
+pub(crate) fn refusal(le_enabled: bool, developer: bool, source: &SourceRequest) -> Option<&'static str> {
     if !le_enabled {
-        Some("error.le_audio_disabled")
+        // Its switch is there in developer mode only (issue #86)
+        Some(if developer { "error.le_audio_disabled" } else { "error.le_audio_developer" })
     } else if matches!(source, SourceRequest::Application { .. }) {
         Some("error.le_audio_capture")
     } else {
@@ -418,7 +419,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     let ready = || inner.notify(StreamState::Idle, Msg::new("status.ready"));
     let session_start = Instant::now();
 
-    if let Some(key) = refusal(inner.le_wanted(), &req.source) {
+    if let Some(key) = refusal(inner.le_wanted(), inner.developer(), &req.source) {
         tracing::debug!("le stream: refused ({key}), LE wanted {}, source {}", inner.le_wanted(), req.source);
         return inner.notify(StreamState::Error, Msg::new(key));
     }
@@ -816,7 +817,7 @@ fn run_broadcast(inner: &Arc<Inner>, req: StreamRequest) {
     tracing::info!("Auracast (developer mode): broadcast {}", crate::diag::quoted(&req.device_name));
     tracing::debug!("broadcast: request {req:?}");
 
-    if let Some(key) = refusal(inner.le_wanted(), &req.source) {
+    if let Some(key) = refusal(inner.le_wanted(), inner.developer(), &req.source) {
         tracing::debug!("broadcast: refused ({key})");
         return inner.notify(StreamState::Error, Msg::new(key));
     }
@@ -1030,15 +1031,22 @@ mod tests {
     #[test]
     fn refused_while_off_or_for_app_capture() {
         let app = SourceRequest::Application { exe: "x.exe".into() };
-        assert_eq!(refusal(false, &SourceRequest::SystemLoopback), Some("error.le_audio_disabled"));
-        assert_eq!(refusal(false, &app), Some("error.le_audio_disabled"));
-        assert_eq!(refusal(true, &app), Some("error.le_audio_capture"));
-        assert_eq!(refusal(true, &SourceRequest::SystemLoopback), None);
-        assert_eq!(refusal(true, &SourceRequest::TestTone), None);
+        assert_eq!(refusal(false, true, &SourceRequest::SystemLoopback), Some("error.le_audio_disabled"));
+        assert_eq!(refusal(false, true, &app), Some("error.le_audio_disabled"));
+        // Outside developer mode there is no switch to point to
+        assert_eq!(refusal(false, false, &SourceRequest::SystemLoopback), Some("error.le_audio_developer"));
+        assert_eq!(refusal(true, true, &app), Some("error.le_audio_capture"));
+        assert_eq!(refusal(true, true, &SourceRequest::SystemLoopback), None);
+        assert_eq!(refusal(true, true, &SourceRequest::TestTone), None);
         let virt = SourceRequest::VirtualDevice { id: "{x}".into(), name: "CABLE".into(), auto_switch: true };
-        assert_eq!(refusal(true, &virt), None);
+        assert_eq!(refusal(true, true, &virt), None);
         // The messages exist in English
-        for key in ["error.le_audio_disabled", "error.le_audio_capture", "error.le_audio_unavailable"] {
+        for key in [
+            "error.le_audio_disabled",
+            "error.le_audio_developer",
+            "error.le_audio_capture",
+            "error.le_audio_unavailable",
+        ] {
             assert_ne!(Msg::new(key).english(), key);
         }
         assert!(Msg::with("error.le_audio_connect", &[&"timeout"]).english().contains("(timeout)"));

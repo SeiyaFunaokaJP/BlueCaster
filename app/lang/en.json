@@ -98,6 +98,7 @@
   "error.connect_auth_failed": "Authentication failed. Put the device into pairing mode, or remove the pairing on it, and try again.",
   "error.pairing_hint": "Failed to connect. Ensure device is in pairing mode.",
   "error.le_audio_disabled": "This audio device uses LE Audio, which is turned off. Turn on \"Use LE Audio when available\" on Adapters.",
+  "error.le_audio_developer": "This audio device uses LE Audio, which is available only in developer mode for now.",
   "error.le_audio_unavailable": "LE Audio could not start. This Bluetooth adapter may not support it.",
   "error.le_audio_connect": "LE Audio: could not connect to the device (%s).",
   "error.le_audio_stream": "LE Audio: the stream could not be set up (%s).",

@@ -98,6 +98,7 @@
   "error.connect_auth_failed": "驗證失敗。請將裝置切換到配對模式，或在裝置上移除配對，然後再試一次。",
   "error.pairing_hint": "連線失敗。請確認裝置處於配對模式。",
   "error.le_audio_disabled": "此音訊裝置使用 LE Audio，但 LE Audio 已關閉。請在「介面卡」中開啟「可用時使用 LE Audio」。",
+  "error.le_audio_developer": "此音訊裝置使用 LE Audio，目前僅在開發人員模式下可用。",
   "error.le_audio_unavailable": "無法啟動 LE Audio。此藍牙介面卡可能不支援。",
   "error.le_audio_connect": "LE Audio：無法連線到裝置（%s）。",
   "error.le_audio_stream": "LE Audio：無法建立音訊串流（%s）。",

@@ -521,11 +521,16 @@ impl Inner {
         );
     }
 
-    /// LE Audio (experimental) for the next stack: the setting, or the
-    /// command line's --le-audio
+    /// LE Audio for the next stack: the setting in developer mode
+    /// ([`Settings::le_audio`]), or the command line's --le-audio
     pub fn le_wanted(&self) -> bool {
         self.le_cli.lock().unwrap_or_else(|e| e.into_inner()).is_some()
-            || self.settings.lock().unwrap_or_else(|e| e.into_inner()).le_audio_experimental
+            || self.settings.lock().unwrap_or_else(|e| e.into_inner()).le_audio()
+    }
+
+    /// Developer mode is on
+    pub fn developer(&self) -> bool {
+        self.settings.lock().unwrap_or_else(|e| e.into_inner()).debug_mode
     }
 
     /// The running stack has LE Audio
@@ -1199,7 +1204,7 @@ impl Service {
             settings.media_keys,
             settings.volume_sync,
             settings.afh,
-            settings.le_audio_experimental,
+            settings.le_audio(),
             settings.debug_mode
         );
         apply_dev_overrides(&settings);
@@ -1209,8 +1214,8 @@ impl Service {
             h.set_afh_policy(self.inner.opts.afh.as_deref().unwrap_or(afh_policy(&settings)));
         }
         let old = std::mem::replace(&mut *self.inner.settings.lock().unwrap_or_else(|e| e.into_inner()), settings);
-        let new_le = self.inner.settings.lock().unwrap_or_else(|e| e.into_inner()).le_audio_experimental;
-        if old.le_audio_experimental != new_le && host.is_some() && self.inner.le_active() != self.inner.le_wanted() {
+        let new_le = self.inner.settings.lock().unwrap_or_else(|e| e.into_inner()).le_audio();
+        if old.le_audio() != new_le && host.is_some() && self.inner.le_active() != self.inner.le_wanted() {
             if self.is_running() || self.is_scanning() {
                 tracing::info!(
                     "LE Audio turned {}: BTstack restarts before the next scan or connection",

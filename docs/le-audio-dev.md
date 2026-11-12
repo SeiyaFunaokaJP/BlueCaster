@@ -10,7 +10,9 @@ english_only: true
 BlueCaster can stream to LE Audio devices as a **BAP unicast client** (audio
 source): LC3 over Connected Isochronous Streams (CIS), on the same BTstack
 session and WinUSB adapter as A2DP. It is used only for a
-device's LE Audio entry (or `--le-audio` in CLI mode). `le_audio_experimental`
+device's LE Audio entry (or `--le-audio` in CLI mode), and since issue #86
+only in developer mode (`Settings::le_audio`: the setting and `debug_mode`;
+the Adapters switch is shown only there). `le_audio_experimental`
 in `settings.json` (on by default, no switch in the window) turns the LE side
 off altogether. With the setting off none of the LE code runs and HCI init is that of a build
 without LE (see "LE Audio off"). It has only been verified against the Bumble
