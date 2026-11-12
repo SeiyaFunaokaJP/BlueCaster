@@ -77,6 +77,7 @@ const NO_OVERRIDES: DevOverrides = {
   ignore_sink_max: false,
   queue_max_wait_ms: 0,
   encode_at_send: false,
+  keep_bitrate_on_slow_link: false,
 };
 
 /** Developer > Debug: experiments for one adapter's transport (issue #86) */
@@ -382,6 +383,11 @@ function Overrides(props: {
           hint={t("ui.dev.encode_at_send_hint")}
           checked={props.value.encode_at_send}
           onChange={(v) => set({ encode_at_send: v })}
+        />
+        <Toggle
+          label={t("ui.dev.keep_bitrate_on_slow_link")}
+          checked={props.value.keep_bitrate_on_slow_link}
+          onChange={(v) => set({ keep_bitrate_on_slow_link: v })}
         />
       </Section>
       <PacketSizes />

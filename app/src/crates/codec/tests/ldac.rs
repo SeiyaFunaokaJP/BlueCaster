@@ -386,3 +386,22 @@ fn abr_reset_goes_back_to_the_quality_asked_for() {
     encode_packets(&mut fixed, &mut tone, &mut out);
     assert_eq!(fixed.bitrate_kbps(), 660);
 }
+
+#[test]
+fn reduce_goes_to_mq_and_back_to_the_quality_asked_for() {
+    let mut enc = LdacEncoder::new(&config(48000, 2, Quality::High, 16, MTUS[1])).unwrap();
+    let mut tone = Tone::new(48000, 2, PcmFormat::I16, 128);
+    let mut out = vec![0u8; enc.max_output_bytes()];
+    assert!(enc.reduce(true));
+    encode_packets(&mut enc, &mut tone, &mut out);
+    assert_eq!(enc.bitrate_kbps(), 330);
+    assert!(enc.reduce(false));
+    encode_packets(&mut enc, &mut tone, &mut out);
+    assert_eq!(enc.bitrate_kbps(), 990);
+
+    // Nothing lower than MQ, and ABR moves the quality itself
+    let mut mq = LdacEncoder::new(&config(48000, 2, Quality::Mobile, 16, MTUS[1])).unwrap();
+    assert!(!mq.reduce(true));
+    let abr = EncoderConfig { abr: true, ..config(48000, 2, Quality::High, 16, MTUS[1]) };
+    assert!(!LdacEncoder::new(&abr).unwrap().reduce(true));
+}

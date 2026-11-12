@@ -234,6 +234,29 @@ impl Encoder for LdacEncoder {
         self.abr.is_some()
     }
 
+    /// MQ (330 kbps at 48 / 96 kHz) while `on`, the quality mode asked for
+    /// after. Not under ABR, which moves the quality itself.
+    fn reduce(&mut self, on: bool) -> bool {
+        if self.abr.is_some() || self.eqmid >= ffi::LDACBT_EQMID_MQ {
+            return false;
+        }
+        let eqmid = if on { ffi::LDACBT_EQMID_MQ } else { self.eqmid };
+        if self.bt.eqmid() == eqmid {
+            return true;
+        }
+        match self.bt.set_eqmid(eqmid) {
+            Ok(()) => {
+                self.bitrate_kbps = u32::try_from(self.bt.bitrate()).unwrap_or(self.bitrate_kbps);
+                tracing::info!("LDAC: quality mode {eqmid} ({})", if on { "slow link" } else { "as asked" });
+                true
+            }
+            Err(e) => {
+                tracing::warn!("LDAC: quality mode {eqmid} failed: {e}");
+                false
+            }
+        }
+    }
+
     /// Back to the quality mode asked for, with a fresh ABR module (its
     /// observation windows start over)
     fn abr_reset(&mut self) {

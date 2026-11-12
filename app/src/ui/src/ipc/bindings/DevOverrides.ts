@@ -25,4 +25,8 @@ queue_max_wait_ms: number,
  * Audio waits unencoded while the send queue is backed up (ABR then
  * lowers its bit rate too). Applies to the next stream
  */
-encode_at_send: boolean, };
+encode_at_send: boolean, 
+/**
+ * A link slow after a call keeps the full bit rate (not lowered)
+ */
+keep_bitrate_on_slow_link: boolean, };

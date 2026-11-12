@@ -3,7 +3,7 @@
 //! works with deltas, so nothing is ever reset).
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 /// Capacity of the media send queue, in packets (as v1)
@@ -69,6 +69,10 @@ pub struct LinkStats {
     /// not yet reported sent by Number Of Completed Packets. Audio waits
     /// there after the send queue, unseen by queue_ms (BTstack thread).
     pub controller_backlog: AtomicU32,
+    /// The link carries less than it did before a voice link: the encoder
+    /// lowers its bit rate while set (crate::esco_watch, #86; BTstack
+    /// thread writes, the encode thread reads)
+    pub slow_link: AtomicBool,
     /// The largest controller_backlog since the link sampler last took it
     pub controller_backlog_peak: MaxGauge,
     /// The largest controller_backlog since the stream started

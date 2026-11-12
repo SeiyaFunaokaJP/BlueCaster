@@ -35,22 +35,36 @@ const ERROR_CODE_UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE: u8 = 0x11;
 /// liveness probe that waits behind it.
 pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_millis(1500);
 
-/// A reading of a link
+/// A reading of a link, or a setting given to it again
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LinkRead {
     FailedContacts,
     LinkQuality,
     RemoteVersion,
     SupervisionTimeout,
+    /// Change Connection Packet Type with every type BTstack asks for at
+    /// set-up, after a voice link (eSCO) ended: a controller can stay on
+    /// slower packets afterwards (issue #86, A2DP at under half its rate
+    /// after some eSCO links, the next eSCO link fixing it again)
+    PacketTypes,
 }
 
 impl LinkRead {
+    const ALL: [LinkRead; 5] = [
+        LinkRead::FailedContacts,
+        LinkRead::LinkQuality,
+        LinkRead::RemoteVersion,
+        LinkRead::SupervisionTimeout,
+        LinkRead::PacketTypes,
+    ];
+
     fn opcode(self) -> u16 {
         match self {
             LinkRead::FailedContacts => HCI_OPCODE_READ_FAILED_CONTACT_COUNTER,
             LinkRead::LinkQuality => HCI_OPCODE_READ_LINK_QUALITY,
             LinkRead::RemoteVersion => HCI_OPCODE_READ_REMOTE_VERSION_INFORMATION,
             LinkRead::SupervisionTimeout => HCI_OPCODE_READ_LINK_SUPERVISION_TIMEOUT,
+            LinkRead::PacketTypes => HCI_OPCODE_CHANGE_CONNECTION_PACKET_TYPE,
         }
     }
 
@@ -61,6 +75,7 @@ impl LinkRead {
             LinkRead::LinkQuality => (15, 4),
             LinkRead::RemoteVersion => (2, 7),
             LinkRead::SupervisionTimeout => (11, 0),
+            LinkRead::PacketTypes => (1, 6),
         }
     }
 
@@ -70,6 +85,7 @@ impl LinkRead {
             LinkRead::LinkQuality => stack.cmd_read_link_quality(handle),
             LinkRead::RemoteVersion => stack.cmd_read_remote_version(handle),
             LinkRead::SupervisionTimeout => stack.cmd_read_link_supervision_timeout(handle),
+            LinkRead::PacketTypes => stack.cmd_restore_acl_packet_types(handle),
         }
     }
 }
@@ -155,6 +171,14 @@ impl LinkTracker {
     pub fn disconnected(&mut self, handle: u16) {
         self.links.remove(&handle);
         self.reads.retain(|&(_, h)| h != handle);
+    }
+
+    /// A voice link (SCO/eSCO) on the ACL link `handle` ended: its packet
+    /// types are set again
+    pub fn voice_link_ended(&mut self, handle: u16) {
+        if self.links.contains_key(&handle) {
+            self.queue(LinkRead::PacketTypes, handle);
+        }
     }
 
     /// The A2DP signaling channel is up on `handle`: what is read once per
@@ -267,9 +291,7 @@ impl LinkTracker {
     }
 
     fn ours(opcode: u16) -> bool {
-        [LinkRead::FailedContacts, LinkRead::LinkQuality, LinkRead::RemoteVersion, LinkRead::SupervisionTimeout]
-            .iter()
-            .any(|r| r.opcode() == opcode)
+        LinkRead::ALL.iter().any(|r| r.opcode() == opcode)
     }
 
     /// An HCI event; true when a link's details changed
@@ -287,17 +309,9 @@ impl LinkTracker {
                         let mut s = [0u8; 64];
                         s.copy_from_slice(bitmap);
                         self.supported = Some(s);
-                        let skipped: Vec<LinkRead> = [
-                            LinkRead::FailedContacts,
-                            LinkRead::LinkQuality,
-                            LinkRead::RemoteVersion,
-                            LinkRead::SupervisionTimeout,
-                        ]
-                        .into_iter()
-                        .filter(|&r| !self.listed(r))
-                        .collect();
+                        let skipped: Vec<LinkRead> = LinkRead::ALL.into_iter().filter(|&r| !self.listed(r)).collect();
                         if !skipped.is_empty() {
-                            tracing::info!("link details: the controller does not list {skipped:?}, not read");
+                            tracing::info!("link details: the controller does not list {skipped:?}, not sent");
                         }
                     }
                     return false;
@@ -419,6 +433,18 @@ impl LinkTracker {
                 );
                 true
             }
+            HCI_EVENT_CONNECTION_PACKET_TYPE_CHANGED => {
+                let (Some(status), Some(handle), Some(types)) = (u8_at(p, 2), le16(p, 3), le16(p, 5)) else {
+                    return false;
+                };
+                tracing::info!("ACL packet types of 0x{:04x}: 0x{types:04x} (status 0x{status:02X})", handle & 0x0FFF);
+                false
+            }
+            HCI_EVENT_MAX_SLOTS_CHANGED => {
+                let (Some(handle), Some(slots)) = (le16(p, 2), u8_at(p, 4)) else { return false };
+                tracing::debug!("ACL link 0x{:04x}: up to {slots}-slot packets", handle & 0x0FFF);
+                false
+            }
             HCI_EVENT_MODE_CHANGE => {
                 let (Some(status), Some(handle), Some(mode), Some(interval)) =
                     (u8_at(p, 2), le16(p, 3), u8_at(p, 5), le16(p, 6))
@@ -534,12 +560,28 @@ mod tests {
         assert!(!t.on_hci(HCI_EVENT_COMMAND_COMPLETE, &p, false));
         // Kept over the reset when HCI is up
         t.reset();
-        for r in
-            [LinkRead::FailedContacts, LinkRead::LinkQuality, LinkRead::RemoteVersion, LinkRead::SupervisionTimeout]
-        {
+        for r in LinkRead::ALL {
             t.queue(r, 0x0B);
         }
         assert_eq!(t.reads, [(LinkRead::LinkQuality, 0x0B), (LinkRead::RemoteVersion, 0x0B)]);
+    }
+
+    #[test]
+    fn packet_types_are_set_again_after_a_voice_link() {
+        let mut t = tracker_with(0x0B, [1; 6]);
+        // Only for a link we know, once while queued
+        t.voice_link_ended(0x0C);
+        assert!(t.reads.is_empty());
+        t.voice_link_ended(0x0B);
+        t.voice_link_ended(0x0B);
+        assert_eq!(t.reads, [(LinkRead::PacketTypes, 0x0B)]);
+        // A controller without the command: never sent again
+        t.reads.clear();
+        let mut p = vec![HCI_EVENT_COMMAND_STATUS, 4, 0x01, 1];
+        p.extend_from_slice(&HCI_OPCODE_CHANGE_CONNECTION_PACKET_TYPE.to_le_bytes());
+        assert!(!t.on_hci(HCI_EVENT_COMMAND_STATUS, &p, true));
+        t.voice_link_ended(0x0B);
+        assert!(t.reads.is_empty());
     }
 
     #[test]

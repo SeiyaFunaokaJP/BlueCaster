@@ -458,6 +458,7 @@
   "ui.dev.queue_wait_auto": "350",
   "ui.dev.encode_at_send": "发送时编码",
   "ui.dev.encode_at_send_hint": "开启 ABR 时，卡顿期间积压的音频也以降低后的码率发送。\n适用于 SBC、SBC XQ、LDAC、LHDC V5、aptX Adaptive。",
+  "ui.dev.keep_bitrate_on_slow_link": "通话后连接变慢时也不降低比特率",
   "ui.dev.aac_config_bitrate0": "配置中的比特率为 0",
   "ui.dev.aac_config_bitrate0_hint": "配置音频设备时将比特率发送为 0（未知）。",
   "ui.dev.aac_latm_v0": "旧 LATM 格式（2.0.2 及更早）",

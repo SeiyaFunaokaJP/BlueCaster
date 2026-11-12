@@ -458,6 +458,7 @@
   "ui.dev.queue_wait_auto": "350",
   "ui.dev.encode_at_send": "Erst beim Senden kodieren",
   "ui.dev.encode_at_send_hint": "Mit ABR geht aufgehaltenes Audio mit der gesenkten Bitrate raus.\nFür SBC, SBC XQ, LDAC, LHDC V5 und aptX Adaptive.",
+  "ui.dev.keep_bitrate_on_slow_link": "Bitrate halten, wenn die Verbindung nach einem Anruf langsamer wird",
   "ui.dev.aac_config_bitrate0": "Bitrate 0 in der Konfiguration",
   "ui.dev.aac_config_bitrate0_hint": "Sendet 0 (unbekannt) als Bitrate, wenn das Audiogerät konfiguriert wird.",
   "ui.dev.aac_latm_v0": "Altes LATM-Format (2.0.2 und früher)",

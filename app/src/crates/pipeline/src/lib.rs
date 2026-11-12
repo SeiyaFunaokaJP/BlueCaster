@@ -415,6 +415,8 @@ fn encode_thread(
     let mut rate = PacketRate::default();
     // Encode at send time: holding audio back now (for the log)
     let mut holding = false;
+    // The bit rate lowered for a slow link (LinkStats::slow_link)
+    let mut reduced = false;
     tracing::debug!(
         "encode thread: {kind}, {:?} {} ch -> {fmt:?} {out_ch} ch at {} Hz, {per_encode} frames per encode, \
          {per_codec_frame} per codec frame (rtp timestamp step), rounds of {round_frames} frames, output buffer {} \
@@ -450,6 +452,27 @@ fn encode_thread(
             abr_last = Instant::now();
         }
         control.report_overflows("encode thread", &mut overflow_report);
+        let slow = sink.stats().slow_link.load(Ordering::Acquire);
+        if slow != reduced {
+            reduced = slow;
+            let done = encoder.reduce(slow);
+            // The new bit rate shows from the next packet (LiveCodec)
+            tracing::info!(
+                "encode thread: {} the bit rate for a slow link{}",
+                if slow { "lowering" } else { "restoring" },
+                if done { "" } else { ": not supported by this codec" }
+            );
+            if done {
+                if slow || abr {
+                    let now = live_codec(encoder.as_ref());
+                    live = Some(now);
+                    sink.stats().set_live_codec(Some(now));
+                } else {
+                    live = None;
+                    sink.stats().set_live_codec(None);
+                }
+            }
+        }
         if window.since.elapsed() >= SUMMARY_INTERVAL {
             window.report(encoder.as_ref(), &sink, encode_errors, timestamp);
         }

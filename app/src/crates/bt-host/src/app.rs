@@ -19,6 +19,7 @@ use codec::caps::{AacCapabilities, AacObjectType, ConfigRequest, Configuration, 
 use codec::sbc::{Allocation, ChannelMode};
 
 use crate::bringup::{self, ChipLoader};
+use crate::esco_watch::{EscoWatch, Verdict};
 use crate::events::{addr_at, addr_str, event_type, hci_error_string, le16, le24, subevent, u8_at};
 use crate::le::core::LeCore;
 use crate::le::iso_send::TIMER_ISO;
@@ -43,6 +44,8 @@ const TIMER_RTK_VERIFY: u32 = 5;
 const TIMER_LOADER: u32 = 7;
 /// One of our link detail commands still unanswered (link_details.rs)
 const TIMER_LINK_COMMAND: u32 = 8;
+/// The stream's rate after a voice link (crate::esco_watch)
+const TIMER_ESCO_WATCH: u32 = 9;
 const RTK_VERIFY_RETRY_MS: u32 = 100;
 const RTK_VERIFY_TRIES: u8 = 20;
 /// Each L2CAP packet starts with a 4-byte header
@@ -203,6 +206,8 @@ pub(crate) struct HostApp {
     link: LinkTracker,
     /// ACL handle of the started stream (its controller backlog)
     media_acl: Option<u16>,
+    /// The stream's rate after a voice link (#86)
+    esco: EscoWatch,
 }
 
 /// Why the signaling connection failed. Page timeout, or a device that never
@@ -295,6 +300,7 @@ impl HostApp {
             read_rssi_next: true,
             link: LinkTracker::default(),
             media_acl: None,
+            esco: EscoWatch::default(),
         }
     }
 
@@ -832,6 +838,7 @@ impl HostApp {
         self.local_seid = local;
         self.remote_seid = config.remote_seid;
         self.stream_codec = Some(config.kind);
+        self.esco.reconfigured();
         let cid = self.a2dp_cid;
         tracing::debug!(
             "set configuration: cid 0x{cid:04X}, local SEID {local}, remote SEID {}, {} {:?}",
@@ -1019,6 +1026,14 @@ impl HostApp {
     /// a lost link are stale: dropped before the encode thread may queue
     /// again (v1 flushed after a reconnect).
     fn set_streaming(&mut self, on: bool) {
+        if on != self.streaming {
+            let completed = self.media_completed();
+            if on {
+                self.esco.stream_started(Instant::now(), completed);
+            } else {
+                self.esco.stream_stopped(Instant::now(), completed);
+            }
+        }
         if on && !self.streaming {
             let stale = self.media.slots();
             if stale > 0 {
@@ -1044,6 +1059,57 @@ impl HostApp {
         self.can_send_asked = None;
         self.last_media_sent = None;
         self.last_completed = None;
+    }
+
+    /// Packets the controller completed on the stream's link so far
+    fn media_completed(&self) -> u64 {
+        self.media_acl.and_then(|h| self.completed_by_handle.get(&h).copied()).unwrap_or(0)
+    }
+
+    /// A second of [`EscoWatch`]: a short audio connection when the stream
+    /// came out of a voice link slow
+    fn esco_tick(&mut self, stack: &Stack) {
+        let Some(acl) = self.esco.watching() else { return };
+        let keep = codec::dev::overrides().keep_bitrate_on_slow_link;
+        if keep && self.esco.is_lowered() {
+            tracing::info!("stream after the voice link: the full bit rate again (developer mode keeps it)");
+            self.stop_esco_watch(stack);
+            return;
+        }
+        let completed = (self.streaming && self.media_acl == Some(acl)).then(|| self.media_completed());
+        match self.esco.tick(Instant::now(), completed) {
+            Verdict::Wait => {}
+            Verdict::Good { rate } => {
+                tracing::info!("stream after the voice link: {rate} packets/s, as before");
+            }
+            Verdict::Lower { rate, before } => {
+                if keep {
+                    tracing::warn!(
+                        "stream after the voice link: {rate} packets/s of {before} before; the full bit rate kept (developer mode)"
+                    );
+                    self.esco.stop();
+                } else {
+                    tracing::warn!(
+                        "stream after the voice link: {rate} packets/s of {before} before; lowering the bit rate for now"
+                    );
+                    self.stats.slow_link.store(true, Ordering::Release);
+                }
+            }
+            Verdict::Probe => {
+                tracing::info!("stream after the voice link: trying the full bit rate again");
+                self.stats.slow_link.store(false, Ordering::Release);
+            }
+        }
+        if self.esco.watching().is_some() {
+            stack.timer_start(TIMER_ESCO_WATCH, crate::esco_watch::TICK.as_millis() as u32);
+        }
+    }
+
+    /// The watch ends: the full bit rate again
+    fn stop_esco_watch(&mut self, stack: &Stack) {
+        self.esco.stop();
+        stack.timer_stop(TIMER_ESCO_WATCH);
+        self.stats.slow_link.store(false, Ordering::Release);
     }
 
     fn drop_stale_media(&mut self, now: Instant) {
@@ -1202,6 +1268,7 @@ impl HostApp {
                     self.stats.with_radio(|r| *r = Default::default());
                     self.link.reset();
                     self.media_acl = None;
+                    self.stop_esco_watch(stack);
                     self.publish_link();
                     self.shared.update(|s| {
                         s.hci_ready = false;
@@ -1463,10 +1530,28 @@ impl HostApp {
                 );
                 // The audio connection's SCO link: released even if HFP
                 // never says so
-                if u8_at(p, 2) == Some(0)
-                    && let Some(e) = self.voice.on_disconnected(handle)
-                {
-                    let _ = self.events.send(e);
+                if u8_at(p, 2) == Some(0) {
+                    // Its ACL link gets its packet types set again, and the
+                    // stream's rate is watched: the controller can stay
+                    // slow after eSCO (#86)
+                    if let Some(acl) = self.voice.acl_of_sco(handle) {
+                        self.link.voice_link_ended(acl);
+                        self.send_link_reads(stack);
+                        if self.media_acl == Some(acl) {
+                            // The full bit rate again: the voice link may
+                            // have put the link right
+                            self.stats.slow_link.store(false, Ordering::Release);
+                            if self.esco.voice_link_ended(Instant::now(), acl) {
+                                stack.timer_start(TIMER_ESCO_WATCH, crate::esco_watch::TICK.as_millis() as u32);
+                            }
+                        }
+                    }
+                    if self.esco.watching() == Some(handle) {
+                        self.stop_esco_watch(stack);
+                    }
+                    if let Some(e) = self.voice.on_disconnected(handle) {
+                        let _ = self.events.send(e);
+                    }
                 }
                 let lost = self.shared.update(|s| {
                     s.acl_down = true;
@@ -2025,6 +2110,7 @@ impl HostApp {
                 }
                 tracing::info!("signaling connection released (cid 0x{cid:04x})");
                 self.a2dp_cid = 0;
+                self.stop_esco_watch(stack);
                 self.set_streaming(false);
                 self.can_send_requested = false;
                 self.stats.queue_depth.store(0, Ordering::Relaxed);
@@ -2653,6 +2739,7 @@ impl App for HostApp {
             }
             TIMER_RTK_VERIFY => self.verify_realtek_download(stack),
             TIMER_LINK_COMMAND => self.link_command_timeout(stack),
+            TIMER_ESCO_WATCH => self.esco_tick(stack),
             TIMER_LOADER => {
                 if let Some(loader) = self.loader.as_mut() {
                     let actions = loader.on_timeout();
