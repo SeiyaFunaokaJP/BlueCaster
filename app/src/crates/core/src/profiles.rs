@@ -59,6 +59,9 @@ fn headset_mode<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Err
     };
     Ok(mode.as_str().into())
 }
+fn is_true(b: &bool) -> bool {
+    *b
+}
 fn is_false(b: &bool) -> bool {
     !*b
 }
