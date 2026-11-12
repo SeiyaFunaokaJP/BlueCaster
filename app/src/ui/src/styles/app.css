@@ -897,14 +897,15 @@ option {
   z-index: 50;
   display: grid;
   place-items: center;
-  padding: var(--s6);
+  /* Over the page, inside its margins: a dialog is as wide as the page's
+     cards (issue #86). The Dialog measures the page's area (beside the
+     navigation, short of its scroll bar). */
+  padding: var(--s6) calc(var(--page-right, 0px) + var(--s6)) var(--s6) calc(var(--page-left, 0px) + var(--s6));
   background: var(--overlay);
   animation: fade var(--t-fast) var(--ease);
 }
-/* Every dialog spans the window inside the pages' margins, up to the pages'
-   own width (issue #86) */
 .dialog {
-  width: min(72rem, 100%);
+  width: min(72rem - 2 * var(--s6), 100%);
   /* A tall dialog (SBC XQ settings) fits the window: the title and the
      buttons stay put and the body scrolls */
   max-height: calc(100vh - 2 * var(--s6));
@@ -3503,6 +3504,12 @@ option {
 .cable-row-text {
   flex: 1 1 16em;
   min-width: 0;
+}
+.cable-row-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
 }
 .cable-row-actions {
   display: flex;

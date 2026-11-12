@@ -1015,8 +1015,8 @@ function FixedCards(props: {
       })),
     ];
   };
-  const value = (id: string, text: string) => (
-    <output id={id} class="input readonly num">
+  const value = (id: string, text: string, described?: string) => (
+    <output id={id} class="input readonly num" aria-describedby={described}>
       {text}
     </output>
   );
@@ -1048,25 +1048,27 @@ function FixedCards(props: {
         <Show when={open()}>
           {(c) => (
             <div class="codec-settings">
-              {/* As an A2DP codec's settings, read only (issue #86) */}
+              {/* As an A2DP codec's settings, read only, with the same
+                  descriptions (issue #86) */}
               <Show when={!c().noBitRate}>
-                <Field label={t("connection.quality")}>
-                  {(id) => value(id, kbps(c()) ? `${kbps(c())} kbps` : "—")}
+                <Field label={t("connection.quality")} hint={t("tooltip.quality")}>
+                  {(id, described) => value(id, kbps(c()) ? `${kbps(c())} kbps` : "—", described)}
                 </Field>
               </Show>
               <Show
                 when={rateOptions()}
                 fallback={
-                  <Field label={t("connection.sample_rate")}>
-                    {(id) => value(id, rate(c()) ? `${rate(c())} Hz` : "—")}
+                  <Field label={t("connection.sample_rate")} hint={t("tooltip.sample_rate")}>
+                    {(id, described) => value(id, rate(c()) ? `${rate(c())} Hz` : "—", described)}
                   </Field>
                 }
               >
                 {(options) => (
-                  <Field label={t("connection.sample_rate")}>
-                    {(id) => (
+                  <Field label={t("connection.sample_rate")} hint={t("tooltip.sample_rate")}>
+                    {(id, described) => (
                       <Select
                         id={id}
+                        describedBy={described}
                         value={props.rateChoice!.value}
                         options={options()}
                         disabled={props.disabled}
@@ -1077,10 +1079,14 @@ function FixedCards(props: {
                 )}
               </Show>
               {/* LC3 and the call codecs carry 16-bit samples */}
-              <Field label={t("connection.bit_depth")}>{(id) => value(id, t("bitdepth.16"))}</Field>
+              <Field label={t("connection.bit_depth")} hint={t("tooltip.bit_depth")}>
+                {(id, described) => value(id, t("bitdepth.16"), described)}
+              </Field>
               {/* The call link and the microphone are one channel */}
               <Show when={props.mono}>
-                <Field label={t("ui.diag.cd_channel_mode")}>{(id) => value(id, t("ui.diag.cd_mode.mono"))}</Field>
+                <Field label={t("ui.diag.cd_channel_mode")} hint={t("tooltip.channel_mode")}>
+                  {(id, described) => value(id, t("ui.diag.cd_mode.mono"), described)}
+                </Field>
               </Show>
             </div>
           )}

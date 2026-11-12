@@ -68,11 +68,14 @@ const APP_RECHECK: Duration = Duration::from_secs(1);
 
 /// How often Auto asks whether an application records from the microphone
 /// output's capture side: every tick of the session (200 ms), so that
-/// little of a recording's start is lost (#86)
+/// little of a recording's start is lost (#86). Windows reports a
+/// recording's start and end at once, so this and [`AUTO_IDLE`] are all
+/// the delay there is.
 const AUTO_POLL: Duration = Duration::from_millis(150);
 /// How long nobody must record before Auto goes back to A2DP: an app that
-/// opens the device again does not bounce the link
-const AUTO_IDLE: Duration = Duration::from_secs(1);
+/// opens the device again does not bounce the link (#86: back to A2DP about
+/// as fast as to the microphone)
+const AUTO_IDLE: Duration = Duration::from_millis(500);
 /// How long the voice link opened for a slow link stays up
 const RECOVERY_UP: Duration = Duration::from_secs(1);
 /// How long it may take to come up
@@ -1437,7 +1440,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_turns_on_at_once_and_off_after_an_idle_second() {
+    fn auto_turns_on_at_once_and_off_after_half_a_second_idle() {
         let t0 = Instant::now();
         let at = |ms| t0 + Duration::from_millis(ms);
         let mut w = AutoWatch::default();
@@ -1448,15 +1451,15 @@ mod tests {
         assert!(w.due(at(200)));
         // Recording: on at the first poll that sees it
         assert!(w.seen(true, at(200)));
-        // Nobody for less than a second (an app opening the device
+        // Nobody for less than half a second (an app opening the device
         // again): still on
         assert!(w.seen(false, at(400)));
-        assert!(w.seen(false, at(1200)));
-        assert!(w.seen(true, at(1300)));
-        assert!(w.seen(false, at(1500)));
-        assert!(w.seen(false, at(2400)));
-        // A second of nobody: off
-        assert!(!w.seen(false, at(2500)));
+        assert!(w.seen(false, at(600)));
+        assert!(w.seen(true, at(800)));
+        assert!(w.seen(false, at(1000)));
+        assert!(w.seen(false, at(1400)));
+        // Half a second of nobody: off
+        assert!(!w.seen(false, at(1600)));
         assert!(!w.seen(false, at(9000)));
         assert!(w.seen(true, at(10000)));
     }

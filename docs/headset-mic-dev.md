@@ -210,12 +210,16 @@ records the microphone, and full-quality A2DP otherwise.
   Windows meter or "Listen to this device".
 - **The poll** (`voice.rs` `AutoWatch`): on every session tick (200 ms;
   `AUTO_POLL`, about 2 ms a poll), so little of a recording's start is
-  lost; the output is resolved once per mode or output change, not on
-  every poll. A WAV `mic_output` counts as always
+  lost. Windows reports a recording's start and end at once (measured with
+  the `watch_capture` win-sys example), so the poll and the hysteresis
+  below are all the delay there is. The output is resolved once per mode
+  or output change, not on every poll. A WAV `mic_output` counts as always
   recorded from (the CLI's test path).
 - **Hysteresis**: the first poll that sees a recording turns the voice link
-  on; it goes back to A2DP only after the polls have seen nobody for 1 s
-  (`AUTO_IDLE`), so an app that opens the device again does not bounce the
+  on; it goes back to A2DP only after the polls have seen nobody for
+  500 ms (`AUTO_IDLE`; 2 s, then 1 s, before issue #86 asked for a way
+  back as fast as the way to the microphone), so an app that opens the
+  device again does not bounce the
   link. The link going down by Auto leaves the plain Streaming status (no
   message); `StreamStatus.voice` is None while Auto is idle.
 - **A slow stream after a voice link** (`bt_host::esco_watch`): the bit
