@@ -598,9 +598,9 @@ pub struct Profile {
     /// Settings.le_audio_experimental (error.le_audio_disabled)
     #[serde(default)]
     pub le_audio: bool,
-    /// LE Audio: GMAP low-latency presets with a gaming headset (on by
-    /// default; other headsets get the media configuration either way)
-    #[serde(default = "yes")]
+    /// LE Audio: GMAP low-latency presets with a gaming headset (LC3 LL; off
+    /// by default: LC3); other headsets get the media configuration either way
+    #[serde(default)]
     pub le_low_latency: bool,
     /// Headset mode: the headphones' microphone is
     /// rendered to mic_device_id. "off" (the default) | "on" | "auto";
@@ -623,6 +623,10 @@ pub struct Profile {
     /// as with headset_mic "off"; headset_mic is kept for unmuting
     #[serde(default)]
     pub mic_muted: bool,
+    /// The microphone output's recording side is Windows' default input
+    /// while the device is connected (on by default)
+    #[serde(default = "yes")]
+    pub mic_default_input: bool,
     /// Classic devices: the call codec chosen on its card with Auto-select
     /// off ("cvsd", "msbc", "lc3_swb"; "" = none chosen, the best both
     /// sides have). The voice link takes it, or the next lower one the

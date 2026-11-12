@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use bluecaster_core::default_input::{DefaultInput, Want as InputWant};
 use bluecaster_core::diag::AudioRates;
 use bluecaster_core::paths;
 use bluecaster_core::profiles::{self, Profile as CoreProfile};
@@ -137,6 +138,9 @@ pub struct CoreState {
     /// Set by [`CoreState::restart_profile`] for the [`CoreState::begin_stream`]
     /// it calls
     restarting: AtomicBool,
+    /// The headset microphone's cable as Windows' default input while its
+    /// device is connected ([`default_input_want`])
+    default_input: DefaultInput,
     tray: Box<dyn Fn(TrayView) + Send + Sync>,
     quit: Box<dyn Fn() + Send + Sync>,
     balloon: Box<dyn Fn(BalloonRequest) + Send + Sync>,
@@ -192,6 +196,7 @@ fn to_ipc_profile(p: &CoreProfile, legacy: u16) -> Profile {
         mic_device_id: p.mic_device_id.clone(),
         mic_device_name: p.mic_device_name.clone(),
         mic_muted: p.mic_muted,
+        mic_default_input: p.mic_default_input,
         voice_codec: p.voice_codec.clone(),
         mic_rate: p.mic_rate,
         sbc_bitpool: p.sbc_bitpool,
@@ -274,6 +279,7 @@ fn merge_profile(base: Option<&CoreProfile>, p: &Profile) -> CoreProfile {
     c.mic_device_id = p.mic_device_id.clone();
     c.mic_device_name = p.mic_device_name.clone();
     c.mic_muted = p.mic_muted;
+    c.mic_default_input = p.mic_default_input;
     // A call codec not known reads as none chosen
     c.voice_codec = bluecaster_core::VoiceCodec::from_name(&p.voice_codec).map_or(String::new(), |v| v.name().into());
     c.mic_rate = p.mic_rate;
@@ -1491,6 +1497,44 @@ fn default_cable(devices: &[audio_capture::DeviceInfo]) -> Option<&audio_capture
     cables.iter().find(|d| !d.name.to_lowercase().contains("16ch")).or(cables.first()).copied()
 }
 
+/// Windows' default input for the stream and the profiles: the
+/// microphone output's recording side while a device whose profile asks for
+/// it (headset mode Auto or On, muted or not, an output chosen) is
+/// connected; kept while it connects (again), released once disconnected
+fn default_input_want(stream: &StreamStatus, profiles: &[Profile]) -> InputWant {
+    match stream.state {
+        StreamState::Connecting | StreamState::Reconnecting => InputWant::Keep,
+        StreamState::Idle | StreamState::Error => InputWant::Release,
+        StreamState::Streaming => stream
+            .profile
+            .as_ref()
+            .and_then(|name| profiles.iter().find(|p| &p.name == name))
+            .filter(|p| p.mic_default_input && !p.mic_device_id.is_empty() && HeadsetMic::parse(&p.headset_mic).is_on())
+            .map_or(InputWant::Release, |p| InputWant::Switch(p.mic_device_id.clone())),
+    }
+}
+
+/// Windows' endpoints; none in tests, which must not touch the PC's
+/// default input
+fn new_default_input() -> DefaultInput {
+    if cfg!(test) { DefaultInput::new(Arc::new(NoInputs), std::time::Duration::ZERO) } else { DefaultInput::windows() }
+}
+
+/// No capture endpoints (tests)
+struct NoInputs;
+
+impl bluecaster_core::default_input::InputEndpoints for NoInputs {
+    fn default_input(&self, _: bluecaster_core::default_input::Role) -> Option<String> {
+        None
+    }
+    fn capture_side(&self, _: &str) -> Option<String> {
+        None
+    }
+    fn set_default_input(&self, _: &str, _: bluecaster_core::default_input::Role) -> bool {
+        false
+    }
+}
+
 /// The headset mode in force for a profile: its mode with an output
 /// chosen; Off otherwise (or while muted)
 fn headset_mic_in_force(p: &CoreProfile) -> HeadsetMic {
@@ -1717,6 +1761,7 @@ impl CoreState {
             battery_deadline: Mutex::new(None),
             quiet_connect: AtomicBool::new(false),
             restarting: AtomicBool::new(false),
+            default_input: new_default_input(),
             tray,
             quit,
             balloon,
@@ -1749,9 +1794,18 @@ impl CoreState {
 
     /// Applies an event to the snapshot and sends it to the clients
     pub fn publish(&self, event: Event) {
+        let mut input = None;
         let rev = {
             let mut g = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
             let s = &mut g.1;
+            if matches!(event, Event::Stream(_) | Event::Profiles { .. }) {
+                let (stream, profiles) = match &event {
+                    Event::Stream(st) => (st, &s.profiles),
+                    Event::Profiles { profiles, .. } => (&s.stream, profiles),
+                    _ => unreachable!(),
+                };
+                input = Some(default_input_want(stream, profiles));
+            }
             match &event {
                 Event::Adapter(a) => s.adapter = a.clone(),
                 Event::Devices(d) => s.devices = d.clone(),
@@ -1782,6 +1836,9 @@ impl CoreState {
             g.0 += 1;
             g.0
         };
+        if let Some(want) = input {
+            self.default_input.follow(want);
+        }
         let _ = self.events.send((rev, Arc::new(event)));
         self.update_tray();
     }
@@ -2491,6 +2548,7 @@ impl CoreState {
     }
 
     pub fn quit(&self) {
+        self.default_input.release_now();
         self.publish(Event::Bye);
         (self.quit)();
     }
@@ -2975,7 +3033,9 @@ impl CoreState {
                 });
                 let auto_select = self.service.settings().auto_codec;
                 // Settings of a codec not in use: nothing the stream uses
-                let kept_only = pos.is_some_and(|i| list[i].only_kept_settings_differ(&merged));
+                let kept_only = pos.is_some_and(|i| {
+                    list[i].only_kept_settings_differ(&merged) || list[i].only_default_input_differs(&merged)
+                });
                 let in_order = merged.clone();
                 // The profile's device joins the saved ones of its kind (as
                 // a connection saves it)
@@ -4148,6 +4208,57 @@ mod tests {
         assert_eq!(headset_mic_in_force(&muted), HeadsetMic::Off);
         let no_output = CoreProfile { mic_device_id: String::new(), ..auto };
         assert_eq!(headset_mic_in_force(&no_output), HeadsetMic::Off);
+    }
+
+    #[test]
+    fn the_microphones_cable_is_the_default_input_while_connected() {
+        let core = CoreProfile {
+            name: "WH".into(),
+            device_address: "00:11:22:33:44:55".into(),
+            headset_mic: "auto".into(),
+            mic_device_id: "{cable}".into(),
+            ..CoreProfile::default()
+        };
+        // On by default, also for a profile saved before the setting
+        assert!(core.mic_default_input);
+        let p = to_ipc_profile(&core, 679);
+        assert!(p.mic_default_input);
+        let saved: Profile = serde_json::from_value(serde_json::json!({
+            "name": "x", "device_address": "", "device_name": "", "codec": "auto", "quality": "hq",
+            "abr": false, "codec_fallback": true, "sample_rate": 0, "bit_depth": 0, "capture_mode": "loopback",
+            "audio_device_id": "", "audio_device_name": "", "auto_switch_device": true, "app_exe": "",
+            "app_name": "", "volume_sync": "auto", "volume_device_id": "", "volume_device_name": "",
+            "max_media_payload": 679
+        }))
+        .unwrap();
+        assert!(saved.mic_default_input);
+        let stream = |state| StreamStatus { state, profile: Some("WH".into()), ..StreamStatus::default() };
+        let want = |state, p: &Profile| default_input_want(&stream(state), std::slice::from_ref(p));
+        assert_eq!(want(StreamState::Streaming, &p), InputWant::Switch("{cable}".into()));
+        // Muted from the card: still the device's microphone, kept
+        let muted = Profile { mic_muted: true, ..p.clone() };
+        assert_eq!(want(StreamState::Streaming, &muted), InputWant::Switch("{cable}".into()));
+        assert_eq!(want(StreamState::Connecting, &p), InputWant::Keep);
+        assert_eq!(want(StreamState::Reconnecting, &p), InputWant::Keep);
+        assert_eq!(want(StreamState::Idle, &p), InputWant::Release);
+        assert_eq!(want(StreamState::Error, &p), InputWant::Release);
+        // Turned off, headset mode off, no output: not switched
+        for off in [
+            Profile { mic_default_input: false, ..p.clone() },
+            Profile { headset_mic: "off".into(), ..p.clone() },
+            Profile { mic_device_id: String::new(), ..p.clone() },
+            Profile { name: "other".into(), ..p.clone() },
+        ] {
+            assert_eq!(want(StreamState::Streaming, &off), InputWant::Release);
+        }
+        // Turning it alone keeps the stream going
+        let off = CoreProfile { mic_default_input: false, ..core.clone() };
+        assert!(core.only_default_input_differs(&off));
+        assert!(!core.only_default_input_differs(&core));
+        assert!(!merge_profile(Some(&core), &to_ipc_profile(&off, 679)).mic_default_input);
+        // Written only when off
+        assert!(serde_json::to_value(&core).unwrap().get("mic_default_input").is_none());
+        assert_eq!(serde_json::to_value(&off).unwrap()["mic_default_input"], false);
     }
 
     #[test]

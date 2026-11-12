@@ -37,7 +37,7 @@ Macht aus einem gewöhnlichen Bluetooth-Adapter -- einem günstigen USB-Stick od
 | FastStream | 198/216 kbps | 44,1/48 kHz | 16 Bit | -- |
 | Opus 05 | 256 kbps | 48 kHz | 16 Bit | -- |
 | LC3 (LE Audio) | 32--124 kbps pro Kanal | 16/24/32/48 kHz | 16 Bit | ~140 ms |
-| LC3 Low Latency (LE Audio GMAP) | 64--96 kbps pro Kanal | 32/48 kHz | 16 Bit | ~30 ms |
+| LC3 LL (LE Audio GMAP) | 64--96 kbps pro Kanal | 32/48 kHz | 16 Bit | ~30 ms |
 
 ### Codec-Unterstützung nach Plattform (Senden an Kopfhörer)
 

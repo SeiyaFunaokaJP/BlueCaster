@@ -1268,6 +1268,11 @@ option {
 .status-pill > .dot {
   margin-top: 0.4rem;
 }
+/* No red dot beside the device's name for an error: it read as recording
+   (issue #86); the red "Error" says it. Collapsed to the dot, it stays. */
+.status-pill.st-error > .dot {
+  background: transparent;
+}
 /* The dot opens Home for the whole block: stretched over it, the
    microphone's button above it; focus rings the block */
 .status-pill-open {
@@ -1363,6 +1368,9 @@ option {
   .shell:not(.nav-expanded) .status-pill > .dot {
     margin-top: 0;
   }
+  .shell:not(.nav-expanded) .status-pill.st-error > .dot {
+    background: var(--st);
+  }
 }
 .shell.nav-collapsed {
   grid-template-columns: 3.5rem 1fr;
@@ -1382,6 +1390,9 @@ option {
 }
 .shell.nav-collapsed .status-pill > .dot {
   margin-top: 0;
+}
+.shell.nav-collapsed .status-pill.st-error > .dot {
+  background: var(--st);
 }
 
 .content {

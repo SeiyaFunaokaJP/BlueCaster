@@ -6,7 +6,6 @@
 import { createSignal, Match, onMount, Show, Switch } from "solid-js";
 import { errorText, useApp } from "../app/context";
 import { saveSettings } from "../app/settings";
-import { CableSettings } from "../components/CableNotes";
 import { Banner, Button, Dialog, Field, Section, Segmented, Select, Toggle } from "../components/controls";
 import { LANGUAGES, t, tm } from "../i18n";
 import type { UpdatePhase } from "../ipc/transport";
@@ -225,10 +224,6 @@ export function Settings() {
           checked={s().include_prereleases}
           onChange={(v) => set({ include_prereleases: v })}
         />
-      </Section>
-
-      <Section title={t("ui.settings.virtual_cables")}>
-        <CableSettings />
       </Section>
 
       <Section title={t("ui.settings.advanced")}>

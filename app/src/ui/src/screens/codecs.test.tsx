@@ -1432,6 +1432,38 @@ describe("codec settings within what the device lists (issue #86: moto buds+)", 
     fireEvent.click(hideSwitch());
     expect(await rates("SRS-XB13")).toEqual(["48000 Hz"]);
   });
+
+  it("aptX Adaptive LL is a card of its own, saved as aptX Adaptive in Low Latency (issue #86)", async () => {
+    const { calls } = start("#/codecs", "capped");
+    const earfun = await section("EarFun Air Pro 4+");
+    const ids = cards(earfun).map((r) => r.value);
+    expect(ids.slice(ids.indexOf("aptxad"), ids.indexOf("aptxad") + 2)).toEqual(["aptxad", "aptxadll"]);
+    expect(cardNames(earfun)).toContain("aptX Adaptive LL");
+    // aptX Adaptive's own settings: High only (no Low Latency in it)
+    let dialog = await codecSettings(earfun, "codec.aptx_adaptive");
+    expect(within(dialog).getByLabelText(t("connection.quality"))).toHaveTextContent(`${t("quality.high")} (427 kbps)`);
+    fireEvent.click(within(dialog).getByRole("button", { name: t("modal.close") }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // LL's: its one bit rate, 48 kHz, 24-bit, no ABR
+    dialog = await codecSettings(earfun, "codec.aptx_adaptive_ll");
+    expect(within(dialog).getByLabelText(t("connection.quality"))).toHaveTextContent("265 kbps");
+    expect(within(dialog).getByLabelText(t("connection.sample_rate"))).toHaveTextContent("48000 Hz");
+    expect(within(dialog).getByLabelText(t("connection.bit_depth"))).toHaveTextContent(t("bitdepth.24"));
+    expect(within(dialog).queryByRole("switch", { name: (n) => n.startsWith(t("connection.abr")) })).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: t("modal.close") }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // Chosen: the profile asks for aptX Adaptive in Low Latency
+    fireEvent.click(earfun.querySelector<HTMLInputElement>('input[value="aptxadll"]')!);
+    await waitFor(() => expect(saves(calls).length).toBeGreaterThan(0));
+    expect(saves(calls).at(-1)!.profile).toMatchObject({ codec: "aptxad", quality: "ll", abr: false });
+    await waitFor(() => expect(earfun.querySelector('input[value="aptxadll"]')).toBeChecked());
+    expect(earfun.querySelector('input[value="aptxad"]')).not.toBeChecked();
+    // aptX Adaptive again: High
+    await settled(earfun);
+    fireEvent.click(earfun.querySelector<HTMLInputElement>('input[value="aptxad"]')!);
+    await waitFor(() => expect(saves(calls).at(-1)!.profile).toMatchObject({ codec: "aptxad", quality: "hq" }));
+    await waitFor(() => expect(earfun.querySelector('input[value="aptxad"]')).toBeChecked());
+  });
 });
 
 describe("SBC settings", () => {
