@@ -89,7 +89,21 @@ export const NO_DEBUG: DevDebug = {
   mtk_register: "",
   le_keys_to_windows: false,
   realtek_driver_firmware: false,
+  le_latency_c_to_p_ms: 0,
+  le_latency_p_to_c_ms: 0,
+  le_rtn_c_to_p: null,
+  le_rtn_p_to_c: null,
+  le_interleaved: false,
+  le_mic_preset: "",
+  le_mic_retry_same_link: false,
 };
+
+/** The microphone presets Developer > Debug offers (le-audio presets.rs) */
+const MIC_PRESETS = [
+  "16_1_1", "16_2_1", "24_1_1", "24_2_1", "32_1_1", "32_2_1", "48_1_1", "48_2_1",
+  "16_2_2", "24_2_2", "32_2_2", "48_2_2",
+  "32_1_gs", "32_2_gs", "48_1_gs", "48_2_gs",
+];
 
 export function Developer() {
   const app = useApp();
@@ -434,7 +448,8 @@ function Overrides(props: {
 
 /** Experiments for one adapter: MediaTek LE Audio kept on the bulk
  *  endpoint, another padding or queue, and one HCI command sent after
- *  start-up (read when the adapter opens next) */
+ *  start-up (read when the adapter opens next); the LE Audio CIG's values
+ *  and the microphone preset (read when the next stream starts, issue #86) */
 function Debug(props: {
   value: DevDebug;
   save: (v: DevDebug) => Promise<boolean>;
@@ -538,6 +553,7 @@ function Debug(props: {
           )}
         </Field>
       </Section>
+      <LeAudioDebug value={props.value} set={set} />
       <Section title={t("ui.dev.realtek_section")}>
         <Toggle
           label={t("ui.dev.realtek_driver_firmware")}
@@ -554,6 +570,79 @@ function Debug(props: {
         <KeysCompare />
       </Section>
     </div>
+  );
+}
+
+/** LE Audio stream experiments: the CIG's latency, RTN and packing, the
+ *  microphone preset, where the retry without the microphone runs. Empty
+ *  fields keep what BlueCaster plans. */
+function LeAudioDebug(props: { value: DevDebug; set: (patch: Partial<DevDebug>) => void }) {
+  const number = (
+    label: string,
+    value: number | null | undefined,
+    max: number,
+    save: (v: number | null) => void,
+  ) => (
+    <Field label={label}>
+      {(id, describedBy) => (
+        <input
+          id={id}
+          class="input"
+          type="number"
+          min="0"
+          max={max}
+          step="1"
+          aria-describedby={describedBy}
+          value={value ?? ""}
+          placeholder={t("codec.auto")}
+          onChange={(e) => {
+            const text = e.currentTarget.value;
+            save(text.trim() === "" ? null : clampInt(text, 0, max, 0));
+          }}
+        />
+      )}
+    </Field>
+  );
+  return (
+    <Section title={t("ui.dev.le_section")}>
+      <p class="hint">{t("ui.dev.le_section_hint")}</p>
+      {number(t("ui.dev.le_latency_c_to_p"), props.value.le_latency_c_to_p_ms || null, 4000, (v) =>
+        props.set({ le_latency_c_to_p_ms: v ?? 0 }),
+      )}
+      {number(t("ui.dev.le_latency_p_to_c"), props.value.le_latency_p_to_c_ms || null, 4000, (v) =>
+        props.set({ le_latency_p_to_c_ms: v ?? 0 }),
+      )}
+      {number(t("ui.dev.le_rtn_c_to_p"), props.value.le_rtn_c_to_p, 15, (v) =>
+        props.set({ le_rtn_c_to_p: v }),
+      )}
+      {number(t("ui.dev.le_rtn_p_to_c"), props.value.le_rtn_p_to_c, 15, (v) =>
+        props.set({ le_rtn_p_to_c: v }),
+      )}
+      <Toggle
+        label={t("ui.dev.le_interleaved")}
+        checked={props.value.le_interleaved}
+        onChange={(v) => props.set({ le_interleaved: v })}
+      />
+      <Field label={t("ui.dev.le_mic_preset")}>
+        {(id, describedBy) => (
+          <Select
+            id={id}
+            describedBy={describedBy}
+            value={props.value.le_mic_preset}
+            options={[
+              { value: "", label: t("codec.auto") },
+              ...MIC_PRESETS.map((p) => ({ value: p, label: p })),
+            ]}
+            onChange={(v) => props.set({ le_mic_preset: v })}
+          />
+        )}
+      </Field>
+      <Toggle
+        label={t("ui.dev.le_mic_retry_same_link")}
+        checked={props.value.le_mic_retry_same_link}
+        onChange={(v) => props.set({ le_mic_retry_same_link: v })}
+      />
+    </Section>
   );
 }
 

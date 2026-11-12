@@ -283,6 +283,21 @@ pub struct DevDebug {
     /// instead of the firmware folder's, where the driver has it (the
     /// RTL8761B, issue #427; adapter::configure)
     pub realtek_driver_firmware: bool,
+    /// LE Audio CIG (bt_host::CigOverrides): max transport latency C->P
+    /// and P->C in ms, 0: as planned
+    pub le_latency_c_to_p_ms: u16,
+    pub le_latency_p_to_c_ms: u16,
+    /// RTN C->P and P->C; None: as planned
+    pub le_rtn_c_to_p: Option<u8>,
+    pub le_rtn_p_to_c: Option<u8>,
+    /// Interleaved CIS packing instead of sequential
+    pub le_interleaved: bool,
+    /// The LE Audio microphone's preset ("32_2_1"), taken as it is; empty:
+    /// as planned
+    pub le_mic_preset: String,
+    /// A stream with the microphone that failed is retried without it on
+    /// the same link instead of a new one
+    pub le_mic_retry_same_link: bool,
 }
 
 impl DevDebug {

@@ -353,6 +353,34 @@ pub fn le_mic_target(
 /// one tried. GMAP low latency: the request's flag or (from a profile) the
 /// setting, not with an explicit preset. The headset microphone asks for
 /// the conversational configuration.
+/// Developer > Debug for LE Audio streams (service.rs apply_dev_overrides)
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct LeDebug {
+    /// The microphone's preset, taken as it is; empty: as planned
+    pub mic_preset: String,
+    /// The retry without the microphone stays on the same link
+    pub retry_same_link: bool,
+}
+
+static LE_DEBUG: std::sync::Mutex<LeDebug> =
+    std::sync::Mutex::new(LeDebug { mic_preset: String::new(), retry_same_link: false });
+
+pub(crate) fn set_debug(d: LeDebug) {
+    *LE_DEBUG.lock().unwrap_or_else(|e| e.into_inner()) = d;
+}
+
+fn debug() -> LeDebug {
+    LE_DEBUG.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Developer > Debug's microphone preset into the request
+fn apply_debug(request: &mut LeStreamRequest, d: &LeDebug) {
+    if !d.mic_preset.is_empty() {
+        request.source_preset_order = vec![d.mic_preset.clone()];
+        request.source_preset_exact = true;
+    }
+}
+
 pub(crate) fn stream_request(le: &LeRequest) -> (LeStreamRequest, bool) {
     let mut request = LeStreamRequest::default();
     if let Some(p) = &le.preset {
@@ -429,7 +457,12 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         le.headset_mic = bt_host::HeadsetMic::Off;
     }
     let mut mic_note = mic_note;
-    let (request, low_latency) = stream_request(&le);
+    let (mut request, low_latency) = stream_request(&le);
+    let le_debug = debug();
+    apply_debug(&mut request, &le_debug);
+    if le_debug != LeDebug::default() {
+        tracing::info!("LE Audio: Developer > Debug: {le_debug:?}");
+    }
     tracing::debug!("le stream: stream request {request:?}, low latency {low_latency}");
     host.le_set_low_latency(low_latency);
     let mut devices = vec![req.device];
@@ -460,9 +493,14 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
             asked.conversational = false;
             // On a new link: right after the refused CIS, EarFun earbuds
             // left ASE 2 in Enabling on the same link, while a fresh
-            // connection streamed every time (issue #86)
-            host.le_disconnect_all();
-            let ids = connect_devices(&host, &devices, &req.device_name, &stopped)?;
+            // connection streamed every time (issue #86). Developer > Debug
+            // can keep the link, to compare.
+            let ids = if le_debug.retry_same_link {
+                ids
+            } else {
+                host.le_disconnect_all();
+                connect_devices(&host, &devices, &req.device_name, &stopped)?
+            };
             r = host.le_start_stream(ids, asked, &le_silence_set);
         }
         let r = r.map_err(|e| {
@@ -978,6 +1016,16 @@ fn connect_devices(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_developer_microphone_preset_is_taken_as_it_is() {
+        let le = LeRequest { headset_mic: bt_host::HeadsetMic::On, ..LeRequest::default() };
+        let (mut r, _) = stream_request(&le);
+        apply_debug(&mut r, &LeDebug::default());
+        assert!(!r.source_preset_exact);
+        apply_debug(&mut r, &LeDebug { mic_preset: "32_2_1".into(), retry_same_link: false });
+        assert_eq!((r.source_preset_order.as_slice(), r.source_preset_exact), (&["32_2_1".to_string()][..], true));
+    }
 
     #[test]
     fn refused_while_off_or_for_app_capture() {

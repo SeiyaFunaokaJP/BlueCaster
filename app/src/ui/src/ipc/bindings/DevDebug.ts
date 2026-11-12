@@ -40,4 +40,25 @@ le_keys_to_windows: boolean,
  * A Realtek chip's firmware from Realtek's Windows driver on this PC
  * instead of the firmware folder's (the RTL8761B, issue #427)
  */
-realtek_driver_firmware: boolean, };
+realtek_driver_firmware: boolean, 
+/**
+ * LE Audio CIG: max transport latency C->P / P->C in ms; 0: as planned
+ */
+le_latency_c_to_p_ms: number, le_latency_p_to_c_ms: number, 
+/**
+ * LE Audio CIG: RTN C->P / P->C; None: as planned
+ */
+le_rtn_c_to_p?: number | null, le_rtn_p_to_c?: number | null, 
+/**
+ * LE Audio CIG: interleaved packing
+ */
+le_interleaved: boolean, 
+/**
+ * The LE Audio microphone's preset, taken as it is; empty: as planned
+ */
+le_mic_preset: string, 
+/**
+ * A stream with the microphone that failed is retried without it on
+ * the same link
+ */
+le_mic_retry_same_link: boolean, };
