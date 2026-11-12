@@ -497,6 +497,13 @@ pub trait Encoder: Send {
     /// old link's queue made it do says nothing about the new one)
     fn abr_reset(&mut self) {}
 
+    /// The link carries less for a while: the lowest bit rate while `on`,
+    /// the one configured again after. False when the encoder has none to
+    /// go down to (or ABR does it already).
+    fn reduce(&mut self, _on: bool) -> bool {
+        false
+    }
+
     /// The setup for Diagnostics; nothing beyond the bit rate by default
     fn details(&self) -> EncoderDetails {
         EncoderDetails::default()

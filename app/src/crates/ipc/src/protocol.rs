@@ -756,6 +756,8 @@ pub struct DevOverrides {
     /// Audio waits unencoded while the send queue is backed up (ABR then
     /// lowers its bit rate too). Applies to the next stream
     pub encode_at_send: bool,
+    /// A link slow after a call keeps the full bit rate (not lowered)
+    pub keep_bitrate_on_slow_link: bool,
 }
 
 /// Developer mode's override of one vendor's protocol

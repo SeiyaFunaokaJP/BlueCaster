@@ -882,6 +882,16 @@ uint8_t bluecaster_cmd_read_link_supervision_timeout(uint16_t con_handle) {
     return hci_send_cmd(&hci_read_link_supervision_timeout, con_handle);
 }
 
+/* The ACL packet types BTstack asks for when it creates a connection (from
+   the controller's buffer size and features, "may not be used" bits set) */
+uint16_t bluecaster_usable_acl_packet_types(void) {
+    return hci_usable_acl_packet_types();
+}
+
+uint8_t bluecaster_cmd_change_connection_packet_type(uint16_t con_handle, uint16_t packet_types) {
+    return hci_send_cmd(&hci_change_connection_packet_type, con_handle, packet_types);
+}
+
 /* What BTstack holds of a link; -1 when it has no such connection */
 int bluecaster_acl_packets_in_controller(uint16_t con_handle) {
     hci_connection_t *c = hci_connection_for_handle(con_handle);

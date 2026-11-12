@@ -463,6 +463,12 @@ impl Voice {
         Some(crate::HostEvent::Voice(VoiceEvent::Established { codec, sco_handle, rx_len, tx_len }))
     }
 
+    /// The ACL link under the open audio connection whose SCO link is
+    /// `sco_handle`
+    pub fn acl_of_sco(&self, sco_handle: u16) -> Option<u16> {
+        self.sco.filter(|&(sco, _)| sco == sco_handle).map(|(_, acl)| acl)
+    }
+
     /// HCI Disconnection Complete: the SCO link of the open audio
     /// connection gone counts as its release (an event once)
     pub fn on_disconnected(&mut self, handle: u16) -> Option<crate::HostEvent> {

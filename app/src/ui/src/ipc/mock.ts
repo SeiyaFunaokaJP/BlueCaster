@@ -214,6 +214,7 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
       ignore_sink_max: false,
       queue_max_wait_ms: 0,
       encode_at_send: false,
+      keep_bitrate_on_slow_link: false,
     },
     dev_vendors: {},
     dev_log: {

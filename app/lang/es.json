@@ -460,6 +460,7 @@
   "ui.dev.queue_wait_auto": "350",
   "ui.dev.encode_at_send": "Codificar al enviar",
   "ui.dev.encode_at_send_hint": "Con ABR, el audio retenido por un corte sale a la tasa reducida.\nPara SBC, SBC XQ, LDAC, LHDC V5 y aptX Adaptive.",
+  "ui.dev.keep_bitrate_on_slow_link": "Mantener la tasa de bits cuando el enlace se ralentiza tras una llamada",
   "ui.dev.aac_config_bitrate0": "Tasa de bits 0 en la configuración",
   "ui.dev.aac_config_bitrate0_hint": "Envía 0 (desconocida) como tasa de bits al configurar el dispositivo de audio.",
   "ui.dev.aac_latm_v0": "Formato LATM antiguo (2.0.2 y anteriores)",
