@@ -1787,6 +1787,11 @@ pub enum Method {
     /// need a restart first)
     #[serde(rename = "audio.install_vb_cable")]
     AudioInstallVbCable,
+    /// Removes VB-CABLE, or the Hi-Fi Cable (`hifi`), with VB-Audio's own
+    /// setup (UAC prompt) -> bool: it is gone from Windows' outputs (false:
+    /// Windows may need a restart first)
+    #[serde(rename = "audio.uninstall_cable")]
+    AudioUninstallCable { hifi: bool },
     /// -> MixerApp[]
     #[serde(rename = "audio.mixer")]
     AudioMixer,

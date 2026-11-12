@@ -1505,7 +1505,8 @@ export class MockCore implements Transport {
       case "audio.devices": {
         const hifi = { ...HIFI_CABLE, capture_rate: this.hifiCaptureRate };
         const all = this.hifiCable ? [...AUDIO_DEVICES, hifi] : AUDIO_DEVICES;
-        const list = this.noVirtual ? all.filter((d) => !d.is_virtual) : all;
+        const kept = this.vbCableRemoved ? all.filter((d) => !/Virtual Cable/.test(d.name)) : all;
+        const list = this.noVirtual ? kept.filter((d) => !d.is_virtual) : kept;
         const def = this.defaultOutput;
         return def === null ? list : list.map((d) => ({ ...d, is_default: d.id === def }));
       }
@@ -1515,6 +1516,11 @@ export class MockCore implements Transport {
         if (this.vbCableDownloadFails)
           throw errorInfo("vb_cable.download_failed", "error.vb_cable_download_failed");
         this.noVirtual = false;
+        this.vbCableRemoved = false;
+        return true;
+      case "audio.uninstall_cable":
+        if (p.hifi) this.hifiCable = false;
+        else this.vbCableRemoved = true;
         return true;
       case "audio.mixer":
         return this.mixer;
@@ -1725,6 +1731,8 @@ export class MockCore implements Transport {
   /** The sample rate of the Hi-Fi Cable's recording side (its playback
    *  side runs at 48 kHz) */
   hifiCaptureRate = 48000;
+  /** VB-CABLE removed with audio.uninstall_cable */
+  vbCableRemoved = false;
   /** audio.install_vb_cable cannot reach VB-Audio */
   vbCableDownloadFails = false;
   /** Now and then the capture falls behind (?capturedrops): audio dropped at capture */

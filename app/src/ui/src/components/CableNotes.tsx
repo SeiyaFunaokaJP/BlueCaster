@@ -1,14 +1,16 @@
-// VB-Audio's virtual cables, suggested where they are missing: the Hi-Fi
-// Cable for the sound (it adds the least delay), VB-CABLE for the headphones'
-// microphone. Install VB-CABLE has the core fetch VB-Audio's own pack from
-// VB-Audio and run its setup (BlueCaster ships none of it); VB-Audio asks
-// that the user can tell it is their donationware, so its origin is said
-// beside the button (https://vb-audio.com/Services/licensing.htm). Where the
-// download fails, VB-Audio's page is offered instead. The Hi-Fi Cable is
-// only linked. The pages show one line and keep the rest in a dialog. The
-// line stays while a cable is missing (issue #86: other ways to the
-// microphone only bring bug reports); Developer > Hide the virtual sound
-// devices warning removes it. About names both as VB-Audio's donationware.
+// VB-Audio's virtual cables: the Hi-Fi Cable for the sound (it adds the
+// least delay), VB-CABLE for the headphones' microphone. The pages show one
+// amber line while a cable is missing; Learn more opens the dialog with both
+// cables, each with Install (Download for the Hi-Fi Cable) or Uninstall, and
+// VB-Audio's links. Nothing else in the app talks about the cables (issue
+// #86). Install VB-CABLE has the core fetch VB-Audio's own pack from
+// VB-Audio and run its setup (BlueCaster ships none of it); Uninstall runs
+// VB-Audio's installed setup. VB-Audio asks that the user can tell it is
+// their donationware, so its origin is said under each cable
+// (https://vb-audio.com/Services/licensing.htm). The line cannot be closed
+// (issue #86: other ways to the microphone only bring bug reports);
+// Developer > Hide the virtual sound devices warning removes it. About >
+// Third-party software opens the same dialog.
 
 import { createSignal, Show } from "solid-js";
 import { useApp } from "../app/context";
@@ -38,78 +40,147 @@ export function Origin(props: { text: string; url: string }) {
   );
 }
 
-/** VB-CABLE's Install button, and VB-Audio's page once it failed.
- *  `onInstalled` once it is among Windows' outputs. */
-function VbCableInstall(props: { onInstalled?: () => void }) {
+/** One cable: its name and origin, Installed, and Install or Uninstall.
+ *  `installed` null until Windows' outputs are read. */
+function CableRow(props: {
+  name: string;
+  origin: string;
+  originUrl: string;
+  installed: boolean | null;
+  hifi: boolean;
+  onChanged: () => void;
+}) {
   const app = useApp();
   const { core } = app;
   const [busy, setBusy] = createSignal(false);
-  // It installed but Windows does not list it yet
+  // Done, but Windows still lists it, or does not list it yet
   const [restart, setRestart] = createSignal(false);
-  // It failed (no download, VB-Audio changed the pack, ...): their page
+  // Install failed (no download, VB-Audio changed the pack, ...): their page
   const [failed, setFailed] = createSignal(false);
-  const install = async () => {
+  const act = async (uninstall: boolean) => {
     setBusy(true);
+    setRestart(false);
     try {
-      let found = false;
+      let done = false;
       const ok = await app.run(async () => {
-        found = await core.request("audio.install_vb_cable");
+        done = uninstall
+          ? await core.request("audio.uninstall_cable", { hifi: props.hifi })
+          : await core.request("audio.install_vb_cable");
       });
-      if (ok && found) props.onInstalled?.();
+      if (ok && done) props.onChanged();
       else if (ok) setRestart(true);
-      else setFailed(true);
+      else if (!uninstall) setFailed(true);
     } finally {
       setBusy(false);
     }
   };
+  const page = () => core.transport.openUrl(props.hifi ? LINKS.hifiCable : LINKS.vbCable);
   return (
-    <>
-      <Button icon="arrow_download" busy={busy()} onClick={() => void install()}>
-        {t("vbcable.install")}
-      </Button>
-      <Show when={failed()}>
-        <Button icon="open" onClick={() => core.transport.openUrl(LINKS.vbCable)}>
-          {t("vbcable.download")}
-        </Button>
-      </Show>
+    <div class="cable-row">
+      <div class="cable-row-text">
+        <strong>{props.name}</strong>
+        <Origin text={props.origin} url={props.originUrl} />
+      </div>
+      <div class="cable-row-actions">
+        <Show when={props.installed !== null}>
+          <Show
+            when={props.installed}
+            fallback={
+              <Show
+                when={!props.hifi}
+                fallback={
+                  <Button icon="open" onClick={page}>
+                    {t("cables.download")}
+                  </Button>
+                }
+              >
+                <Button icon="arrow_download" busy={busy()} onClick={() => void act(false)}>
+                  {t("cables.install")}
+                </Button>
+                <Show when={failed()}>
+                  <Button icon="open" onClick={page}>
+                    {t("cables.download")}
+                  </Button>
+                </Show>
+              </Show>
+            }
+          >
+            <span class="muted">{t("cables.installed")}</span>
+            <Button busy={busy()} onClick={() => void act(true)}>
+              {t("cables.uninstall")}
+            </Button>
+          </Show>
+        </Show>
+      </div>
       <Show when={restart()}>
-        <p class="field-warn">
+        <p class="field-warn cable-row-note">
           <Icon name="warning" />
-          <span>{t("vbcable.restart")}</span>
+          <span>{t("cables.restart")}</span>
         </p>
       </Show>
-    </>
-  );
-}
-
-function VbCableNote(props: { onInstalled?: () => void }) {
-  return (
-    <div class="setup-note cable-note">
-      <div class="cable-note-text">
-        <p>{t("ui.setup.vbcable_note")}</p>
-        <Origin text={t("vbcable.origin")} url={LINKS.vbCableHome} />
-      </div>
-      <div class="cable-note-actions">
-        <VbCableInstall onInstalled={props.onInstalled} />
-      </div>
     </div>
   );
 }
 
-function HifiCableNote() {
+/** Both cables and VB-Audio's links (`devices`: Windows' outputs, null
+ *  until read; `reload` reads them again) */
+export function CablesDialog(props: {
+  open: boolean;
+  devices: readonly AudioDevice[] | null;
+  reload: () => void;
+  onClose: () => void;
+}) {
   const { core } = useApp();
+  const has = (find: (d: readonly AudioDevice[]) => AudioDevice | null) =>
+    props.devices === null ? null : find(props.devices) !== null;
+  const link = (url: string, label: string) => (
+    <a
+      href={url}
+      onClick={(e) => {
+        e.preventDefault();
+        core.transport.openUrl(url);
+      }}
+    >
+      {label}
+    </a>
+  );
   return (
-    <div class="setup-note cable-note">
-      <div class="cable-note-text">
-        <p>{t("ui.setup.hificable_note")}</p>
-        <Origin text={t("hificable.origin")} url={LINKS.vbAudioHome} />
+    <Dialog open={props.open} title={t("cables.title")} onCancel={props.onClose}>
+      <div class="cable-dialog">
+        <div>
+          <p>{t("cables.intro")}</p>
+          <ul class="cable-reasons">
+            <li>{t("cables.reason_separate")}</li>
+            <li>{t("cables.reason_features")}</li>
+          </ul>
+        </div>
+        <CableRow
+          name="VB-CABLE"
+          origin={t("vbcable.origin")}
+          originUrl={LINKS.vbCableHome}
+          installed={has(vbCable)}
+          hifi={false}
+          onChanged={props.reload}
+        />
+        <CableRow
+          name="Hi-Fi Cable"
+          origin={t("hificable.origin")}
+          originUrl={LINKS.vbAudioHome}
+          installed={has(hifiCable)}
+          hifi
+          onChanged={props.reload}
+        />
+        <hr class="cable-rule" />
+        <div class="cable-vendor">
+          <strong>VB-Audio</strong>
+          <p class="hint inline wrap">
+            {link(LINKS.vbAudioHome, "vb-audio.com")}
+            {link(LINKS.vbCableHome, "vb-cable.com")}
+            {link(LINKS.vbAudioLicensing, t("cables.licensing"))}
+          </p>
+        </div>
       </div>
-      <div class="cable-note-actions">
-        <Button icon="open" onClick={() => core.transport.openUrl(LINKS.hifiCable)}>
-          {t("hificable.download")}
-        </Button>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -121,42 +192,25 @@ export function cableWarningHidden(
 }
 
 /** One amber line while a cable is missing (`devices`: Windows' outputs,
- *  null until read); Learn more opens the suggestions for the missing ones
- *  (issue #86: the notes made the pages too busy). It cannot be closed. */
+ *  null until read); Learn more opens both cables. It cannot be closed. */
 export function CableNotes(props: { devices: readonly AudioDevice[] | null; reload: () => void }) {
   const app = useApp();
   const s = () => app.core.state.snap!.settings;
   const [open, setOpen] = createSignal(false);
-  const noVb = () => props.devices !== null && vbCable(props.devices) === null;
-  const noHifi = () => props.devices !== null && hifiCable(props.devices) === null;
-  const shown = () => (noVb() || noHifi()) && !cableWarningHidden(s());
+  const missing = () =>
+    props.devices !== null && (vbCable(props.devices) === null || hifiCable(props.devices) === null);
+  // Kept while the dialog is open: installing the last cable would close it
+  const shown = () => (missing() || open()) && !cableWarningHidden(s());
   return (
     <Show when={shown()}>
-      <div class="banner banner-warn cable-banner">
-        <Icon name="warning" class="banner-icon" />
-        <span class="cable-banner-text">{t("cables.recommended")}</span>
-        <Button onClick={() => setOpen(true)}>{t("cables.learn_more")}</Button>
-      </div>
-      <Dialog open={open()} title={t("cables.title")} onCancel={() => setOpen(false)}>
-        <div class="cable-dialog">
-          <Show when={noHifi()}>
-            <HifiCableNote />
-          </Show>
-          <Show when={noVb()}>
-            <VbCableNote onInstalled={props.reload} />
-          </Show>
+      <Show when={missing()}>
+        <div class="banner banner-warn cable-banner">
+          <Icon name="warning" class="banner-icon" />
+          <span class="cable-banner-text">{t("cables.recommended")}</span>
+          <Button onClick={() => setOpen(true)}>{t("cables.learn_more")}</Button>
         </div>
-      </Dialog>
+      </Show>
+      <CablesDialog open={open()} devices={props.devices} reload={props.reload} onClose={() => setOpen(false)} />
     </Show>
-  );
-}
-
-/** About: both cables named as VB-Audio's donationware, with their sites */
-export function CableOrigins() {
-  return (
-    <>
-      <Origin text={t("hificable.origin")} url={LINKS.vbAudioHome} />
-      <Origin text={t("vbcable.origin")} url={LINKS.vbCableHome} />
-    </>
   );
 }

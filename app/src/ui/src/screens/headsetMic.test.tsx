@@ -116,26 +116,17 @@ describe("Input Source on Audio Devices", () => {
     expect(micSelect(wh).value).toBe(CABLE);
   });
 
-  it("recommends the Hi-Fi Cable over VB-Cable for the sound, and swaps them", async () => {
-    const { core } = start("#/devices", "voice");
+  it("says nothing about the cables below the sources (the banner's Learn more does)", async () => {
+    start("#/devices", "voice");
     const wh = await deviceEntry(/WH-1000XM5/);
     // The microphone off: VB-Cable is free to be the source
     fireEvent.click(mode(wh, "off"));
     const source = () => within(wh).getByLabelText(t("capture.mode")) as HTMLSelectElement;
     await within(source()).findByRole("option", { name: "CABLE Input (VB-Audio Virtual Cable)" });
     fireEvent.change(source(), { target: { value: `virtual:${CABLE}` } });
-    await waitFor(() => expect(wh.textContent).toContain(t("capture.vbcable_delay")));
-    // Not installed: where to get it
-    expect(within(wh).getByRole("button", { name: t("hificable.download") })).toBeInTheDocument();
-    mock!.hifiCable = true;
-    window.dispatchEvent(new Event("focus"));
-    fireEvent.click(await within(wh).findByRole("button", { name: t("capture.use_hificable") }));
-    await waitFor(() => {
-      const p = core.state.snap!.profiles.find((x) => x.device_address === "AC:80:0A:12:34:56" && !x.le_audio)!;
-      expect(p.audio_device_name).toBe("Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)");
-      expect(p.mic_device_id).toBe(CABLE);
-    });
-    expect(wh.textContent).not.toContain(t("capture.vbcable_delay"));
+    await waitFor(() => expect(source().value).toBe(`virtual:${CABLE}`));
+    expect(within(wh).queryByRole("button", { name: t("hificable.download") })).toBeNull();
+    expect(wh.textContent).not.toContain("Hi-Fi Cable is");
   });
 
   it("says when the Hi-Fi Cable's two sides run at different rates", async () => {

@@ -3484,22 +3484,39 @@ option {
 .device-note {
   padding: var(--s4);
 }
-.setup-note {
+.cable-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--s4);
-  color: var(--text-2);
+  gap: var(--s2) var(--s4);
 }
-.cable-note-text {
-  flex: 1;
+.cable-row-text {
+  flex: 1 1 16em;
   min-width: 0;
 }
-.cable-note-actions {
+.cable-row-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: var(--s2);
+}
+.cable-row-note {
+  flex-basis: 100%;
+}
+.cable-reasons {
+  margin: var(--s1) 0 0;
+  padding-left: 1.4em;
+}
+.cable-rule {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 0;
+}
+.cable-vendor .inline {
+  gap: var(--s4);
+  margin-top: var(--s1);
 }
 .cable-origin {
   margin-top: var(--s1);
@@ -3516,12 +3533,6 @@ option {
   display: flex;
   flex-direction: column;
   gap: var(--s4);
-}
-.source-advice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--s2);
 }
 .setup-general .field {
   flex-direction: row;
