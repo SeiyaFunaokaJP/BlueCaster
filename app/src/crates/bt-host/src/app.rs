@@ -1582,6 +1582,10 @@ impl HostApp {
                         le16(p, 14).unwrap_or(0),
                         le16(p, 16).unwrap_or(0)
                     );
+                    if let Some(addr) = addr_at(p, 5) {
+                        self.link.voice_link_started(addr);
+                        self.send_link_reads(stack);
+                    }
                 }
             }
             HCI_EVENT_DISCONNECTION_COMPLETE => {
@@ -1599,7 +1603,7 @@ impl HostApp {
                     // stream's rate is watched: the controller can stay
                     // slow after eSCO (#86)
                     if let Some(acl) = self.voice.acl_of_sco(handle) {
-                        self.link.voice_link_ended(acl);
+                        self.link.voice_link_ended(acl, self.media_acl == Some(acl));
                         self.send_link_reads(stack);
                         if self.media_acl == Some(acl) {
                             // The full bit rate again: the voice link may
@@ -2122,6 +2126,7 @@ impl HostApp {
                 self.sample_controller_backlog(stack);
                 self.stats.mark_stream_start();
                 self.link.stream_started(self.media_acl);
+                self.send_link_reads(stack);
                 self.publish_link();
                 self.set_streaming(true);
                 stack.timer_start(TIMER_STALL_WATCH, crate::stall_watch::TICK.as_millis() as u32);

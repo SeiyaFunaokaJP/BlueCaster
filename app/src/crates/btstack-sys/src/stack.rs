@@ -651,6 +651,15 @@ impl Stack {
         status
     }
 
+    /// Lets the remote put the link into sniff mode or not (role switch
+    /// stays allowed); answered by a Command Complete
+    pub fn cmd_allow_sniff(&self, con_handle: u16, allow: bool) -> u8 {
+        // SAFETY: on the BTstack thread.
+        let status = unsafe { ffi::bluecaster_cmd_write_link_policy(con_handle, i32::from(allow)) };
+        tracing::debug!(target: "btstack", "link policy 0x{con_handle:04X}, sniff {allow}: 0x{status:02X}");
+        status
+    }
+
     /// Frees BTstack's command slot held by `opcode`, a command the
     /// controller never answered: BTstack gets a Command Status with
     /// `status` as if from the controller. Only for commands BTstack does not

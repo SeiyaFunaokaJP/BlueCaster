@@ -104,6 +104,7 @@ unsafe extern "C" {
     pub fn bluecaster_cmd_read_link_supervision_timeout(con_handle: u16) -> u8;
     pub fn bluecaster_usable_acl_packet_types() -> u16;
     pub fn bluecaster_cmd_change_connection_packet_type(con_handle: u16, packet_types: u16) -> u8;
+    pub fn bluecaster_cmd_write_link_policy(con_handle: u16, allow_sniff: c_int) -> u8;
     pub fn bluecaster_acl_packets_in_controller(con_handle: u16) -> c_int;
     pub fn bluecaster_acl_role(con_handle: u16) -> c_int;
     pub fn bluecaster_connection_address(con_handle: u16, addr: *mut u8) -> c_int;

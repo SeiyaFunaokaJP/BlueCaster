@@ -892,6 +892,12 @@ uint8_t bluecaster_cmd_change_connection_packet_type(uint16_t con_handle, uint16
     return hci_send_cmd(&hci_change_connection_packet_type, con_handle, packet_types);
 }
 
+/* Role switch always; sniff as asked (the default set at init allows both) */
+uint8_t bluecaster_cmd_write_link_policy(uint16_t con_handle, int allow_sniff) {
+    uint16_t policy = LM_LINK_POLICY_ENABLE_ROLE_SWITCH | (allow_sniff ? LM_LINK_POLICY_ENABLE_SNIFF_MODE : 0);
+    return hci_send_cmd(&hci_write_link_policy_settings, con_handle, policy);
+}
+
 /* What BTstack holds of a link; -1 when it has no such connection */
 int bluecaster_acl_packets_in_controller(uint16_t con_handle) {
     hci_connection_t *c = hci_connection_for_handle(con_handle);
