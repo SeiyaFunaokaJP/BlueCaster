@@ -1030,7 +1030,6 @@
   "ui.pairing.not_available": "なし",
   "ui.pairing.key_size": "鍵長 %u",
   "ui.pairing.le_missing.no_stack": "LE のキーは Bluetooth を起動すると確認できます。",
-  "ui.pairing.le_missing.no_le": "LE のキーは LE Audio がオンのときだけ求めます。",
   "ui.pairing.le_missing.not_asked": "LE のキーは、次に BlueCaster からこのデバイスに接続したときに求めます。",
   "ui.pairing.le_missing.asking": "LE のキーをデバイスに求めています。",
   "ui.pairing.le_missing.not_secure": "このデバイスとは古い暗号化方式で接続しているため、LE のキーを受け取れません。",

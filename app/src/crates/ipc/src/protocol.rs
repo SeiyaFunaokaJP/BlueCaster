@@ -2240,8 +2240,6 @@ pub struct DevicePairing {
 pub enum LeKeysMissing {
     /// No stack runs
     NoStack,
-    /// LE Audio is off, so nothing is asked
-    NoLe,
     /// Not asked since Bluetooth started (no connection since)
     NotAsked,
     /// Asked, no answer yet

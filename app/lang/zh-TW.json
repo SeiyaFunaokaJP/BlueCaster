@@ -1029,7 +1029,6 @@
   "ui.pairing.not_available": "無",
   "ui.pairing.key_size": "金鑰長度 %u",
   "ui.pairing.le_missing.no_stack": "啟動 Bluetooth 後可查看 LE 金鑰。",
-  "ui.pairing.le_missing.no_le": "僅在 LE Audio 開啟時要求 LE 金鑰。",
   "ui.pairing.le_missing.not_asked": "BlueCaster 下次連線到此裝置時會要求 LE 金鑰。",
   "ui.pairing.le_missing.asking": "正在向裝置要求 LE 金鑰。",
   "ui.pairing.le_missing.not_secure": "與此裝置的連線使用舊的加密方式，無法取得 LE 金鑰。",

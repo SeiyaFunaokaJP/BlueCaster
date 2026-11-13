@@ -522,7 +522,7 @@ below):
 | `devices\device_codecs.json` | What each classic device offered when it last connected (and whether OPPO earbuds were asked for Hi-Res) |
 | `pairing\link_keys.txt` | Link keys: headphones paired with v1 or 2.0.x reconnect without pairing again |
 | `pairing\le_audio_bonds.tlv`, `pairing\le_audio_csip.txt` | LE Audio: LE bonds (with the GATT server's persistent CCC values) and coordinated sets |
-| `pairing\windows_le_keys.txt`, `pairing\replaced_windows_keys.json` | LE keys taken from Windows until a stack with LE adds them; Windows' keys that **Restore original driver** replaced |
+| `pairing\windows_le_keys.txt`, `pairing\replaced_windows_keys.json` | LE keys taken from Windows until a stack adds them; Windows' keys that **Restore original driver** replaced |
 | `adapters\adapter_caps.json` | What a stack learnt about each adapter (LE Audio support, address, HCI version, Windows' name for it) |
 | `adapters\driver\<instance id>.json` | The previous driver of each adapter WinUSB was assigned to |
 | `firmware\` | Firmware files (`*.bin`, `*.hcd`, `ibt-*`; Intel's also in `firmware\intel\`, as linux-firmware lays them out); files earlier versions kept loose in the settings folder are moved there |

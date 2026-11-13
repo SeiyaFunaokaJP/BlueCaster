@@ -1029,7 +1029,6 @@
   "ui.pairing.not_available": "Non disponible",
   "ui.pairing.key_size": "Taille de clé %u",
   "ui.pairing.le_missing.no_stack": "Démarrez le Bluetooth pour voir les clés LE.",
-  "ui.pairing.le_missing.no_le": "Les clés LE ne sont demandées qu'avec LE Audio activé.",
   "ui.pairing.le_missing.not_asked": "BlueCaster demandera les clés LE la prochaine fois qu'il se connectera à cet appareil.",
   "ui.pairing.le_missing.asking": "Demande des clés LE à l'appareil en cours.",
   "ui.pairing.le_missing.not_secure": "La connexion à cet appareil utilise un ancien chiffrement qui ne peut pas donner de clés LE.",
