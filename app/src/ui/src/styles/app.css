@@ -838,7 +838,8 @@ option {
   padding: var(--s3) var(--s4);
   border: 1px solid color-mix(in srgb, var(--st) 55%, transparent);
   border-radius: var(--r-card);
-  background: color-mix(in srgb, var(--st) 9%, var(--surface));
+  /* Only the border carries the colour; a tinted fill broke the theme (#86) */
+  background: var(--surface);
 }
 .banner-info {
   --st: var(--text-3);
@@ -937,7 +938,7 @@ option {
   gap: var(--s2);
 }
 /* The devices Windows loses with the adapter (issue #86): one per line, in
-   a box in the warning colour, with what happens to them */
+   a box outlined in the warning colour, with what happens to them */
 .paired-warn {
   display: flex;
   flex-direction: column;
@@ -945,7 +946,6 @@ option {
   padding: var(--s3);
   border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
   border-radius: var(--r);
-  background: color-mix(in srgb, var(--warn) 10%, transparent);
 }
 /* Every device (issue #86), scrolling when there are many */
 .paired-list {
