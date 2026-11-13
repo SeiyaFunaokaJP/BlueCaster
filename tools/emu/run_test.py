@@ -68,6 +68,8 @@ to mono) over it; the hands-free unit sends a 1.5 kHz tone back (CVSD as PCM,
 mSBC / LC3-SWB as frames encoded by BlueCaster's codecs, voice_frames.py):
   - the audio connection is established with the expected codec (BlueCaster's
     log; the sink's log for the negotiated codec)
+  - the battery level the hands-free unit sends behind AT+XAPL, before the
+    OK to it, is answered OK and shown (70 %)
   - SCO packets in both directions in both HCI captures, at about the air
     rate (CVSD 16-bit: 267/s, transparent: 133/s, each way)
   - the sink received SCO packets: cvsd, with the test tone's 1 kHz in the
@@ -1489,6 +1491,12 @@ def run_voice_case(args, case, port):
         failures.append('bluecaster.log: the voice link never carried audio ("Voice: ..." missing)')
     if re.search(r'Traceback|HFP-HF protocol failed', sink_log):
         failures.append('sink.log: a Python error')
+    # The battery level, sent before the AG's OK to AT+XAPL (hfp_audio.py)
+    m = re.search(r'HFP: battery sent with AT\+XAPL: (.*)', sink_log)
+    if not m or m.group(1).strip() != 'OK OK':
+        failures.append(f'sink.log: AT+XAPL and AT+IPHONEACCEV answered {m.group(1).strip() if m else "never"}, not OK OK')
+    if 'HFP: battery level 6 of 0-9 = 70%' not in bc_log:
+        failures.append('bluecaster.log: no battery level 70 %')
     # Both captures: SCO out (0x08) and in (0x09), at about the air rate for
     # the time the link was up (at least a second of it)
     detail = []
