@@ -12,10 +12,13 @@
 // (issue #86: other ways to the microphone only bring bug reports);
 // Developer > Hide the virtual sound devices warning removes it, green too. About >
 // Third-party software opens the same dialog, the only place that names
-// the cables' origin.
+// the cables' origin. After an update from a version without it, the dialog
+// opens by itself once on the main window (issue #86: the setup, which shows
+// the line, does not run again).
 
-import { createEffect, createSignal, on, onCleanup, Show } from "solid-js";
-import { errorText, useApp } from "../app/context";
+import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
+import { errorText, onAudioDevicesChanged, useApp } from "../app/context";
+import { saveSettings } from "../app/settings";
 import { t } from "../i18n";
 import { IpcError, type AudioDevice, type Settings } from "../ipc/types";
 import { LINKS } from "../lib/links";
@@ -265,5 +268,51 @@ export function CableNotes(props: { devices: readonly AudioDevice[] | null; relo
       </div>
       <CablesDialog open={open()} devices={props.devices} reload={props.reload} onClose={() => setOpen(false)} />
     </Show>
+  );
+}
+
+/** The dialog once by itself after an update (settings.cables_dialog_shown:
+ *  false in a folder set up before it). Both cables installed, or the
+ *  warning hidden in developer mode: nothing to show, it only counts as
+ *  shown. Closed: never again. */
+export function CablesOnce() {
+  const app = useApp();
+  const { core } = app;
+  const [devices, setDevices] = createSignal<AudioDevice[] | null>(null);
+  const [open, setOpen] = createSignal(false);
+  const load = () =>
+    core
+      .request("audio.devices")
+      .then(setDevices)
+      .catch(() => {});
+  const shown = () => void saveSettings(app, { cables_dialog_shown: true });
+  onMount(() => {
+    const s = core.state.snap!.settings;
+    // A first setup shows the line itself
+    if (s.cables_dialog_shown || !s.setup_done) return;
+    if (cableWarningHidden(s)) return shown();
+    core
+      .request("audio.devices")
+      .then((list) => {
+        setDevices(list);
+        if (vbCable(list) !== null && hifiCable(list) !== null) shown();
+        else setOpen(true);
+      })
+      // Not read: next time
+      .catch(() => {});
+  });
+  onAudioDevicesChanged(() => {
+    if (open()) void load();
+  });
+  return (
+    <CablesDialog
+      open={open()}
+      devices={devices()}
+      reload={() => void load()}
+      onClose={() => {
+        setOpen(false);
+        shown();
+      }}
+    />
   );
 }

@@ -921,6 +921,8 @@ function DeviceCodecs(props: {
           matchSource={snap().settings.developer_mode && snap().settings.dev_overrides.match_source}
           sourceFormat={sourceFormat()}
           deviceName={e().name}
+          warnUnlisted={!snap().settings.unlisted_options_warned}
+          onUnlistedWarned={() => void saveSettings(app, { unlisted_options_warned: true })}
           onForgetReport={() => void app.run(() => app.core.request("device.forget_codecs", { address: e().address }))}
           onChange={(values) => {
             pending = values;

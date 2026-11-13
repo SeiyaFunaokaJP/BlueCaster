@@ -1073,6 +1073,12 @@ async function codecSettings(where: HTMLElement, label: string) {
   return screen.findByRole("dialog");
 }
 
+/** The warning before the first unlock of unlisted options: accepted */
+async function acceptUnlock() {
+  const warn = await screen.findByRole("dialog", { name: t("ui.profile.unlisted_warn_title") });
+  fireEvent.click(within(warn).getByRole("button", { name: t("ui.profile.unlisted_warn_accept") }));
+}
+
 describe("codec settings", () => {
   it("offers what the device does not list once its supported options are not the only ones (issue #86)", async () => {
     const { calls } = start("#/codecs", "capped");
@@ -1088,6 +1094,7 @@ describe("codec settings", () => {
     const rates = () => [...rate().options].map((o) => o.textContent);
     expect(rates()).not.toContain(t("ui.profile.sbc_not_offered", "96000 Hz"));
     fireEvent.click(listed);
+    await acceptUnlock();
     await waitFor(() =>
       expect(rates()).toContain(t("ui.profile.sbc_not_offered", "96000 Hz")),
     );
@@ -1152,6 +1159,58 @@ describe("codec settings", () => {
         name: t("ui.profile.codec_options_listed", "moto buds+"),
       }),
     ).toBeNull();
+  });
+
+  it("unlocking unlisted options asks once, for every device and codec (issue #86)", async () => {
+    const { calls, core } = start("#/codecs", "capped");
+    const moto = await section("moto buds+");
+    expect(core.state.snap!.settings.unlisted_options_warned).toBe(false);
+    let dialog = await codecSettings(moto, "codec.lhdc_v5");
+    const listed = () =>
+      within(dialog).getByRole("switch", {
+        name: t("ui.profile.codec_options_listed", "moto buds+"),
+      });
+    const warning = () =>
+      screen.queryByRole("dialog", { name: t("ui.profile.unlisted_warn_title") });
+    const unlocked = () =>
+      saves(calls).some((s) => (s.profile as { unlisted_options?: boolean }).unlisted_options);
+    // Cancel: the switch stays on, nothing saved
+    fireEvent.click(listed());
+    let warn = await screen.findByRole("dialog", { name: t("ui.profile.unlisted_warn_title") });
+    expect(warn).toHaveTextContent(t("ui.profile.unlisted_warn"));
+    expect(listed()).toBeChecked();
+    fireEvent.click(within(warn).getByRole("button", { name: t("modal.cancel") }));
+    await waitFor(() => expect(warning()).toBeNull());
+    expect(listed()).toBeChecked();
+    // Escape closes the warning only, not the codec's settings
+    fireEvent.click(listed());
+    warn = await screen.findByRole("dialog", { name: t("ui.profile.unlisted_warn_title") });
+    fireEvent.keyDown(within(warn).getByRole("button", { name: t("modal.cancel") }), { key: "Escape" });
+    await waitFor(() => expect(warning()).toBeNull());
+    expect(dialog).toBeInTheDocument();
+    expect(listed()).toBeChecked();
+    expect(core.state.snap!.settings.unlisted_options_warned).toBe(false);
+    expect(unlocked()).toBe(false);
+    // Accepted: unlocked and remembered
+    fireEvent.click(listed());
+    warn = await screen.findByRole("dialog", { name: t("ui.profile.unlisted_warn_title") });
+    fireEvent.click(within(warn).getByRole("button", { name: t("ui.profile.unlisted_warn_accept") }));
+    await waitFor(() => expect(listed()).not.toBeChecked());
+    await waitFor(() => expect(core.state.snap!.settings.unlisted_options_warned).toBe(true));
+    await waitFor(() => expect(unlocked()).toBe(true));
+    // On again, then off: no question, nor for another codec
+    fireEvent.click(listed());
+    await waitFor(() => expect(listed()).toBeChecked());
+    fireEvent.click(listed());
+    await waitFor(() => expect(listed()).not.toBeChecked());
+    expect(warning()).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: t("modal.close") }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    dialog = await codecSettings(moto, "codec.aac");
+    expect(listed()).toBeChecked();
+    fireEvent.click(listed());
+    await waitFor(() => expect(listed()).not.toBeChecked());
+    expect(warning()).toBeNull();
   });
 
   it("other codecs keep what the device reported", async () => {
@@ -1502,6 +1561,7 @@ describe("each codec card keeps its own settings (issue #86: aptX Adaptive's lea
     dialog = await codecSettings(earfun, "codec.aptx_adaptive_ll");
     expect(rate(dialog)).toHaveTextContent("48000 Hz");
     fireEvent.click(listed(dialog));
+    await acceptUnlock();
     await close(dialog);
     await waitFor(() =>
       expect(saves(calls).at(-1)!.profile).toMatchObject({

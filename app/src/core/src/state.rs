@@ -339,6 +339,8 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
         auto_reconnect: s.auto_reconnect,
         vb_cable_note_hidden: s.vb_cable_note_hidden,
         hifi_cable_note_hidden: s.hifi_cable_note_hidden,
+        cables_dialog_shown: s.cables_dialog_shown,
+        unlisted_options_warned: s.unlisted_options_warned,
         volume_sync: s.volume_sync,
         mute_output: s.mute_output,
         volume_mixer: s.volume_mixer,
@@ -438,6 +440,8 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
     c.auto_reconnect = s.auto_reconnect;
     c.vb_cable_note_hidden = s.vb_cable_note_hidden;
     c.hifi_cable_note_hidden = s.hifi_cable_note_hidden;
+    c.cables_dialog_shown = s.cables_dialog_shown;
+    c.unlisted_options_warned = s.unlisted_options_warned;
     c.volume_sync = s.volume_sync;
     c.mute_output = s.mute_output;
     c.volume_mixer = s.volume_mixer;

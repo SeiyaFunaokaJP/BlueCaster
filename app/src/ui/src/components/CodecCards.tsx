@@ -8,7 +8,7 @@
 // device listed them when it last connected (issue #86: its rates, bit
 // depths, largest bit rate and bitpool range).
 
-import { createEffect, on, Show } from "solid-js";
+import { createEffect, createSignal, on, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 import { t } from "../i18n";
 import type { Profile } from "../ipc/types";
@@ -336,6 +336,10 @@ export function CodecSettings(props: {
   /** Forgets what the device listed (LHDC V5: OPPO earbuds are then asked
    *  for Hi-Res again, issue #237) */
   onForgetReport?: () => void;
+  /** Turning "Show only supported options" off asks first (until accepted
+   *  once, for every device and codec: onUnlistedWarned) */
+  warnUnlisted?: boolean;
+  onUnlistedWarned?: () => void;
   onChange: (values: CodecChoice) => void;
   onClose: () => void;
 }) {
@@ -515,6 +519,12 @@ export function CodecSettings(props: {
     setV(fitted({ ...v, unlisted_options: on }));
     changed();
   };
+  // Asked before the first unlock (issue #86: a device may reboot or break)
+  const [warning, setWarning] = createSignal(false);
+  const toggleListed = (on: boolean) => {
+    if (!on && props.warnUnlisted) setWarning(true);
+    else setUnlisted(!on);
+  };
   return (
     <Dialog
       open={props.spec !== null}
@@ -528,8 +538,24 @@ export function CodecSettings(props: {
           <Toggle
             label={t("ui.profile.codec_options_listed", props.deviceName!)}
             checked={!v.unlisted_options}
-            onChange={(on) => setUnlisted(!on)}
+            controlled
+            onChange={toggleListed}
           />
+          <Dialog
+            open={warning()}
+            title={t("ui.profile.unlisted_warn_title")}
+            warn
+            confirm={t("ui.profile.unlisted_warn_accept")}
+            cancel={t("modal.cancel")}
+            onConfirm={() => {
+              setWarning(false);
+              props.onUnlistedWarned?.();
+              setUnlisted(true);
+            }}
+            onCancel={() => setWarning(false)}
+          >
+            <p>{t("ui.profile.unlisted_warn")}</p>
+          </Dialog>
         </Show>
         {/* SBC and SBC XQ: the bitpool below decides the bit rate, shown
             here as worked out (issue #86) */}
