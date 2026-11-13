@@ -305,13 +305,13 @@ NEGOTIATION = {
     'oppo-never': ('lhdcv5', OPPO_SINK + ['--oppo', 'off'], 'lhdcv5', OPPO_NAME),
     # (earbuds that keep their limit: each stream asks, gains nothing, undoes it)
     'oppo-every-connection': ('lhdcv5', OPPO_SINK + ['--oppo', 'off', '--oppo-no-change'], 'lhdcv5', OPPO_TWICE),
-    # LE keys derived from the link key (issue #86; LE Audio on,
-    # DEV_SETTINGS): asked after pairing, and the sink's LTK, IRK and
+    # LE keys derived from the link key (issue #86; DEV_SETTINGS): asked
+    # after pairing, and the sink's LTK, IRK and
     # identity address kept (CTKD_CASES); the next connection, from a sink
     # that lists SMP over BR/EDR only from then on; none from a sink without
     # it, one that refuses or one that never answers; with developer mode
-    # off too (one pairing for both kinds), none with LE Audio off; the
-    # stream as always
+    # off or LE Audio off too (the keys do not depend on LE Audio: SM
+    # alone, nothing of LE Audio set up); the stream as always
     'ctkd': ('sbc', CTKD_SINK, 'sbc', ['--sessions', '2']),
     'ctkd-next-connection': ('sbc', CTKD_SINK + ['--ctkd-from', '2', '--ctkd-public-identity'], 'sbc',
                              ['--sessions', '3']),
@@ -402,12 +402,15 @@ LOG_CHECKS = {
                     # NoAnswer after SM's 30 s (--duration 35), else the link ends
                     # first and the next connection asks again (NotAsked)
                     ('bluecaster.log', f'CTKD: no LE keys from {SINK_ADDRESS} (', 1)],
-    'ctkd-developer-off': [('bluecaster.log', CTKD_GIVEN, 1), ('sink.log', 'CTKD: keys LTK', 1)],
-    'ctkd-le-off': [('sink.log', 'SMP over BR/EDR listed', True), ('sink.log', 'CTKD:', False),
-                    ('bluecaster.log', CTKD_GIVEN, False)],
+    'ctkd-developer-off': [('bluecaster.log', CTKD_GIVEN, 1), ('sink.log', 'CTKD: keys LTK', 1),
+                           ('bluecaster.log', 'LE keys: initializing', True),
+                           ('bluecaster.log', 'LE Audio: initializing', False)],
+    'ctkd-le-off': [('bluecaster.log', CTKD_GIVEN, 1), ('sink.log', 'CTKD: keys LTK', 1),
+                    ('bluecaster.log', 'LE keys: initializing', True),
+                    ('bluecaster.log', 'LE Audio: initializing', False)],
 }
 # Cases whose LE keys BlueCaster keeps must equal the sink's (ctkd_check)
-CTKD_CASES = {'ctkd', 'ctkd-next-connection', 'ctkd-developer-off'}
+CTKD_CASES = {'ctkd', 'ctkd-next-connection', 'ctkd-developer-off', 'ctkd-le-off'}
 TONES = ((1000.0, 0.5), (1500.0, 0.5))  # (frequency, amplitude) per channel, as --test-tone
 LATE_SDU_FAILURE = 'reached the controller after their SDU interval began'  # LE Audio cases run once more
 

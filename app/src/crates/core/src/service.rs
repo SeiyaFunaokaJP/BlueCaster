@@ -552,6 +552,12 @@ impl Inner {
         crate::adapter::configure(&mut c, &s, &self.opts.config_dir);
         let cli = self.le_cli.lock().unwrap_or_else(|e| e.into_inner()).clone();
         c.le_audio = le_config(le_on, cli.as_ref(), &self.opts);
+        // The LE keys of classic devices do not depend on LE Audio (issue
+        // #86: Windows and Linux get them of headphones without it)
+        c.le_keys = Some(bt_host::LeKeysConfig {
+            bonds_file: crate::paths::le_bonds_file(&self.opts.config_dir),
+            imported_bonds_file: Some(crate::paths::windows_le_keys_file(&self.opts.config_dir)),
+        });
         c.battery = true;
         // Headset microphone: the session's request, or the developer
         // CLI's --headset-mic-toggle

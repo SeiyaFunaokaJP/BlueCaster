@@ -3,4 +3,4 @@
 /**
  * Why BlueCaster has no LE keys of a classic device (issue #86)
  */
-export type LeKeysMissing = "no_stack" | "no_le" | "not_asked" | "asking" | "not_secure" | "device_led" | "no_support" | "refused" | "no_answer" | "none_given";
+export type LeKeysMissing = "no_stack" | "not_asked" | "asking" | "not_secure" | "device_led" | "no_support" | "refused" | "no_answer" | "none_given";

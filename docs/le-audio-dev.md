@@ -13,9 +13,9 @@ session and WinUSB adapter as A2DP. It is used only for a
 device's LE Audio entry (or `--le-audio` in CLI mode), and since issue #86
 only in developer mode (`Settings::le_audio`: the setting and `debug_mode`;
 the Adapters switch is shown only there). `le_audio_experimental`
-in `settings.json` (on by default, no switch in the window) turns the LE side
-off altogether. With the setting off none of the LE code runs and HCI init is that of a build
-without LE (see "LE Audio off"). It has only been verified against the Bumble
+in `settings.json` (on by default, no switch in the window) turns LE Audio
+off altogether. With the setting off only SM and the bonds file are set up, for the LE keys
+of classic devices (see "LE Audio off"). It has only been verified against the Bumble
 emulator (`tools/emu`), not yet with real headphones or a real 5.2
 controller.
 
@@ -90,7 +90,8 @@ the GATT client or the GATT server runs on the **BTstack thread**, through an
 
 1. `HostConfig.le_audio = Some(LeConfig { bond_dir, media, ccp_sim,
    ccp_console })` (the service sets it from the setting, or from `--le-audio`;
-   None = LE hidden). LE is unhidden before `hci_init`.
+   None = no LE Audio: `HostConfig.le_keys` then sets up SM and the bonds file
+   alone). LE is unhidden before `hci_init`.
 2. Stack init (BTstack thread, after the classic endpoints): LE bond TLV,
    `le_device_db_tlv`, SM (Secure Connections, bonding, Just Works), GATT
    client, HCI / SM / ISO handlers, the modules (`modules::create_all`, once
@@ -567,19 +568,25 @@ Real hardware: not tried.
 
 ## LE Audio off
 
-Users with the setting off get the behaviour of a build without LE:
+Users with the setting off get no LE Audio. LE itself stays up for the LE
+keys of classic devices (issue #86):
 
-- **HCI init.** BTstack is always built with LE and would set it up on any
-  dual-mode controller. With LE hidden (the default of every run;
-  `Stack::set_le_hidden(false)` only when `HostConfig.le_audio` is Some),
+- **LE keys.** The service always sets `HostConfig.le_keys`, so LE is not
+  hidden and HCI init is BTstack's for a dual-mode controller, as with LE
+  Audio on. `Stack::le_init` then sets up the bonds file and SM; the LE
+  core, its modules and the GATT server do not exist. A classic pairing
+  brings the device's LE keys (`btstack-sys/src/ctkd.rs`), as with Windows
+  and Linux, which get them of headphones without LE Audio too. Forgetting
+  the device forgets them (`BtHost::forget_link_key`). Emulator cases
+  `ctkd-developer-off` and `ctkd-le-off`.
+- **LE hidden.** A BtHost with neither `le_keys` nor `le_audio` (tests,
+  tools) keeps LE hidden, the default of every run:
   `btstack-sys/src/transport.rs` clears LE Supported (Controller) in Read
   Local Supported Features and the LE command bits BTstack looks up in Read
   Local Supported Commands, so BTstack skips all LE setup; LE commands it
   still sends (LE Set Scan Parameters, whose flag cannot be cleared from
   outside) are answered by the transport with Unknown HCI Command and never
-  reach the controller. The emulator's A2DP set sends the same HCI commands
-  as a build without LE, except that LE Set Scan Parameters is answered
-  locally.
+  reach the controller.
 - **Toggling the setting** takes effect when BTstack starts: an idle stack
   is stopped at once; while streaming or scanning the change waits for the
   next scan or connection (`Service::le_audio_deferred()`; the UI shows v1's

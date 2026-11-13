@@ -7,8 +7,9 @@
 //! identity address (le_device_db, the bond TLV file); which classic device
 //! a bond came from is kept beside it in the same file (one tag per bond).
 //!
-//! Runs only while [`set_ctkd`] is on (always, since issue #86) and SM is set up (LE
-//! Audio on, [`Stack::le_init`]): after a new pairing, and on a connection
+//! Runs only while [`set_ctkd`] is on (always, since issue #86) and SM is set up
+//! ([`Stack::le_init`]; bt-host does that with and without LE Audio, as the
+//! keys do not depend on it): after a new pairing, and on a connection
 //! of a device without keys from it yet (once per device and run). A device
 //! that does not list the channel is not asked; one that refuses, or does
 //! not answer (SM's 30 s timeout), keeps its classic link as it is.
@@ -39,7 +40,7 @@ thread_local! {
 /// available" alone did not say)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CtkdOutcome {
-    /// SM is not set up (LE Audio off), so nothing is asked
+    /// SM is not set up, so nothing is asked
     NoLe,
     /// Not asked during this run yet (no connection since)
     NotAsked,
@@ -166,6 +167,27 @@ impl Stack {
         })
     }
 
+    /// Forgets the LE keys derived from the classic device `addr`'s link
+    /// key (its bond and the note of where it came from). False without one.
+    pub fn delete_le_keys_of_classic(&self, addr: &[u8; 6]) -> bool {
+        if !self.le_initialized() {
+            return false;
+        }
+        let Some(index) = (0..self.le_device_db_max_count())
+            .find(|&i| self.tlv_get(tag(i)).is_some_and(|v| v.len() == MAPPING_LEN && v[..6] == addr[..]))
+        else {
+            return false;
+        };
+        let entry = self.le_device_db_info(index);
+        self.tlv_delete(tag(index));
+        if let Some(e) = entry {
+            self.le_delete_bonding(e.addr_type, &e.addr);
+        }
+        OUTCOMES.with(|o| o.borrow_mut().retain(|(a, _)| a != addr));
+        ASKED.with(|a| a.borrow_mut().retain(|a| a != addr));
+        true
+    }
+
     /// The LE keys of the classic device `addr`, else why there are none
     pub fn le_keys_or_why(&self, addr: &[u8; 6]) -> Result<LeKeys, CtkdOutcome> {
         if !self.le_initialized() {
@@ -248,7 +270,7 @@ pub enum LeBondAdded {
     Added,
     /// The device has LE keys already
     Kept,
-    /// SM is not set up (LE Audio off)
+    /// SM is not set up
     NoLe,
     Failed,
 }

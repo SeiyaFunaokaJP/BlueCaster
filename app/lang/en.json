@@ -1030,7 +1030,6 @@
   "ui.pairing.not_available": "Not available",
   "ui.pairing.key_size": "Key Size %u",
   "ui.pairing.le_missing.no_stack": "Start Bluetooth to see the LE keys.",
-  "ui.pairing.le_missing.no_le": "LE keys are asked for only with LE Audio on.",
   "ui.pairing.le_missing.not_asked": "BlueCaster asks for the LE keys the next time it connects to this device.",
   "ui.pairing.le_missing.asking": "Asking the device for its LE keys.",
   "ui.pairing.le_missing.not_secure": "This device's connection uses older encryption, which cannot give LE keys.",

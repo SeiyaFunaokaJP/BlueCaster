@@ -187,8 +187,13 @@ pub struct HostConfig {
     pub media_payload_limit: u16,
     pub capture: HciCapture,
     pub afh: Option<Box<dyn AfhSource>>,
-    /// LE Audio (experimental); None: LE stays off and hidden
+    /// LE Audio (developer mode); None: no LE Audio
     pub le_audio: Option<LeConfig>,
+    /// The LE keys of classic devices, kept without LE Audio too (issue
+    /// #86, as Windows and Linux keep them): SM and the bonds file alone,
+    /// nothing else of LE. Not used with `le_audio`, which sets up its own.
+    /// Both None: LE stays off and hidden.
+    pub le_keys: Option<LeKeysConfig>,
     /// Headphone battery level: an HFP audio gateway that only makes the
     /// service level connection, where the headphones report it (and the LE
     /// Battery Service). Off: no HFP at all.
@@ -203,6 +208,16 @@ pub struct HostConfig {
     pub on_loader: Option<bringup::LoaderHook>,
     /// The adapter's Bluetooth name, as headphones show it ([`local_name`])
     pub local_name: String,
+}
+
+/// See [`HostConfig::le_keys`]
+#[derive(Debug, Clone)]
+pub struct LeKeysConfig {
+    /// The LE bonds, le_audio_bonds.tlv (LE Audio's file: the same bonds)
+    pub bonds_file: PathBuf,
+    /// LE keys taken from Windows that wait for a stack ([`le_import`]),
+    /// added once the bonds file is open
+    pub imported_bonds_file: Option<PathBuf>,
 }
 
 /// The name without a computer name
@@ -244,6 +259,7 @@ impl HostConfig {
             capture: HciCapture::new(),
             afh: None,
             le_audio: None,
+            le_keys: None,
             battery: false,
             voice: false,
             on_loader: None,
@@ -584,6 +600,7 @@ impl BtHost {
                         capture,
                         afh,
                         le_audio,
+                        le_keys,
                         battery,
                         voice,
                         on_loader,
@@ -591,9 +608,10 @@ impl BtHost {
                     } = config;
                     let failed_shared = shared.clone();
                     let result = btstack_sys::run(move |stack, remote| {
-                        // LE Audio: the controller's LE support visible to
-                        // BTstack (before hci_init / the transport)
-                        if le_audio.is_some() {
+                        // LE Audio, or the LE keys of classic devices (SM):
+                        // the controller's LE support visible to BTstack
+                        // (before hci_init / the transport)
+                        if le_audio.is_some() || le_keys.is_some() {
                             stack.set_le_hidden(false);
                         }
                         // HFP audio: HCI init's SCO commands (flow control,
@@ -632,6 +650,7 @@ impl BtHost {
                             on_loader,
                             probe,
                             local_name,
+                            le_keys,
                         };
                         let mut app = HostApp::new(
                             shared,
@@ -1682,7 +1701,16 @@ impl BtHost {
     /// device can no longer connect by itself. False when the stack did not
     /// answer.
     pub fn forget_link_key(&self, addr: [u8; 6]) -> bool {
-        self.call(Duration::from_secs(2), move |_, s| s.drop_link_key(&addr)).is_some()
+        // Without LE Audio the LE keys derived from the link key go with it
+        // (with it they are the LE Audio device's bond, forgotten there)
+        let le_keys_too = !self.le_on;
+        self.call(Duration::from_secs(2), move |_, s| {
+            s.drop_link_key(&addr);
+            if le_keys_too {
+                s.delete_le_keys_of_classic(&addr);
+            }
+        })
+        .is_some()
     }
 
     /// Stores a link key in the running stack and its file (one taken from

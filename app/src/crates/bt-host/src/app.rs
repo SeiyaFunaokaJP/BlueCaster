@@ -87,6 +87,8 @@ pub(crate) struct Setup {
     pub probe: Option<mpsc::Sender<ProbeReport>>,
     /// HostConfig::local_name
     pub local_name: String,
+    /// HostConfig::le_keys
+    pub le_keys: Option<crate::LeKeysConfig>,
 }
 
 /// LMP subversions Realtek chips report while running their ROM code,
@@ -605,10 +607,17 @@ impl HostApp {
             stack.hfp_ag_init(self.setup.voice);
             self.voice.on_ag_init();
         }
-        // LE Audio (experimental, off by default): SM, GATT client / server,
-        // ISO. Nothing of it runs while the setting is off.
+        // LE Audio (developer mode): SM, GATT client / server, ISO. Without
+        // it only SM and the bonds file, for the LE keys of classic devices
+        // (issue #86); nothing of LE Audio runs then.
         if let Some(le) = self.le.as_mut() {
             le.stack_init(stack);
+        } else if let Some(keys) = self.setup.le_keys.as_ref().filter(|_| !stack.le_initialized()) {
+            tracing::info!("LE keys: initializing (SM, bonds)");
+            stack.le_init(Box::new(crate::le_bond_file::TlvFile::open(&keys.bonds_file)));
+            if let Some(imported) = keys.imported_bonds_file.as_deref() {
+                crate::le_import::apply(stack, imported);
+            }
         }
         // The Realtek driver sends vendor commands before HCI Reset (reading
         // the LMP subversion); without custom pre-init that step runs in the
