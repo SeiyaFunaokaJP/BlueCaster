@@ -83,6 +83,28 @@ lc3swb-msbc / lc3swb-cvsd: the hands-free unit offers LC3-SWB, BlueCaster is
 given --voice-codec msbc / cvsd (the call codec chosen with Auto-select off):
 the link must come up with that codec instead.
 Outputs go to tools/emu/out/voice-<case>/.
+
+    python tools/emu/run_test.py --le-pairing [link-key link-key-ct2 no-link-key replaces-classic drops-authenticated]
+
+runs the dual-mode pairing cases instead (issue #86): one emu_sink.py
+(--dual-mode --le-audio-adv --check-link-key) for several bluecaster-core runs
+with the same settings folder, LE ones (--le-audio: pairs over LE, then ends
+with an error, as the sink has no LE Audio services) and classic ones (A2DP
+SBC). The sink pairs over LE with LinkKey in its key distribution or not
+(--le-link-key on / off; link-key-ct2: h7) and authenticates a classic link
+only with the link key it has for BlueCaster:
+  - link-key: after the LE pairing BlueCaster's link_keys.txt holds the key
+    the sink derived (type 7), and the classic connection authenticates with
+    it, without pairing
+  - no-link-key: no link key after the LE pairing; the classic connection
+    pairs
+  - replaces-classic: an older (unauthenticated) link key, then an LE
+    pairing with LinkKey: the derived key replaces it and authenticates the
+    next classic connection
+  - drops-authenticated: a classic pairing (authenticated), then an LE
+    pairing with LinkKey (Just Works): the older key is dropped, not
+    replaced, and the next classic connection pairs
+Outputs go to tools/emu/out/lepair-<case>/.
 """
 
 import argparse
@@ -1067,6 +1089,161 @@ LINK_CASES = {
         ('bluecaster.log', r'stream configuration timed out', False),
     ]),
 }
+# Dual-mode pairing cases (issue #86): sink options, BlueCaster runs ('le' or
+# 'classic'), whether the last LE pairing leaves a link key, and patterns
+# counted in bluecaster-<n>-<run>.log (n from 1) / sink.log
+LE_PAIRING_SINK = ['--codecs', 'sbc', '--dual-mode', '--le-audio-adv', '--check-link-key', '--log-level', 'INFO']
+LE_STORED = 'LE pairing: BR/EDR link key derived and stored'
+CLASSIC_PAIRED = f'new link key from pairing with {SINK_ADDRESS}'
+SINK_AUTHENTICATED = 'link key: authenticated with the key the sink has'
+LE_PAIRING_CASES = {
+    'link-key': (['--le-link-key', 'on'], ['le', 'classic'], True, [
+        ('bluecaster-1-le.log', LE_STORED, 1),
+        ('bluecaster-1-le.log', 'h6 key', True),
+        ('bluecaster-2-classic.log', CLASSIC_PAIRED, 0),
+        ('bluecaster-2-classic.log', 'streaming started', True),
+        ('sink.log', SINK_AUTHENTICATED, 1),
+        ('sink.log', 'authentication failed', 0),
+    ]),
+    'link-key-ct2': (['--le-link-key', 'on', '--le-ct2'], ['le', 'classic'], True, [
+        ('bluecaster-1-le.log', LE_STORED, 1),
+        ('bluecaster-1-le.log', 'h7 key', True),
+        ('bluecaster-2-classic.log', CLASSIC_PAIRED, 0),
+        ('bluecaster-2-classic.log', 'streaming started', True),
+        ('sink.log', SINK_AUTHENTICATED, 1),
+        ('sink.log', 'authentication failed', 0),
+    ]),
+    'no-link-key': (['--le-link-key', 'off'], ['le', 'classic'], False, [
+        ('bluecaster-1-le.log', 'LE pairing: BR/EDR link key not derived (the device does not distribute one)', 1),
+        ('bluecaster-1-le.log', 'link keys: stored', 0),
+        ('bluecaster-2-classic.log', CLASSIC_PAIRED, 1),
+        ('bluecaster-2-classic.log', 'streaming started', True),
+        ('sink.log', 'LE pairing: link key -', 1),
+        ('sink.log', 'authentication failed', 0),
+    ]),
+    # An older unauthenticated key ('seed': written as Windows' keys are
+    # taken over, type 4) is replaced by the derived one
+    'replaces-classic': (['--le-link-key', 'on'], ['seed', 'le', 'classic'], True, [
+        ('bluecaster-2-le.log', 'LE pairing: BR/EDR link key derived and stored in place of the older one', 1),
+        ('bluecaster-3-classic.log', CLASSIC_PAIRED, 0),
+        ('bluecaster-3-classic.log', 'streaming started', True),
+        ('sink.log', SINK_AUTHENTICATED, 1),
+        ('sink.log', 'authentication failed', 0),
+    ]),
+    # An authenticated key (the emulated classic pairing always makes one)
+    # is not replaced by an unauthenticated derived one (Just Works over
+    # LE) but dropped: the classic side pairs again. Without SMP over BR/EDR
+    # the classic pairing gives no LE keys, so the LE run pairs anew.
+    'drops-authenticated': (['--le-link-key', 'on', '--no-smp-br-edr'], ['classic', 'le', 'classic'], None, [
+        ('bluecaster-1-classic.log', CLASSIC_PAIRED, 1),
+        ('bluecaster-2-le.log', 'the older authenticated one dropped, the classic side pairs again', 1),
+        ('bluecaster-3-classic.log', CLASSIC_PAIRED, 1),
+        ('bluecaster-3-classic.log', 'streaming started', True),
+        ('sink.log', 'authentication failed', 0),
+    ]),
+}
+# A link key taken over from Windows (pairing.rs WINDOWS_KEY_TYPE)
+SEEDED_KEY = ('00112233445566778899aabbccddeeff', 4)
+
+
+def link_keys_of(config):
+    """BlueCaster's link_keys.txt as {address: (key hex, type)}"""
+    keys = {}
+    for line in read_secret(os.path.join(config, 'pairing', 'link_keys.txt')).decode().splitlines():
+        parts = line.split()
+        if len(parts) == 3 and not line.startswith('#'):
+            keys[parts[0].replace('-', ':')] = (parts[1].lower(), int(parts[2]))
+    return keys
+
+
+def run_le_pairing_case(args, case, port):
+    """One sink, several bluecaster-core runs: the link key an LE pairing
+    leaves is the one the sink derived, and a classic link authenticates
+    with it."""
+    sink_args, runs, derived, checks = LE_PAIRING_CASES[case]
+    out = os.path.join(args.out, 'lepair-' + case)
+    shutil.rmtree(out, ignore_errors=True)
+    os.makedirs(out)
+    config = os.path.join(out, 'config')
+    failures, keys_after = [], []
+    port = free_port(port)
+    sink = start_sink(port, os.path.join(out, 'sink.pklg'), os.path.join(out, 'sink.log'),
+                      extra=LE_PAIRING_SINK + sink_args)
+    try:
+        env = dict(os.environ, BLUECASTER_CONFIG_DIR=config, BLUECASTER_LOG='debug')
+        for n, kind in enumerate(runs, 1):
+            if kind == 'seed':
+                # Plain text, as older builds wrote it (read and encrypted)
+                os.makedirs(os.path.join(config, 'pairing'), exist_ok=True)
+                with open(os.path.join(config, 'pairing', 'link_keys.txt'), 'w', encoding='utf-8') as f:
+                    f.write(f'{SINK_ADDRESS.replace(":", "-")} {SEEDED_KEY[0]} {SEEDED_KEY[1]}\n')
+                keys_after.append(link_keys_of(config))
+                continue
+            cmd = [args.bluecaster, '--cli', '--hci-tcp', f'127.0.0.1:{port}', '-d', SINK_ADDRESS, '--test-tone',
+                   '--duration', '3', '--hci-capture', os.path.join(out, f'bluecaster-{n}-{kind}.pklg')]
+            cmd += ['--le-audio'] if kind == 'le' else ['-c', 'sbc']
+            with open(os.path.join(out, f'bluecaster-{n}-{kind}.log'), 'w', encoding='utf-8', errors='replace') as log:
+                try:
+                    rc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, env=env, timeout=120).returncode
+                except subprocess.TimeoutExpired:
+                    rc = 'timeout'
+            # An LE run ends with an error (no LE Audio services), after pairing
+            if kind == 'classic' and rc != 0:
+                failures.append(f'run {n} ({kind}): BlueCaster exited with {rc}')
+            if kind == 'le' and rc == 'timeout':
+                failures.append(f'run {n} ({kind}): timeout')
+            keys_after.append(link_keys_of(config))
+    finally:
+        sink.terminate()
+        sink.wait(10)
+    for name, text, present in checks:
+        found = read_text(os.path.join(out, name)).count(text)
+        if isinstance(present, bool) and (found > 0) != present:
+            failures.append(f'{name}: "{text}" {"missing" if present else "found"}')
+        elif not isinstance(present, bool) and found != present:
+            failures.append(f'{name}: "{text}" {found} times, not {present}')
+    # The key after the (last) LE pairing: the sink's derived one; none (the
+    # one from before, unchanged); derived None: dropped
+    le_run = max(i for i, k in enumerate(runs) if k == 'le')
+    sink_keys = re.findall(r'LE pairing: link key ([0-9a-f]{32}|-)', read_text(os.path.join(out, 'sink.log')))
+    kept = keys_after[le_run].get(SINK_ADDRESS)
+    before = keys_after[le_run - 1].get(SINK_ADDRESS) if le_run > 0 else None
+    if not sink_keys:
+        failures.append('sink.log: no LE pairing')
+    elif derived is None:
+        if before is None or kept is not None:
+            failures.append(f'the older key {before} not dropped: {kept}')
+    elif derived:
+        if kept != (sink_keys[-1], 7):
+            failures.append(f'after the LE pairing BlueCaster keeps {kept}, the sink derived {sink_keys[-1]} (type 7)')
+        if before is not None and kept is not None and before[0] == kept[0]:
+            failures.append('the classic key was not replaced')
+    elif sink_keys[-1] != '-' or kept != before:
+        failures.append(f'a link key without LinkKey: sink {sink_keys[-1]}, BlueCaster {kept} (before {before})')
+    others = {a for keys in keys_after for a in keys} - {SINK_ADDRESS}
+    if others:
+        failures.append(f'link keys of {len(others)} other address(es)')
+    return failures, f'link key after the LE pairing: {"stored" if kept else "none"}'
+
+
+def main_le_pairing(args):
+    wanted = args.le_pairing or list(LE_PAIRING_CASES)
+    unknown = [n for n in wanted if n not in LE_PAIRING_CASES]
+    if unknown:
+        sys.exit(f'Unknown LE pairing case(s) {unknown}; known: {list(LE_PAIRING_CASES)}')
+    results = []
+    for index, case in enumerate(wanted):
+        print(f'--- le-pairing {case} ...', flush=True)
+        failures, detail = run_le_pairing_case(args, case, args.base_port + 500 + index)
+        results.append((case, failures))
+        print(f'    {"PASS" if not failures else "FAIL"}  {detail}')
+        for failure in failures:
+            print(f'      - {failure}')
+    passed = sum(1 for _, f in results if not f)
+    print(f'\n{passed}/{len(results)} LE pairing cases passed. Details: {args.out}')
+    sys.exit(0 if passed == len(results) else 1)
+
+
 LOG_TIME =re.compile(r'(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3})')
 
 
@@ -1438,6 +1615,9 @@ def main():
                         help=f'run the link cases instead ({", ".join(LINK_CASES)}; default: all of them)')
     parser.add_argument('--voice', nargs='*', metavar='CASE',
                         help=f'run the HFP audio cases instead ({", ".join(VOICE_CASES)}; default: all of them)')
+    parser.add_argument('--le-pairing', nargs='*', metavar='CASE',
+                        help=f'run the dual-mode pairing cases instead ({", ".join(LE_PAIRING_CASES)}; '
+                             'default: all of them)')
     parser.add_argument('--duration', type=int, default=5, help='seconds of streaming per codec')
     parser.add_argument('--max-packet', type=int, help='passed to BlueCaster --max-packet (default: its own)')
     parser.add_argument('--build-dir', default=os.path.join(REPO, 'build'),
@@ -1454,7 +1634,7 @@ def main():
     for path, hint in ((VENV_PYTHON, 'run: python tools/emu/setup_env.py'),
                        (args.bluecaster, 'build BlueCaster'), (args.decoder, 'build bluecaster_decode')):
         voice_decodes = args.voice is not None and any(c.endswith('-roundtrip') for c in args.voice or VOICE_CASES)
-        if path == args.decoder and (args.scan is not None or args.link is not None
+        if path == args.decoder and (args.scan is not None or args.link is not None or args.le_pairing is not None
                                      or (args.voice is not None and not voice_decodes)):
             continue  # a scan streams nothing, a link or voice case decodes nothing (but a round trip)
         if not os.path.exists(path):
@@ -1467,6 +1647,8 @@ def main():
         main_link(args)
     if args.voice is not None:
         main_voice(args)
+    if args.le_pairing is not None:
+        main_le_pairing(args)
 
     results = []
     for index, codec in enumerate(args.codecs):

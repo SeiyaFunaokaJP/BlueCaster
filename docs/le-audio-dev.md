@@ -613,6 +613,20 @@ keys of classic devices (issue #86):
   kind (`state.rs` `le_switched_profile`, an LE profile made from the
   classic one when missing). CTKD runs whenever SM is up, not only in
   developer mode, so a classic pairing brings the LE keys.
+- **Link key from an LE pairing.** The other way round, an LE pairing (the
+  LE Audio entry) brings the link key (issue #86): SM offers LinkKey and
+  CT2, and derives the BR/EDR link key (h6, or h7 with CT2 on both sides)
+  only when the device's Pairing Response carries LinkKey in both key
+  distributions, so the device derives the same key. `ctkd.rs`
+  (`bluecaster_rs_ctkd_from_le`) keeps it in `link_keys.txt` under a public
+  identity address only (type 7 or 8), replacing an older key: the device
+  replaced it too. An authenticated older key is dropped instead of being
+  replaced by an unauthenticated one (BLURtooth). Developer mode's Pairing
+  keys then show it for the LE Audio entry; forgetting the LE Audio entry
+  drops it unless the classic entry stays saved. The log has one `LE
+  pairing: BR/EDR link key ...` line per bonding, without an address.
+  Emulator cases `run_test.py --le-pairing` (one dual-mode sink, LE then
+  classic runs; the sink authenticates only with the key it derived).
 - **Conversational contexts.** With the microphone, the sink ASEs name the
   source contexts alone (Conversational), not Media | Conversational: EarFun
   earbuds answered that Enable with Rejected Metadata. A conversational

@@ -1713,6 +1713,13 @@ impl BtHost {
         .is_some()
     }
 
+    /// Drops `addr`'s link key alone from the running stack and its file
+    /// (one from an LE pairing, issue #86). False when the stack did not
+    /// answer.
+    pub fn forget_link_key_only(&self, addr: [u8; 6]) -> bool {
+        self.call(Duration::from_secs(2), move |_, s| s.drop_link_key(&addr)).is_some()
+    }
+
     /// Stores a link key in the running stack and its file (one taken from
     /// Windows): the device connects with it from then on. False when the
     /// stack did not answer.

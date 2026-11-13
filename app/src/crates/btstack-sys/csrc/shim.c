@@ -90,6 +90,11 @@ int bluecaster_ctkd_enabled(void) { return bluecaster_rs_ctkd_enabled(); }
 int bluecaster_ctkd_wanted(const unsigned char *addr) { return bluecaster_rs_ctkd_wanted(addr); }
 void bluecaster_rs_ctkd_note(const uint8_t *addr, int what);
 void bluecaster_ctkd_note(const unsigned char *addr, int what) { bluecaster_rs_ctkd_note(addr, what); }
+void bluecaster_rs_ctkd_from_le(int why, int addr_type, const uint8_t *addr, const uint8_t *key, int key_type);
+void bluecaster_ctkd_from_le(int why, int addr_type, const unsigned char *addr, const unsigned char *key,
+                             int key_type) {
+    bluecaster_rs_ctkd_from_le(why, addr_type, addr, key, key_type);
+}
 
 static void cig_slot_release(uint8_t cig_id);
 
