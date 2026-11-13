@@ -208,6 +208,7 @@ export function CablesDialog(props: {
             <li>{t("cables.reason_features")}</li>
           </ul>
         </div>
+        <hr class="cable-rule" />
         <CableRow
           name="VB-CABLE"
           origin={t("vbcable.origin")}

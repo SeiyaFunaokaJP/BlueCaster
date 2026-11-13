@@ -558,7 +558,7 @@ export function DevicePicker(props: {
       <Show when={props.paired && pairedList().length > 0}>
         <section class="paired-devices" aria-labelledby={`${uid}-paired`}>
           <h3 id={`${uid}-paired`}>{t("ui.setup.paired_title")}</h3>
-          <div class="device-list saved-devices">
+          <div class="device-list">
             <For each={pairedList()}>{(d, i) => row(d, i, "p")}</For>
           </div>
         </section>
