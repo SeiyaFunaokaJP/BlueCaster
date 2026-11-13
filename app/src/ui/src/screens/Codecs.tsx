@@ -762,8 +762,9 @@ function DeviceCodecs(props: {
       aria-busy={busy() || ordering() ? "true" : undefined}
     >
       <div class="device-codecs-head">
-        {/* Which device is in use (issue #86 round 8), as the sidebar's dot */}
-        <span class={`dot st-${state()}`} role="img" aria-label={stateLabel(state())} title={stateLabel(state())} />
+        {/* Which device is in use (issue #86 round 8), as the sidebar's dot;
+            never red here, it looked like recording (issue #86) */}
+        <span class={`dot st-${state() === "error" ? "idle" : state()}`} role="img" aria-label={stateLabel(state())} title={stateLabel(state())} />
         <Icon name="headphones" />
         <div class="device-codecs-title">
           <h2 id={titleId()} class="ellipsis">
