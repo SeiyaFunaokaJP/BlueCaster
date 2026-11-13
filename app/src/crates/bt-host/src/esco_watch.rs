@@ -221,6 +221,13 @@ impl EscoWatch {
         let Some((then, at)) = self.last.replace((now, completed)) else { return Verdict::Wait };
         let Some(before) = self.before else { return Verdict::Wait };
         let rate = per_second(completed.saturating_sub(at), now.saturating_duration_since(then));
+        if rate == 0 {
+            // Nothing completed: a stalled link, not a slow one; a lower bit
+            // rate would not help (crate::stall_watch drops it)
+            self.slow = 0;
+            self.good = 0;
+            return Verdict::Wait;
+        }
         if rate * 100 < before * SLOW_PERCENT {
             self.good = 0;
             self.slow += 1;
@@ -384,6 +391,15 @@ mod tests {
         w.stream_started(t, n);
         assert_eq!(run_voice(&mut w, &mut t, &mut n, 187), Verdict::Good { rate: 187 });
         assert_eq!(w.watching(), None);
+    }
+
+    #[test]
+    fn a_link_that_completes_nothing_is_not_slow() {
+        let (mut w, mut t, mut n) = slow_after_a_voice_link();
+        let (v, _) = run(&mut w, &mut t, &mut n, 0);
+        assert_eq!(v, Verdict::Wait);
+        assert!(!w.is_lowered());
+        assert_eq!(w.watching(), None, "the watch expired");
     }
 
     #[test]

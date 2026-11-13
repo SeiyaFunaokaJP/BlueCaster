@@ -46,6 +46,8 @@ const TIMER_LOADER: u32 = 7;
 const TIMER_LINK_COMMAND: u32 = 8;
 /// The stream's rate after a voice link (crate::esco_watch)
 const TIMER_ESCO_WATCH: u32 = 9;
+/// Packets waiting on a stream that takes none (crate::stall_watch)
+const TIMER_STALL_WATCH: u32 = 10;
 const RTK_VERIFY_RETRY_MS: u32 = 100;
 const RTK_VERIFY_TRIES: u8 = 20;
 /// Each L2CAP packet starts with a 4-byte header
@@ -208,6 +210,8 @@ pub(crate) struct HostApp {
     media_acl: Option<u16>,
     /// The stream's rate after a voice link (#86)
     esco: EscoWatch,
+    /// A stream whose link takes no packets any more (#86)
+    stall: crate::stall_watch::StallWatch,
 }
 
 /// Why the signaling connection failed. Page timeout, or a device that never
@@ -301,6 +305,7 @@ impl HostApp {
             link: LinkTracker::default(),
             media_acl: None,
             esco: EscoWatch::default(),
+            stall: Default::default(),
         }
     }
 
@@ -1027,6 +1032,7 @@ impl HostApp {
     /// again (v1 flushed after a reconnect).
     fn set_streaming(&mut self, on: bool) {
         if on != self.streaming {
+            self.stall.reset();
             let completed = self.media_completed();
             if on {
                 self.esco.stream_started(Instant::now(), completed);
@@ -1113,6 +1119,27 @@ impl HostApp {
         if self.esco.watching().is_some() {
             stack.timer_start(TIMER_ESCO_WATCH, crate::esco_watch::TICK.as_millis() as u32);
         }
+    }
+
+    /// A second of [`crate::stall_watch::StallWatch`] while streaming: a link
+    /// that takes no packets any more is dropped, and the session connects
+    /// again (its disconnection is a lost connection)
+    fn stall_tick(&mut self, stack: &Stack) {
+        let Some(acl) = self.media_acl.filter(|_| self.streaming) else { return };
+        let waiting = stack.acl_packets_in_controller(acl).unwrap_or(0);
+        if let Some(took) = self.stall.tick(Instant::now(), self.media_completed(), waiting) {
+            tracing::warn!(
+                "stream: no packet completed for {} s with {waiting} waiting in the controller; dropping the link to connect again",
+                took.as_secs()
+            );
+            // Not a slow link: no lowered bit rate, no voice link to put it right
+            self.stop_esco_watch(stack);
+            if self.drop_acl(stack) {
+                return;
+            }
+            tracing::warn!("stream: the stalled link could not be dropped");
+        }
+        stack.timer_start(TIMER_STALL_WATCH, crate::stall_watch::TICK.as_millis() as u32);
     }
 
     /// The watch ends: the full bit rate again
@@ -2088,6 +2115,7 @@ impl HostApp {
                 self.link.stream_started(self.media_acl);
                 self.publish_link();
                 self.set_streaming(true);
+                stack.timer_start(TIMER_STALL_WATCH, crate::stall_watch::TICK.as_millis() as u32);
                 self.can_send_requested = false;
                 self.shared.update(|s| {
                     s.streaming = true;
@@ -2769,6 +2797,7 @@ impl App for HostApp {
             TIMER_RTK_VERIFY => self.verify_realtek_download(stack),
             TIMER_LINK_COMMAND => self.link_command_timeout(stack),
             TIMER_ESCO_WATCH => self.esco_tick(stack),
+            TIMER_STALL_WATCH => self.stall_tick(stack),
             TIMER_LOADER => {
                 if let Some(loader) = self.loader.as_mut() {
                     let actions = loader.on_timeout();

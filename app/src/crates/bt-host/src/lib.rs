@@ -33,6 +33,7 @@ pub mod rfcomm;
 pub mod script;
 pub mod sdp_services;
 mod shared;
+pub mod stall_watch;
 pub mod stats;
 pub mod voice;
 
