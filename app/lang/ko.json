@@ -379,7 +379,7 @@
   "cables.installed": "설치됨",
   "cables.not_installed": "설치되지 않음",
   "cables.uninstall": "제거",
-  "cables.restart": "완료했습니다. Windows 목록이 아직 바뀌지 않았다면 Windows를 다시 시작하세요.",
+  "cables.restart": "Windows 목록이 바뀌지 않으면 Windows를 다시 시작하세요.",
   "cables.licensing": "라이선스",
   "capture.mode": "출력 소스",
   "capture.input_source": "입력 소스",

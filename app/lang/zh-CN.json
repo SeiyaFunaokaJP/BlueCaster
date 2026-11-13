@@ -379,7 +379,7 @@
   "cables.installed": "已安装",
   "cables.not_installed": "未安装",
   "cables.uninstall": "卸载",
-  "cables.restart": "已完成。如果 Windows 的列表还没有变化，请重启 Windows。",
+  "cables.restart": "如果 Windows 的列表没有变化，请重启 Windows。",
   "cables.licensing": "许可",
   "capture.mode": "输出源",
   "capture.input_source": "输入源",

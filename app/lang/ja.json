@@ -379,7 +379,7 @@
   "cables.installed": "インストール済み",
   "cables.not_installed": "未インストール",
   "cables.uninstall": "アンインストール",
-  "cables.restart": "完了しました。Windows の一覧に反映されない場合は Windows を再起動してください。",
+  "cables.restart": "Windows の一覧が変わらない場合は Windows を再起動してください。",
   "cables.licensing": "ライセンス",
   "capture.mode": "出力ソース",
   "capture.input_source": "入力ソース",

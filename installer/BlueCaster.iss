@@ -58,7 +58,9 @@
 ; installation. The same page offers to remove VB-CABLE and the Hi-Fi Cable
 ; (VB-Audio's virtual audio drivers), each only when installed and off by
 ; default (other apps may use them): VB-Audio's own setup runs elevated and
-; without its window (RemoveCables), and Windows is then offered a restart.
+; without its window, followed by a scan for hardware changes in the same
+; elevated step (bluecaster-driver remove-cable, RemoveCables). Windows is
+; offered a restart only when a removed cable's output is still in its list.
 ;
 ; Kept only for the step from 2.0.x (OldV2*, NsisUninstKey, V1*, OldCoreMutex,
 ; OldAppMutex, OldRunValue, OldLanguageKey, the [InstallDelete] of the old
@@ -594,6 +596,12 @@ const
   HiFiUninstKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:VBHIFI {87459874-1236-4469}';
   AsioBridgeUninstKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:ASIOBridge {17359A74-1236-5467}';
   HiFiDriverName = 'vbaudio_hfvaio';
+  { Windows' audio outputs (CableListed): DeviceState's low bits 1 = active;
+    the name of the device the output belongs to }
+  RenderKey = 'SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render';
+  DeviceNameValue = '{b3f8fa53-0004-438e-9003-51a46e139bfc},6';
+  HiFiDeviceName = 'vb-audio hi-fi cable';
+  VbCableDeviceName = 'vb-audio virtual cable';
   RootMediaKey = 'SYSTEM\CurrentControlSet\Enum\ROOT\MEDIA';
   ServicesKey = 'SYSTEM\CurrentControlSet\Services\';
   { Remove without a window: VB-CABLE's setup as community packages run it
@@ -604,10 +612,10 @@ const
 
 var
   UpdateMode, PassiveMode, KeepV1, CoreWasRunning, RunWasSet, HadDesktopIcon, DeleteData, RestoreChosen, RestoreUnrecorded: Boolean;
-  { The setups of the cables chosen on the uninstall page; whether one was
-    removed (UninstallNeedRestart) }
+  { The setups of the cables chosen on the uninstall page; whether Windows
+    needs a restart after removing one (UninstallNeedRestart) }
   VbCableSetup, HiFiSetup: String;
-  CableRemoved: Boolean;
+  CableRestart: Boolean;
   { Setup replaces an installation: this one, 2.0.x (Inno Setup or NSIS) or v1 }
   IsUpgrade: Boolean;
   { An earlier version is uninstalled first: v1, the NSIS one of 2.0.x,
@@ -1572,21 +1580,72 @@ begin
   end;
 end;
 
+{ An active output of the cable in Windows' list (Sound settings), as the
+  app lists them; no administrator needed to read it }
+function CableListed(const IsHiFi: Boolean): Boolean;
+var
+  Root: Integer;
+  Outputs: TArrayOfString;
+  Name, Want: String;
+  State: Cardinal;
+  I: Integer;
+begin
+  Result := False;
+  if IsWin64 then
+    Root := HKLM64
+  else
+    Root := HKLM;
+  if IsHiFi then
+    Want := HiFiDeviceName
+  else
+    Want := VbCableDeviceName;
+  if not RegGetSubkeyNames(Root, RenderKey, Outputs) then
+    Exit;
+  for I := 0 to GetArrayLength(Outputs) - 1 do
+    if RegQueryDWordValue(Root, RenderKey + '' + Outputs[I], 'DeviceState', State) and ((State and $F) = 1) and
+       RegQueryStringValue(Root, RenderKey + '' + Outputs[I] + '\Properties', DeviceNameValue, Name) and
+       (Pos(Want, Lowercase(Name)) > 0) then begin
+      Result := True;
+      Exit;
+    end;
+end;
+
 { Runs a cable's setup elevated to remove it, then checks that it has gone
   (VB-Audio documents no exit codes): IsHiFi checks the Hi-Fi Cable's
-  device, else VB-CABLE's registration. UAC cancelled: it stays, no message. }
+  device, else VB-CABLE's registration. UAC cancelled: it stays, no message.
+  The setup runs through bluecaster-driver remove-cable, which then scans for
+  hardware changes (administrator rights, so in the same elevated step):
+  without the scan the output stayed in Windows' list until a restart
+  (issue #86). Windows is offered a restart only if it is still listed after
+  the scan, or when the scan could not run (no helper: the setup alone). }
 procedure RemoveCable(const Name, Setup, Params: String; const IsHiFi: Boolean);
 var
   Code, I: Integer;
-  Removed: Boolean;
+  Removed, Rescanned, Listed: Boolean;
+  Exe, Line, Dir: String;
 begin
-  Log(Format('Removing %s: %s %s', [Name, ExtractFileName(Setup), Params]));
-  if not ShellExec('runas', Setup, Params, ExtractFileDir(Setup), SW_HIDE, ewWaitUntilTerminated, Code) then begin
+  Exe := ExpandConstant('{app}\{#DriverExe}');
+  Rescanned := FileExists(Exe);
+  if Rescanned then begin
+    Line := 'remove-cable "' + Setup + '"';
+    if IsHiFi then
+      Line := Line + ' --hifi';
+    Dir := '';
+    Log(Format('Removing %s: %s remove-cable, then a scan for hardware changes', [Name, ExtractFileName(Setup)]));
+  end else begin
+    Exe := Setup;
+    Line := Params;
+    Dir := ExtractFileDir(Setup);
+    Log(Format('Removing %s: %s %s', [Name, ExtractFileName(Setup), Params]));
+  end;
+  if not ShellExec('runas', Exe, Line, Dir, SW_HIDE, ewWaitUntilTerminated, Code) then begin
     { 1223: UAC cancelled }
     Log(Format('The setup of %s did not start (%d): it stays', [Name, Code]));
     Exit;
   end;
-  Log(Format('The setup of %s: exit code %d', [Name, Code]));
+  Log(Format('The removal of %s: exit code %d', [Name, Code]));
+  { The helper's 0: the setup ran and the scan was asked for }
+  Rescanned := Rescanned and (Code = 0);
   Removed := False;
   for I := 1 to 20 do begin
     if IsHiFi then
@@ -1597,13 +1656,23 @@ begin
       Break;
     Sleep(500);
   end;
-  if Removed then begin
-    Log(Name + ' removed');
-    CableRemoved := True;
-  end else begin
+  if not Removed then begin
     Log(Name + ' is still installed');
     MsgBox(FmtMessage(CustomMessage('RemoveCableFailed'), [Name]), mbError, MB_OK);
+    Exit;
   end;
+  Log(Name + ' removed');
+  { Windows' list may follow the scan a moment later }
+  Listed := True;
+  for I := 1 to 20 do begin
+    Listed := CableListed(IsHiFi);
+    if not Listed then
+      Break;
+    Sleep(500);
+  end;
+  Log(Format('%s: scan for hardware changes %d, still listed %d', [Name, Ord(Rescanned), Ord(Listed)]));
+  if Listed or not Rescanned then
+    CableRestart := True;
 end;
 
 { The cables chosen on the uninstall page, once the core (which captures
@@ -1616,10 +1685,11 @@ begin
     RemoveCable('Hi-Fi Cable', HiFiSetup, HiFiRemoveParams, True);
 end;
 
-{ VB-Audio's setups ask for a restart after removing a driver }
+{ A removed cable Windows still lists (or one removed without the scan):
+  VB-Audio's setups ask for a restart then }
 function UninstallNeedRestart: Boolean;
 begin
-  Result := CableRemoved;
+  Result := CableRestart;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
