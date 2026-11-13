@@ -1,17 +1,20 @@
 // A device's Input Source on Audio Devices (issue #86; it was on Codecs):
 // the headphones' microphone rendered to an output of the PC, a virtual
 // cable whose recording side apps use as a microphone. Off, Auto (only
-// while an app records from it) or On, with the mode on the right of its
-// label and the device below, always there (disabled while Off) so that
+// while an app records from it) or On, with the mode beside the device (below it
+// when narrow; issue #86: not above it), the device always there (disabled
+// while Off) so that
 // switching does not move the page. The list names each device by the side
 // apps pick ("CABLE Output", not "CABLE Input"; an output whose recording
 // side another one already names, with its own name added). Only the cables
 // a microphone can use: not the 16-channel one, outputs without a recording
 // side (under Monitoring) or the output source's cable, unless chosen or
 // Developer > Show every audio device is on (the source's cable then listed
-// but disabled, saying so; issue #86: the list read as chaos). A classic
-// device that has no profile yet shows what its first one gets: Auto with
-// VB-CABLE, else the Hi-Fi Cable (the core's default_mic_output). The
+// but disabled, saying so; issue #86: the list read as chaos). A device
+// that has no profile yet shows what its first one gets: VB-CABLE, else the
+// Hi-Fi Cable, on Auto (Off for LE Audio, which takes Auto as On; the
+// core's default_mic_output). System Loopback's default output is not
+// another device's Output Source its stream made the default. The
 // Hi-Fi Cable with its two sides at different sample rates is said (it may
 // pass nothing then; on one PC it still did). Off here and the microphone's
 // button on the cards are one state (issue #86): a device whose mode is Auto
@@ -22,7 +25,7 @@
 
 import { createSignal, Show } from "solid-js";
 import { useApp } from "../app/context";
-import { allAudioDevices } from "../app/settings";
+import { allAudioDevices, defaultDeviceSwitch, devicesSwitchShown } from "../app/settings";
 import { t } from "../i18n";
 import type { AudioDevice, Device, Profile } from "../ipc/types";
 import {
@@ -34,6 +37,7 @@ import {
   hifiCable,
   isHifiCable,
   multichannelCable,
+  ownDefaultOutput,
   type HeadsetMode,
   vbCable,
 } from "../lib/profile";
@@ -45,12 +49,11 @@ import { Icon } from "./Icon";
  *  output for System Loopback): the microphone must not go there */
 function sourceDevice(
   source: Pick<Profile, "capture_mode" | "audio_device_id">,
-  devices: readonly AudioDevice[],
+  defaultOutput: string,
 ) {
   if (source.capture_mode === "virtual" || source.capture_mode === "output")
     return source.audio_device_id;
-  if (source.capture_mode === "loopback")
-    return devices.find((d) => d.is_default)?.id ?? "";
+  if (source.capture_mode === "loopback") return defaultOutput;
   return "";
 }
 
@@ -65,7 +68,9 @@ export function InputSource(props: {
   const entry = () =>
     audioEntries(snap()).find((e) => e.key === deviceKey(props.device)) ?? null;
   const all = () => allAudioDevices(snap().settings);
-  const looped = () => sourceDevice(props.source, props.devices);
+  // Not another device's Output Source made the default while it streams
+  const defaultOutput = () => ownDefaultOutput(props.devices, snap());
+  const looped = () => sourceDevice(props.source, defaultOutput());
   /** The profile shown: a classic device without one, its first one's defaults */
   const shown = (): Profile | null => {
     const e = entry();
@@ -76,10 +81,11 @@ export function InputSource(props: {
     const cable = [vbCable(props.devices), hifiCable(props.devices)].find(
       (c) => c && c.id !== looped(),
     );
-    return !e.le_audio && cable
+    // LE Audio takes Auto as On: its microphone stays Off with the cable
+    return cable
       ? {
           ...base,
-          headset_mic: "auto",
+          headset_mic: e.le_audio ? "off" : "auto",
           mic_device_id: cable.id,
           mic_device_name: cable.name,
         }
@@ -120,8 +126,9 @@ export function InputSource(props: {
    *  nothing. Not while connecting makes the Output Source the default. */
   const playsDefault = () => {
     const d = props.devices.find((x) => x.id === chosen());
-    const switches = props.source.capture_mode === "virtual" && props.source.auto_switch_device !== false;
-    return !!d?.is_default && !switches && !usedBySource(d.id);
+    const switches =
+      props.source.capture_mode === "virtual" && defaultDeviceSwitch(snap().settings, props.source.auto_switch_device);
+    return !!d && d.id === defaultOutput() && !switches && !usedBySource(d.id);
   };
   /** The Hi-Fi Cable chosen with its two sides at different sample rates:
    *  [playback, recording] */
@@ -205,8 +212,16 @@ export function InputSource(props: {
   return (
     <Show when={shown()}>
       <div class="input-source">
-        <div class="row input-source-head">
-          <span class="row-label">{t("capture.input_source")}</span>
+        <span class="row-label">{t("capture.input_source")}</span>
+        <div class="inline capture-source input-source-pick">
+          <Icon name="mic" />
+          <Select
+            label={t("ui.mic_output")}
+            value={chosen()}
+            options={options()}
+            disabled={busy() || mode() === "off"}
+            onChange={choose}
+          />
           <Segmented<HeadsetMode>
             label={t("capture.input_source")}
             value={mode()}
@@ -216,16 +231,6 @@ export function InputSource(props: {
               disabled: busy(),
             }))}
             onChange={chooseMode}
-          />
-        </div>
-        <div class="inline capture-source">
-          <Icon name="mic" />
-          <Select
-            label={t("ui.mic_output")}
-            value={chosen()}
-            options={options()}
-            disabled={busy() || mode() === "off"}
-            onChange={choose}
           />
         </div>
         <p class="hint">{t("ui.headset_mic_quality")}</p>
@@ -252,12 +257,14 @@ export function InputSource(props: {
             <span>{t("capture.mic_is_default_output")}</span>
           </p>
         </Show>
-        <Toggle
-          label={t("capture.mic_default_input")}
-          checked={shown()?.mic_default_input !== false}
-          disabled={busy()}
-          onChange={(v) => void save({ mic_default_input: v })}
-        />
+        <Show when={devicesSwitchShown(snap().settings)}>
+          <Toggle
+            label={t("capture.mic_default_input")}
+            checked={shown()?.mic_default_input !== false}
+            disabled={busy()}
+            onChange={(v) => void save({ mic_default_input: v })}
+          />
+        </Show>
       </div>
     </Show>
   );

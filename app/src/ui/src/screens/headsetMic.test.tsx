@@ -269,8 +269,8 @@ describe("Input Source on Audio Devices", () => {
     expect(micSelect(wh).value).toBe(CABLE);
   });
 
-  it("makes the microphone's cable the default input while connected unless turned off", async () => {
-    const { saves } = start("#/devices", "voice");
+  it("makes the microphone's cable the default input while connected, a switch in developer mode", async () => {
+    const { core, saves } = start("#/devices", "voice");
     const wh = await deviceEntry(/WH-1000XM5/);
     const toggle = (await within(wh).findByRole("switch", {
       name: t("capture.mic_default_input"),
@@ -285,6 +285,13 @@ describe("Input Source on Audio Devices", () => {
       }),
     );
     await waitFor(() => expect(toggle.checked).toBe(false));
+    // Always on outside developer mode (issue #86)
+    await core.request("settings.set", {
+      settings: { ...core.state.snap!.settings, developer_mode: false },
+    });
+    await waitFor(() =>
+      expect(within(wh).queryByRole("switch", { name: t("capture.mic_default_input") })).toBeNull(),
+    );
   });
 
   it("says playback quality may drop, for LE Audio devices too", async () => {
@@ -343,7 +350,7 @@ describe("Input Source on Audio Devices", () => {
   });
 
   it("warns when Windows plays into the microphone's device (issue #86)", async () => {
-    start("#/devices", "voice");
+    const { core } = start("#/devices", "voice");
     mock!.defaultOutput = CABLE;
     const wh = await deviceEntry(/WH-1000XM5/);
     const source = within(wh).getByLabelText(t("capture.mode")) as HTMLSelectElement;
@@ -361,6 +368,17 @@ describe("Input Source on Audio Devices", () => {
     await waitFor(() =>
       expect(within(wh).queryByText(t("capture.mic_is_default_output"))).toBeNull(),
     );
+    // Turned off (developer mode): the warning again
+    fireEvent.click(autoSwitch);
+    await within(wh).findByText(t("capture.mic_is_default_output"));
+    // Outside developer mode the switch is always on (issue #86)
+    await core.request("settings.set", {
+      settings: { ...core.state.snap!.settings, developer_mode: false },
+    });
+    await waitFor(() =>
+      expect(within(wh).queryByText(t("capture.mic_is_default_output"))).toBeNull(),
+    );
+    expect(within(wh).queryByRole("switch", { name: t("capture.auto_switch") })).toBeNull();
   });
 
   it("refuses the other side of the cable the output source plays to", async () => {

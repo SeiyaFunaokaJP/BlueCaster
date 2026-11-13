@@ -291,20 +291,30 @@ fn merge_profile(base: Option<&CoreProfile>, p: &Profile) -> CoreProfile {
     c.sbc_subbands = p.sbc_subbands;
     c.sbc_allocation = p.sbc_allocation.clone();
     c.sbc_channel_mode = p.sbc_channel_mode.clone();
-    // The codec in use has its settings in the fields above
+    // The codec in use has its settings in the fields above, by card: aptX
+    // Adaptive's own stay while its LL card is chosen, and LL's while it is
+    // not (issue #86)
+    let card = profiles::card_key(&p.codec, &p.quality);
     c.codec_settings = p
         .codec_settings
         .iter()
-        .filter(|(k, _)| **k != p.codec)
+        .filter(|(k, _)| k.as_str() != card)
         .map(|(k, v)| (k.clone(), from_ipc_codec_values(v)))
         .collect();
     // The codecs' keys, each once (the cards' order: FastStream and Opus 05
     // too, which Auto and the fallback never take); the UI sends none for
-    // the default order
+    // the default order; aptX Adaptive LL's card has its own place
     c.codec_order = Vec::new();
-    for k in p.codec_order.iter().filter_map(|k| codec::CodecKind::from_key(k)) {
-        if !c.codec_order.iter().any(|x| x == k.key()) {
-            c.codec_order.push(k.key().to_string());
+    let keys = p.codec_order.iter().filter_map(|k| {
+        if k.eq_ignore_ascii_case(profiles::APTXAD_LL_CARD) {
+            Some(profiles::APTXAD_LL_CARD)
+        } else {
+            codec::CodecKind::from_key(k).map(codec::CodecKind::key)
+        }
+    });
+    for k in keys {
+        if !c.codec_order.iter().any(|x| x == k) {
+            c.codec_order.push(k.to_string());
         }
     }
     c
@@ -1468,28 +1478,47 @@ fn codec_named_in_place(stream: &StreamStatus, before: Option<&CoreProfile>, sav
     as_before == *b
 }
 
-/// A new classic profile left on Auto without a microphone output gets
-/// VB-CABLE's, else the Hi-Fi Cable's (issue #86), unless its capture source is
-/// that cable (the microphone would loop into the stream). LE Audio takes Auto as On, so
-/// its profiles get none by themselves.
-fn default_mic_output(p: &mut CoreProfile) {
-    if p.le_audio || !p.mic_device_id.is_empty() || HeadsetMic::parse(&p.headset_mic) != HeadsetMic::Auto {
+/// A new profile on Auto or On without a microphone output gets VB-CABLE's,
+/// else the Hi-Fi Cable's (issue #86), unless its capture source is that
+/// cable (the microphone would loop into the stream). An LE Audio one
+/// stays closed (Off) with it: LE Audio takes Auto as On
+/// ([`profiles::fill_mic_outputs`]). Windows' list can still be missing the
+/// cables then: [`CoreState::watch_cables`] gives them later.
+fn default_mic_output(p: &mut CoreProfile, stream: &StreamStatus, list: &[CoreProfile]) {
+    if !p.mic_device_id.is_empty() || HeadsetMic::parse(&p.headset_mic) == HeadsetMic::Off {
         return;
     }
     let devices = audio_capture::render_devices().unwrap_or_default();
-    let default_output = devices.iter().find(|d| d.is_default).map_or("", |d| d.id.as_str());
-    // VB-CABLE first: the Hi-Fi Cable, with less delay, stays free for the
-    // sound
-    let Some(cable) = [default_cable(&devices), hifi_cable(&devices)]
-        .into_iter()
-        .flatten()
-        .find(|c| profiles::mic_output_conflicts(&p.source(), &c.id, default_output).is_none())
-    else {
-        return;
-    };
-    tracing::info!("profile \"{}\": microphone output {} by default", p.name, cable.name);
-    p.mic_device_id = cable.id.clone();
-    p.mic_device_name = cable.name.clone();
+    let default_output = default_output_for_cables(&devices, stream, list);
+    if profiles::fill_mic_outputs(std::slice::from_mut(p), &cables(&devices), default_output) > 0 {
+        tracing::info!("profile \"{}\": microphone output {} by default", p.name, p.mic_device_name);
+    }
+}
+
+/// VB-CABLE and the Hi-Fi Cable among Windows' outputs
+fn cables(devices: &[audio_capture::DeviceInfo]) -> profiles::Cables {
+    let cable = |d: &audio_capture::DeviceInfo| profiles::Cable { id: d.id.clone(), name: d.name.clone() };
+    profiles::Cables { vb: default_cable(devices).map(cable), hifi: hifi_cable(devices).map(cable) }
+}
+
+/// Windows' default output as the cables' rules take it for System
+/// Loopback: none while it is the Output Source the stream made the default
+/// for its own device (issue #86: one device's Output Source took cables
+/// from another device's lists; the default goes back when that stream
+/// ends)
+fn default_output_for_cables<'a>(
+    devices: &'a [audio_capture::DeviceInfo],
+    stream: &StreamStatus,
+    list: &[CoreProfile],
+) -> &'a str {
+    let default = devices.iter().find(|d| d.is_default).map_or("", |d| d.id.as_str());
+    let switched = matches!(stream.state, StreamState::Connecting | StreamState::Streaming | StreamState::Reconnecting)
+        && stream
+            .profile
+            .as_ref()
+            .and_then(|n| list.iter().find(|p| &p.name == n))
+            .is_some_and(|p| p.capture_mode == "virtual" && !default.is_empty() && p.audio_device_id == default);
+    if switched { "" } else { default }
 }
 
 /// VB-CABLE's playback side ("CABLE Input"), the 2-channel one before the
@@ -1502,8 +1531,10 @@ fn default_cable(devices: &[audio_capture::DeviceInfo]) -> Option<&audio_capture
 /// Windows' default input for the stream and the profiles: the
 /// microphone output's recording side while a device whose profile asks for
 /// it (headset mode Auto or On, muted or not, an output chosen) is
-/// connected; kept while it connects (again), released once disconnected
-fn default_input_want(stream: &StreamStatus, profiles: &[Profile]) -> InputWant {
+/// connected; kept while it connects (again), released once disconnected.
+/// The profile's switch counts only in developer mode (`developer_mode`),
+/// on for everyone else (issue #86).
+fn default_input_want(stream: &StreamStatus, profiles: &[Profile], developer_mode: bool) -> InputWant {
     match stream.state {
         StreamState::Connecting | StreamState::Reconnecting => InputWant::Keep,
         StreamState::Idle | StreamState::Error => InputWant::Release,
@@ -1511,7 +1542,11 @@ fn default_input_want(stream: &StreamStatus, profiles: &[Profile]) -> InputWant 
             .profile
             .as_ref()
             .and_then(|name| profiles.iter().find(|p| &p.name == name))
-            .filter(|p| p.mic_default_input && !p.mic_device_id.is_empty() && HeadsetMic::parse(&p.headset_mic).is_on())
+            .filter(|p| {
+                (p.mic_default_input || !developer_mode)
+                    && !p.mic_device_id.is_empty()
+                    && HeadsetMic::parse(&p.headset_mic).is_on()
+            })
             .map_or(InputWant::Release, |p| InputWant::Switch(p.mic_device_id.clone())),
     }
 }
@@ -1800,13 +1835,14 @@ impl CoreState {
         let rev = {
             let mut g = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
             let s = &mut g.1;
-            if matches!(event, Event::Stream(_) | Event::Profiles { .. }) {
-                let (stream, profiles) = match &event {
-                    Event::Stream(st) => (st, &s.profiles),
-                    Event::Profiles { profiles, .. } => (&s.stream, profiles),
+            if matches!(event, Event::Stream(_) | Event::Profiles { .. } | Event::Settings(_)) {
+                let (stream, profiles, settings) = match &event {
+                    Event::Stream(st) => (st, &s.profiles, &s.settings),
+                    Event::Profiles { profiles, .. } => (&s.stream, profiles, &s.settings),
+                    Event::Settings(x) => (&s.stream, &s.profiles, x),
                     _ => unreachable!(),
                 };
-                input = Some(default_input_want(stream, profiles));
+                input = Some(default_input_want(stream, profiles, settings.developer_mode));
             }
             match &event {
                 Event::Adapter(a) => s.adapter = a.clone(),
@@ -2234,76 +2270,49 @@ impl CoreState {
         Ok(Value::Null)
     }
 
-    /// VB-CABLE that came after it was missing is taken into use, one time
-    /// (issue #86): for the sound where the Hi-Fi Cable is not there (the
-    /// profiles that capture System Loopback), else for the microphone (the
-    /// classic profiles whose microphone has no working output). A device
-    /// the user set up otherwise before stays as it is.
-    fn watch_vb_cable(&self, devices: &[audio_capture::DeviceInfo]) {
-        let mut s = self.service.settings();
-        match (vb_cable(devices), s.awaiting_vb_cable) {
-            (None, false) => s.awaiting_vb_cable = true,
-            (Some(_), true) => {
-                s.awaiting_vb_cable = false;
-                let cable = default_cable(devices).expect("VB-CABLE is there");
-                let mut list = profiles::load(&self.config_dir());
-                let changed = if hifi_cable(devices).is_some() {
-                    let default_output = devices.iter().find(|d| d.is_default).map_or("", |d| d.id.as_str());
-                    let n = profiles::use_mic_cable(&mut list, &cable.id, &cable.name, default_output);
-                    tracing::info!("VB-Cable found: {n} profile(s) play the microphone into it now");
-                    n
-                } else {
-                    let n = profiles::use_virtual_device(&mut list, &cable.id, &cable.name);
-                    tracing::info!("VB-Cable found: {n} profile(s) capture it now");
-                    n
-                };
-                self.save_found_cable(&list, &s, changed, "VB-Cable");
-            }
-            _ => return,
-        }
-        let _ = s.save(&self.config_dir());
-        self.service.set_settings(s);
-    }
-
-    /// The virtual cables taken into use when they come (issue #86): the
-    /// Hi-Fi Cable for the sound (less delay), VB-CABLE for the microphone
+    /// The virtual cables taken into use (issue #86): once one came after it
+    /// was missing, the profiles set up by the rules alone are set up again
+    /// with what Windows has now, the Hi-Fi Cable for the sound (less delay)
+    /// and VB-CABLE for the microphone ([`profiles::reassign_cables`]; what
+    /// the user chose stays); and a microphone on without an output gets
+    /// one whenever a cable it can use is there
+    /// ([`profiles::fill_mic_outputs`]).
     pub fn watch_cables(&self, devices: &[audio_capture::DeviceInfo]) {
-        self.watch_vb_cable(devices);
-        self.watch_hifi_cable(devices);
-    }
-
-    /// The Hi-Fi Cable that came after it was missing, one time: the profiles
-    /// that capture System Loopback capture it, then the classic profiles
-    /// whose microphone had no working output play it there (one that works
-    /// stays, as apps record from it)
-    fn watch_hifi_cable(&self, devices: &[audio_capture::DeviceInfo]) {
-        let mut s = self.service.settings();
-        match (hifi_cable(devices), s.awaiting_hifi_cable) {
-            (None, false) => s.awaiting_hifi_cable = true,
-            (Some(cable), true) => {
-                s.awaiting_hifi_cable = false;
-                let default_output = devices.iter().find(|d| d.is_default).map_or("", |d| d.id.as_str());
-                let mut list = profiles::load(&self.config_dir());
-                let sound = profiles::use_virtual_device(&mut list, &cable.id, &cable.name);
-                let mic = profiles::use_mic_cable(&mut list, &cable.id, &cable.name, default_output);
-                tracing::info!(
-                    "Hi-Fi Cable found: {sound} profile(s) capture it, {mic} play the microphone into it now"
-                );
-                self.save_found_cable(&list, &s, sound + mic, "Hi-Fi Cable");
-            }
-            _ => return,
+        // One look at a time: two would both save the profiles
+        static WATCHING: Mutex<()> = Mutex::new(());
+        let _one = WATCHING.lock().unwrap_or_else(|e| e.into_inner());
+        let s = self.service.settings();
+        let now = cables(devices);
+        // Missing at the last look; both there before the first one
+        let was = profiles::CableSet { vb: !s.awaiting_vb_cable, hifi: !s.awaiting_hifi_cable };
+        let (vb_missing, hifi_missing) = (vb_cable(devices).is_none(), now.hifi.is_none());
+        let came = (!vb_missing && !was.vb) || (!hifi_missing && !was.hifi);
+        let flags_changed = (vb_missing, hifi_missing) != (s.awaiting_vb_cable, s.awaiting_hifi_cable);
+        let mut list = profiles::load(&self.config_dir());
+        let (_, snap) = self.snapshot();
+        let default_output = default_output_for_cables(devices, &snap.stream, &list);
+        let set_up = if came { profiles::reassign_cables(&mut list, was, &now, default_output) } else { 0 };
+        let filled = profiles::fill_mic_outputs(&mut list, &now, default_output);
+        if came || filled > 0 {
+            tracing::info!(
+                "cables: VB-CABLE {}, Hi-Fi Cable {}; {set_up} profile(s) set up again, {filled} microphone(s) given one",
+                if vb_missing { "missing" } else { "there" },
+                if hifi_missing { "missing" } else { "there" },
+            );
         }
-        let _ = s.save(&self.config_dir());
-        self.service.set_settings(s);
-    }
-
-    /// The profiles a cable that came changed, saved (`changed` > 0)
-    fn save_found_cable(&self, list: &[CoreProfile], s: &CoreSettings, changed: usize, what: &str) {
-        let active = Some(s.last_profile.clone()).filter(|n| list.iter().any(|p| &p.name == n));
-        if changed > 0
-            && let Err(e) = self.save_profiles(list, active)
-        {
-            tracing::warn!("{what}: profiles not saved: {}", e.code);
+        if set_up + filled > 0 {
+            let active = Some(s.last_profile.clone()).filter(|n| list.iter().any(|p| &p.name == n));
+            if let Err(e) = self.save_profiles(&list, active) {
+                tracing::warn!("cables: profiles not saved: {}", e.code);
+            }
+        }
+        if flags_changed {
+            // As they are now: the settings may have been saved meanwhile
+            let mut s = self.service.settings();
+            s.awaiting_vb_cable = vb_missing;
+            s.awaiting_hifi_cable = hifi_missing;
+            let _ = s.save(&self.config_dir());
+            self.service.set_settings(s);
         }
     }
 
@@ -2429,6 +2438,7 @@ impl CoreState {
             .to_request(settings.legacy_max_media_payload())
             .map_err(|_| err("profile.invalid_address", "error.invalid_address"))?;
         req.developer_codecs = settings.debug_mode;
+        req.source = settings.source_in_force(req.source);
         req.volume_sync = effective_volume_sync(settings.volume_sync, req.volume_sync);
         req.mute_output = settings.mutes_output();
         req.sbc = settings.sbc_frame(req.sbc);
@@ -3041,7 +3051,7 @@ impl CoreState {
                 let pos = list.iter().position(|p| p.name == key);
                 let mut merged = merge_profile(pos.map(|i| &list[i]), &profile);
                 if pos.is_none() {
-                    default_mic_output(&mut merged);
+                    default_mic_output(&mut merged, &self.snapshot().1.stream, &list);
                 }
                 let before = pos.map(|i| list[i].clone());
                 // Only the device's codec order changed (its cards dragged):
@@ -3120,7 +3130,7 @@ impl CoreState {
                 };
                 if restart_after_save(&s.stream, &key) && !order_keeps_codec && !kept_only && !headset_kept {
                     let in_place = source_changes_in_place(&s.stream, before.as_ref(), &in_order)
-                        && self.service.change_source(in_order.source());
+                        && self.service.change_source(self.service.settings().source_in_force(in_order.source()));
                     let bitpools_in_place = !self.service.settings().auto_codec
                         && bitpools_change_in_place(&s.stream, before.as_ref(), &in_order)
                         && self.service.change_bitpools(in_order.bitpools());
@@ -4259,7 +4269,7 @@ mod tests {
         .unwrap();
         assert!(saved.mic_default_input);
         let stream = |state| StreamStatus { state, profile: Some("WH".into()), ..StreamStatus::default() };
-        let want = |state, p: &Profile| default_input_want(&stream(state), std::slice::from_ref(p));
+        let want = |state, p: &Profile| default_input_want(&stream(state), std::slice::from_ref(p), true);
         assert_eq!(want(StreamState::Streaming, &p), InputWant::Switch("{cable}".into()));
         // Muted from the card: still the device's microphone, kept
         let muted = Profile { mic_muted: true, ..p.clone() };
@@ -4277,6 +4287,13 @@ mod tests {
         ] {
             assert_eq!(want(StreamState::Streaming, &off), InputWant::Release);
         }
+        // Outside developer mode the switch is on whatever the profile says
+        let off = Profile { mic_default_input: false, ..p.clone() };
+        let streaming = stream(StreamState::Streaming);
+        assert_eq!(
+            default_input_want(&streaming, std::slice::from_ref(&off), false),
+            InputWant::Switch("{cable}".into())
+        );
         // Turning it alone keeps the stream going
         let off = CoreProfile { mic_default_input: false, ..core.clone() };
         assert!(core.only_default_input_differs(&off));
@@ -4593,6 +4610,91 @@ mod tests {
         assert!(!same_after_auto_toggle(&streaming("LDAC"), &profile("ldac"), true, None, false));
         let connecting = StreamStatus { state: StreamState::Connecting, ..streaming("LDAC") };
         assert!(!same(&connecting, &profile("ldac"), true, false));
+    }
+
+    fn render_device(id: &str, name: &str, is_default: bool) -> audio_capture::DeviceInfo {
+        audio_capture::DeviceInfo {
+            id: id.into(),
+            name: name.into(),
+            short_name: None,
+            adapter_name: None,
+            is_default,
+            is_virtual: name.contains("VB-Audio"),
+            capture_name: None,
+            capture_rate: None,
+        }
+    }
+
+    #[test]
+    fn vb_cable_installed_after_the_hifi_cable_takes_the_microphone() {
+        // issue #86: the Hi-Fi Cable alone at first, VB-CABLE installed later
+        // (its setup makes it the Windows default output): the sound ended
+        // up on VB-CABLE and the microphone on the Hi-Fi Cable
+        let dir = std::env::temp_dir().join(format!("bluecaster-state-cables-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let options = bluecaster_core::ServiceOptions {
+            config_dir: dir.clone(),
+            hci_tcp: None,
+            capture: bt_host::HciCapture::new(),
+            afh: None,
+            usb: Default::default(),
+        };
+        let state =
+            CoreState::new(Arc::new(Service::new(options, tx)), Box::new(|_| {}), Box::new(|| {}), Box::new(|_| {}));
+        let hifi = render_device("{hifi}", "Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)", false);
+        let before = [render_device("{spk}", "Speakers (Realtek(R) Audio)", true), hifi.clone()];
+        state.watch_cables(&before);
+        assert!(state.service.settings().awaiting_vb_cable);
+        // A device added on Audio Devices: Windows default, and the Hi-Fi
+        // Cable for its microphone as the rules gave it then
+        let mut added = CoreProfile {
+            name: "Buds".into(),
+            device_address: "C0:11:22:33:44:55".into(),
+            headset_mic: "auto".into(),
+            ..CoreProfile::default()
+        };
+        profiles::fill_mic_outputs(std::slice::from_mut(&mut added), &cables(&before), "{spk}");
+        assert_eq!(added.mic_device_id, "{hifi}");
+        profiles::save(&dir, &[added]).unwrap();
+        let after = [
+            render_device("{spk}", "Speakers (Realtek(R) Audio)", false),
+            hifi,
+            render_device("{vb}", "CABLE Input (VB-Audio Virtual Cable)", true),
+        ];
+        state.watch_cables(&after);
+        let p = &profiles::load(&dir)[0];
+        assert_eq!((p.capture_mode.as_str(), p.audio_device_id.as_str()), ("virtual", "{hifi}"));
+        assert_eq!(
+            (p.mic_device_id.as_str(), p.mic_device_name.as_str()),
+            ("{vb}", "CABLE Input (VB-Audio Virtual Cable)")
+        );
+        assert!(!state.service.settings().awaiting_vb_cable);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn another_devices_output_source_made_the_default_does_not_count() {
+        // issue #86: one device's Output Source, made the Windows default
+        // while it streams, took that cable from the other devices
+        let devices = [
+            render_device("{spk}", "Speakers (Realtek(R) Audio)", false),
+            render_device("{hifi}", "Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)", true),
+        ];
+        let earfun = CoreProfile {
+            name: "EarFun".into(),
+            capture_mode: "virtual".into(),
+            audio_device_id: "{hifi}".into(),
+            ..CoreProfile::default()
+        };
+        let list = [earfun];
+        let stream = |state| StreamStatus { state, profile: Some("EarFun".into()), ..StreamStatus::default() };
+        assert_eq!(default_output_for_cables(&devices, &stream(StreamState::Streaming), &list), "");
+        // Not streaming: the default is the user's
+        assert_eq!(default_output_for_cables(&devices, &stream(StreamState::Idle), &list), "{hifi}");
+        let loopback = CoreProfile { capture_mode: "loopback".into(), ..list[0].clone() };
+        assert_eq!(default_output_for_cables(&devices, &stream(StreamState::Streaming), &[loopback]), "{hifi}");
     }
 
     #[test]
@@ -5132,6 +5234,48 @@ mod tests {
         let merged = merge_profile(None, &Profile { codec_order: order, ..ui });
         assert_eq!(merged.codec_order, ["sbcxq", "faststream", "aac"]);
         assert_eq!(to_ipc_profile(&merged, 679).codec_order, merged.codec_order);
+        // aptX Adaptive LL's card keeps its place (issue #86)
+        let ui = to_ipc_profile(&merged, 679);
+        let order = ["aac", "AptxAdLL", "aptxad"].map(String::from).to_vec();
+        assert_eq!(
+            merge_profile(None, &Profile { codec_order: order, ..ui }).codec_order,
+            ["aac", "aptxadll", "aptxad"]
+        );
+    }
+
+    #[test]
+    fn aptx_adaptive_and_its_ll_card_keep_their_own_settings() {
+        // issue #86: aptX Adaptive's settings were dropped while its LL card
+        // was chosen (both are codec "aptxad"), and came back as LL's
+        let ad = profiles::CodecValues { sample_rate: 96000, abr: true, ..profiles::CodecValues::default() };
+        let ll =
+            profiles::CodecValues { quality: "ll".into(), unlisted_options: true, ..profiles::CodecValues::default() };
+        let core = CoreProfile {
+            device_address: "C0:11:22:33:44:55".into(),
+            codec: "aptxad".into(),
+            quality: "ll".into(),
+            sample_rate: 48000,
+            codec_settings: BTreeMap::from([("aptxad".to_string(), ad.clone())]),
+            ..CoreProfile::default()
+        };
+        // LL chosen: aptX Adaptive's own stay
+        let saved = merge_profile(None, &to_ipc_profile(&core, 679));
+        assert_eq!(saved.codec_settings.get("aptxad"), Some(&ad));
+        assert_eq!((saved.quality.as_str(), saved.sample_rate), ("ll", 48000));
+        // aptX Adaptive chosen: LL's stay, a stale copy of aptX Adaptive's goes
+        let back = CoreProfile {
+            quality: "hq".into(),
+            sample_rate: 96000,
+            abr: true,
+            codec_settings: BTreeMap::from([("aptxad".to_string(), ad.clone()), ("aptxadll".to_string(), ll.clone())]),
+            ..core
+        };
+        let saved = merge_profile(None, &to_ipc_profile(&back, 679));
+        assert_eq!(saved.codec_settings.get("aptxadll"), Some(&ll));
+        assert!(!saved.codec_settings.contains_key("aptxad"));
+        // Each streams its own
+        let r = saved.to_request(679).unwrap();
+        assert_eq!((r.quality, r.sample_rate, r.abr), (codec::Quality::High, Some(96000), true));
     }
 
     #[test]

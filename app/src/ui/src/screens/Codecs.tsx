@@ -242,8 +242,8 @@ export function saveCodecOrder(app: ReturnType<typeof useApp>, entry: AudioEntry
 
 /** The codec a device streams with now, when its profile streams (aptX
  *  Adaptive LL's card while aptX Adaptive streams as its profile chose it in
- *  Low Latency: not under Auto-select, which streams High, unless developer
- *  mode keeps each codec's settings) */
+ *  Low Latency: not under Auto-select, which picks aptX Adaptive with its own
+ *  settings) */
 export function streamingCodec(snap: Snapshot, entry: AudioEntry): CodecId | null {
   const st = snap.stream;
   const p = entry.profile;
@@ -251,8 +251,7 @@ export function streamingCodec(snap: Snapshot, entry: AudioEntry): CodecId | nul
   const key = codecLabelKey(st.info.codec);
   const id = CODECS.find((c) => c.id !== "auto" && c.label === key)?.id ?? null;
 
-  if (id !== "aptxad" || cardOf(p) !== "aptxadll") return id;
-  return !snap.settings.auto_codec || autoKeepsCodecSettings(snap.settings) ? "aptxadll" : id;
+  return id === "aptxad" && cardOf(p) === "aptxadll" && !snap.settings.auto_codec ? "aptxadll" : id;
 }
 
 /** The codec a device's cards (and Home's Codec card) show chosen: under

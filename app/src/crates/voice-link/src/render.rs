@@ -5,8 +5,10 @@
 //! The PCM arrives through a lock-free queue ([`PcmProducer`], pushed on the
 //! BTstack or decode thread). The render thread ("voice-render", MMCSS
 //! "Audio") owns every COM object of the stream, as audio-capture's loopback
-//! does: WASAPI shared mode, event driven, the stream format mono i16 at the
-//! voice rate with Windows converting (AUTOCONVERTPCM). It writes silence
+//! does: WASAPI shared mode, event driven, the stream format i16 at the
+//! voice rate in the device's own channel layout with Windows converting
+//! the rate (AUTOCONVERTPCM); the mono sample goes to the front left and
+//! right ([`upmix`]). It writes silence
 //! until the queue holds the prefill, silence on an underrun (and primes
 //! again), and a slow drift control keeps the queue near the prefill.
 
@@ -364,7 +366,54 @@ struct Wasapi {
     client: AudioClient,
     render: AudioRenderClient,
     event: Handle,
+    /// The stream's channels and where the mono sample goes
+    layout: Layout,
     bytes: Vec<u8>,
+}
+
+const SPEAKER_FRONT_LEFT: u32 = 0x1;
+const SPEAKER_FRONT_RIGHT: u32 = 0x2;
+const SPEAKER_FRONT_CENTER: u32 = 0x4;
+
+/// The render stream's channel count and the channels that carry the mono
+/// microphone (the others stay silent)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Layout {
+    pub channels: usize,
+    pub targets: Vec<usize>,
+}
+
+impl Layout {
+    /// For a stream of `channels`: the front left and right. Channels follow
+    /// the speaker mask's bits from the lowest, and those two are bits 0
+    /// and 1, so they are the first two channels; a cable with unnamed
+    /// channels (mask 0) puts left and right there by convention too. Not
+    /// every channel: an app recording the cable in stereo gets the
+    /// device's channels downmixed, and copies in the centre, rear and LFE
+    /// would add up there. A mono device gets its only channel.
+    pub fn for_device(channels: usize) -> Layout {
+        let channels = channels.max(1);
+        Layout { channels, targets: (0..channels.min(2)).collect() }
+    }
+
+    /// Mono with the centre position, the layout Windows expects for one
+    /// channel (used when the device's own layout is refused)
+    fn mono() -> Layout {
+        Layout { channels: 1, targets: vec![0] }
+    }
+}
+
+/// Little-endian i16 frames of `layout` from the mono samples
+pub(crate) fn upmix(mono: &[i16], layout: &Layout, out: &mut Vec<u8>) {
+    out.clear();
+    out.reserve(mono.len() * layout.channels * 2);
+    for &s in mono {
+        let start = out.len();
+        out.resize(start + layout.channels * 2, 0);
+        for &c in &layout.targets {
+            out[start + c * 2..start + c * 2 + 2].copy_from_slice(&s.to_le_bytes());
+        }
+    }
 }
 
 impl Endpoint for Wasapi {
@@ -380,8 +429,7 @@ impl Endpoint for Wasapi {
     }
 
     fn write(&mut self, frames: &[i16]) -> Result<(), RenderError> {
-        self.bytes.clear();
-        self.bytes.extend(frames.iter().flat_map(|s| s.to_le_bytes()));
+        upmix(frames, &self.layout, &mut self.bytes);
         self.render
             .write_to_device(frames.len(), &self.bytes, None)
             .map_err(|e| RenderError::from_wasapi("writing to the audio output", e))
@@ -399,13 +447,31 @@ fn open_stream(device_id: &str, rate: u32) -> Result<(Wasapi, Duration, String),
         return Err(RenderError::DeviceNotFound(device_id.to_owned()));
     }
     let name = device.get_friendlyname().unwrap_or_default();
-    let mut client =
-        device.get_iaudioclient().map_err(|e| RenderError::from_wasapi("activating the audio client", e))?;
-    let wave = WaveFormat::new(16, 16, &SampleType::Int, rate as usize, 1, None);
+    let activate = || device.get_iaudioclient().map_err(|e| RenderError::from_wasapi("activating the audio client", e));
     let mode = StreamMode::EventsShared { autoconvert: true, buffer_duration_hns: BUFFER_HNS };
-    client
-        .initialize_client(&wave, &Direction::Render, &mode)
-        .map_err(|e| RenderError::from_wasapi("initializing the audio output", e))?;
+    // The device's own channels and positions, filled by `upmix`. A mono
+    // stream with the wasapi crate's default mask (front left) reached
+    // only the left channel of a stereo cable (#86)
+    let mut client = activate()?;
+    let mix = client.get_mixformat().ok();
+    let (channels, mask) = mix.as_ref().map_or((2, SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT), |m| {
+        (usize::from(m.get_nchannels()), m.get_dwchannelmask())
+    });
+    let mut layout = Layout::for_device(channels);
+    let wave = WaveFormat::new(16, 16, &SampleType::Int, rate as usize, layout.channels, Some(mask));
+    if let Err(e) = client.initialize_client(&wave, &Direction::Render, &mode) {
+        tracing::debug!(
+            "voice link: {} ch mask 0x{mask:x} refused ({}), trying mono",
+            layout.channels,
+            RenderError::from_wasapi("initializing the audio output", e)
+        );
+        client = activate()?;
+        layout = Layout::mono();
+        let wave = WaveFormat::new(16, 16, &SampleType::Int, rate as usize, 1, Some(SPEAKER_FRONT_CENTER));
+        client
+            .initialize_client(&wave, &Direction::Render, &mode)
+            .map_err(|e| RenderError::from_wasapi("initializing the audio output", e))?;
+    }
     let event = client.set_get_eventhandle().map_err(|e| RenderError::from_wasapi("SetEventHandle", e))?;
     let render =
         client.get_audiorenderclient().map_err(|e| RenderError::from_wasapi("GetService(IAudioRenderClient)", e))?;
@@ -417,12 +483,14 @@ fn open_stream(device_id: &str, rate: u32) -> Result<(Wasapi, Duration, String),
         .map(|hns| Duration::from_nanos(hns * 100))
         .unwrap_or(DEFAULT_PERIOD);
     tracing::debug!(
-        "voice link: render client for \u{201C}{name}\u{201D}: {rate} Hz mono i16 (converted by Windows), buffer {:?} \
-         frames, period {:.2} ms",
+        "voice link: render client for \u{201C}{name}\u{201D}: {rate} Hz i16 {} ch, mono on {:?} (converted by \
+         Windows), buffer {:?} frames, period {:.2} ms",
+        layout.channels,
+        layout.targets,
         client.get_buffer_size().ok(),
         period.as_secs_f64() * 1000.0
     );
-    Ok((Wasapi { client, render, event, bytes: Vec::new() }, period, name))
+    Ok((Wasapi { client, render, event, layout, bytes: Vec::new() }, period, name))
 }
 
 fn thread_main(
@@ -625,6 +693,60 @@ mod tests {
         }
     }
 
+    fn frames(bytes: &[u8], channels: usize) -> Vec<Vec<i16>> {
+        bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| i16::from_le_bytes(*b))
+            .collect::<Vec<_>>()
+            .chunks_exact(channels)
+            .map(<[i16]>::to_vec)
+            .collect()
+    }
+
+    #[test]
+    fn stereo_gets_the_sample_on_both_sides() {
+        let layout = Layout::for_device(2);
+        assert_eq!(layout, Layout { channels: 2, targets: vec![0, 1] });
+        let mut out = Vec::new();
+        upmix(&[1, -2, i16::MAX], &layout, &mut out);
+        assert_eq!(frames(&out, 2), vec![vec![1, 1], vec![-2, -2], vec![i16::MAX, i16::MAX]]);
+    }
+
+    #[test]
+    fn surround_gets_it_on_the_front_pair_only() {
+        // 7.1: FL FR FC LFE BL BR SL SR
+        let layout = Layout::for_device(8);
+        assert_eq!(layout.targets, vec![0, 1]);
+        let mut out = Vec::new();
+        upmix(&[7], &layout, &mut out);
+        assert_eq!(frames(&out, 8), vec![vec![7, 7, 0, 0, 0, 0, 0, 0]]);
+    }
+
+    #[test]
+    fn sixteen_channels_take_the_first_two() {
+        // "CABLE In 16ch"
+        let layout = Layout::for_device(16);
+        assert_eq!(layout.targets, vec![0, 1]);
+        let mut out = Vec::new();
+        upmix(&[3, 4], &layout, &mut out);
+        let f = frames(&out, 16);
+        assert_eq!(f.len(), 2);
+        assert_eq!(&f[1][..3], &[4, 4, 0]);
+        assert!(f[1][2..].iter().all(|&s| s == 0));
+    }
+
+    #[test]
+    fn mono_device_gets_its_one_channel() {
+        assert_eq!(Layout::for_device(1), Layout { channels: 1, targets: vec![0] });
+        assert_eq!(Layout::for_device(0), Layout { channels: 1, targets: vec![0] });
+        assert_eq!(Layout::for_device(1), Layout::mono());
+        let mut out = Vec::new();
+        upmix(&[5, 6], &Layout::mono(), &mut out);
+        assert_eq!(frames(&out, 1), vec![vec![5], vec![6]]);
+    }
+
     #[test]
     fn second_producer_is_detached() {
         let (p, c) = pcm_channel(10);
@@ -642,6 +764,68 @@ mod tests {
         send::<PcmProducer>();
         send::<PcmConsumer>();
         send::<RenderError>();
+    }
+
+    /// Renders a tone into each VB-CABLE input (stereo and 16 channel) and
+    /// records "CABLE Output" in stereo: both sides carry it (#86, it was
+    /// on the left only). Silent; needs VB-CABLE
+    #[test]
+    #[ignore = "needs VB-CABLE"]
+    fn cable_output_carries_the_microphone_on_both_sides() {
+        use std::collections::VecDeque;
+        let _com = ComApartment::init_mta().unwrap();
+        let enumerator = DeviceEnumerator::new().unwrap();
+        let find = |dir: Direction, name: &str| {
+            let all = enumerator.get_device_collection(&dir).unwrap();
+            (&all).into_iter().filter_map(Result::ok).find(|d| d.get_friendlyname().is_ok_and(|n| n.starts_with(name)))
+        };
+        let capture_dev = find(Direction::Capture, "CABLE Output").expect("CABLE Output");
+        for input in ["CABLE Input", "CABLE In 16ch"] {
+            let Some(render_dev) = find(Direction::Render, input) else {
+                eprintln!("{input}: not installed, skipped");
+                continue;
+            };
+            let mut cap = capture_dev.get_iaudioclient().unwrap();
+            let wave = WaveFormat::new(32, 32, &SampleType::Float, 48_000, 2, None);
+            let mode = StreamMode::PollingShared { autoconvert: true, buffer_duration_hns: 1_000_000 };
+            cap.initialize_client(&wave, &Direction::Capture, &mode).unwrap();
+            let capture = cap.get_audiocaptureclient().unwrap();
+            cap.start_stream().unwrap();
+
+            let r = Renderer::open(&render_dev.get_id().unwrap(), 16_000, 40).unwrap();
+            let mut p = r.producer();
+            let mut bytes = VecDeque::new();
+            let tone: Vec<i16> = (0..16_000)
+                .map(|i| (8000.0 * (2.0 * std::f64::consts::PI * 440.0 * i as f64 / 16_000.0).sin()) as i16)
+                .collect();
+            for chunk in tone.chunks(160) {
+                let mut pushed = 0;
+                while pushed < chunk.len() {
+                    pushed += p.push(&chunk[pushed..]);
+                    if pushed < chunk.len() {
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                }
+                thread::sleep(Duration::from_millis(9));
+                let _ = capture.read_from_device_to_deque(&mut bytes);
+            }
+            thread::sleep(Duration::from_millis(100));
+            let _ = capture.read_from_device_to_deque(&mut bytes);
+            cap.stop_stream().unwrap();
+            assert!(!r.ended(), "{input}: {:?}", r.end_error());
+            drop(r);
+
+            let bytes = Vec::from(bytes);
+            let samples: Vec<f32> = bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
+            let rms = |ch: usize| {
+                let s: Vec<f32> = samples.as_chunks::<2>().0.iter().map(|f| f[ch]).collect();
+                (s.iter().map(|x| x * x).sum::<f32>() / s.len().max(1) as f32).sqrt()
+            };
+            let (l, rr) = (rms(0), rms(1));
+            eprintln!("{input}: {} frames, rms L {l:.4} R {rr:.4}", samples.len() / 2);
+            assert!(l > 0.02 && rr > 0.02, "{input}: L {l} R {rr}");
+            assert!((l / rr - 1.0).abs() < 0.2, "{input}: L {l} R {rr}");
+        }
     }
 
     /// Renders a 1 kHz tone to the default output device for 1 s (audible)

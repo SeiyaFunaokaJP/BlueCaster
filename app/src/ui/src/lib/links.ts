@@ -26,8 +26,8 @@ export const LINKS = {
   vbAudioHome: "https://vb-audio.com/",
   /** VB-Audio's terms for its donationware */
   vbAudioLicensing: "https://vb-audio.com/Services/licensing.htm",
-  // On the same page, below VB-CABLE (HiFi-Cable & ASIO-Bridge)
-  hifiCable: "https://vb-audio.com/Cable/",
+  /** Its download on VB-CABLE's page (HiFi-Cable & ASIO-Bridge) */
+  hifiCable: "https://vb-audio.com/Cable/#DownloadASIOBridge",
 } as const;
 
 /** The third-party licences of this version (a development build has no

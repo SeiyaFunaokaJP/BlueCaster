@@ -484,6 +484,9 @@ function StepDevice() {
     setConnecting(address);
     setPaused(true);
     try {
+      // Windows' outputs not read yet (a click as the step opens): read
+      // first, or the device would start without its cable (issue #86)
+      if (devices() === null) await load();
       const profile = await saveWithProfile(app, address, name, false, cable());
       const ok =
         profile &&

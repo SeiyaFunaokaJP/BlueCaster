@@ -897,15 +897,15 @@ option {
   z-index: 50;
   display: grid;
   place-items: center;
-  /* Over the page, inside its margins: a dialog is as wide as the page's
-     cards (issue #86). The Dialog measures the page's area (beside the
-     navigation, short of its scroll bar). */
-  padding: var(--s6) calc(var(--page-right, 0px) + var(--s6)) var(--s6) calc(var(--page-left, 0px) + var(--s6));
+  padding: var(--s6);
   background: var(--overlay);
   animation: fade var(--t-fast) var(--ease);
 }
+/* As wide as the page's cards, centred in the window (issue #86): the
+   Dialog measures the page's width (beside the navigation, short of its
+   scroll bar) */
 .dialog {
-  width: min(72rem - 2 * var(--s6), 100%);
+  width: min(72rem - 2 * var(--s6), var(--page-width, 100vw) - 2 * var(--s6), 100%);
   /* A tall dialog (SBC XQ settings) fits the window: the title and the
      buttons stay put and the body scrolls */
   max-height: calc(100vh - 2 * var(--s6));
@@ -2146,8 +2146,17 @@ option {
   padding: var(--s3) var(--s4) var(--s4);
   border-top: 1px solid var(--border);
 }
-/* Input Source (the headset microphone, issue #86): its label on the left
-   and Off / Auto / On on the right, the device below it always there */
+/* Input Source (the headset microphone, issue #86): its label, then the
+   device with Off / Auto / On after it (below it when narrow) */
+.input-source-pick {
+  flex-wrap: wrap;
+}
+.input-source-pick > .select {
+  flex: 1 1 12em;
+}
+.input-source-pick > .segmented {
+  align-self: center;
+}
 .input-source {
   display: flex;
   flex-direction: column;
