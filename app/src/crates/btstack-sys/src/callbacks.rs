@@ -268,6 +268,7 @@ extern "C" fn bluecaster_rs_log_message(level: c_int, message: *const c_char) {
         // HCI_DUMP_LOG_LEVEL_DEBUG 0, _INFO 1, _ERROR 2, _PRINT 3 (the
         // Realtek driver's printf, see build.rs)
         match level {
+            2 if is_sco_completion_noise(&text) => tracing::trace!(target: "btstack", "{text}"),
             2 => tracing::warn!(target: "btstack", "{text}"),
             3 => tracing::info!(target: "btstack", "{}", text.trim_end()),
             1 if from_chipset_driver(&text) => tracing::info!(target: "btstack", "{text}"),
@@ -275,6 +276,15 @@ extern "C" fn bluecaster_rs_log_message(level: c_int, message: *const c_char) {
             _ => tracing::trace!(target: "btstack", "{text}"),
         }
     })
+}
+
+/// BTstack counts no SCO packets it sends, yet a MediaTek MT7925 reports
+/// each one completed (#86): hci.c then logs this error once per voice packet,
+/// about 140 a second for as long as a voice link runs (46 000 lines of a
+/// 49 000-line log). BTstack just clamps its count to zero, so the line goes
+/// to trace (the message names no handle: an ACL one would go there too).
+fn is_sco_completion_noise(text: &str) -> bool {
+    text.contains("hci_number_completed_packets, more packet slots freed then sent")
 }
 
 /// BTstack's info log prints key material (ENABLE_LOG_INFO; sm.c,
