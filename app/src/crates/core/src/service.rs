@@ -1459,6 +1459,12 @@ impl Service {
             }
         }
         if le_audio {
+            // A link key from its LE pairing (issue #86) goes with it unless
+            // its classic entry is still saved and connects with that key
+            let dir = &self.inner.opts.config_dir;
+            if !crate::devices::load(dir).iter().any(|d| d.address.eq_ignore_ascii_case(address)) {
+                self.forget_link_key_only(addr);
+            }
             return;
         }
         {
@@ -1471,6 +1477,14 @@ impl Service {
         }
         // A running stack holds the keys in memory and writes them in full
         if !self.host().is_some_and(|h| h.forget_link_key(addr)) {
+            bt_host::link_keys::forget(&crate::paths::link_keys_file(&self.inner.opts.config_dir), &addr);
+        }
+    }
+
+    /// Drops `addr`'s link key alone (its LE keys stay with its LE Audio
+    /// entry's own bond)
+    fn forget_link_key_only(&self, addr: [u8; 6]) {
+        if !self.host().is_some_and(|h| h.forget_link_key_only(addr)) {
             bt_host::link_keys::forget(&crate::paths::link_keys_file(&self.inner.opts.config_dir), &addr);
         }
     }
@@ -2120,19 +2134,29 @@ mod tests {
         let dir = s.inner.opts.config_dir.clone();
         std::fs::create_dir_all(crate::paths::pairing_dir(&dir)).unwrap();
         let line = format!("{} {} 4\n", address.replace(':', "-"), "00".repeat(16));
-        std::fs::write(crate::paths::link_keys_file(&dir), line).unwrap();
+        std::fs::write(crate::paths::link_keys_file(&dir), &line).unwrap();
         s.inner.codecs.lock().unwrap().insert(address.clone(), Default::default());
         *s.last_request.lock().unwrap() = Some(req);
-        // Another device, or the same address's other kind, changes nothing
+        crate::devices::save(&dir, &address, "Classic").unwrap();
+        let keys = || bt_host::link_keys::FileLinkKeyStore::open(&crate::paths::link_keys_file(&dir)).entries().len();
+        // Another device, or the same address's other kind while its classic
+        // entry is saved, changes nothing
         s.forget_device("00:11:22:33:44:66", false);
         s.forget_device(&address, true);
         assert!(s.last_request.lock().unwrap().is_some());
-        assert_eq!(bt_host::link_keys::FileLinkKeyStore::open(&crate::paths::link_keys_file(&dir)).entries().len(), 1);
+        assert_eq!(keys(), 1);
 
         s.forget_device(&address, false);
         assert!(s.last_request.lock().unwrap().is_none());
         assert!(s.device_codecs().is_empty());
-        assert!(bt_host::link_keys::FileLinkKeyStore::open(&crate::paths::link_keys_file(&dir)).entries().is_empty());
+        assert_eq!(keys(), 0);
+
+        // An LE Audio entry without a saved classic one: the link key from
+        // its LE pairing (issue #86) goes with it
+        crate::devices::remove(&dir, &address).unwrap();
+        std::fs::write(crate::paths::link_keys_file(&dir), line).unwrap();
+        s.forget_device(&address, true);
+        assert_eq!(keys(), 0);
     }
 
     #[test]

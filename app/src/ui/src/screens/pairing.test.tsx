@@ -75,6 +75,28 @@ describe("device pairing", () => {
     expect(within(keys).queryByRole("rowheader", { name: t("ui.pairing.link_key") })).toBeNull();
   });
 
+  it("shows the link key an LE Audio entry's LE pairing gave (issue #86)", async () => {
+    location.hash = "#/devices";
+    mock = new MockCore({ speed: 0, scenario: "le" });
+    mock.leLinkKeys = ["F4:4E:FD:00:11:22"];
+    const core = createCore(mock);
+    render(() => <App core={core} />);
+    await screen.findByRole("navigation");
+    await core.request("settings.set", { settings: { ...core.state.snap!.settings, developer_mode: true } });
+    const row = await waitFor(() => {
+      const r = document.querySelector<HTMLElement>('.device-row[data-key$="/le"]');
+      expect(r).not.toBeNull();
+      return r!;
+    });
+    fireEvent.click(within(row).getByRole("button", { name: t("ui.pairing.services") }));
+    const dialog = await screen.findByRole("dialog", { name: t("ui.pairing.services") });
+    fireEvent.click(within(dialog).getByRole("button", { name: t("ui.pairing.key_title") }));
+    const keys = await within(dialog).findByRole("table", { name: t("ui.pairing.key_title") });
+    expect(within(keys).getByRole("rowheader", { name: t("ui.pairing.link_key") })).toBeInTheDocument();
+    expect(within(keys).getByText("35B84730F4F1390A5302A4DC79D37A28")).toBeInTheDocument();
+    expect(within(keys).getByRole("rowheader", { name: t("ui.pairing.ltk") })).toBeInTheDocument();
+  });
+
   it("lists the keys first, folded, the services as a table below them (issue #86)", async () => {
     const { calls } = await open("#/devices", true);
     const [tag] = await screen.findAllByRole("button", { name: t("ui.pairing.services") });

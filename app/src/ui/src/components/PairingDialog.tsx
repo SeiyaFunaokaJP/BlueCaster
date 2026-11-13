@@ -88,8 +88,8 @@ export function PairingDialog(props: { device: Device | null; onClose: () => voi
                     </tr>
                   </thead>
                   <tbody>
-                  {/* An LE Audio entry has no link key, only its LE keys */}
-                  <Show when={!le()}>
+                  {/* An LE Audio entry has a link key only when its LE pairing gave one (issue #86) */}
+                  <Show when={!le() || p().key}>
                     <KeyRow
                       name={t("ui.pairing.link_key")}
                       value={p().key?.key}

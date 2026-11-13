@@ -1046,6 +1046,8 @@ export class MockCore implements Transport {
   adapterDevices: { address: string; name: string; audio: boolean }[] | null = [];
   /** LE keys of the saved devices (device.pairing), as derived with LE Audio on */
   leKeys: DevicePairing["le_keys"] = null;
+  /** Devices whose LE pairing gave a link key too (device.pairing, issue #86) */
+  leLinkKeys: string[] = [];
   /** Why there are none (device.pairing) */
   leKeysMissing: NonNullable<DevicePairing["le_keys_missing"]> = "not_asked";
   /** device.services answers "busy" this many times first (another query runs) */
@@ -1205,10 +1207,15 @@ export class MockCore implements Transport {
         const saved = this.snap.devices.some(
           (d) => d.saved && d.address === String(p.address),
         );
+        const classic = this.snap.devices.some(
+          (d) => d.saved && !d.le_audio && d.address === String(p.address),
+        );
         return {
-          link_key: saved
+          link_key: classic
             ? { key: "00112233445566778899aabbccddeeff", key_type: 4 }
-            : null,
+            : saved && this.leLinkKeys.includes(String(p.address))
+              ? { key: "35b84730f4f1390a5302a4dc79d37a28", key_type: 7 }
+              : null,
           le_keys: saved ? this.leKeys : null,
           le_keys_missing: saved && this.leKeys ? null : this.leKeysMissing,
         };

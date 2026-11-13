@@ -157,6 +157,25 @@ class EmuController(Controller):
         self.send_hci_packet(hci.HCI_Link_Key_Request_Event(bd_addr=connection.peer_address))
         return None
 
+    # --check-link-key: a function giving the link key the sink has for
+    # BlueCaster (None: none); a Link Key Request Reply with another key
+    # fails authentication, as LMP would with a real device
+    expected_link_key = None
+
+    def on_hci_link_key_request_reply_command(self, command):
+        connection = self.classic_connections.get(command.bd_addr)
+        if self.expected_link_key is None or connection is None:
+            return super().on_hci_link_key_request_reply_command(command)
+        expected = self.expected_link_key()
+        if expected is not None and bytes(command.link_key) == expected:
+            print('link key: authenticated with the key the sink has', flush=True)
+            return super().on_hci_link_key_request_reply_command(command)
+        print(f"link key: the key BlueCaster gave differs from the sink's ({'none there' if expected is None else 'another'}), "
+              'authentication failed', flush=True)
+        self.send_hci_packet(hci.HCI_Authentication_Complete_Event(
+            status=hci.HCI_ErrorCode.AUTHENTICATION_FAILURE_ERROR, connection_handle=connection.handle))
+        return hci.HCI_StatusAndAddressReturnParameters(status=hci.HCI_ErrorCode.SUCCESS, bd_addr=command.bd_addr)
+
     def _complete(self, command, data):
         self.send_hci_packet(hci.HCI_Command_Complete_Event(
             num_hci_command_packets=1,
@@ -607,6 +626,11 @@ def refuse_dual_channel(sink):
 
 async def main(args):
     link = LocalLink()
+    if args.le_link_key:
+        # LE data from the address the connection uses (BTstack connects with
+        # its public one), as for the LE Audio sinks
+        from le_audio.controller import LeLocalLink
+        link = LeLocalLink()
     transport = await open_transport(f'tcp-server:127.0.0.1:{args.port}')
     controller_class = EmuController
     if args.hfp:
@@ -672,6 +696,37 @@ async def main(args):
                 config.delegate = Refuse()
             return config
         device.pairing_config_factory = ctkd_config
+    # LE pairing of a dual-mode device (issue #86): its public address as
+    # identity, LinkKey in its key distribution (--le-link-key on) or not,
+    # CT2 (h7) with --le-ct2; the link key it derives is printed
+    sink_link_key = {'key': None}
+    if args.le_link_key:
+        distribution = PairingDelegate.DEFAULT_KEY_DISTRIBUTION
+        if args.le_link_key == 'on':
+            distribution |= PairingDelegate.KeyDistribution.DISTRIBUTE_LINK_KEY
+        make_le_config = device.pairing_config_factory
+
+        def le_config(connection):
+            config = make_le_config(connection)
+            if connection.transport == BT_BR_EDR_TRANSPORT:
+                return config
+            config.identity_address_type = PairingConfig.AddressType.PUBLIC
+            config.delegate = PairingDelegate(local_initiator_key_distribution=distribution,
+                                              local_responder_key_distribution=distribution)
+            return config
+        device.pairing_config_factory = le_config
+        if args.le_ct2:
+            from bumble import smp
+            session_init = smp.Session.__init__
+
+            def with_ct2(self, *a, **k):
+                session_init(self, *a, **k)
+                self.ct2 = True   # Bumble leaves it off; the request's CT2 then decides
+            smp.Session.__init__ = with_ct2
+    if args.check_link_key:
+        bluecaster_controller.aes_ccm = sink_controller.aes_ccm = True
+        bluecaster_controller.link_key_request = True
+        bluecaster_controller.expected_link_key = lambda: sink_link_key['key']
     await device.power_on()
     # SMP over BR/EDR (Bumble serves it by default): with --ctkd as from
     # --ctkd-from's connection on (none before, as a device without it),
@@ -686,6 +741,9 @@ async def main(args):
         if on:
             device.l2cap_channel_manager.register_fixed_channel(SMP_BR_CID, smp_handler)
         print(f'SMP over BR/EDR {"listed" if on else "not listed"} (connection {connections})', flush=True)
+    if args.no_smp_br_edr:
+        # No LE keys from a classic pairing: a later LE pairing is a new one
+        device.l2cap_channel_manager.deregister_fixed_channel(SMP_BR_CID)
     if args.le_audio_adv:
         # Earbuds with LE Audio on (issue #86): over LE too, under the
         # classic address, a CAS general announcement and the name
@@ -832,6 +890,17 @@ async def main(args):
     def on_connection(connection):
         log.info('ACL connection from %s', connection.peer_address)
         connection.on('disconnection', lambda reason: print(f'link down (0x{reason:02X})', flush=True))
+        if args.le_link_key or args.check_link_key:
+            le = connection.transport != BT_BR_EDR_TRANSPORT
+
+            def on_pairing(keys):
+                if keys.link_key is not None:
+                    sink_link_key['key'] = keys.link_key.value
+                if le:
+                    print(f'LE pairing: link key {keys.link_key.value.hex() if keys.link_key else "-"}', flush=True)
+                else:
+                    print('classic pairing', flush=True)
+            connection.on('pairing', on_pairing)
         on_connection.count += 1
         if args.ctkd:
             smp_over_br_edr(on_connection.count)
@@ -928,5 +997,12 @@ if __name__ == '__main__':
                         help='also an HFP hands-free unit with these codecs (cvsd: no codec negotiation), '
                              'SCO carried between the controllers (hfp_audio.py)')
     parser.add_argument('--ctkd-silent', action='store_true', help='with --ctkd, list SMP over BR/EDR, answer nothing')
+    parser.add_argument('--le-link-key', choices=['on', 'off'],
+                        help='LE pairing gives the public address as identity and LinkKey in its key '
+                             'distribution (on) or not (off); prints the link key derived (issue #86)')
+    parser.add_argument('--le-ct2', action='store_true', help='with --le-link-key, derive with h7 (CT2) when asked')
+    parser.add_argument('--no-smp-br-edr', action='store_true', help='do not list SMP over BR/EDR (no CTKD from BR/EDR)')
+    parser.add_argument('--check-link-key', action='store_true',
+                        help='authenticate a classic link only with the link key the sink has for BlueCaster')
     bumble.logging.setup_basic_logging(parser.parse_known_args()[0].log_level)
     asyncio.run(main(parser.parse_args()))

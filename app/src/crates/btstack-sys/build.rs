@@ -387,11 +387,18 @@ fn patched_avrcp_target(btstack: &Path) -> PathBuf {
 /// (bluecaster_ctkd_wanted). A device that does not list CID 7 is not
 /// asked; a failure ends SMP on that link only, never the link.
 ///
-/// The other direction (a BR/EDR link key derived from an LE pairing) stays
-/// off, as before: BTstack would derive and store it whether or not the
-/// device distributes one, replacing the device's classic key. LE pairing
-/// keeps its key distribution and AuthReq of today (no LinkKey, no CT2),
-/// and SM never stores a link key.
+/// The other direction, a BR/EDR link key derived from an LE pairing (issue
+/// #86: a dual-mode device paired as LE Audio had no link key): LE pairing
+/// offers LinkKey and CT2 (BTstack's own key distribution and AuthReq with
+/// the flag), but SM derives the key only when the device agreed, i.e. the
+/// Pairing Request and Response both carry LinkKey in the initiator and the
+/// responder key distribution (Core Vol 3 Part H 3.6.1: only then does
+/// either side derive it; unpatched BTstack 1.8.x derives it on every LE
+/// Secure Connections bonding). h6, or h7 when both set CT2 (Part H
+/// 2.4.2.4), from the full LTK before it is masked (ESR09 E6405). SM then
+/// does not store it itself: it hands the outcome to Rust
+/// (bluecaster_rs_ctkd_from_le, see src/ctkd.rs), which keeps the key under
+/// a public identity address only.
 fn patched_sm(btstack: &Path) -> PathBuf {
     const FILE: &str = "sm.c";
     let mut source = std::fs::read_to_string(btstack.join("src/ble/sm.c")).unwrap();
@@ -401,7 +408,10 @@ fn patched_sm(btstack: &Path) -> PathBuf {
          #define ENABLE_CROSS_TRANSPORT_KEY_DERIVATION\n\
          int bluecaster_ctkd_enabled(void);\n\
          int bluecaster_ctkd_wanted(const unsigned char *addr);\n\
-         void bluecaster_ctkd_note(const unsigned char *addr, int what);\n",
+         void bluecaster_ctkd_note(const unsigned char *addr, int what);\n\
+         void bluecaster_ctkd_from_le(int why, int addr_type, const unsigned char *addr, const unsigned char *key,\n\
+                                      int key_type);\n\
+         static int bluecaster_link_key_agreed(void);\n",
     );
     // Why a link is not asked over, so the Services dialog can say (issue
     // #86): 1 not Secure Connections, 2 the device opened it, 3 no CID 7
@@ -445,19 +455,58 @@ fn patched_sm(btstack: &Path) -> PathBuf {
         "} else if (sm_conn->sm_pairing_requested){",
         "} else if (sm_conn->sm_pairing_requested || bluecaster_ctkd_wanted(sm_conn->sm_peer_address)){",
     );
-    // No link key derived from an LE pairing, none offered in it
+    // A link key from an LE pairing only when both sides agreed to it: the
+    // device derives one only then, so only then is ours the same as its
     let from_le = "static bool sm_ctkd_from_le(void) {";
-    replace_once(&mut source, FILE, from_le, &format!("{from_le}\n    if (setup != NULL) return false;"));
-    replace_once(&mut source, FILE, "flags |= SM_KEYDIST_LINK_KEY;", "/* BlueCaster: no LinkKey over LE */");
-    replace_once(&mut source, FILE, "auth_req |= SM_AUTHREQ_CT2;", "/* BlueCaster: no CT2 over LE */");
-    // Nor stored: after a derivation from BR/EDR, BTstack 1.8.1 stores the
-    // link key it read for it (setup->sm_link_key, most significant octet
-    // first for h6 / h7) back as a link key, byte-reversed and under the
-    // device's identity address. With a public identity that replaces the
-    // device's link key with a wrong one (the next connection fails
-    // authentication); with a random one it adds a stray key.
+    replace_once(
+        &mut source,
+        FILE,
+        from_le,
+        &format!(
+            "static int bluecaster_link_key_agreed(void) {{\n\
+             \x20   return (sm_pairing_packet_get_initiator_key_distribution(setup->sm_m_preq)\n\
+             \x20         & sm_pairing_packet_get_responder_key_distribution(setup->sm_m_preq)\n\
+             \x20         & sm_pairing_packet_get_initiator_key_distribution(setup->sm_s_pres)\n\
+             \x20         & sm_pairing_packet_get_responder_key_distribution(setup->sm_s_pres)\n\
+             \x20         & SM_KEYDIST_LINK_KEY) != 0;\n\
+             }}\n\
+             {from_le}\n    if (!bluecaster_link_key_agreed()) return false;"
+        ),
+    );
+    // Stored by Rust, not here (BTstack: under the identity address of any
+    // type, kept back when the stored key is authenticated and the derived
+    // one is not). BTstack 1.8.3 calls this after an LE bonding (both sides
+    // bondable) only; sm_init_setup resets sm_link_key_type for each LE
+    // pairing, so a key read for a derivation from BR/EDR never comes here.
+    // why: 0 derived, 1 no LE Secure Connections, 2 the device did not
+    // agree to LinkKey, 3 not derived otherwise. The key goes over in HCI
+    // order (least significant octet first; SM's h6 / h7 result is most
+    // significant first), as BTstack's own store and link_keys.txt keep it.
     let store = "static void sm_store_classic_bonding_information(sm_connection_t * sm_conn) {";
-    replace_once(&mut source, FILE, store, &format!("{store}\n    if (sm_conn != NULL) return;"));
+    replace_once(
+        &mut source,
+        FILE,
+        store,
+        &format!(
+            "{store}\n\
+             \x20   if (sm_conn != NULL) {{\n\
+             \x20       link_key_t bluecaster_key;\n\
+             \x20       int why = 3;\n\
+             \x20       memset(bluecaster_key, 0, sizeof(bluecaster_key));\n\
+             \x20       if (setup->sm_link_key_type != INVALID_LINK_KEY) {{\n\
+             \x20           why = 0;\n\
+             \x20           reverse_128(setup->sm_link_key, bluecaster_key);\n\
+             \x20       }} else if (!setup->sm_use_secure_connections) {{\n\
+             \x20           why = 1;\n\
+             \x20       }} else if (!bluecaster_link_key_agreed()) {{\n\
+             \x20           why = 2;\n\
+             \x20       }}\n\
+             \x20       bluecaster_ctkd_from_le(why, setup->sm_peer_addr_type, setup->sm_peer_address, bluecaster_key,\n\
+             \x20                               (int) setup->sm_link_key_type);\n\
+             \x20       return;\n\
+             \x20   }}"
+        ),
+    );
     let path = PathBuf::from(env::var("OUT_DIR").unwrap()).join("sm.c");
     std::fs::write(&path, source).unwrap();
     path
