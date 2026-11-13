@@ -5143,10 +5143,12 @@ mod tests {
         assert_eq!(vendor_note(ChipVendor::Qualcomm, 0x0CF3, 0xE300).unwrap().key, "firmware.vendor_qualcomm");
         assert_eq!(vendor_note(ChipVendor::Qualcomm, 0x0489, 0xE0C7).unwrap().key, "firmware.vendor_qualcomm");
         assert_eq!(vendor_note(ChipVendor::Qualcomm, 0x0CF3, 0xE400).unwrap().key, "firmware.vendor_unsupported");
-        // MediaTek: the MT79xx have a loader, the others none (MT6639)
+        // MediaTek: the MT79xx and the MT7927 have a loader, the others none
+        // (MT7663)
         assert_eq!(vendor_note(ChipVendor::MediaTek, 0x0E8D, 0x7925).unwrap().key, "firmware.vendor_mediatek");
         assert_eq!(vendor_note(ChipVendor::MediaTek, 0x0E8D, 0x0608).unwrap().key, "firmware.vendor_mediatek");
-        assert_eq!(vendor_note(ChipVendor::MediaTek, 0x0E8D, 0x6639).unwrap().key, "firmware.vendor_unsupported");
+        assert_eq!(vendor_note(ChipVendor::MediaTek, 0x0E8D, 0x7927).unwrap().key, "firmware.vendor_mediatek");
+        assert_eq!(vendor_note(ChipVendor::MediaTek, 0x0E8D, 0x7663).unwrap().key, "firmware.vendor_unsupported");
         assert!(vendor_note(ChipVendor::Realtek, 0x0BDA, 0x8771).is_none());
         // ROM dongles and Wi-Fi-loaded combos: a note, never "unsupported"
         assert_eq!(vendor_note(ChipVendor::Barrot, 0x33FA, 0x0010).unwrap().key, "firmware.vendor_barrot");

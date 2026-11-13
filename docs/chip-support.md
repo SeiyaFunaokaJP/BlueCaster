@@ -6,7 +6,7 @@ nav_order: 4.5
 
 # Adding Chip Support
 
-BlueCaster drives the Bluetooth adapter itself (WinUSB), so it has to do what the vendor's Windows driver does before the adapter works: on many chips, load firmware into it at every start. Realtek, Intel, Broadcom and CSR adapters work today, and so do the MediaTek MT7925, MT7922, MT7921 and MT7902 and the Qualcomm QCA61x4, QCA9377 and WCN6855 (the MT7922, the MT7902 and the Qualcomm chips not yet tested on hardware); the other MediaTek chips (MT7927 and older ones) and Qualcomm chips (QCA6290, WCN785x) do not, because nobody has written their loader yet. `app/src/crates/bt-host/src/mediatek.rs` (the MT79xx's) is a real loader to start from for another MediaTek chip.
+BlueCaster drives the Bluetooth adapter itself (WinUSB), so it has to do what the vendor's Windows driver does before the adapter works: on many chips, load firmware into it at every start. Realtek, Intel, Broadcom and CSR adapters work today, and so do the MediaTek MT7925, MT7927, MT7922, MT7921 and MT7902 and the Qualcomm QCA61x4, QCA9377 and WCN6855 (the MT7927, the MT7922, the MT7902 and the Qualcomm chips not yet tested on hardware); the other MediaTek chips (older ones) and Qualcomm chips (QCA6290, WCN785x) do not, because nobody has written their loader yet. `app/src/crates/bt-host/src/mediatek.rs` (the MT79xx's) is a real loader to start from for another MediaTek chip.
 
 This page is the procedure for adding one. You need an adapter with that chip; the maintainers do not have them. Even without writing code, you can help: steps 1 and 2 give the report a contributor needs.
 

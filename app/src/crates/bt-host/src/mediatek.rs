@@ -26,6 +26,16 @@
 //! (mtkbtfilterx.sys and the firmware it ships, 26.40.3.69 and 1.1147.0.616)
 //! and the chip probe in #86; written without vendor or GPL source.
 //!
+//! The MT7927 (chip ID 0x6639, experimental, not tested on hardware) goes
+//! the MT7925's way in that driver, with three differences: its file is
+//! `BT_RAM_CODE_MT6639_2_1_hdr.bin`, which has sections the driver does not
+//! send at start (it picks them by type, [`START_SECTION_TYPES`]), and one
+//! more WMT command comes before Bluetooth on ([`MT6639_SETUP`]). The
+//! driver also starts its interface 2 at alternate setting 0, where the
+//! MT7925 gets 1: hci_transport's iso_intr, whose LE Audio settings were
+//! measured on an MT7925, picks the setting from the descriptors and does
+//! not know the chip, so they are unconfirmed on the MT7927.
+//!
 //! Firmware: the folder first (as for the other loaders, also in its
 //! `mediatek\` subfolder), then the container MediaTek's Windows driver
 //! installed (`mtkbt_v2.dat`, see [`from_windows_driver`]): a PC with a
@@ -86,9 +96,28 @@ const CHIP_FLAVORED: u16 = 0x7961;
 
 /// Chips this loader takes (the chip ID's low half): the MT79xx of
 /// MediaTek's Windows driver, whose files share one layout. The MT7921
-/// reports 0x7961. USB IDs in chips::LOADER_CHIPS; only the MT7925 has been
-/// seen (#86), the others are untested.
-pub const CHIPS: &[u16] = &[0x7925, 0x7922, 0x7961, 0x7902];
+/// reports 0x7961, the MT7927 0x6639. USB IDs in chips::LOADER_CHIPS; the
+/// MT7925 (#86) and an MT7921 have been seen, the others are untested.
+pub const CHIPS: &[u16] = &[0x7925, 0x7922, 0x7961, 0x7902, CHIP_MT6639];
+
+/// The MT7927's chip ID
+const CHIP_MT6639: u16 = 0x6639;
+
+/// The chips whose sections MediaTek's driver picks by type at start
+/// ([`START_SECTION_TYPES`]); the others get every section in file order
+const TYPED_SECTION_CHIPS: &[u16] = &[0x7925, CHIP_MT6639];
+/// The section types (a section map's word 7) the driver sends at start, in
+/// this order, the first section of each. The MT6639's file has more
+/// (type 0x20000) that the driver sends only later, on a separate path; the
+/// MT7925's lists one without data. For the MT7925 file this is its file
+/// order.
+const START_SECTION_TYPES: &[u32] = &[0, 2, 3, 0x80, 0x90, 0x1_0000];
+
+/// The MT6639's command between the last section and Bluetooth on, as
+/// MediaTek's driver sends it (WMT opcode, flag, data), and the answer it
+/// expects (flag, data). Its meaning is not known.
+const MT6639_SETUP: (u8, u8, &[u8]) = (0x55, 0x02, &[0x02, 0x01, 0x03, 0x03, 0x03, 0x01]);
+const MT6639_SETUP_ANSWER: (u8, &[u8]) = (0x00, &[0x02]);
 
 /// The firmware file's layout
 const HEADER_SIZE: usize = 32;
@@ -123,30 +152,40 @@ struct Section {
     data: Vec<u8>,
 }
 
-/// A firmware file as the chip takes it: the sections with data. Err: why
-/// the file is not one
-fn parse_firmware(file: &[u8]) -> Result<Vec<Section>, &'static str> {
+/// A firmware file as `chip` takes it: the sections with data, in the order
+/// to send them. Err: why the file is not one
+fn parse_firmware(file: &[u8], chip: u16) -> Result<Vec<Section>, &'static str> {
     let count_at = HEADER_SIZE + 12;
     let count = file.get(count_at..count_at + 4).ok_or("too short for a MediaTek firmware header")?;
     let count = u32::from_le_bytes([count[0], count[1], count[2], count[3]]) as usize;
     if count == 0 || count > MAX_SECTIONS {
         return Err("no plausible section count");
     }
-    let mut sections = Vec::new();
+    // (type, section) of every section with data
+    let mut found = Vec::new();
     for i in 0..count {
         let at = HEADER_SIZE + GLOBAL_SIZE + i * SECTION_MAP_SIZE;
         let map = file.get(at..at + SECTION_MAP_SIZE).ok_or("section maps cut short")?;
-        let word = |n: usize| u32::from_le_bytes([map[n * 4], map[n * 4 + 1], map[n * 4 + 2], map[n * 4 + 3]]) as usize;
+        let word = |n: usize| u32::from_le_bytes([map[n * 4], map[n * 4 + 1], map[n * 4 + 2], map[n * 4 + 3]]);
         // Offset in the file, then the size to download (the spec's second
         // word); sections without one only describe the image
-        let (offset, size) = (word(1), word(4));
+        let (offset, size) = (word(1) as usize, word(4) as usize);
         if size == 0 {
             continue;
         }
         let data =
             offset.checked_add(size).and_then(|end| file.get(offset..end)).ok_or("a section is outside the file")?;
-        sections.push(Section { spec: map[SECTION_SPEC].to_vec(), data: data.to_vec() });
+        found.push((word(7), Section { spec: map[SECTION_SPEC].to_vec(), data: data.to_vec() }));
     }
+    let sections: Vec<Section> = if TYPED_SECTION_CHIPS.contains(&chip) {
+        START_SECTION_TYPES
+            .iter()
+            .filter_map(|t| found.iter().position(|(kind, _)| kind == t))
+            .map(|i| found[i].1.clone())
+            .collect()
+    } else {
+        found.into_iter().map(|(_, s)| s).collect()
+    };
     if sections.is_empty() {
         return Err("no section to download");
     }
@@ -208,9 +247,14 @@ fn read_wmt_event() -> ControlRequest {
 }
 
 /// The firmware file of a chip: "BT_RAM_CODE_MT7925_1_1_hdr.bin", the
-/// MT7961's "1a" flavor "BT_RAM_CODE_MT7961_1a_2_hdr.bin"
+/// MT7961's "1a" flavor "BT_RAM_CODE_MT7961_1a_2_hdr.bin", the MT6639's
+/// "BT_RAM_CODE_MT6639_2_1_hdr.bin"
 pub fn firmware_name(chip: u16, fw_version: u32, flavor_a: bool) -> String {
-    let flavor = if flavor_a { "1a" } else { "1" };
+    let flavor = match (chip, flavor_a) {
+        (CHIP_MT6639, _) => "2",
+        (_, true) => "1a",
+        (_, false) => "1",
+    };
     format!("BT_RAM_CODE_MT{chip:04X}_{flavor}_{:x}_hdr.bin", (fw_version & 0xFF) + 1)
 }
 
@@ -221,6 +265,8 @@ enum Wmt {
     Query(usize),
     /// A chunk of the section
     Chunk,
+    /// The MT6639's [`MT6639_SETUP`], before Bluetooth on
+    Setup,
     /// Bluetooth on
     FuncOn,
 }
@@ -260,6 +306,8 @@ pub struct Loader {
     read_file: FileReader,
     state: State,
     started: Instant,
+    /// The chip ID, once read
+    chip: u16,
     file: String,
     sections: Vec<Section>,
     /// The section being sent, its chunks and the next one
@@ -282,6 +330,7 @@ impl Loader {
             read_file,
             state: State::Idle,
             started: Instant::now(),
+            chip: 0,
             file: String::new(),
             sections: Vec::new(),
             current: 0,
@@ -359,8 +408,25 @@ impl Loader {
         self.send(Wmt::Chunk, first)
     }
 
+    /// After the settle time: the MT6639's setup command, else Bluetooth on
+    fn before_func_on(&mut self) -> Vec<Action> {
+        if self.chip == CHIP_MT6639 {
+            let (op, flag, data) = MT6639_SETUP;
+            return self.send(Wmt::Setup, wmt_command(op, flag, data));
+        }
+        self.func_on()
+    }
+
+    fn func_on(&mut self) -> Vec<Action> {
+        self.send(Wmt::FuncOn, wmt_command(WMT_FUNC_CTRL, 0, &[0x01]))
+    }
+
     fn on_wmt(&mut self, what: Wmt, op: u8, flag: u8, data: &[u8]) -> Vec<Action> {
-        let expected = if what == Wmt::FuncOn { WMT_FUNC_CTRL } else { WMT_PATCH_DOWNLOAD };
+        let expected = match what {
+            Wmt::FuncOn => WMT_FUNC_CTRL,
+            Wmt::Setup => MT6639_SETUP.0,
+            Wmt::Query(_) | Wmt::Chunk => WMT_PATCH_DOWNLOAD,
+        };
         if op != expected {
             tracing::warn!("mediatek: WMT event for opcode 0x{op:02X}, waiting for 0x{expected:02X}");
             return self.finish(Err(LoadError::Unsupported("the chip answered another WMT command")));
@@ -393,6 +459,16 @@ impl Loader {
                     }
                 }
             }
+            Wmt::Setup => {
+                // MediaTek's driver stops on another answer; going on shows
+                // in the log whether the chip starts all the same
+                if (flag, data) == MT6639_SETUP_ANSWER {
+                    tracing::info!("mediatek: MT6639 setup command answered");
+                } else {
+                    tracing::warn!("mediatek: MT6639 setup command answered with flag {flag}, data {data:02X?}");
+                }
+                self.func_on()
+            }
             Wmt::FuncOn => {
                 let status = data.get(..2).map(|s| u16::from_be_bytes([s[0], s[1]]));
                 tracing::info!("mediatek: Bluetooth on, status {status:04X?}");
@@ -419,7 +495,8 @@ impl Loader {
         if file != wanted {
             tracing::info!("mediatek: {wanted} not found, using {file}");
         }
-        match parse_firmware(&data) {
+        self.chip = chip;
+        match parse_firmware(&data, chip) {
             Ok(sections) => {
                 self.total_chunks = sections.iter().map(Self::chunk_count).sum();
                 tracing::info!(
@@ -483,6 +560,7 @@ impl Loader {
                 return self.finish(Err(LoadError::Timeout(match what {
                     Wmt::Query(_) => "section query",
                     Wmt::Chunk => "download",
+                    Wmt::Setup => "MT6639 setup",
                     Wmt::FuncOn => "Bluetooth on",
                 })));
             }
@@ -565,7 +643,7 @@ impl ChipLoader for Loader {
                 vec![Action::UsbControl(read_wmt_event())]
             }
             State::Pause { then: Wmt::Query(index) } => self.query(index),
-            State::Pause { then: Wmt::FuncOn } => self.send(Wmt::FuncOn, wmt_command(WMT_FUNC_CTRL, 0, &[0x01])),
+            State::Pause { then: Wmt::FuncOn } => self.before_func_on(),
             state => {
                 self.state = state;
                 Vec::new()
@@ -618,7 +696,7 @@ impl ChipLoader for Loader {
         match self.state {
             State::Version { .. } => "version",
             State::ChipId | State::ChipId79xx | State::FwVersion { .. } | State::Flavor { .. } => "chip ID",
-            State::Waiting { what: Wmt::FuncOn, .. } | State::Pause { then: Wmt::FuncOn } => "start",
+            State::Waiting { what: Wmt::FuncOn | Wmt::Setup, .. } | State::Pause { then: Wmt::FuncOn } => "start",
             State::Waiting { .. } | State::Pause { .. } => "download",
             State::Idle | State::Done => "",
         }
@@ -724,6 +802,8 @@ mod tests {
             // dlAddr, dlSize, then a marker to find the spec by
             map[12..16].copy_from_slice(&(0x0090_0000u32 + i as u32).to_le_bytes());
             map[16..20].copy_from_slice(&(size as u32).to_le_bytes());
+            // Types in the order the MT7925 is sent them
+            map[28..32].copy_from_slice(&START_SECTION_TYPES[(i + 1) % START_SECTION_TYPES.len()].to_le_bytes());
             map[63] = 0xA0 + i as u8;
             f.extend_from_slice(&map);
             body.extend((0..size).map(|n| (n + i) as u8));
@@ -758,6 +838,8 @@ mod tests {
         received: Vec<Vec<u8>>,
         current: Option<usize>,
         bluetooth_on: bool,
+        /// The MT6639's setup command came
+        setup: bool,
     }
 
     impl Chip {
@@ -779,6 +861,7 @@ mod tests {
                 received: Vec::new(),
                 current: None,
                 bluetooth_on: false,
+                setup: false,
             }
         }
 
@@ -843,7 +926,15 @@ mod tests {
                     self.received[section].extend_from_slice(data);
                     self.answer(op, 0, &[]);
                 }
+                (op, flag) if (op, flag) == (MT6639_SETUP.0, MT6639_SETUP.1) => {
+                    assert_eq!(self.id_79xx as u16, CHIP_MT6639, "only the MT6639 gets it");
+                    assert_eq!(data, MT6639_SETUP.2);
+                    assert!(!self.received.is_empty() || !self.has.is_empty(), "after the download");
+                    self.setup = true;
+                    self.answer(op, MT6639_SETUP_ANSWER.0, MT6639_SETUP_ANSWER.1);
+                }
                 (WMT_FUNC_CTRL, 0) => {
+                    assert_eq!(self.setup, self.id_79xx as u16 == CHIP_MT6639, "the MT6639's setup first");
                     assert_eq!(data, [0x01]);
                     self.bluetooth_on = true;
                     self.answer(op, 0, &[0x04, 0x04]);
@@ -917,6 +1008,10 @@ mod tests {
         assert!(run(&mut Chip::new(), files(&[10])).controls.iter().all(|c| c.index != 0x0020));
     }
 
+    /// The MT6639 section of MediaTek's driver 26.40.3.69
+    const MT7927_IDS: [(u16, u16); 5] =
+        [(0x0E8D, 0x6639), (0x0E8D, 0x7927), (0x0489, 0xE110), (0x0E8D, 0x0738), (0x13D3, 0x3589)];
+
     #[test]
     fn every_chip_has_mediatek_usb_ids_listed() {
         use crate::chips::{ChipVendor, LOADER_CHIPS, vendor_for_usb};
@@ -925,7 +1020,10 @@ mod tests {
             .filter(|(v, _, _)| *v == ChipVendor::MediaTek)
             .map(|&(_, vid, pid)| (vid, pid))
             .collect();
-        for (vid, pid) in [(0x0E8D, 0x7925), (0x0E8D, 0x7922), (0x0E8D, 0x7961), (0x0E8D, 0x7902), (0x0E8D, 0x0608)] {
+        for (vid, pid) in [(0x0E8D, 0x7925), (0x0E8D, 0x7922), (0x0E8D, 0x7961), (0x0E8D, 0x7902), (0x0E8D, 0x0608)]
+            .into_iter()
+            .chain(MT7927_IDS)
+        {
             assert!(ids.contains(&(vid, pid)), "{vid:04X}:{pid:04X}");
         }
         // Every listed ID is taken as MediaTek
@@ -1025,7 +1123,7 @@ mod tests {
 
     #[test]
     fn an_unknown_chip_is_left_alone() {
-        let r = run(&mut Chip { id_79xx: 0x6639, ..Chip::new() }, files(&[10]));
+        let r = run(&mut Chip { id_79xx: 0x7663, ..Chip::new() }, files(&[10]));
         assert!(matches!(r.result, Err(LoadError::Unsupported(_))), "{:?}", r.result);
         assert!(r.opcodes().iter().all(|&o| o != OP_WMT), "nothing sent to it");
     }
@@ -1074,29 +1172,93 @@ mod tests {
         assert!(matches!(r.result, Err(LoadError::Host(_))), "{:?}", r.result);
     }
 
-    #[test]
-    fn reads_the_section_layout_of_the_real_file() {
-        // The header and the five maps of BT_RAM_CODE_MT7925_1_1_hdr.bin in
-        // driver 26.40.3.69 (offset, size, then the download size)
-        let maps: [(u32, u32, u32); 5] = [
-            (0x1A0, 0x12DC0, 0x12DC0),
-            (0x12F60, 0x54840, 0x54840),
-            (0x677A0, 0xA240, 0xA240),
-            (0x719E0, 0, 0),
-            (0x719E0, 0x3A, 0),
-        ];
-        let mut f = vec![0u8; 0x719E0 + 0x3A];
-        f[HEADER_SIZE + 12] = 5;
-        for (i, (offset, size, dl)) in maps.iter().enumerate() {
+    /// A file with these maps (offset, size, download size, type) and
+    /// section data that tells its offset
+    fn file_with_maps(maps: &[(u32, u32, u32, u32)]) -> Vec<u8> {
+        let len = maps.iter().map(|&(offset, size, _, _)| (offset + size) as usize).max().unwrap();
+        let mut f: Vec<u8> = (0..len).map(|n| (n * 7 + n / 251) as u8).collect();
+        f[..HEADER_SIZE + GLOBAL_SIZE + maps.len() * SECTION_MAP_SIZE].fill(0);
+        f[HEADER_SIZE + 12] = maps.len() as u8;
+        for (i, (offset, size, dl, kind)) in maps.iter().enumerate() {
             let at = HEADER_SIZE + GLOBAL_SIZE + i * SECTION_MAP_SIZE;
             f[at + 4..at + 8].copy_from_slice(&offset.to_le_bytes());
             f[at + 8..at + 12].copy_from_slice(&size.to_le_bytes());
             f[at + 16..at + 20].copy_from_slice(&dl.to_le_bytes());
+            f[at + 28..at + 32].copy_from_slice(&kind.to_le_bytes());
         }
-        let sections = parse_firmware(&f).unwrap();
-        let sizes: Vec<usize> = sections.iter().map(|s| s.data.len()).collect();
-        assert_eq!(sizes, [0x12DC0, 0x54840, 0xA240], "the two without a download size are skipped");
-        assert!(sections.iter().all(|s| s.spec.len() == 52));
+        f
+    }
+
+    /// The maps of BT_RAM_CODE_MT7925_1_1_hdr.bin in driver 26.40.3.69
+    const MT7925_MAPS: [(u32, u32, u32, u32); 5] = [
+        (0x1A0, 0x12DC0, 0x12DC0, 2),
+        (0x12F60, 0x54840, 0x54840, 0x80),
+        (0x677A0, 0xA240, 0xA240, 0x1_0000),
+        (0x719E0, 0, 0, 0x2_0000),
+        (0x719E0, 0x3A, 0, 0),
+    ];
+
+    /// The maps of BT_RAM_CODE_MT6639_2_1_hdr.bin in driver 26.40.3.69
+    const MT6639_MAPS: [(u32, u32, u32, u32); 9] = [
+        (0x2A0, 0xF1C0, 0xF1C0, 3),
+        (0xF460, 0xD900, 0xD900, 2),
+        (0x1CD60, 0x201C0, 0x201C0, 0x90),
+        (0x3CF20, 0x2B680, 0x2B680, 0x80),
+        (0x685A0, 0xEF80, 0xEF80, 0x1_0000),
+        (0x77520, 0xD700, 0xD700, 0x2_0000),
+        (0x84C20, 0x7280, 0x7280, 0x2_0000),
+        (0x8BEA0, 0, 0, 0x2_0000),
+        (0x8BEA0, 0x35, 0, 0),
+    ];
+
+    #[test]
+    fn reads_the_section_layout_of_the_real_file() {
+        let f = file_with_maps(&MT7925_MAPS);
+        let sizes = |chip| -> Vec<usize> { parse_firmware(&f, chip).unwrap().iter().map(|s| s.data.len()).collect() };
+        assert_eq!(sizes(0x7925), [0x12DC0, 0x54840, 0xA240], "the two without a download size are skipped");
+        assert_eq!(sizes(0x7922), sizes(0x7925), "file order gives the same");
+        assert!(parse_firmware(&f, 0x7925).unwrap().iter().all(|s| s.spec.len() == 52));
+    }
+
+    /// The MT6639's sections go in the driver's order of types, and those
+    /// of type 0x20000 stay out
+    #[test]
+    fn the_mt6639_gets_its_sections_by_type() {
+        let f = file_with_maps(&MT6639_MAPS);
+        let sections = parse_firmware(&f, CHIP_MT6639).unwrap();
+        let expected: Vec<&[u8]> = [1, 0, 3, 2, 4]
+            .iter()
+            .map(|&i| {
+                let (offset, size, _, _) = MT6639_MAPS[i];
+                &f[offset as usize..(offset + size) as usize]
+            })
+            .collect();
+        let data: Vec<&[u8]> = sections.iter().map(|s| s.data.as_slice()).collect();
+        assert_eq!(data, expected);
+    }
+
+    #[test]
+    fn loads_an_mt6639_with_its_file_and_setup_command() {
+        let name = "BT_RAM_CODE_MT6639_2_1_hdr.bin";
+        assert_eq!(firmware_name(CHIP_MT6639, 0, false), name);
+        assert_eq!(firmware_name(CHIP_MT6639, 0x0000_8a00, false), name);
+        let file = file_with_maps(&MT6639_MAPS);
+        let mut chip = Chip { id_79xx: CHIP_MT6639 as u32, fw_version: Ok(0x0000_8a00), ..Chip::new() };
+        let r = run(&mut chip, HashMap::from([(name.to_owned(), file.clone())]));
+        assert_eq!(r.result, Ok(Outcome::Loaded { firmware: name.into(), detail: None }));
+        let sent: Vec<Vec<u8>> = parse_firmware(&file, CHIP_MT6639).unwrap().into_iter().map(|s| s.data).collect();
+        assert_eq!(chip.received, sent);
+        assert!(chip.setup && chip.bluetooth_on);
+        // The setup command as MediaTek's driver sends it, right before
+        // Bluetooth on
+        let wmt: Vec<&[u8]> = r.commands.iter().filter(|c| c.opcode() == OP_WMT).map(|c| c.params()).collect();
+        let n = wmt.len();
+        assert_eq!(wmt[n - 2], [0x01, 0x55, 0x07, 0x00, 0x02, 0x02, 0x01, 0x03, 0x03, 0x03, 0x01]);
+        assert_eq!(wmt[n - 1], [0x01, 0x06, 0x02, 0x00, 0x00, 0x01]);
+        // Another chip never gets it
+        let mut mt7925 = Chip::new();
+        run(&mut mt7925, files(&[10]));
+        assert!(!mt7925.setup && mt7925.bluetooth_on);
     }
 
     #[test]
@@ -1131,12 +1293,19 @@ mod tests {
         let path = std::env::var("MTKBT_DAT").expect("MTKBT_DAT");
         let container = std::fs::read(path).unwrap();
         // Chip, ROM version, flavor of each file the driver may have
-        let cases = [(0x7925u16, 0u32, 0u32), (0x7922, 0, 0), (0x7902, 0, 0), (0x7961, 1, 0), (0x7961, 1, FLAVOR_1A)];
+        let cases = [
+            (0x7925u16, 0u32, 0u32),
+            (0x7922, 0, 0),
+            (0x7902, 0, 0),
+            (0x7961, 1, 0),
+            (0x7961, 1, FLAVOR_1A),
+            (CHIP_MT6639, 0, 0),
+        ];
         let mut loaded = 0;
         for (chip_id, version, flavor) in cases {
             let name = firmware_name(chip_id, version, flavor != 0);
             let Some(file) = driver_container_file(&container, &name) else { continue };
-            let sections = parse_firmware(&file).unwrap();
+            let sections = parse_firmware(&file, chip_id).unwrap();
             let mut chip = Chip { id_79xx: chip_id as u32, fw_version: Ok(version), flavor: Ok(flavor), ..Chip::new() };
             let r = run(&mut chip, HashMap::from([(name.clone(), file)]));
             assert_eq!(r.result, Ok(Outcome::Loaded { firmware: name.clone(), detail: None }), "{name}");
