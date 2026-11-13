@@ -18,7 +18,7 @@ nav_order: 4
 
 ## 概述 {#overview}
 
-BlueCaster 让 Windows 能够使用 LHDC V5、LDAC、aptX Adaptive、aptX HD、aptX Low Latency、aptX、Opus、AAC、SBC XQ 和 SBC 的 Bluetooth 音频（以及通过 LE Audio 使用 LC3）。Windows 自带的 Bluetooth 堆栈在 A2DP 上只支持 SBC、经典 aptX 以及（仅限 Windows 11）AAC——本工具无需内核驱动即可增加其他编解码器。
+BlueCaster 让 Windows 能够使用 LHDC V5、LDAC、aptX Adaptive、aptX HD、aptX Low Latency、aptX、Opus、AAC、SBC XQ 和 SBC 的 Bluetooth 音频（以及通过 LE Audio 使用 LC3，实验性）。Windows 自带的 Bluetooth 堆栈在 A2DP 上只支持 SBC、经典 aptX 以及（仅限 Windows 11）AAC——本工具无需内核驱动即可增加其他编解码器。
 
 使用 **BTstack + WinUSB**——完全在用户模式下运行，无需驱动签名。
 

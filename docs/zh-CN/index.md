@@ -11,7 +11,7 @@ has_toc: false
 适用于 Windows 的 Bluetooth A2DP 音频串流工具，支持全部主流编解码器。
 {: .fs-6 .fw-300 }
 
-把普通的 Bluetooth 适配器（廉价的 USB 适配器，或许多笔记本电脑的内置适配器）从 Windows 只给的基础编解码器，变成 Hi-Fi 发射器：**LHDC V5、LDAC 和 aptX Adaptive** 最高 96 kHz（LHDC V5 最高 192 kHz），以及 **aptX HD、aptX、aptX Low Latency、Opus、AAC、SBC XQ、SBC 和 FastStream**，还有 LE Audio（LC3）。BlueCaster 会自行设置适配器，一键即可交还给 Windows（[工作原理](architecture)）。
+把普通的 Bluetooth 适配器（廉价的 USB 适配器，或许多笔记本电脑的内置适配器）从 Windows 只给的基础编解码器，变成 Hi-Fi 发射器：**LHDC V5、LDAC 和 aptX Adaptive** 最高 96 kHz（LHDC V5 最高 192 kHz），以及 **aptX HD、aptX、aptX Low Latency、Opus、AAC、SBC XQ、SBC 和 FastStream**，还有 LE Audio（LC3，实验性，仅限开发者模式）。BlueCaster 会自行设置适配器，一键即可交还给 Windows（[工作原理](architecture)）。
 
 ![BlueCaster's Codecs screen, streaming LDAC 990 kbps / 48 kHz to Sony WH-1000XM4](../images/app_sample.png)
 
@@ -36,8 +36,8 @@ has_toc: false
 | SBC | 最高约 345 kbps | 44.1/48 kHz | 16 bit | 约 150 ms |
 | FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | -- |
 | Opus 05 | 256 kbps | 48 kHz | 16 bit | -- |
-| LC3（LE Audio） | 每声道 32--124 kbps | 16/24/32/48 kHz | 16 bit | 约 140 ms |
-| LC3 LL（LE Audio GMAP） | 每声道 64--96 kbps | 32/48 kHz | 16 bit | 约 30 ms |
+| LC3（LE Audio） 🧪 | 每声道 32--124 kbps | 16/24/32/48 kHz | 16 bit | 约 140 ms |
+| LC3 LL（LE Audio GMAP） 🧪 | 每声道 64--96 kbps | 32/48 kHz | 16 bit | 约 30 ms |
 
 ### 各平台的编解码器支持情况（向耳机发送）
 
@@ -55,9 +55,9 @@ has_toc: false
 | SBC | ✅ | ✅ | ✅ | ✅ |
 | FastStream | ❌ | ❌ | ✅ | ✅（仅音乐，需明确选择） |
 | Opus 05（PipeWire 自有的 Opus） | ❌ | ❌ | ✅ PipeWire 0.3.57+（`opus_05`，仅限 PipeWire 设备） | ✅（需明确选择，仅限开发者模式） |
-| LC3（LE Audio，BAP 单播） | ❌ | ✅ 仅限 Bluetooth 硬件和驱动支持 LE Audio 的 PC | ✅ PipeWire BAP `lc3`（BlueZ LE Audio） | ✅（设备的 LE Audio 条目；游戏耳机使用 GMAP 低延迟；需要支持 ISO 的 Bluetooth 5.2 适配器，[使用方法](usage#le-audio)） |
+| LC3（LE Audio，BAP 单播） | ❌ | ✅ 仅限 Bluetooth 硬件和驱动支持 LE Audio 的 PC | ✅ PipeWire BAP `lc3`（BlueZ LE Audio） | 🧪 实验性，仅限开发者模式（设备的 LE Audio 条目；游戏耳机使用 GMAP 低延迟；需要支持 ISO 的 Bluetooth 5.2 适配器，[使用方法](usage#le-audio)） |
 
-✅ 支持 · ❌ 不支持。所有列均指发送端（PC → 耳机）。“内置”指不使用 BlueCaster 时操作系统自带的 Bluetooth 音频；Ubuntu 一列为 Ubuntu 26.04 的 PipeWire 编解码器集（`libspa-0.2-bluetooth`）。
+✅ 支持 · 🧪 实验性 · ❌ 不支持。所有列均指发送端（PC → 耳机）。“内置”指不使用 BlueCaster 时操作系统自带的 Bluetooth 音频；Ubuntu 一列为 Ubuntu 26.04 的 PipeWire 编解码器集（`libspa-0.2-bluetooth`）。
 
 {: .warning }
 **aptX HD 和 aptX Low Latency** 参照 Android / PipeWire 的实现，并通过了编码/解码往返测试，但尚未在真实耳机上验证。表中的延迟为典型值，并非使用 BlueCaster 实测。
@@ -144,7 +144,7 @@ BlueCaster 完全绕过 Windows 的 Bluetooth 堆栈。它通过 WinUSB 直接�
 ## 功能
 
 - **多编解码器**：LHDC V5、LDAC、aptX Adaptive、aptX、AAC、aptX HD、aptX Low Latency、Opus、Opus 05、FastStream、SBC XQ 和 SBC，自动协商
-- **LE Audio**：通过 LC3 向 LE Audio 耳机传输（BAP 单播、一对耳机的左右两只、耳机音量、媒体按键、GMAP 低延迟）。需要支持 Bluetooth 5.2 等时通道的适配器；目前已在 MediaTek MT7925 和 Bluetooth 模拟器上测试过（请参阅[使用方法](usage#le-audio)）
+- **LE Audio（实验性，仅限开发者模式）**：通过 LC3 向 LE Audio 耳机传输（BAP 单播、一对耳机的左右两只、耳机音量、媒体按键、GMAP 低延迟）。需要支持 Bluetooth 5.2 等时通道的适配器；只在一台 MediaTek MT7925 上测试过，存在已知问题（请参阅[使用方法](usage#le-audio)）
 - **三种捕获模式**：系统环回、虚拟音频设备路由，或单个应用的输出
 - **窗口、托盘和 CLI**：用于设置和诊断的窗口、用于日常连接的托盘浮出窗口和菜单，以及命令行（请参阅[使用方法](usage)）
 - **在应用内分配 WinUSB**：为适配器分配 WinUSB 驱动程序，并可恢复原来的驱动程序，无需 Zadig（请参阅[安装与设置](setup#winusb)）；Windows 通过该适配器配对过的耳机无需重新配对即可连接

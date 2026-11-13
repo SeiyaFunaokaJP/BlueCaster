@@ -22,9 +22,9 @@ Bluetooth audio transmitter for Windows. It turns an ordinary Bluetooth adapter,
 | SBC | up to ~345 kbps | 44.1/48 kHz | 16 bit | ✅ | ✅ |
 | FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | ❌ | ✅ |
 | Opus 05 (PipeWire) | 256 kbps | 48 kHz | 16 bit | ❌ | ✅ 🔧 |
-| LC3 (LE Audio) | 32–124 kbps per channel | 16–48 kHz | 16 bit | Windows 11 | ✅ |
+| LC3 (LE Audio) | 32–124 kbps per channel | 16–48 kHz | 16 bit | Windows 11 | 🧪 🔧 |
 
-✅ supported · 🔧 developer mode only · ❌ not supported
+✅ supported · 🧪 experimental: tested on one adapter, with known problems · 🔧 developer mode only · ❌ not supported
 
 ## Requirements
 
@@ -49,7 +49,7 @@ See the [Setup guide](https://seiyafunaokajp.github.io/BlueCaster/setup) and the
 ## Features
 
 - **Codec choice**: picks the best codec the headphones support, or the one you choose; ABR on LHDC V5, LDAC and aptX Adaptive
-- **LE Audio**: LC3 to LE Audio headphones and earbuds with a Bluetooth 5.2 adapter; tested on a MediaTek MT7925 and against the Bluetooth emulator so far ([details](https://seiyafunaokajp.github.io/BlueCaster/usage#le-audio))
+- **LE Audio (experimental, developer mode only)**: LC3 to LE Audio headphones and earbuds with a Bluetooth 5.2 adapter; tested on one MediaTek MT7925 only, with known problems ([details](https://seiyafunaokajp.github.io/BlueCaster/usage#le-audio))
 - **Capture**: all system audio, a virtual audio device (e.g. VB-CABLE), or one application
 - **Runs in the tray**: keeps streaming with the window closed, reconnects after a lost link and after sleep
 - **Driver setup in the app**: assigns and restores WinUSB without Zadig; headphones paired in Windows through the adapter connect without pairing again

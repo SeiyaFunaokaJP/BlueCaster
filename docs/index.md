@@ -9,7 +9,7 @@ nav_order: 1
 Advanced Bluetooth Audio Transmitter for Windows, with full codec support.
 {: .fs-6 .fw-300 }
 
-Turns an ordinary Bluetooth adapter -- a cheap USB dongle, or on many laptops the built-in one -- from the basic codecs Windows gives it into a Hi-Fi transmitter: **LHDC V5, LDAC and aptX Adaptive** at up to 96 kHz (LHDC V5 up to 192 kHz), plus **aptX HD, aptX, aptX Low Latency, Opus, AAC, SBC XQ, SBC and FastStream**, and LE Audio (LC3). BlueCaster sets the adapter up by itself and gives it back to Windows with one click ([how it works](architecture)).
+Turns an ordinary Bluetooth adapter -- a cheap USB dongle, or on many laptops the built-in one -- from the basic codecs Windows gives it into a Hi-Fi transmitter: **LHDC V5, LDAC and aptX Adaptive** at up to 96 kHz (LHDC V5 up to 192 kHz), plus **aptX HD, aptX, aptX Low Latency, Opus, AAC, SBC XQ, SBC and FastStream**, and LE Audio (LC3, experimental, developer mode only). BlueCaster sets the adapter up by itself and gives it back to Windows with one click ([how it works](architecture)).
 
 ![BlueCaster's Codecs screen, streaming LDAC 990 kbps / 48 kHz to Sony WH-1000XM4](images/app_sample.png)
 
@@ -34,8 +34,8 @@ Turns an ordinary Bluetooth adapter -- a cheap USB dongle, or on many laptops th
 | SBC | up to ~345 kbps | 44.1/48 kHz | 16 bit | ~150 ms |
 | FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | -- |
 | Opus 05 | 256 kbps | 48 kHz | 16 bit | -- |
-| LC3 (LE Audio) | 32--124 kbps per channel | 16/24/32/48 kHz | 16 bit | ~140 ms |
-| LC3 LL (LE Audio GMAP) | 64--96 kbps per channel | 32/48 kHz | 16 bit | ~30 ms |
+| LC3 (LE Audio) 🧪 | 32--124 kbps per channel | 16/24/32/48 kHz | 16 bit | ~140 ms |
+| LC3 LL (LE Audio GMAP) 🧪 | 64--96 kbps per channel | 32/48 kHz | 16 bit | ~30 ms |
 
 ### Codec Support by Platform (Sending to Headphones)
 
@@ -53,9 +53,9 @@ Turns an ordinary Bluetooth adapter -- a cheap USB dongle, or on many laptops th
 | SBC | ✅ | ✅ | ✅ | ✅ |
 | FastStream | ❌ | ❌ | ✅ | ✅ (music only, chosen explicitly) |
 | Opus 05 (PipeWire's own Opus) | ❌ | ❌ | ✅ PipeWire 0.3.57+ (`opus_05`, to PipeWire devices only) | ✅ (chosen explicitly, developer mode only) |
-| LC3 (LE Audio, BAP unicast) | ❌ | ✅ on PCs whose Bluetooth hardware and driver support LE Audio | ✅ PipeWire BAP `lc3` (BlueZ LE Audio) | ✅ (a device's LE Audio entry; GMAP low latency with gaming headsets; Bluetooth 5.2 adapter with ISO, [Usage](usage#le-audio)) |
+| LC3 (LE Audio, BAP unicast) | ❌ | ✅ on PCs whose Bluetooth hardware and driver support LE Audio | ✅ PipeWire BAP `lc3` (BlueZ LE Audio) | 🧪 experimental, developer mode only (a device's LE Audio entry; GMAP low latency with gaming headsets; Bluetooth 5.2 adapter with ISO, [Usage](usage#le-audio)) |
 
-✅ supported · ❌ not supported. All columns are the sending side (PC → headphones). "Built-in" is the OS's own Bluetooth audio, without BlueCaster; the Ubuntu column is the PipeWire codec set of Ubuntu 26.04 (`libspa-0.2-bluetooth`).
+✅ supported · 🧪 experimental · ❌ not supported. All columns are the sending side (PC → headphones). "Built-in" is the OS's own Bluetooth audio, without BlueCaster; the Ubuntu column is the PipeWire codec set of Ubuntu 26.04 (`libspa-0.2-bluetooth`).
 
 {: .warning }
 **aptX HD and aptX Low Latency** follow the Android / PipeWire implementations and pass encode/decode round-trip tests, but have not yet been verified with real headphones. Latency values in this table are typical figures, not measured with BlueCaster.
@@ -142,7 +142,7 @@ BlueCaster bypasses the Windows Bluetooth stack entirely. It communicates direct
 ## Features
 
 - **Multi-codec**: LHDC V5, LDAC, aptX Adaptive, aptX, AAC, aptX HD, aptX Low Latency, Opus, Opus 05, FastStream, SBC XQ and SBC with automatic negotiation
-- **LE Audio**: LC3 to LE Audio headphones and earbuds (BAP unicast, both earbuds of a pair, headset volume, media buttons, GMAP low latency). Needs an adapter with Bluetooth 5.2 isochronous channels; tested on a MediaTek MT7925 and against the Bluetooth emulator so far ([Usage](usage#le-audio))
+- **LE Audio (experimental, developer mode only)**: LC3 to LE Audio headphones and earbuds (BAP unicast, both earbuds of a pair, headset volume, media buttons, GMAP low latency). Needs an adapter with Bluetooth 5.2 isochronous channels; tested on one MediaTek MT7925 only, with known problems ([Usage](usage#le-audio))
 - **Three capture modes**: System loopback, virtual audio device routing, or one application's output
 - **Window, tray and CLI**: a window for setup and diagnostics, a tray flyout and menu for everyday connecting, and a command line (see [Usage](usage))
 - **WinUSB in the app**: assigns the WinUSB driver to the adapter and restores the original driver, no Zadig needed (see [Setup](setup#winusb)); headphones Windows paired through the adapter connect without pairing again

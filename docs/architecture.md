@@ -19,7 +19,7 @@ nav_order: 5
 
 BlueCaster enables LHDC V5, LDAC, aptX Adaptive, aptX HD,
 aptX Low Latency, aptX, Opus, AAC, SBC XQ and SBC Bluetooth audio on Windows
-(and LC3 over LE Audio). Windows' own Bluetooth stack supports
+(and LC3 over LE Audio, experimental). Windows' own Bluetooth stack supports
 only SBC, classic aptX and (Windows 11 only) AAC for A2DP — this tool adds the
 others without requiring a kernel driver.
 

@@ -20,7 +20,7 @@ nav_order: 4
 
 BlueCaster 讓 Windows 能使用 LHDC V5、LDAC、aptX Adaptive、aptX HD、
 aptX Low Latency、aptX、Opus、AAC、SBC XQ 與 SBC 藍牙音訊
-（以及透過 LE Audio 的 LC3）。Windows 本身的藍牙堆疊在 A2DP 上
+（以及透過 LE Audio 的 LC3，實驗性）。Windows 本身的藍牙堆疊在 A2DP 上
 只支援 SBC、傳統 aptX 與（僅限 Windows 11）AAC — 本工具不需核心驅動程式
 即可加入其他轉碼器。
 
