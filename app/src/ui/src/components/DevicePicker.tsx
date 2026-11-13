@@ -519,10 +519,18 @@ export function DevicePicker(props: {
         >
           <For each={saved()}>
             {(d, i) => (
-              <div class="device-entry">
-                {row(d, i, "s")}
-                {props.settings?.(d)}
-              </div>
+              // The core's list is reconciled by position: the same entry
+              // object may hold another device after one is added or
+              // forgotten. One device, one entry (issue #86: a device's
+              // settings showed on, and were saved into, the next one).
+              <Show when={deviceKey(d)} keyed>
+                {(_key) => (
+                  <div class="device-entry">
+                    {row(d, i, "s")}
+                    {props.settings?.(d)}
+                  </div>
+                )}
+              </Show>
             )}
           </For>
         </Show>

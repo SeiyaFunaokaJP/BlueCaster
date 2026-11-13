@@ -346,7 +346,40 @@ pub enum ProfileError {
     Address(String),
 }
 
+/// The Codecs screen's card of aptX Adaptive's low latency mode (issue #86):
+/// saved as codec "aptxad" with quality "ll", its settings kept apart from
+/// aptX Adaptive's under this key
+pub const APTXAD_LL_CARD: &str = "aptxadll";
+
+/// The card a codec and quality show on, the key of its settings in
+/// `codec_settings`: aptX Adaptive in Low Latency is [`APTXAD_LL_CARD`]
+pub fn card_key<'a>(codec: &'a str, quality: &str) -> &'a str {
+    if codec == "aptxad" && quality == "ll" { APTXAD_LL_CARD } else { codec }
+}
+
 impl Profile {
+    /// The card of the codec in use ([`card_key`])
+    pub fn card(&self) -> &str {
+        card_key(&self.codec, &self.quality)
+    }
+
+    /// Settings an earlier version kept for aptX Adaptive in Low Latency
+    /// (`codec_settings["aptxad"]` with quality "ll", before aptX Adaptive LL
+    /// had a card of its own) go to that card's key, unless it has its own
+    /// already (then they are dropped: they are not aptX Adaptive's).
+    /// Returns whether anything moved.
+    pub fn separate_card_settings(&mut self) -> bool {
+        let legacy = self.codec_settings.get("aptxad").is_some_and(|v| v.quality == "ll");
+        if !legacy {
+            return false;
+        }
+        let v = self.codec_settings.remove("aptxad").unwrap_or_default();
+        if self.card() != APTXAD_LL_CARD {
+            self.codec_settings.entry(APTXAD_LL_CARD.into()).or_insert(v);
+        }
+        true
+    }
+
     /// The settings of the codec in use
     pub fn codec_values(&self) -> CodecValues {
         CodecValues {
@@ -368,10 +401,17 @@ impl Profile {
 
     /// Each codec's settings: the codec in use's, then the others' kept
     /// ones (what Auto-select streams with in developer mode,
-    /// `DevOverrides::auto_codec_settings`)
+    /// `DevOverrides::auto_codec_settings`). Auto picks aptX Adaptive, never
+    /// its LL card: aptX Adaptive's are its card's, also while LL is chosen.
     pub fn all_codec_values(&self) -> Vec<(CodecKind, CodecValues)> {
-        let current = CodecKind::from_key(&self.codec);
-        let kept = self.codec_settings.iter().filter_map(|(key, v)| Some((CodecKind::from_key(key)?, v.clone())));
+        // None for aptX Adaptive LL's card, which is no codec of Auto's
+        let current = CodecKind::from_key(self.card());
+        let kept = self
+            .codec_settings
+            .iter()
+            // An earlier version's aptX Adaptive in Low Latency is LL's
+            .filter(|(key, v)| card_key(key, &v.quality) == key.as_str())
+            .filter_map(|(key, v)| Some((CodecKind::from_key(key)?, v.clone())));
         current.map(|k| (k, self.codec_values())).into_iter().chain(kept.filter(|(k, _)| Some(*k) != current)).collect()
     }
 
@@ -663,7 +703,7 @@ pub fn make_names_unique(list: &mut [Profile]) -> usize {
 /// one, as the Codecs screen keeps them: the one `last_profile` names if it
 /// is of that device, else the first. A profile folded away gives its codec
 /// settings to the kept one's `codec_settings` when the kept one has none
-/// for that codec yet (an Auto profile has none of its own); its name,
+/// for that codec's card yet (an Auto profile has none of its own); its name,
 /// capture source, volume sync and packet size go (the Audio Devices screen
 /// already kept those the same for all of a device's profiles). Profiles
 /// without a valid address are left as they are. Returns the names of the
@@ -704,19 +744,20 @@ pub fn consolidate(list: &mut Vec<Profile>, last_profile: &str) -> Vec<String> {
             continue;
         }
         let into = &mut kept[at];
-        let gives =
-            !p.le_audio && p.codec != "auto" && p.codec != into.codec && !into.codec_settings.contains_key(&p.codec);
+        // By card: aptX Adaptive and its LL card keep their own
+        let card = p.card().to_string();
+        let gives = !p.le_audio && card != "auto" && card != into.card() && !into.codec_settings.contains_key(&card);
         tracing::info!(
             "profiles: \"{}\" folded into \"{}\" (same device){}",
             p.name,
             into.name,
-            if gives { format!(", its {} settings kept", p.codec) } else { String::new() }
+            if gives { format!(", its {card} settings kept") } else { String::new() }
         );
         if gives {
-            into.codec_settings.insert(p.codec.clone(), p.codec_values());
+            into.codec_settings.insert(card, p.codec_values());
         }
         for (c, v) in p.codec_settings {
-            if c != into.codec {
+            if c != into.card() {
                 into.codec_settings.entry(c).or_insert(v);
             }
         }
@@ -724,21 +765,6 @@ pub fn consolidate(list: &mut Vec<Profile>, last_profile: &str) -> Vec<String> {
     }
     *list = kept;
     folded
-}
-
-/// The profiles that capture System Loopback capture this virtual device
-/// instead, and make it the Windows default output while connected. How many
-/// changed.
-pub fn use_virtual_device(list: &mut [Profile], id: &str, name: &str) -> usize {
-    let mut changed = 0;
-    for p in list.iter_mut().filter(|p| p.capture_mode == "loopback") {
-        p.capture_mode = "virtual".into();
-        p.audio_device_id = id.into();
-        p.audio_device_name = name.into();
-        p.auto_switch_device = true;
-        changed += 1;
-    }
-    changed
 }
 
 /// VB-Audio's Hi-Fi Cable ("Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)"):
@@ -754,22 +780,187 @@ pub fn is_vb_cable(name: &str, is_virtual: bool) -> bool {
     is_virtual && name.to_lowercase().contains("cable") && !is_hifi_cable(name)
 }
 
-/// Once the Hi-Fi Cable is installed, the classic profiles whose
-/// microphone has no output, or one that loops into what they capture
-/// (VB-CABLE as both), play the microphone into it instead. A microphone
-/// output that works is left alone: apps record from it. How many changed.
-pub fn use_mic_cable(list: &mut [Profile], id: &str, name: &str, default_output_id: &str) -> usize {
-    let mut changed = 0;
-    for p in list.iter_mut().filter(|p| !p.le_audio) {
-        let looped = mic_output_conflicts(&p.source(), &p.mic_device_id, default_output_id).is_some();
-        if (!p.mic_device_id.is_empty() && !looped)
-            || mic_output_conflicts(&p.source(), id, default_output_id).is_some()
-        {
-            continue;
+/// One of VB-Audio's cables Windows has: its playback endpoint
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cable {
+    pub id: String,
+    pub name: String,
+}
+
+/// The cables BlueCaster sets up by itself (issue #86): the Hi-Fi Cable
+/// for the sound (less delay), VB-CABLE for the microphone
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Cables {
+    /// VB-CABLE's 2-channel cable, else its 16-channel one
+    pub vb: Option<Cable>,
+    pub hifi: Option<Cable>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CableKind {
+    Vb,
+    Hifi,
+}
+
+/// Which of [`Cables`] were there
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CableSet {
+    pub vb: bool,
+    pub hifi: bool,
+}
+
+impl CableSet {
+    fn has(&self, kind: CableKind) -> bool {
+        match kind {
+            CableKind::Vb => self.vb,
+            CableKind::Hifi => self.hifi,
         }
-        p.mic_device_id = id.into();
-        p.mic_device_name = name.into();
-        changed += 1;
+    }
+
+    /// The sound's cable: the Hi-Fi Cable, else VB-CABLE
+    fn sound(&self) -> Option<CableKind> {
+        [CableKind::Hifi, CableKind::Vb].into_iter().find(|&k| self.has(k))
+    }
+
+    /// The microphone's cable beside a source of kind `source`: VB-CABLE,
+    /// else the Hi-Fi Cable
+    fn mic(&self, source: Option<CableKind>) -> Option<CableKind> {
+        [CableKind::Vb, CableKind::Hifi].into_iter().find(|&k| self.has(k) && Some(k) != source)
+    }
+}
+
+impl Cables {
+    pub fn set(&self) -> CableSet {
+        CableSet { vb: self.vb.is_some(), hifi: self.hifi.is_some() }
+    }
+
+    fn get(&self, kind: CableKind) -> Option<&Cable> {
+        match kind {
+            CableKind::Vb => self.vb.as_ref(),
+            CableKind::Hifi => self.hifi.as_ref(),
+        }
+    }
+
+    /// Which cable the endpoint `id` named `name` is: by its id, else by
+    /// its name (a cable missing now, or installed again under another id).
+    /// The 16-channel cable and VB-Audio's other cables (A, B...) are none:
+    /// only chosen by hand.
+    fn kind(&self, id: &str, name: &str) -> Option<CableKind> {
+        if id.is_empty() {
+            return None;
+        }
+        let is = |c: &Option<Cable>| c.as_ref().is_some_and(|c| c.id == id);
+        let n = name.to_lowercase();
+        if is(&self.vb) {
+            Some(CableKind::Vb)
+        } else if is(&self.hifi) || is_hifi_cable(name) {
+            Some(CableKind::Hifi)
+        } else if n.contains("vb-audio virtual cable") && !n.contains("16ch") {
+            Some(CableKind::Vb)
+        } else {
+            None
+        }
+    }
+
+    /// An endpoint `id` that is one of these cables under the id it had
+    /// before (installed again): that cable's
+    fn follow(&self, id: &mut String, name: &mut String) {
+        if let Some(c) = self.kind(id, name).and_then(|k| self.get(k))
+            && c.id != *id
+        {
+            *id = c.id.clone();
+            *name = c.name.clone();
+        }
+    }
+
+    /// The microphone's cable for a profile capturing `source`: VB-CABLE,
+    /// else the Hi-Fi Cable, not one the microphone would loop into
+    pub fn mic_for(&self, source: &SourceRequest, default_output_id: &str) -> Option<&Cable> {
+        [&self.vb, &self.hifi]
+            .into_iter()
+            .flatten()
+            .find(|c| mic_output_conflicts(source, &c.id, default_output_id).is_none())
+    }
+}
+
+/// The microphone plays into `cable`. An LE Audio profile on Auto that had
+/// no output goes Off with it: LE Audio takes Auto as On, so the
+/// microphone would open by itself (issue #86).
+fn give_mic(p: &mut Profile, cable: &Cable) {
+    if p.le_audio && p.mic_device_id.is_empty() && HeadsetMic::parse(&p.headset_mic) == HeadsetMic::Auto {
+        p.headset_mic = headset_off();
+    }
+    p.mic_device_id = cable.id.clone();
+    p.mic_device_name = cable.name.clone();
+}
+
+/// The profiles whose microphone is Auto or On without an output get the
+/// microphone's cable ([`Cables::mic_for`]; issue #86: "-" with the cables
+/// installed, when Windows had not listed them as the profile was made, and
+/// on LE Audio). No output is never the user's choice: the list cannot
+/// choose it. How many changed.
+pub fn fill_mic_outputs(list: &mut [Profile], cables: &Cables, default_output_id: &str) -> usize {
+    let mut changed = 0;
+    for p in
+        list.iter_mut().filter(|p| p.mic_device_id.is_empty() && HeadsetMic::parse(&p.headset_mic) != HeadsetMic::Off)
+    {
+        if let Some(c) = cables.mic_for(&p.source(), default_output_id).cloned() {
+            give_mic(p, &c);
+            changed += 1;
+        }
+    }
+    changed
+}
+
+/// Sets the cables up again once one came (issue #86: VB-CABLE installed
+/// after the Hi-Fi Cable left the sound on VB-CABLE and the microphone on
+/// the Hi-Fi Cable): the sound on the Hi-Fi Cable, else VB-CABLE, the
+/// microphone on VB-CABLE, else the Hi-Fi Cable. Only what these rules gave
+/// with the cables there before (`was`) moves: such a source, System
+/// Loopback (every device starts there) with such a microphone, a
+/// microphone they gave, none, or one that loops into the source. Anything
+/// else is the user's choice and stays. How many profiles changed.
+pub fn reassign_cables(list: &mut [Profile], was: CableSet, now: &Cables, default_output_id: &str) -> usize {
+    let mut changed = 0;
+    for p in list.iter_mut() {
+        let before = p.clone();
+        // A cable installed again under another id is the same cable
+        if matches!(p.capture_mode.as_str(), "virtual" | "output") {
+            now.follow(&mut p.audio_device_id, &mut p.audio_device_name);
+        }
+        now.follow(&mut p.mic_device_id, &mut p.mic_device_name);
+        let source_kind = match p.capture_mode.as_str() {
+            "virtual" | "output" => now.kind(&p.audio_device_id, &p.audio_device_name),
+            _ => None,
+        };
+        let loops = |p: &Profile| mic_output_conflicts(&p.source(), &p.mic_device_id, default_output_id).is_some();
+        let mic_kind = now.kind(&p.mic_device_id, &p.mic_device_name);
+        let mic_auto =
+            p.mic_device_id.is_empty() || loops(p) || (mic_kind.is_some() && mic_kind == was.mic(source_kind));
+        let sound_auto = match p.capture_mode.as_str() {
+            "loopback" => mic_auto,
+            "virtual" => source_kind.is_some() && source_kind == was.sound(),
+            _ => false,
+        };
+        if sound_auto
+            && let Some(c) = now.set().sound().and_then(|k| now.get(k))
+            && (p.capture_mode != "virtual" || p.audio_device_id != c.id)
+        {
+            p.capture_mode = "virtual".into();
+            p.audio_device_id = c.id.clone();
+            p.audio_device_name = c.name.clone();
+            p.auto_switch_device = true;
+        }
+        // A microphone the new source loops into moves too
+        if (mic_auto || loops(p))
+            && let Some(c) = now.mic_for(&p.source(), default_output_id).cloned()
+            && p.mic_device_id != c.id
+        {
+            give_mic(p, &c);
+        }
+        if *p != before {
+            changed += 1;
+        }
     }
     changed
 }
@@ -790,6 +981,10 @@ pub fn load_counted(dir: &Path) -> (Vec<Profile>, usize) {
     match serde_json::from_str::<ProfilesFile>(&text) {
         Ok(mut f) => {
             let renamed = make_names_unique(&mut f.profiles);
+            let separated = f.profiles.iter_mut().map(Profile::separate_card_settings).filter(|m| *m).count();
+            if separated > 0 {
+                tracing::info!("profiles: {separated} profile(s) with aptX Adaptive LL settings of their own now");
+            }
             tracing::debug!(
                 "profiles: loaded {} profile(s) from {}, {renamed} renamed",
                 f.profiles.len(),
@@ -819,21 +1014,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_system_loopback_takes_the_virtual_device() {
-        let mut list = vec![Profile::default(), Profile::default()];
-        list[1].capture_mode = "app".into();
-        list[0].auto_switch_device = false;
-        assert_eq!(use_virtual_device(&mut list, "{cable}", "CABLE Input"), 1);
-        assert_eq!(list[0].capture_mode, "virtual");
-        assert_eq!(list[0].audio_device_id, "{cable}");
-        assert_eq!(list[0].audio_device_name, "CABLE Input");
-        assert!(list[0].auto_switch_device);
-        assert_eq!(list[1].capture_mode, "app");
-        // A second time changes nothing
-        assert_eq!(use_virtual_device(&mut list, "{cable}", "CABLE Input"), 0);
-    }
-
-    #[test]
     fn the_hifi_cable_is_told_apart_from_vb_cable() {
         assert!(is_hifi_cable("Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)"));
         assert!(!is_vb_cable("Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)", true));
@@ -843,34 +1023,151 @@ mod tests {
         assert!(!is_vb_cable("CABLE Input (VB-Audio Virtual Cable)", false));
     }
 
-    #[test]
-    fn the_hifi_cable_takes_only_microphones_without_a_working_output() {
-        let virt = |mic: &str| Profile {
-            capture_mode: "virtual".into(),
-            audio_device_id: "{cable}".into(),
-            mic_device_id: mic.into(),
-            ..Profile::default()
+    const VB: &str = "CABLE Input (VB-Audio Virtual Cable)";
+    const HIFI: &str = "Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)";
+
+    fn cables(vb: bool, hifi: bool) -> Cables {
+        let cable = |id: &str, name: &str| Cable { id: id.into(), name: name.into() };
+        Cables { vb: vb.then(|| cable("{vb}", VB)), hifi: hifi.then(|| cable("{hifi}", HIFI)) }
+    }
+
+    /// A profile capturing `source` (an endpoint id, "" for System
+    /// Loopback) with its microphone on `mic` ("" for none), on Auto
+    fn cabled(source: &str, mic: &str) -> Profile {
+        let name = |id: &str| match id {
+            "{vb}" => VB,
+            "{hifi}" => HIFI,
+            _ => "Voicemeeter Input (VB-Audio Voicemeeter VAIO)",
         };
+        let mut p = Profile { headset_mic: "auto".into(), ..Profile::default() };
+        if !source.is_empty() {
+            p.capture_mode = "virtual".into();
+            p.audio_device_id = source.into();
+            p.audio_device_name = name(source).into();
+        }
+        if !mic.is_empty() {
+            p.mic_device_id = mic.into();
+            p.mic_device_name = name(mic).into();
+        }
+        p
+    }
+
+    /// (source, microphone) of each profile: "" for System Loopback / none
+    fn setup(list: &[Profile]) -> Vec<(&str, &str)> {
+        list.iter()
+            .map(|p| {
+                let source = if p.capture_mode == "loopback" { "" } else { p.audio_device_id.as_str() };
+                (source, p.mic_device_id.as_str())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn vb_cable_after_the_hifi_cable_takes_the_microphone_not_the_sound() {
+        // issue #86: devices set up with the Hi-Fi Cable alone, VB-CABLE
+        // installed later (and made the Windows default output by its setup)
+        let was = CableSet { vb: false, hifi: true };
         let mut list = vec![
-            virt(""),                               // no microphone output: takes it
-            virt("{cable}"),                        // loops into the source: takes it
-            virt("{voicemeeter}"),                  // works: left alone
-            Profile { le_audio: true, ..virt("") }, // LE Audio: left alone
-            // Captures the Hi-Fi Cable itself: it cannot be its microphone too
-            Profile { audio_device_id: "{hifi}".into(), ..virt("") },
+            cabled("{hifi}", ""),              // the setup's: no microphone
+            cabled("", "{hifi}"),              // Windows default, Hi-Fi Cable microphone
+            cabled("{voicemeeter}", ""),       // a source chosen by hand stays
+            cabled("{hifi}", "{voicemeeter}"), // a microphone chosen by hand stays
         ];
-        assert_eq!(use_mic_cable(&mut list, "{hifi}", "Hi-Fi Cable Input", ""), 2);
-        assert_eq!(list[0].mic_device_id, "{hifi}");
-        assert_eq!(list[0].mic_device_name, "Hi-Fi Cable Input");
-        assert_eq!(list[1].mic_device_id, "{hifi}");
-        assert_eq!(list[2].mic_device_id, "{voicemeeter}");
-        assert_eq!(list[3].mic_device_id, "");
-        assert_eq!(list[4].mic_device_id, "");
-        // System Loopback with the cable as the default output loops too
-        let mut lb = vec![Profile { mic_device_id: "{cable}".into(), ..Profile::default() }];
-        assert_eq!(use_mic_cable(&mut lb, "{hifi}", "Hi-Fi Cable Input", "{cable}"), 1);
+        assert_eq!(reassign_cables(&mut list, was, &cables(true, true), "{vb}"), 3);
+        assert_eq!(
+            setup(&list),
+            [("{hifi}", "{vb}"), ("{hifi}", "{vb}"), ("{voicemeeter}", "{vb}"), ("{hifi}", "{voicemeeter}")]
+        );
+        assert_eq!((list[1].audio_device_name.as_str(), list[1].mic_device_name.as_str()), (HIFI, VB));
+        assert!(list[1].auto_switch_device);
         // A second time changes nothing
-        assert_eq!(use_mic_cable(&mut list, "{hifi}", "Hi-Fi Cable Input", ""), 0);
+        assert_eq!(reassign_cables(&mut list, cables(true, true).set(), &cables(true, true), "{vb}"), 0);
+    }
+
+    #[test]
+    fn the_hifi_cable_after_vb_cable_takes_the_sound_and_vb_cable_the_microphone() {
+        // The other order: the sound on VB-CABLE while it was alone
+        let was = CableSet { vb: true, hifi: false };
+        let mut list = vec![
+            cabled("{vb}", ""), // what VB-CABLE alone gave
+            cabled("", "{vb}"), // Windows default with VB-CABLE's microphone
+            cabled("", ""),     // nothing yet
+            // Windows default with a microphone chosen by hand: the user's
+            cabled("", "{voicemeeter}"),
+            Profile { capture_mode: "app".into(), ..cabled("", "{vb}") },
+        ];
+        assert_eq!(reassign_cables(&mut list, was, &cables(true, true), ""), 3);
+        assert_eq!(
+            setup(&list),
+            [("{hifi}", "{vb}"), ("{hifi}", "{vb}"), ("{hifi}", "{vb}"), ("", "{voicemeeter}"), ("", "{vb}")]
+        );
+        assert_eq!(list[4].capture_mode, "app");
+    }
+
+    #[test]
+    fn a_source_chosen_by_hand_keeps_its_cable() {
+        // VB-CABLE as the source while the Hi-Fi Cable was there: not what
+        // the rules give, so the user's; the microphone moves off it
+        let was = CableSet { vb: false, hifi: true };
+        let mut list = vec![cabled("{vb}", "{hifi}"), cabled("{vb}", "")];
+        reassign_cables(&mut list, was, &cables(true, true), "");
+        assert_eq!(setup(&list), [("{vb}", "{hifi}"), ("{vb}", "{hifi}")]);
+    }
+
+    #[test]
+    fn one_cable_alone_takes_the_sound() {
+        let mut list = vec![cabled("", ""), Profile { capture_mode: "app".into(), ..cabled("", "") }];
+        // The app's microphone takes VB-CABLE: the source is no cable
+        assert_eq!(reassign_cables(&mut list, CableSet::default(), &cables(true, false), ""), 2);
+        assert_eq!(setup(&list), [("{vb}", ""), ("", "{vb}")]);
+        let mut list = vec![cabled("", "")];
+        reassign_cables(&mut list, CableSet::default(), &cables(false, true), "");
+        assert_eq!(setup(&list), [("{hifi}", "")]);
+    }
+
+    #[test]
+    fn a_cable_installed_again_under_another_id_is_followed() {
+        let now = Cables { vb: Some(Cable { id: "{vb2}".into(), name: VB.into() }), ..cables(false, true) };
+        let mut list = vec![cabled("{hifi}", "{vb}")];
+        assert_eq!(reassign_cables(&mut list, CableSet { vb: false, hifi: true }, &now, ""), 1);
+        assert_eq!(setup(&list), [("{hifi}", "{vb2}")]);
+    }
+
+    #[test]
+    fn a_microphone_on_without_an_output_gets_a_cable() {
+        // issue #86: "-" with the cables installed
+        let mut list = vec![
+            cabled("{hifi}", ""),
+            cabled("", ""),
+            Profile { headset_mic: "off".into(), ..cabled("", "") }, // Off: stays
+            cabled("", "{voicemeeter}"),                             // has one: stays
+            cabled("{vb}", ""),                                      // VB-CABLE is the source
+        ];
+        assert_eq!(fill_mic_outputs(&mut list, &cables(true, true), ""), 3);
+        assert_eq!(
+            setup(&list),
+            [("{hifi}", "{vb}"), ("", "{vb}"), ("", ""), ("", "{voicemeeter}"), ("{vb}", "{hifi}")]
+        );
+        assert_eq!(list[0].headset_mic, "auto");
+        // VB-CABLE as the Windows default output: Windows default takes the
+        // Hi-Fi Cable
+        let mut lb = vec![cabled("", "")];
+        fill_mic_outputs(&mut lb, &cables(true, true), "{vb}");
+        assert_eq!(setup(&lb), [("", "{hifi}")]);
+        // No cable it can use: none
+        let mut only = vec![cabled("{vb}", "")];
+        assert_eq!(fill_mic_outputs(&mut only, &cables(true, false), ""), 0);
+    }
+
+    #[test]
+    fn an_le_audio_microphone_gets_a_cable_but_stays_closed() {
+        // LE Audio takes Auto as On: the cable is chosen and the microphone
+        // Off until it is turned on; On stays On
+        let le = |mode: &str| Profile { le_audio: true, headset_mic: mode.into(), ..cabled("{hifi}", "") };
+        let mut list = vec![le("auto"), le("on")];
+        assert_eq!(fill_mic_outputs(&mut list, &cables(true, true), ""), 2);
+        assert_eq!(setup(&list), [("{hifi}", "{vb}"), ("{hifi}", "{vb}")]);
+        assert_eq!((list[0].headset_mic.as_str(), list[1].headset_mic.as_str()), ("off", "on"));
     }
 
     #[test]
@@ -966,6 +1263,118 @@ mod tests {
         // Written only when set
         let text = serde_json::to_string(&Profile::default()).unwrap();
         assert!(!text.contains("codec_forced") && !text.contains("unlisted_options"));
+    }
+
+    #[test]
+    fn aptx_adaptive_ll_is_a_card_of_its_own() {
+        let ad = CodecValues { sample_rate: 96000, abr: true, ..CodecValues::default() };
+        let ll = CodecValues { quality: "ll".into(), unlisted_options: true, ..CodecValues::default() };
+        let p = Profile {
+            device_address: "AA:BB:CC:DD:EE:FF".into(),
+            codec: "aptxad".into(),
+            quality: "ll".into(),
+            sample_rate: 48000,
+            codec_settings: BTreeMap::from([("aptxad".to_string(), ad.clone())]),
+            ..Profile::default()
+        };
+        assert_eq!(p.card(), APTXAD_LL_CARD);
+        assert_eq!(card_key("aptxad", "hq"), "aptxad");
+        assert_eq!(card_key("ldac", "ll"), "ldac");
+        // The LL card chosen streams LL
+        let r = p.to_request(1023).unwrap();
+        assert_eq!(
+            (r.codec, r.quality, r.sample_rate),
+            (Some(CodecKind::AptxAdaptive), Quality::LowLatency, Some(48000))
+        );
+        // Auto-select picks aptX Adaptive with aptX Adaptive's own, not LL's
+        let all = p.all_codec_values();
+        assert_eq!(all, vec![(CodecKind::AptxAdaptive, ad.clone())]);
+        let mut req = p.as_auto().to_request(1023).unwrap();
+        all[0].1.apply_to(&mut req);
+        assert_eq!((req.quality, req.sample_rate, req.abr), (Quality::High, Some(96000), true));
+        // aptX Adaptive chosen: its own, LL's kept aside are no codec of Auto's
+        let q = Profile {
+            quality: "hq".into(),
+            codec_settings: BTreeMap::from([(APTXAD_LL_CARD.to_string(), ll.clone())]),
+            ..p.clone()
+        };
+        assert_eq!(q.all_codec_values(), vec![(CodecKind::AptxAdaptive, q.codec_values())]);
+        // Each round-trips under its own key
+        let text = serde_json::to_string(&q).unwrap();
+        assert_eq!(serde_json::from_str::<Profile>(&text).unwrap().codec_settings.get(APTXAD_LL_CARD), Some(&ll));
+    }
+
+    #[test]
+    fn an_earlier_aptx_adaptive_low_latency_loads_as_ll_settings() {
+        // Kept for aptX Adaptive in Low Latency before LL had a card
+        let old = CodecValues { quality: "ll".into(), sample_rate: 48000, ..CodecValues::default() };
+        let mut p = Profile {
+            codec: "ldac".into(),
+            codec_settings: BTreeMap::from([("aptxad".to_string(), old.clone())]),
+            ..Profile::default()
+        };
+        assert!(p.separate_card_settings());
+        assert_eq!(p.codec_settings.get(APTXAD_LL_CARD), Some(&old));
+        assert!(!p.codec_settings.contains_key("aptxad"));
+        assert!(!p.separate_card_settings());
+        // Not under Auto-select's aptX Adaptive before it moves either
+        let q = Profile { codec_settings: BTreeMap::from([("aptxad".to_string(), old.clone())]), ..p.clone() };
+        assert!(q.all_codec_values().iter().all(|(k, _)| *k != CodecKind::AptxAdaptive));
+        // LL's own already there: it stays
+        let own = CodecValues { quality: "ll".into(), ..CodecValues::default() };
+        let mut p = Profile {
+            codec_settings: BTreeMap::from([
+                ("aptxad".to_string(), old.clone()),
+                (APTXAD_LL_CARD.to_string(), own.clone()),
+            ]),
+            ..Profile::default()
+        };
+        assert!(p.separate_card_settings());
+        assert_eq!(p.codec_settings, BTreeMap::from([(APTXAD_LL_CARD.to_string(), own)]));
+        // aptX Adaptive's own (High) are left alone
+        let mut p = Profile {
+            codec_settings: BTreeMap::from([("aptxad".to_string(), CodecValues::default())]),
+            ..Profile::default()
+        };
+        assert!(!p.separate_card_settings());
+        assert!(p.codec_settings.contains_key("aptxad"));
+        // Loaded from a file
+        let dir = std::env::temp_dir().join(format!("bc-profiles-ll-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = path(&dir);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &file,
+            r#"{"profiles":[{"name":"EarFun","device_address":"E8:AB:FA:AA:BB:CC","codec":"aac",
+                "codec_settings":{"aptxad":{"quality":"ll","sample_rate":48000,"bit_depth":0,"abr":false}}}]}"#,
+        )
+        .unwrap();
+        let list = load(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(list[0].codec_settings.get(APTXAD_LL_CARD).map(|v| v.sample_rate), Some(48000));
+        assert!(!list[0].codec_settings.contains_key("aptxad"));
+    }
+
+    #[test]
+    fn folding_keeps_aptx_adaptive_and_ll_apart() {
+        let base = Profile { device_address: "AA:BB:CC:DD:EE:FF".into(), codec: "aptxad".into(), ..Profile::default() };
+        let mut list = vec![
+            Profile { name: "AD".into(), sample_rate: 96000, ..base.clone() },
+            Profile { name: "LL".into(), quality: "ll".into(), sample_rate: 48000, ..base.clone() },
+        ];
+        assert_eq!(consolidate(&mut list, "AD"), ["LL"]);
+        assert_eq!(list.len(), 1);
+        assert_eq!((list[0].card(), list[0].sample_rate), ("aptxad", 96000));
+        let ll = &list[0].codec_settings[APTXAD_LL_CARD];
+        assert_eq!((ll.quality.as_str(), ll.sample_rate), ("ll", 48000));
+        // The other way round
+        let mut list = vec![
+            Profile { name: "AD".into(), sample_rate: 96000, ..base.clone() },
+            Profile { name: "LL".into(), quality: "ll".into(), ..base },
+        ];
+        consolidate(&mut list, "LL");
+        assert_eq!(list[0].card(), APTXAD_LL_CARD);
+        assert_eq!(list[0].codec_settings["aptxad"].sample_rate, 96000);
     }
 
     #[test]

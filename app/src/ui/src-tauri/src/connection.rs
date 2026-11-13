@@ -101,6 +101,10 @@ fn timeout_for(method: &str, params: &Value) -> Duration {
             Duration::from_secs(30.max(seconds + 25))
         }
         "adapter.assign_winusb" | "adapter.restore_driver" => Duration::from_secs(120),
+        // VB-Audio's pack fetched (60 s limit), the administrator prompt,
+        // VB-Audio's setup, then up to 10 s for the output to come or go
+        // (issue #86: with 5 s the UI showed a failure while it installed)
+        "audio.install_vb_cable" | "audio.uninstall_cable" => Duration::from_secs(300),
         // Up to two files, each fetched with a 30 s limit, then the
         // adapters are listed again
         "adapter.download_firmware" => Duration::from_secs(90),
@@ -444,6 +448,9 @@ mod tests {
         assert_eq!(timeout_for("device.scan", &serde_json::json!({ "seconds": 3 })), Duration::from_secs(30));
         assert_eq!(timeout_for("device.scan", &serde_json::json!({ "seconds": 30 })), Duration::from_secs(55));
         assert!(timeout_for("adapter.assign_winusb", &Value::Null) >= Duration::from_secs(60));
+        // A 60 s download, the administrator prompt, the setup and a 10 s wait
+        assert!(timeout_for("audio.install_vb_cable", &Value::Null) >= Duration::from_secs(120));
+        assert!(timeout_for("audio.uninstall_cable", &Value::Null) >= Duration::from_secs(60));
         // Two 30 s fetches and the adapter list
         assert!(timeout_for("adapter.download_firmware", &Value::Null) > Duration::from_secs(60));
         // Discovery waits 1.5 s; connecting ends an older connection first

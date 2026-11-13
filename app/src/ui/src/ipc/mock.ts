@@ -1335,7 +1335,12 @@ export class MockCore implements Transport {
         return null;
       }
       case "profile.save": {
-        const profile = p.profile as Profile;
+        const sent = p.profile as Profile;
+        // As the core keeps it: the card in use has its settings in the
+        // profile's own fields (aptX Adaptive in Low Latency: LL's card)
+        const card = sent.codec === "aptxad" && sent.quality === "ll" ? "aptxadll" : sent.codec;
+        const settings = Object.entries(sent.codec_settings ?? {}).filter(([k]) => k !== card);
+        const profile: Profile = { ...sent, codec_settings: Object.fromEntries(settings) };
         const original = (p.original_name as string | null) ?? profile.name;
         if (!profile.name.trim())
           throw errorInfo("profile.invalid", "profile.name");
@@ -1516,6 +1521,7 @@ export class MockCore implements Transport {
           throw errorInfo("vb_cable.download_failed", "error.vb_cable_download_failed");
         this.noVirtual = false;
         this.vbCableRemoved = false;
+        if (this.vbCableAnswerLate) throw errorInfo("ipc.timeout", "ipc.error.timeout", ["audio.install_vb_cable"]);
         return true;
       case "audio.uninstall_cable":
         if (p.hifi) this.hifiCable = false;
@@ -1734,6 +1740,8 @@ export class MockCore implements Transport {
   vbCableRemoved = false;
   /** audio.install_vb_cable cannot reach VB-Audio */
   vbCableDownloadFails = false;
+  /** audio.install_vb_cable installs, but its answer comes too late */
+  vbCableAnswerLate = false;
   /** Now and then the capture falls behind (?capturedrops): audio dropped at capture */
   captureDrops = false;
   /** Windows' default output (audio.devices), if not the speakers */

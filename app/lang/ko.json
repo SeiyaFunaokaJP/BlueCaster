@@ -368,6 +368,7 @@
   "vbcable.origin": "VB-CABLE은 VB-Audio의 도네이션웨어입니다. 후원을 환영합니다:",
   "hificable.origin": "Hi-Fi Cable은 VB-Audio의 도네이션웨어입니다:",
   "cables.recommended": "BlueCaster에는 가상 오디오 장치를 적극 권장합니다.",
+  "cables.installed_both": "VB-CABLE과 Hi-Fi Cable이 Windows에 설치되어 있습니다",
   "cables.learn_more": "자세히 알아보기",
   "cables.title": "가상 오디오 장치",
   "cables.intro": "없어도 BlueCaster는 작동하지만 다음 이유로 권장합니다:",

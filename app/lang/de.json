@@ -368,6 +368,7 @@
   "vbcable.origin": "VB-CABLE ist Donationware von VB-Audio. Jede Unterstützung ist willkommen:",
   "hificable.origin": "Hi-Fi Cable ist Donationware von VB-Audio:",
   "cables.recommended": "Virtuelle Audiogeräte werden für BlueCaster dringend empfohlen.",
+  "cables.installed_both": "VB-CABLE und Hi-Fi Cable sind in Windows installiert",
   "cables.learn_more": "Mehr erfahren",
   "cables.title": "Virtuelle Audiogeräte",
   "cables.intro": "BlueCaster funktioniert auch ohne sie, sie werden aber empfohlen:",

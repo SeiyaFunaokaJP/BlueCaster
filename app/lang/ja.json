@@ -368,6 +368,7 @@
   "vbcable.origin": "VB-CABLE は VB-Audio のドネーションウェアです。寄付を歓迎しています:",
   "hificable.origin": "Hi-Fi Cable は VB-Audio のドネーションウェアです:",
   "cables.recommended": "BlueCaster には仮想オーディオデバイスを強くおすすめします。",
+  "cables.installed_both": "VB-CABLE と Hi-Fi Cable は Windows にインストール済みです",
   "cables.learn_more": "詳細",
   "cables.title": "仮想オーディオデバイス",
   "cables.intro": "なくても BlueCaster は動きますが、次の理由でおすすめします:",

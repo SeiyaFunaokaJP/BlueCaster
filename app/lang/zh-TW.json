@@ -368,6 +368,7 @@
   "vbcable.origin": "VB-CABLE 是 VB-Audio 的捐贈軟體，歡迎捐助：",
   "hificable.origin": "Hi-Fi Cable 是 VB-Audio 的捐贈軟體：",
   "cables.recommended": "強烈建議為 BlueCaster 安裝虛擬音訊裝置。",
+  "cables.installed_both": "VB-CABLE 和 Hi-Fi Cable 已安裝在 Windows 中",
   "cables.learn_more": "深入了解",
   "cables.title": "虛擬音訊裝置",
   "cables.intro": "沒有它們 BlueCaster 也能運作，但建議安裝：",

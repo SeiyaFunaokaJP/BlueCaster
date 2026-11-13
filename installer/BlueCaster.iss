@@ -1358,11 +1358,18 @@ begin
     Result := '';
 end;
 
+{ In the 64-bit System32: this 32-bit uninstaller would otherwise look in
+  SysWOW64\drivers, where the driver never is (issue #86: Hi-Fi Cable not
+  offered) }
 function HiFiDriverInstalled: Boolean;
 var
   Find: TFindRec;
+  Dir: String;
 begin
-  Result := FindFirst(ExpandConstant('{sys}\drivers\') + HiFiDriverFiles, Find);
+  Dir := ExpandConstant('{sys}\drivers');
+  if IsWin64 then
+    Dir := ApplyPathRedirRules(True, Dir, tpCurrent);
+  Result := FindFirst(AddBackslash(Dir) + HiFiDriverFiles, Find);
   if Result then
     FindClose(Find);
 end;

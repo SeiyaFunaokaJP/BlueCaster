@@ -499,6 +499,25 @@ impl Settings {
         self.mute_output && self.volume_mixer && self.debug_mode
     }
 
+    /// A profile's "Set as Windows default output/input while connected"
+    /// in force: as stored in developer mode, on for everyone else (issue
+    /// #86: apps without an output picker and the microphone need them)
+    pub fn default_device_switch(&self, stored: bool) -> bool {
+        stored || !self.debug_mode
+    }
+
+    /// A profile's source with the default output switch in force
+    /// ([`Settings::default_device_switch`])
+    pub fn source_in_force(&self, source: crate::stream::SourceRequest) -> crate::stream::SourceRequest {
+        use crate::stream::SourceRequest::VirtualDevice;
+        match source {
+            VirtualDevice { id, name, auto_switch } => {
+                VirtualDevice { id, name, auto_switch: self.default_device_switch(auto_switch) }
+            }
+            other => other,
+        }
+    }
+
     /// The SBC frame setup a stream takes from its profile: the fixed one
     /// outside developer mode (issue #86)
     pub fn sbc_frame(&self, wanted: codec::sbc::SbcParams) -> codec::sbc::SbcParams {
@@ -564,6 +583,20 @@ mod tests {
         s.dev_log.always_verbose = "trace".into();
         s.dev_log.day_cap_mb = 1 << 20;
         assert_eq!((s.log().always_verbose.as_str(), s.log().day_cap_mb), ("trace", 10240));
+    }
+
+    #[test]
+    fn default_device_switch_counts_only_in_developer_mode() {
+        use crate::stream::SourceRequest;
+        let off = || SourceRequest::VirtualDevice { id: "{x}".into(), name: "CABLE".into(), auto_switch: false };
+        let mut s = Settings::default();
+        assert!(s.default_device_switch(false));
+        assert_eq!(s.source_in_force(off()).default_switch(), Some("{x}"));
+        assert_eq!(s.source_in_force(SourceRequest::SystemLoopback), SourceRequest::SystemLoopback);
+        s.debug_mode = true;
+        assert!(!s.default_device_switch(false));
+        assert!(s.default_device_switch(true));
+        assert_eq!(s.source_in_force(off()), off());
     }
 
     #[test]

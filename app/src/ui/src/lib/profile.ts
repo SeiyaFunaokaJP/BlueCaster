@@ -208,11 +208,17 @@ export function codecValues(p: Profile): CodecValues {
   };
 }
 
+/** Settings an earlier version kept for aptX Adaptive in Low Latency (the
+ *  core moves them to aptX Adaptive LL's card when it loads the profile) */
+const legacyLl = (v: CodecValues | undefined) => v?.quality === "ll";
+
 /** The settings kept for a codec card (aptX Adaptive LL: those an earlier
- *  version kept for aptX Adaptive in Low Latency, until it has its own) */
+ *  version kept for aptX Adaptive in Low Latency, until it has its own; never
+ *  aptX Adaptive's own, issue #86) */
 export function keptFor(p: Pick<Profile, "codec_settings">, card: string): CodecValues | undefined {
   const kept = p.codec_settings ?? {};
-  if (card === "aptxadll" && !kept[card] && kept.aptxad?.quality === "ll") return kept.aptxad;
+  if (card === "aptxadll" && !kept[card] && legacyLl(kept.aptxad)) return kept.aptxad;
+  if (card === "aptxad" && legacyLl(kept.aptxad)) return undefined;
   return kept[card];
 }
 
@@ -227,6 +233,11 @@ export function withCodec(p: Profile, codec: string, values?: CodecValues): Prof
   const from = cardOf(p);
   const kept: Record<string, CodecValues> = { ...(p.codec_settings ?? {}) };
   const back = values ?? keptFor(p, codec);
+  // An earlier version's aptX Adaptive in Low Latency is LL's (issue #86)
+  if (legacyLl(kept.aptxad)) {
+    kept.aptxadll ??= kept.aptxad;
+    delete kept.aptxad;
+  }
   if (from !== codec) kept[from] = codecValues(p);
   delete kept[codec];
   const base: Profile = { ...p, codec_settings: kept };
@@ -358,6 +369,20 @@ export function isHifiCable(d: Pick<AudioDevice, "name">): boolean {
 /** The Hi-Fi Cable's playback device among Windows' outputs */
 export function hifiCable(devices: readonly AudioDevice[]): AudioDevice | null {
   return devices.find(isHifiCable) ?? null;
+}
+
+/** Windows' default output as a device's System Loopback takes it: none
+ *  while the stream made its own Output Source the default (issue #86: one
+ *  device's Output Source took cables from another device's lists; it goes
+ *  back when that stream ends). As the core's default_output_for_cables. */
+export function ownDefaultOutput(
+  devices: readonly AudioDevice[],
+  snap: Pick<Snapshot, "stream" | "profiles">,
+): string {
+  const id = devices.find((d) => d.is_default)?.id ?? "";
+  const running = ["connecting", "streaming", "reconnecting"].includes(snap.stream.state);
+  const streaming = running ? snap.profiles.find((p) => p.name === snap.stream.profile) : undefined;
+  return id && streaming?.capture_mode === "virtual" && streaming.audio_device_id === id ? "" : id;
 }
 
 /** A 16-channel cable ("CABLE In 16ch"): no use as a source or a

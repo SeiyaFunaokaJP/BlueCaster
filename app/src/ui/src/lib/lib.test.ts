@@ -46,7 +46,7 @@ import {
 import { FlowTracker, stepDetail } from "./flow";
 import { knowAdapters, maskIdentifiers, parseAddress } from "./format";
 import { bugReportUrl, thirdPartyUrl } from "./links";
-import { deviceProfile, followedName, keptFor, validateProfile, vbCable, withCodec } from "./profile";
+import { deviceProfile, followedName, keptFor, ownDefaultOutput, validateProfile, vbCable, withCodec } from "./profile";
 
 const line = (time_ms: number, message: string, level: LogLine["level"] = "info"): LogLine => ({
   time_ms,
@@ -209,6 +209,13 @@ describe("a device's profile (Codecs screen, issue #86)", () => {
     expect(keptFor(kept, "aptxadll")).toMatchObject({ quality: "ll" });
     expect(withCodec(kept, "aptxadll")).toMatchObject({ codec: "aptxad", quality: "ll", sample_rate: 48000 });
     expect(withCodec(kept, "aptxad")).toMatchObject({ codec: "aptxad", quality: "hq" });
+    // ... never as aptX Adaptive's own: they move to LL's card
+    expect(keptFor(kept, "aptxad")).toBeUndefined();
+    expect(withCodec(kept, "aptxad").codec_settings).toMatchObject({ aptxadll: { quality: "ll", sample_rate: 48000 } });
+    expect(withCodec(kept, "aptxad").codec_settings).not.toHaveProperty("aptxad");
+    const viaLl = withCodec(withCodec(kept, "aptxadll"), "aptxad");
+    expect(viaLl).toMatchObject({ codec: "aptxad", quality: "hq" });
+    expect(viaLl.codec_settings.aptxadll).toMatchObject({ quality: "ll", sample_rate: 48000 });
   });
 
   it("names it after the device and codec unless the user named it", () => {
@@ -554,6 +561,19 @@ describe("VB-Cable", () => {
   it("takes the 16-channel one when it is the only one", () => {
     expect(vbCable([device("CABLE In 16ch (VB-Audio Virtual Cable)")])?.name).toMatch(/16ch/);
     expect(vbCable([device("Speakers", false)])).toBeNull();
+  });
+  it("leaves out the default output another device's stream switched to", () => {
+    // issue #86: EarFun's Output Source, the default while it streams,
+    // locked that cable out of Moto Buds' lists
+    const list = [device("Speakers", false), { ...device("Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)"), is_default: true }];
+    const earfun = sampleProfile({ name: "EarFun", capture_mode: "virtual", audio_device_id: list[1].id });
+    const snap = (state: "streaming" | "idle", p = earfun) => ({
+      stream: { state, profile: "EarFun" } as Parameters<typeof ownDefaultOutput>[1]["stream"],
+      profiles: [p],
+    });
+    expect(ownDefaultOutput(list, snap("streaming"))).toBe("");
+    expect(ownDefaultOutput(list, snap("idle"))).toBe(list[1].id);
+    expect(ownDefaultOutput(list, snap("streaming", { ...earfun, capture_mode: "loopback" }))).toBe(list[1].id);
   });
 });
 

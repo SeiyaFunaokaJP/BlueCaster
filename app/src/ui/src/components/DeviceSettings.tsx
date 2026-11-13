@@ -11,7 +11,7 @@
 import { createEffect, createMemo, createResource, createSignal, createUniqueId, on, onCleanup, onMount, Show } from "solid-js";
 import { createStore, unwrap } from "solid-js/store";
 import { useApp } from "../app/context";
-import { allAudioDevices } from "../app/settings";
+import { allAudioDevices, devicesSwitchShown } from "../app/settings";
 import { t } from "../i18n";
 import { codecSpec } from "../lib/codecs";
 import type { AudioApp, AudioDevice, Device, Profile, Snapshot } from "../ipc/types";
@@ -197,7 +197,7 @@ export function DeviceSettings(props: { device: Device }) {
       <Show when={f.capture_mode === "app" && appSupport() === "no"}>
         <Banner kind="warn">{t("ui.profile.app_capture_unsupported")}</Banner>
       </Show>
-      <Show when={f.capture_mode === "virtual"}>
+      <Show when={f.capture_mode === "virtual" && devicesSwitchShown(snap().settings)}>
         <Toggle
           label={t("capture.auto_switch")}
           checked={f.auto_switch_device}

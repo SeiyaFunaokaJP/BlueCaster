@@ -408,6 +408,41 @@ describe("Audio Devices without a virtual device (issue #86)", () => {
     await waitFor(() => expect(within(dialog).getAllByRole("button", { name: t("cables.download") })).toHaveLength(2));
   });
 
+  it("shows VB-CABLE installed when the setup's answer comes too late, with no error or Download (issue #86)", async () => {
+    location.hash = "#/devices";
+    const m = new MockCore({ speed: 0 });
+    m.hifiCable = true;
+    m.noVirtual = true;
+    m.vbCableAnswerLate = true;
+    mock = m;
+    render(() => <App core={createCore(m)} />);
+    fireEvent.click(await screen.findByRole("button", { name: t("cables.learn_more") }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getAllByRole("button", { name: t("cables.install") })[0]);
+    await waitFor(() => expect(within(dialog).getAllByRole("button", { name: t("cables.uninstall") })).toHaveLength(2));
+    expect(within(dialog).queryByRole("button", { name: t("cables.download") })).toBeNull();
+    expect(within(dialog).queryByText(t("cables.restart"))).toBeNull();
+    expect(screen.queryByText(t("ipc.error.timeout", "audio.install_vb_cable"))).toBeNull();
+  });
+
+  it("turns the line green once both cables are installed, Learn more kept (issue #86)", async () => {
+    location.hash = "#/devices";
+    const m = new MockCore({ speed: 0 });
+    m.hifiCable = true;
+    mock = m;
+    const core = createCore(m);
+    render(() => <App core={core} />);
+    const line = (await screen.findByText(t("cables.installed_both"))).closest(".cable-banner") as HTMLElement;
+    expect(line).toHaveClass("banner-good");
+    expect(screen.queryByText(t("cables.recommended"))).toBeNull();
+    fireEvent.click(within(line).getByRole("button", { name: t("cables.learn_more") }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    // The developer switch hides it too
+    const settings = () => core.state.snap!.settings;
+    await m.call("settings.set", { settings: { ...settings(), developer_mode: true, vb_cable_note_hidden: true } });
+    await waitFor(() => expect(screen.queryByText(t("cables.installed_both"))).toBeNull());
+  });
+
   it("About: the program, then third-party software with the cables' dialog, which names VB-Audio; nothing on Settings", async () => {
     location.hash = "#/about";
     const m = new MockCore({ speed: 0 });

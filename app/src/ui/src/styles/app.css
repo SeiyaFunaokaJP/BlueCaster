@@ -2146,8 +2146,17 @@ option {
   padding: var(--s3) var(--s4) var(--s4);
   border-top: 1px solid var(--border);
 }
-/* Input Source (the headset microphone, issue #86): its label on the left
-   and Off / Auto / On on the right, the device below it always there */
+/* Input Source (the headset microphone, issue #86): its label, then the
+   device with Off / Auto / On after it (below it when narrow) */
+.input-source-pick {
+  flex-wrap: wrap;
+}
+.input-source-pick > .select {
+  flex: 1 1 12em;
+}
+.input-source-pick > .segmented {
+  align-self: center;
+}
 .input-source {
   display: flex;
   flex-direction: column;

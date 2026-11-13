@@ -1,6 +1,7 @@
 // VB-Audio's virtual cables: the Hi-Fi Cable for the sound (it adds the
 // least delay), VB-CABLE for the headphones' microphone. The pages show one
-// amber line while a cable is missing; Learn more opens the dialog with both
+// amber line while a cable is missing, a green one once both are installed
+// (issue #86: kept, with its Learn more); Learn more opens the dialog with both
 // cables, each with Install (Download for the Hi-Fi Cable) or Uninstall, and
 // VB-Audio's links. Nothing else in the app talks about the cables (issue
 // #86). Install VB-CABLE has the core fetch VB-Audio's own pack from
@@ -9,18 +10,23 @@
 // their donationware, so its origin is said under each cable
 // (https://vb-audio.com/Services/licensing.htm). The line cannot be closed
 // (issue #86: other ways to the microphone only bring bug reports);
-// Developer > Hide the virtual sound devices warning removes it. About >
+// Developer > Hide the virtual sound devices warning removes it, green too. About >
 // Third-party software opens the same dialog, the only place that names
 // the cables' origin.
 
-import { createSignal, Show } from "solid-js";
-import { useApp } from "../app/context";
+import { createEffect, createSignal, on, onCleanup, Show } from "solid-js";
+import { errorText, useApp } from "../app/context";
 import { t } from "../i18n";
-import type { AudioDevice, Settings } from "../ipc/types";
+import { IpcError, type AudioDevice, type Settings } from "../ipc/types";
 import { LINKS } from "../lib/links";
 import { hifiCable, vbCable } from "../lib/profile";
 import { Button, Dialog } from "./controls";
 import { Icon } from "./Icon";
+
+/** How long Windows' outputs are read again after an install or removal
+ *  that did not see the cable change: every 2 s for 30 s */
+const POLL_MS = 2000;
+const POLLS = 15;
 
 /** VB-Audio's name for it, and that it is donationware: a link to its site */
 function Origin(props: { text: string; url: string }) {
@@ -59,21 +65,61 @@ function CableRow(props: {
   const [restart, setRestart] = createSignal(false);
   // Install failed (no download, VB-Audio changed the pack, ...): their page
   const [failed, setFailed] = createSignal(false);
+  // Windows' outputs read again for a while: a cable may show up (or go)
+  // after the answer (issue #86: installed, yet the error and Download stayed)
+  let polls = 0;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const stopPolling = () => {
+    clearInterval(timer);
+    timer = undefined;
+  };
+  const poll = () => {
+    stopPolling();
+    polls = 0;
+    timer = setInterval(() => {
+      if (++polls > POLLS) stopPolling();
+      else props.onChanged();
+    }, POLL_MS);
+  };
+  onCleanup(stopPolling);
+  // The cable came or went: what the last try said no longer holds
+  createEffect(
+    on(
+      () => props.installed,
+      () => {
+        stopPolling();
+        setRestart(false);
+        setFailed(false);
+      },
+      { defer: true },
+    ),
+  );
   const act = async (uninstall: boolean) => {
     setBusy(true);
     setRestart(false);
+    setFailed(false);
+    stopPolling();
     try {
-      let done = false;
-      const ok = await app.run(async () => {
-        done = uninstall
-          ? await core.request("audio.uninstall_cable", { hifi: props.hifi })
-          : await core.request("audio.install_vb_cable");
-      });
-      if (ok && done) props.onChanged();
-      else if (ok) setRestart(true);
-      else if (!uninstall) setFailed(true);
+      const done = uninstall
+        ? await core.request("audio.uninstall_cable", { hifi: props.hifi })
+        : await core.request("audio.install_vb_cable");
+      if (!done) {
+        setRestart(true);
+        poll();
+      }
+    } catch (e) {
+      // No answer in time: the setup may still be running
+      if (IpcError.from(e).code === "ipc.timeout") {
+        setRestart(true);
+        poll();
+      } else {
+        app.notify(errorText(e), "error");
+        if (!uninstall) setFailed(true);
+      }
     } finally {
       setBusy(false);
+      // Always: an answer that came too late or said "not yet" may be wrong
+      props.onChanged();
     }
   };
   const page = () => core.transport.openUrl(props.hifi ? LINKS.hifiCable : LINKS.vbCable);
@@ -199,25 +245,23 @@ export function cableWarningHidden(
   return s.developer_mode && (s.vb_cable_note_hidden || s.hifi_cable_note_hidden);
 }
 
-/** One amber line while a cable is missing (`devices`: Windows' outputs,
- *  null until read); Learn more opens both cables. It cannot be closed. */
+/** One amber line while a cable is missing, a green one once both are
+ *  installed (`devices`: Windows' outputs, null until read); Learn more
+ *  opens both cables. It cannot be closed. */
 export function CableNotes(props: { devices: readonly AudioDevice[] | null; reload: () => void }) {
   const app = useApp();
   const s = () => app.core.state.snap!.settings;
   const [open, setOpen] = createSignal(false);
   const missing = () =>
     props.devices !== null && (vbCable(props.devices) === null || hifiCable(props.devices) === null);
-  // Kept while the dialog is open: installing the last cable would close it
-  const shown = () => (missing() || open()) && !cableWarningHidden(s());
+  const shown = () => props.devices !== null && !cableWarningHidden(s());
   return (
     <Show when={shown()}>
-      <Show when={missing()}>
-        <div class="banner banner-warn cable-banner">
-          <Icon name="warning" class="banner-icon" />
-          <span class="cable-banner-text">{t("cables.recommended")}</span>
-          <Button onClick={() => setOpen(true)}>{t("cables.learn_more")}</Button>
-        </div>
-      </Show>
+      <div class={`banner ${missing() ? "banner-warn" : "banner-good"} cable-banner`}>
+        <Icon name={missing() ? "warning" : "checkmark_circle"} class="banner-icon" />
+        <span class="cable-banner-text">{t(missing() ? "cables.recommended" : "cables.installed_both")}</span>
+        <Button onClick={() => setOpen(true)}>{t("cables.learn_more")}</Button>
+      </div>
       <CablesDialog open={open()} devices={props.devices} reload={props.reload} onClose={() => setOpen(false)} />
     </Show>
   );
