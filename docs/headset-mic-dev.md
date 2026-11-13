@@ -224,11 +224,9 @@ records the microphone, and full-quality A2DP otherwise.
   message); `StreamStatus.voice` is None while Auto is idle.
 - **A slow stream after a voice link** (`bt_host::esco_watch`): the bit
   rate is lowered (`StreamStatus.slow_link`, the warning under the codec)
-  and the first three tries for the full one open a voice link of one
-  second first (`MicTarget::Discard`, asked for by
-  `LinkStats::recover_link`): the PC's audio goes on over it, the
-  receiving half is never armed, so the microphone's packets are dropped
-  undecoded and nothing reaches the microphone output.
+  and stays lowered until the next voice link or another stream setting
+  chosen by hand. There are no timed tries of the full bit rate and no
+  voice link of our own to put it right any more.
 - `held_off` (after a failure or a refusal) is not cleared by Auto's own on
   and off, only by a mode or output change. The headphones hanging up in
   Auto keep the link closed until nobody has recorded (then the next

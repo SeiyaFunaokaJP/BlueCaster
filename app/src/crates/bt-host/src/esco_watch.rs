@@ -3,13 +3,11 @@
 //! packets of before (83 of 187 a second), with every packet type allowed
 //! and 5-slot packets again. Neither a short eSCO link nor a stream restart
 //! put it right; the next whole voice link did, and once it came right by
-//! itself after 26 s. [`EscoWatch`] spots the slow rate after a voice link:
-//! the encoder lowers its bit rate ([`crate::LinkStats::slow_link`]) and
-//! tries the full one again after [`PROBE_AFTER`], longer each time it is
-//! still slow. A whole voice link put the slow link right about four times
-//! in ten, so the first [`RECOVERY_LINKS`] tries open one first
-//! ([`Verdict::Recover`]: the session opens a short voice link whose
-//! microphone goes nowhere).
+//! itself after 26 s. [`EscoWatch`] spots the slow rate after a voice link
+//! and the encoder lowers its bit rate ([`crate::LinkStats::slow_link`]).
+//! It stays lowered: tries of the full bit rate and short voice links of our
+//! own did not bring the rate back on hardware. The next voice link (the
+//! microphone used again) or another stream setting chosen by hand ends it.
 
 use std::time::{Duration, Instant};
 
@@ -17,21 +15,8 @@ use std::time::{Duration, Instant};
 pub const WATCH: Duration = Duration::from_secs(15);
 /// The watch's tick
 pub const TICK: Duration = Duration::from_secs(1);
-/// How long the bit rate stays lowered before the full one is tried again,
-/// by the times it was lowered in a row (the last one from then on). Each
-/// try that finds the link still slow costs about a second of audio, and
-/// the slow rate was seen lasting minutes, until the next voice link.
-pub const PROBE_AFTER: [Duration; 4] =
-    [Duration::from_secs(20), Duration::from_secs(60), Duration::from_secs(120), Duration::from_secs(300)];
-/// How many of the tries open a voice link first (each one interrupts the
-/// audio for a moment; the later tries only raise the bit rate)
-pub const RECOVERY_LINKS: usize = 3;
-/// How long the voice link asked for may take to come and go; then the full
-/// bit rate is tried without it
-const RECOVERY_WAIT: Duration = Duration::from_secs(8);
 /// Seconds below [`SLOW_PERCENT`] of the rate before that count as slow
-/// after a voice link; one while the full bit rate is tried again (it was
-/// slow just before)
+/// after a voice link
 const SLOW_TICKS: u8 = 2;
 /// Seconds at the rate before that end the watch
 const GOOD_TICKS: u8 = 3;
@@ -46,16 +31,10 @@ const MIN_RATE: u64 = 50;
 pub enum Verdict {
     /// Nothing to do (another tick follows while [`EscoWatch::watching`])
     Wait,
-    /// The rate is as before: the watch ends (after a lowered bit rate:
-    /// the full one stays)
+    /// The rate is as before: the watch ends
     Good { rate: u64 },
-    /// Slow: the bit rate lowered until [`Verdict::Probe`]
+    /// Slow: the bit rate lowered until the next voice link
     Lower { rate: u64, before: u64 },
-    /// The full bit rate tried again, the rate watched
-    Probe,
-    /// A short voice link asked for; the full bit rate is tried after it
-    /// (or after a while without it)
-    Recover,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,15 +45,9 @@ enum State {
         acl: u16,
         until: Instant,
     },
-    /// The bit rate lowered on `acl` until `probe`
+    /// The bit rate lowered on `acl`
     Lowered {
         acl: u16,
-        probe: Instant,
-    },
-    /// Lowered on `acl`, a voice link asked for; given up at `until`
-    Recovering {
-        acl: u16,
-        until: Instant,
     },
 }
 
@@ -90,24 +63,11 @@ pub struct EscoWatch {
     last: Option<(Instant, u64)>,
     slow: u8,
     good: u8,
-    /// Times lowered in a row
-    lowered: usize,
-    /// Voice links asked for since the link went slow
-    recoveries: usize,
 }
 
 impl Default for EscoWatch {
     fn default() -> Self {
-        EscoWatch {
-            before: None,
-            part: None,
-            state: State::Idle,
-            last: None,
-            slow: 0,
-            good: 0,
-            lowered: 0,
-            recoveries: 0,
-        }
+        EscoWatch { before: None, part: None, state: State::Idle, last: None, slow: 0, good: 0 }
     }
 }
 
@@ -140,17 +100,8 @@ impl EscoWatch {
 
     /// The voice link on `acl` went down; true when the watch starts (a
     /// tick to schedule). Whatever was lowered is over: the voice link may
-    /// have put the link right. After the voice link asked for
-    /// ([`Verdict::Recover`]) the waits go on where they were.
+    /// have put the link right.
     pub fn voice_link_ended(&mut self, now: Instant, acl: u16) -> bool {
-        if !matches!(self.state, State::Recovering { .. }) {
-            self.lowered = 0;
-            self.recoveries = 0;
-        }
-        self.watch(now, acl)
-    }
-
-    fn watch(&mut self, now: Instant, acl: u16) -> bool {
         self.last = None;
         self.slow = 0;
         self.good = 0;
@@ -166,48 +117,26 @@ impl EscoWatch {
     pub fn watching(&self) -> Option<u16> {
         match self.state {
             State::Idle => None,
-            State::Watching { acl, .. } | State::Lowered { acl, .. } | State::Recovering { acl, .. } => Some(acl),
+            State::Watching { acl, .. } | State::Lowered { acl } => Some(acl),
         }
     }
 
     /// The bit rate is lowered now
     pub fn is_lowered(&self) -> bool {
-        matches!(self.state, State::Lowered { .. } | State::Recovering { .. })
+        matches!(self.state, State::Lowered { .. })
     }
 
     /// The link went down or the stream ended for good
     pub fn stop(&mut self) {
         self.state = State::Idle;
         self.last = None;
-        self.lowered = 0;
-        self.recoveries = 0;
     }
 
     /// A tick: `completed` on the watched link, None while it does not
-    /// stream; `voice`: a voice link can be opened now
-    pub fn tick(&mut self, now: Instant, completed: Option<u64>, voice: bool) -> Verdict {
+    /// stream
+    pub fn tick(&mut self, now: Instant, completed: Option<u64>) -> Verdict {
         let (acl, until) = match self.state {
-            State::Idle => return Verdict::Wait,
-            State::Lowered { acl, probe } => {
-                if now < probe {
-                    return Verdict::Wait;
-                }
-                if voice && self.recoveries < RECOVERY_LINKS {
-                    self.recoveries += 1;
-                    self.state = State::Recovering { acl, until: now + RECOVERY_WAIT };
-                    return Verdict::Recover;
-                }
-                self.watch(now, acl);
-                return Verdict::Probe;
-            }
-            State::Recovering { acl, until } => {
-                if now < until {
-                    return Verdict::Wait;
-                }
-                // No voice link came: the bit rate alone
-                self.watch(now, acl);
-                return Verdict::Probe;
-            }
+            State::Idle | State::Lowered { .. } => return Verdict::Wait,
             State::Watching { acl, until } => (acl, until),
         };
         if now >= until {
@@ -231,12 +160,10 @@ impl EscoWatch {
         if rate * 100 < before * SLOW_PERCENT {
             self.good = 0;
             self.slow += 1;
-            if self.slow < if self.lowered > 0 { 1 } else { SLOW_TICKS } {
+            if self.slow < SLOW_TICKS {
                 return Verdict::Wait;
             }
-            let wait = PROBE_AFTER[self.lowered.min(PROBE_AFTER.len() - 1)];
-            self.lowered += 1;
-            self.state = State::Lowered { acl, probe: now + wait };
+            self.state = State::Lowered { acl };
             self.last = None;
             return Verdict::Lower { rate, before };
         }
@@ -273,7 +200,7 @@ mod tests {
     /// watch ends), with the ticks it took
     fn run(w: &mut EscoWatch, t: &mut Instant, n: &mut u64, rate: u64) -> (Verdict, u32) {
         for i in 0..400 {
-            let v = w.tick(*t, Some(*n), false);
+            let v = w.tick(*t, Some(*n));
             if v != Verdict::Wait || w.watching().is_none() {
                 return (v, i);
             }
@@ -302,95 +229,32 @@ mod tests {
     }
 
     #[test]
-    fn the_full_bit_rate_is_tried_again_later_each_time() {
+    fn the_bit_rate_stays_lowered_until_the_next_voice_link() {
         let (mut w, mut t, mut n) = slow_after_a_voice_link();
-        for (i, wait) in [20, 60, 120, 300, 300].into_iter().enumerate() {
-            let ticks = run(&mut w, &mut t, &mut n, 83).1;
-            // Two slow seconds after a voice link, one when tried again
-            assert_eq!(ticks, if i == 0 { 2 } else { 1 });
-            assert!(w.is_lowered());
-            let lowered_at = t;
-            // Lowered: 62 packets a second (LDAC MQ), neither slow nor good
-            assert_eq!(run(&mut w, &mut t, &mut n, 62).0, Verdict::Probe);
-            assert_eq!(t - lowered_at, S * wait);
+        assert!(matches!(run(&mut w, &mut t, &mut n, 83).0, Verdict::Lower { .. }));
+        // An hour at the lowered rate (LDAC MQ): no try of the full one
+        for _ in 0..3600 {
+            assert_eq!(w.tick(t, Some(n)), Verdict::Wait);
+            t += S;
+            n += 62;
         }
-        // The link came right: the full bit rate stays
-        assert_eq!(run(&mut w, &mut t, &mut n, 187).0, Verdict::Good { rate: 187 });
+        assert!(w.is_lowered());
+        assert_eq!(w.watching(), Some(1));
+        // The microphone used again: the full bit rate, the rate watched
+        assert!(w.voice_link_ended(t, 1));
         assert!(!w.is_lowered());
+        w.stream_started(t, n);
+        assert_eq!(run(&mut w, &mut t, &mut n, 187).0, Verdict::Good { rate: 187 });
         assert_eq!(w.watching(), None);
     }
 
     #[test]
-    fn a_voice_link_starts_the_waits_over() {
+    fn still_slow_after_the_next_voice_link_lowers_it_again() {
         let (mut w, mut t, mut n) = slow_after_a_voice_link();
         assert!(matches!(run(&mut w, &mut t, &mut n, 83).0, Verdict::Lower { .. }));
-        assert_eq!(run(&mut w, &mut t, &mut n, 62).0, Verdict::Probe);
-        assert!(matches!(run(&mut w, &mut t, &mut n, 83).0, Verdict::Lower { .. }));
-        // Lowered for 40 s now; a voice link in between: 20 s again
-        assert!(w.voice_link_ended(t, 1));
-        assert!(!w.is_lowered());
-        assert!(matches!(run(&mut w, &mut t, &mut n, 83).0, Verdict::Lower { .. }));
-        let at = t;
-        assert_eq!(run(&mut w, &mut t, &mut n, 62).0, Verdict::Probe);
-        assert_eq!(t - at, S * 20);
-    }
-
-    /// Ticks with a voice link possible until a verdict other than Wait
-    fn run_voice(w: &mut EscoWatch, t: &mut Instant, n: &mut u64, rate: u64) -> Verdict {
-        for _ in 0..400 {
-            let v = w.tick(*t, Some(*n), true);
-            if v != Verdict::Wait || w.watching().is_none() {
-                return v;
-            }
-            *t += S;
-            *n += rate;
-        }
-        Verdict::Wait
-    }
-
-    #[test]
-    fn the_first_tries_open_a_voice_link_and_keep_their_waits() {
-        let (mut w, mut t, mut n) = slow_after_a_voice_link();
-        for wait in [20, 60, 120] {
-            assert!(matches!(run_voice(&mut w, &mut t, &mut n, 83), Verdict::Lower { .. }));
-            let lowered_at = t;
-            assert_eq!(run_voice(&mut w, &mut t, &mut n, 62), Verdict::Recover);
-            assert_eq!(t - lowered_at, S * wait);
-            // Still lowered while the voice link comes and goes
-            assert!(w.is_lowered());
-            w.stream_stopped(t, n);
-            t += S;
-            assert!(w.voice_link_ended(t, 1));
-            assert!(!w.is_lowered());
-            w.stream_started(t, n);
-        }
-        // Three voice links did not help: the bit rate alone from now on
-        assert!(matches!(run_voice(&mut w, &mut t, &mut n, 83), Verdict::Lower { .. }));
-        let lowered_at = t;
-        assert_eq!(run_voice(&mut w, &mut t, &mut n, 62), Verdict::Probe);
-        assert_eq!(t - lowered_at, S * 300);
-    }
-
-    #[test]
-    fn a_voice_link_that_does_not_come_leaves_the_bit_rate_alone_to_try() {
-        let (mut w, mut t, mut n) = slow_after_a_voice_link();
-        assert!(matches!(run_voice(&mut w, &mut t, &mut n, 83), Verdict::Lower { .. }));
-        assert_eq!(run_voice(&mut w, &mut t, &mut n, 62), Verdict::Recover);
-        let asked = t;
-        assert_eq!(run_voice(&mut w, &mut t, &mut n, 62), Verdict::Probe);
-        assert_eq!(t - asked, RECOVERY_WAIT);
-        assert_eq!(run_voice(&mut w, &mut t, &mut n, 187), Verdict::Good { rate: 187 });
-    }
-
-    #[test]
-    fn the_voice_link_that_helps_ends_the_watch() {
-        let (mut w, mut t, mut n) = slow_after_a_voice_link();
-        assert!(matches!(run_voice(&mut w, &mut t, &mut n, 83), Verdict::Lower { .. }));
-        assert_eq!(run_voice(&mut w, &mut t, &mut n, 62), Verdict::Recover);
         assert!(w.voice_link_ended(t, 1));
         w.stream_started(t, n);
-        assert_eq!(run_voice(&mut w, &mut t, &mut n, 187), Verdict::Good { rate: 187 });
-        assert_eq!(w.watching(), None);
+        assert_eq!(run(&mut w, &mut t, &mut n, 83), (Verdict::Lower { rate: 83, before: 187 }, 2));
     }
 
     #[test]
@@ -429,7 +293,7 @@ mod tests {
         stream(&mut w, &mut t, &mut n, 187, 10);
         w.reconfigured();
         assert!(!w.voice_link_ended(t, 1));
-        assert_eq!(w.tick(t, Some(n), false), Verdict::Wait);
+        assert_eq!(w.tick(t, Some(n)), Verdict::Wait);
     }
 
     #[test]
@@ -438,7 +302,7 @@ mod tests {
         stream(&mut w, &mut t, &mut n, 187, 10);
         assert!(w.voice_link_ended(t, 1));
         for _ in 0..16 {
-            assert_eq!(w.tick(t, None, false), Verdict::Wait);
+            assert_eq!(w.tick(t, None), Verdict::Wait);
             t += S;
         }
         assert_eq!(w.watching(), None);
