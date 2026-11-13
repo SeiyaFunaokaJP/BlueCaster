@@ -853,6 +853,12 @@ impl HostApp {
         self.remote_seid = config.remote_seid;
         self.stream_codec = Some(config.kind);
         self.esco.reconfigured();
+        // Another stream setting (chosen by hand): the bit rate asked for
+        // again, lowered only after the next voice link
+        if self.esco.is_lowered() {
+            tracing::info!("stream after the voice link: new configuration, the full bit rate again");
+            self.stop_esco_watch(stack);
+        }
         let cid = self.a2dp_cid;
         tracing::debug!(
             "set configuration: cid 0x{cid:04X}, local SEID {local}, remote SEID {}, {} {:?}",
@@ -1081,8 +1087,8 @@ impl HostApp {
         self.media_acl.and_then(|h| self.completed_by_handle.get(&h).copied()).unwrap_or(0)
     }
 
-    /// A second of [`EscoWatch`]: a short audio connection when the stream
-    /// came out of a voice link slow
+    /// A second of [`EscoWatch`]: the bit rate lowered when the stream came
+    /// out of a voice link slow
     fn esco_tick(&mut self, stack: &Stack) {
         let Some(acl) = self.esco.watching() else { return };
         let keep = codec::dev::overrides().keep_bitrate_on_slow_link;
@@ -1092,12 +1098,7 @@ impl HostApp {
             return;
         }
         let completed = (self.streaming && self.media_acl == Some(acl)).then(|| self.media_completed());
-        // A voice link of our own only on the link that carries the stream
-        let voice = !keep
-            && self.esco.is_lowered()
-            && self.hfp_acl == Some(acl)
-            && self.voice.check(self.setup.voice, self.hfp_acl, stack.transport_is_h2()).is_ok();
-        match self.esco.tick(Instant::now(), completed, voice) {
+        match self.esco.tick(Instant::now(), completed) {
             Verdict::Wait => {}
             Verdict::Good { rate } => {
                 tracing::info!("stream after the voice link: {rate} packets/s, as before");
@@ -1110,19 +1111,11 @@ impl HostApp {
                     self.esco.stop();
                 } else {
                     tracing::warn!(
-                        "stream after the voice link: {rate} packets/s of {before} before; lowering the bit rate for now"
+                        "stream after the voice link: {rate} packets/s of {before} before; lowering the bit rate until \
+                         the next voice link or another stream setting"
                     );
                     self.stats.slow_link.store(true, Ordering::Release);
                 }
-            }
-            Verdict::Probe => {
-                tracing::info!("stream after the voice link: trying the full bit rate again");
-                self.stats.recover_link.store(false, Ordering::Release);
-                self.stats.slow_link.store(false, Ordering::Release);
-            }
-            Verdict::Recover => {
-                tracing::info!("stream after the voice link: still slow, asking for a short voice link");
-                self.stats.recover_link.store(true, Ordering::Release);
             }
         }
         if self.esco.watching().is_some() {
@@ -1155,7 +1148,6 @@ impl HostApp {
     fn stop_esco_watch(&mut self, stack: &Stack) {
         self.esco.stop();
         stack.timer_stop(TIMER_ESCO_WATCH);
-        self.stats.recover_link.store(false, Ordering::Release);
         self.stats.slow_link.store(false, Ordering::Release);
     }
 
@@ -1608,7 +1600,6 @@ impl HostApp {
                         if self.media_acl == Some(acl) {
                             // The full bit rate again: the voice link may
                             // have put the link right
-                            self.stats.recover_link.store(false, Ordering::Release);
                             self.stats.slow_link.store(false, Ordering::Release);
                             if self.esco.voice_link_ended(Instant::now(), acl) {
                                 stack.timer_start(TIMER_ESCO_WATCH, crate::esco_watch::TICK.as_millis() as u32);
