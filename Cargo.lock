@@ -5394,6 +5394,7 @@ dependencies = [
  "tracing",
  "webview2-com",
  "windows",
+ "windows-core",
 ]
 
 [[package]]

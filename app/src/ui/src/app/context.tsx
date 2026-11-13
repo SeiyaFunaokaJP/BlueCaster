@@ -2,7 +2,7 @@
 // the browser's back button works in dev mode) and the transient notice
 // line (announced to screen readers).
 
-import { createContext, createSignal, onCleanup, useContext, type Accessor, type JSX } from "solid-js";
+import { createContext, createEffect, createSignal, on, onCleanup, useContext, type Accessor, type JSX } from "solid-js";
 import type { Core } from "../ipc/store";
 import { IpcError } from "../ipc/types";
 import { t, tm } from "../i18n";
@@ -58,6 +58,13 @@ export function useApp(): AppContext {
 }
 
 /** The text of an error from a request */
+/** Runs `read` whenever Windows' audio devices change (a cable installed by
+ *  its own setup, a device plugged in or out); not at first */
+export function onAudioDevicesChanged(read: () => void) {
+  const { core } = useApp();
+  createEffect(on(() => core.state.snap?.audio_endpoints, read, { defer: true }));
+}
+
 export function errorText(e: unknown): string {
   const err = IpcError.from(e);
   const text = tm(err.msg);

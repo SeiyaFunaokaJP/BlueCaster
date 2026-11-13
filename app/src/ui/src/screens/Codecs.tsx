@@ -56,7 +56,7 @@
 
 import { batch, createEffect, createSignal, createUniqueId, For, on, onCleanup, Show, type JSX } from "solid-js";
 import { unwrap } from "solid-js/store";
-import { useApp } from "../app/context";
+import { onAudioDevicesChanged, useApp } from "../app/context";
 import { saveSettings } from "../app/settings";
 import { CodecCard, CodecSettings, type CardSpec, type CodecChoice } from "../components/CodecCards";
 import { Banner, Button, Dialog, Field, Select, Toggle } from "../components/controls";
@@ -333,6 +333,7 @@ export function Codecs() {
   loadDevices();
   window.addEventListener("focus", loadDevices);
   onCleanup(() => window.removeEventListener("focus", loadDevices));
+  onAudioDevicesChanged(loadDevices);
 
   return (
     <div class="page codecs">

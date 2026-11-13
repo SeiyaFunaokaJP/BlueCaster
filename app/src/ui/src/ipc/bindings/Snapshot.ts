@@ -52,6 +52,11 @@ verbose?: VerboseState | null,
  */
 crashes: Array<CrashReport>, 
 /**
+ * Counts the changes to Windows' audio devices since the core started
+ * (one came, went, or a default changed): the UI reads its lists again
+ */
+audio_endpoints: number, 
+/**
  * The vendors with protocols of their own (developer mode's overrides)
  */
 vendors: Array<VendorInfo>, };

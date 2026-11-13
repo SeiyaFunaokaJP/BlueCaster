@@ -295,6 +295,9 @@ async fn sampler(state: Arc<CoreState>) {
     }
 }
 
+/// Quiet time after a change to Windows' audio devices before they are read
+const AUDIO_ENDPOINTS_SETTLE: Duration = Duration::from_millis(500);
+
 /// How often the core looks whether v1 runs
 const V1_CHECK: Duration = Duration::from_secs(3);
 
@@ -383,6 +386,37 @@ async fn watch_v1(state: Arc<CoreState>) {
     }
 }
 
+/// Windows' audio devices: the cables there at start, then every change
+/// (a cable installed by its own setup, outside BlueCaster), a burst of
+/// them (one install adds several devices) taken as one
+fn watch_audio_endpoints(state: &Arc<CoreState>) {
+    if let Ok(devices) = audio_capture::render_devices() {
+        state.watch_cables(&devices);
+    }
+    let _com = match win_sys::audio_policy::ComApartment::init_mta() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("audio endpoints: COM: HRESULT 0x{:08x}", e.code().0 as u32);
+            return;
+        }
+    };
+    let (tx, rx) = mpsc::channel::<()>();
+    let _watch = match win_sys::audio_notify::EndpointWatch::new(move || {
+        let _ = tx.send(());
+    }) {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::warn!("audio endpoints: not watched: HRESULT 0x{:08x}", e.code().0 as u32);
+            return;
+        }
+    };
+    while rx.recv().is_ok() {
+        while rx.recv_timeout(AUDIO_ENDPOINTS_SETTLE).is_ok() {}
+        tracing::debug!("audio endpoints changed");
+        state.audio_endpoints_changed();
+    }
+}
+
 /// Shows a balloon from the core (tray thread)
 fn show_balloon(notifier: &TrayNotifier, b: BalloonRequest) {
     let balloon =
@@ -458,11 +492,10 @@ pub fn run(args: &[String]) -> i32 {
     state.refresh_autostart(replaces_v1);
     {
         let state = state.clone();
-        std::thread::spawn(move || {
-            if let Ok(devices) = audio_capture::render_devices() {
-                state.watch_cables(&devices);
-            }
-        });
+        std::thread::Builder::new()
+            .name("audio-endpoints".into())
+            .spawn(move || watch_audio_endpoints(&state))
+            .expect("spawning the audio endpoint thread");
     }
     {
         let state = state.clone();

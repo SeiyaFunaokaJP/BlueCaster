@@ -1043,6 +1043,10 @@ pub struct Snapshot {
     /// yet (diag.crashes_seen), newest first
     #[serde(default)]
     pub crashes: Vec<CrashReport>,
+    /// Counts the changes to Windows' audio devices since the core started
+    /// (one came, went, or a default changed): the UI reads its lists again
+    #[serde(default)]
+    pub audio_endpoints: u32,
     /// The vendors with protocols of their own (developer mode's overrides)
     #[serde(default)]
     pub vendors: Vec<VendorInfo>,
@@ -1564,6 +1568,8 @@ pub enum Event {
     Verbose(Option<VerboseState>),
     /// Crash reports appeared or were dismissed (state, crashes)
     Crashes(Vec<CrashReport>),
+    /// Windows' audio devices changed (state, audio_endpoints)
+    AudioEndpoints(u32),
     /// Subscription (diag.subscribe receiver): the receiver test, once a
     /// second and on every change
     Receiver(Box<ReceiverState>),
@@ -2652,6 +2658,7 @@ mod tests {
             v1_running: false,
             verbose: None,
             crashes: Vec::new(),
+            audio_endpoints: 0,
             vendors: Vec::new(),
         })
         .unwrap();

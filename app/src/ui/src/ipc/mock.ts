@@ -553,6 +553,7 @@ export function sampleSnapshot(scenario: MockScenario = "normal"): Snapshot {
             },
           ]
         : [],
+    audio_endpoints: 0,
     vendors: [
       { id: "huawei", name: "Huawei", options: [] },
       { id: "oppo", name: "OPPO", options: ["every_connection"] },
@@ -1746,6 +1747,12 @@ export class MockCore implements Transport {
   captureDrops = false;
   /** Windows' default output (audio.devices), if not the speakers */
   defaultOutput: string | null = null;
+
+  /** Windows' audio devices changed (a cable installed by its own setup) */
+  audioEndpointsChanged() {
+    this.snap.audio_endpoints += 1;
+    this.emit({ kind: "audio_endpoints", value: this.snap.audio_endpoints });
+  }
 
   setOtherRadio(radio: Snapshot["adapter"]["other_radio"]) {
     this.snap.adapter.other_radio = radio;
