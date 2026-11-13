@@ -175,6 +175,7 @@ fn main() {
         "a2dp.c" => patched_a2dp(&btstack),
         "avdtp_initiator.c" => patched_avdtp_initiator(&btstack),
         "avrcp_target.c" => patched_avrcp_target(&btstack),
+        "hfp_ag.c" => patched_hfp_ag(&btstack),
         f => btstack.join("src/classic").join(f),
     }));
     build.file(btstack.join("platform/windows/btstack_run_loop_windows.c"));
@@ -366,6 +367,93 @@ fn patched_avrcp_target(btstack: &Path) -> PathBuf {
             &format!("{ctype}, {echoed}, operation_data_field_length, operand);"),
         );
     }
+    let path = PathBuf::from(env::var("OUT_DIR").unwrap()).join(FILE);
+    std::fs::write(&path, source).unwrap();
+    path
+}
+
+/// src/classic/hfp_ag.c holding a command that arrives before the answer to
+/// the previous one went out, written to OUT_DIR.
+///
+/// BTstack 1.8.3 answers such a command with ERROR ("Received a command while
+/// ok pending"). A WH-1000XM4 sends its battery level (AT+IPHONEACCEV) right
+/// after AT+XAPL, before our +XAPL and OK, and does not send it again: after
+/// about every other connection BlueCaster showed no battery. The bytes from
+/// the start of such a command line on are kept and parsed once OK or ERROR
+/// for the previous command has been sent. A line that started before (or
+/// more than the buffer holds) gets the ERROR as before.
+fn patched_hfp_ag(btstack: &Path) -> PathBuf {
+    const FILE: &str = "hfp_ag.c";
+    // LF patterns: a checkout with core.autocrlf (CI) has CRLF
+    let mut source = std::fs::read_to_string(btstack.join("src/classic").join(FILE)).unwrap().replace("\r\n", "\n");
+    replace_once(
+        &mut source,
+        FILE,
+        "static void hfp_ag_run_for_context(hfp_connection_t *hfp_connection){\n",
+        r#"/* BlueCaster: patched by btstack-sys build.rs (patched_hfp_ag) */
+static void hfp_ag_handle_rfcomm_data(hfp_connection_t * hfp_connection, uint8_t *packet, uint16_t size);
+#define BLUECASTER_HELD_MAX 256
+static uint16_t bluecaster_held_cid;
+static uint16_t bluecaster_held_len;
+static uint8_t bluecaster_held[BLUECASTER_HELD_MAX];
+static bool bluecaster_holding(const hfp_connection_t * hfp_connection){
+    return (bluecaster_held_len > 0) && (bluecaster_held_cid == hfp_connection->rfcomm_cid);
+}
+/* Keeps received bytes for later; false if they don't fit */
+static bool bluecaster_hold(hfp_connection_t * hfp_connection, const uint8_t * data, uint16_t len){
+    if ((bluecaster_held_len > 0) && (bluecaster_held_cid != hfp_connection->rfcomm_cid)){
+        if (get_hfp_connection_context_for_rfcomm_cid(bluecaster_held_cid) != NULL) return false;
+        /* their connection is gone */
+        bluecaster_held_len = 0;
+    }
+    if (len > (BLUECASTER_HELD_MAX - bluecaster_held_len)) return false;
+    bluecaster_held_cid = hfp_connection->rfcomm_cid;
+    memcpy(&bluecaster_held[bluecaster_held_len], data, len);
+    bluecaster_held_len += len;
+    return true;
+}
+/* Parses the kept bytes once no OK or ERROR is waiting to be sent */
+static void bluecaster_release(hfp_connection_t * hfp_connection){
+    if (!bluecaster_holding(hfp_connection)) return;
+    if ((hfp_connection->ok_pending > 0) || (hfp_connection->send_error > 0)) return;
+    uint8_t data[BLUECASTER_HELD_MAX];
+    uint16_t len = bluecaster_held_len;
+    memcpy(data, bluecaster_held, len);
+    bluecaster_held_len = 0;
+    log_info("HFP AG: parsing %u bytes held while a response was pending", len);
+    hfp_ag_handle_rfcomm_data(hfp_connection, data, len);
+}
+
+static void hfp_ag_run_for_context(hfp_connection_t *hfp_connection){
+"#,
+    );
+    // Kept bytes first, before anything is sent: their answer follows the
+    // pending one
+    replace_once(
+        &mut source,
+        FILE,
+        "\tif (hfp_connection->rfcomm_cid == 0) return;\n",
+        "\tif (hfp_connection->rfcomm_cid == 0) return;\n\n    bluecaster_release(hfp_connection);\n",
+    );
+    // Before parsing a byte: hold it, and the rest of the packet, if bytes
+    // are held already (order), or if it starts a command line while a
+    // response is pending
+    replace_once(
+        &mut source,
+        FILE,
+        "        hfp_parse(hfp_connection, packet[pos], 0);\n",
+        r#"        if (bluecaster_holding(hfp_connection) ||
+            (((hfp_connection->ok_pending > 0) || (hfp_connection->send_error > 0)) &&
+             (hfp_connection->parser_state == HFP_PARSER_CMD_HEADER) && (hfp_connection->line_size == 0) &&
+             !hfp_parser_is_end_of_line(packet[pos]))){
+            if (bluecaster_hold(hfp_connection, &packet[pos], size - pos)){
+                log_info("HFP AG: holding a command until the pending response is sent");
+                return;
+            }
+        }
+        hfp_parse(hfp_connection, packet[pos], 0);
+"#,
+    );
     let path = PathBuf::from(env::var("OUT_DIR").unwrap()).join(FILE);
     std::fs::write(&path, source).unwrap();
     path
