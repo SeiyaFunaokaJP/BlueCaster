@@ -3560,8 +3560,8 @@ impl CoreState {
                 .await
             }
             Method::AudioUninstallCable { hifi } => {
-                blocking(Box::new(move |_| {
-                    let gone = crate::vb_cable::uninstall(hifi)?;
+                blocking(Box::new(move |me| {
+                    let gone = crate::vb_cable::uninstall(&me.config_dir(), hifi)?;
                     Ok(json(&gone))
                 }))
                 .await

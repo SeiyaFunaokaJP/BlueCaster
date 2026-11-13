@@ -151,10 +151,6 @@ fn run(setup: &Path) -> Result<(), ErrorInfo> {
 const VB_CABLE_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:VBCABLE {87459874-1236-4469}";
 const HIFI_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:VBHIFI {87459874-1236-4469}";
 const ASIO_BRIDGE_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:ASIOBridge {17359A74-1236-5467}";
-/// Remove without a window: VB-CABLE's setup as community packages run it;
-/// the Hi-Fi Cable's with the arguments ASIO Bridge's setup passes it
-const VB_CABLE_REMOVE: &[&str] = &["-u", "-h"];
-const HIFI_REMOVE: &[&str] = &["-h", "-u", "-H"];
 
 /// The program of an UninstallString: the quoted path, else the string up
 /// to ".exe"
@@ -218,10 +214,14 @@ fn listed(hifi: bool) -> bool {
     })
 }
 
-/// Runs VB-Audio's own setup of VB-CABLE or the Hi-Fi Cable (`hifi`) to
-/// remove it, without a window, as administrator, and waits for its output
-/// to go. Ok(false): it is still listed; Windows may need a restart first.
-pub fn uninstall(hifi: bool) -> Result<bool, ErrorInfo> {
+/// Has VB-Audio's own setup remove VB-CABLE or the Hi-Fi Cable (`hifi`),
+/// without a window, then Windows scan for hardware changes: both in the
+/// elevated helper (bluecaster-driver.exe `remove-cable`), as the scan needs
+/// administrator rights too, so the user sees one UAC prompt. Without the
+/// scan the removed output stayed in Windows' list until a restart (issue
+/// #86). Then waits for the output to go. Ok(false): it is still listed;
+/// Windows needs a restart.
+pub fn uninstall(config: &Path, hifi: bool) -> Result<bool, ErrorInfo> {
     let name = if hifi { "Hi-Fi Cable" } else { "VB-CABLE" };
     let failed = || err("vb_cable.uninstall_failed", "error.vb_cable_uninstall_failed");
     let setup = if hifi { hifi_remover() } else { uninstall_entry(VB_CABLE_KEY, false) };
@@ -229,25 +229,45 @@ pub fn uninstall(hifi: bool) -> Result<bool, ErrorInfo> {
         tracing::warn!("{name}: no setup found to remove it");
         return Err(failed());
     };
-    let args = if hifi { HIFI_REMOVE } else { VB_CABLE_REMOVE };
-    let code = elevation::run_elevated(&setup, args).map_err(|e| match e {
+    let setup = setup.to_string_lossy().into_owned();
+    let mut args = vec!["remove-cable", setup.as_str()];
+    if hifi {
+        args.push("--hifi");
+    }
+    let (code, result) = crate::driver::run_with(config, &args, |e| match e {
         ElevationError::Cancelled => err("vb_cable.uac_cancelled", "error.vb_cable_uninstall_uac_cancelled"),
         e => {
             tracing::error!("{name} removal: {e}");
             failed()
         }
     })?;
-    tracing::info!("{name} removal -> exit {code}");
+    if code != 0 {
+        tracing::warn!("{name} removal: helper exit {code}");
+        return Err(failed());
+    }
+    wait_until_gone(name, &result, || listed(hifi), APPEAR_WAIT, Duration::from_millis(500))
+}
+
+/// After the helper: Ok(true) once `listed` says the output is gone, Ok(false)
+/// if it still is after `wait`
+fn wait_until_gone(
+    name: &str,
+    result: &serde_json::Value,
+    mut listed: impl FnMut() -> bool,
+    wait: Duration,
+    every: Duration,
+) -> Result<bool, ErrorInfo> {
+    let rescanned = result.get("rescanned").and_then(serde_json::Value::as_bool).unwrap_or(false);
     let started = Instant::now();
     loop {
-        if !listed(hifi) {
+        if !listed() {
             return Ok(true);
         }
-        if started.elapsed() >= APPEAR_WAIT {
-            tracing::info!("{name}: still among the outputs {APPEAR_WAIT:?} after its removal");
+        if started.elapsed() >= wait {
+            tracing::info!("{name}: still among the outputs {wait:?} after its removal (rescanned {rescanned})");
             return Ok(false);
         }
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(every);
     }
 }
 
@@ -257,6 +277,27 @@ mod tests {
 
     /// Network: VB-Audio still serves the pinned pack, and it unpacks with
     /// its setup (the setup is not run)
+    #[test]
+    fn gone_once_no_longer_listed() {
+        let result = serde_json::json!({ "ok": true, "rescanned": true });
+        let mut calls = 0;
+        let gone = wait_until_gone(
+            "X",
+            &result,
+            || {
+                calls += 1;
+                calls < 3
+            },
+            Duration::from_secs(5),
+            Duration::ZERO,
+        );
+        assert!(gone.unwrap());
+        assert_eq!(calls, 3);
+        // Still listed: a restart is needed
+        let gone = wait_until_gone("X", &serde_json::Value::Null, || true, Duration::ZERO, Duration::ZERO);
+        assert!(!gone.unwrap());
+    }
+
     #[test]
     #[ignore]
     fn fetches_and_unpacks_the_pack() {

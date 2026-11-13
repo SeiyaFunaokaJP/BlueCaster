@@ -379,7 +379,7 @@
   "cables.installed": "已安裝",
   "cables.not_installed": "未安裝",
   "cables.uninstall": "解除安裝",
-  "cables.restart": "已完成。如果 Windows 的清單還沒有變化，請重新啟動 Windows。",
+  "cables.restart": "如果 Windows 的清單沒有變化，請重新啟動 Windows。",
   "cables.licensing": "授權",
   "capture.mode": "輸出來源",
   "capture.input_source": "輸入來源",

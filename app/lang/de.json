@@ -379,7 +379,7 @@
   "cables.installed": "Installiert",
   "cables.not_installed": "Nicht installiert",
   "cables.uninstall": "Deinstallieren",
-  "cables.restart": "Fertig. Wenn sich die Liste von Windows noch nicht geändert hat, starten Sie Windows neu.",
+  "cables.restart": "Wenn sich die Liste von Windows nicht ändert, starten Sie Windows neu.",
   "cables.licensing": "Lizenzbedingungen",
   "capture.mode": "Ausgabequelle",
   "capture.input_source": "Eingangsquelle",

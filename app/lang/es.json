@@ -379,7 +379,7 @@
   "cables.installed": "Instalado",
   "cables.not_installed": "No instalado",
   "cables.uninstall": "Desinstalar",
-  "cables.restart": "Hecho. Si la lista de Windows aún no ha cambiado, reinicie Windows.",
+  "cables.restart": "Si la lista de Windows no cambia, reinicie Windows.",
   "cables.licensing": "Licencias",
   "capture.mode": "Origen de salida",
   "capture.input_source": "Origen de entrada",

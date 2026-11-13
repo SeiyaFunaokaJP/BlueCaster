@@ -9,6 +9,7 @@
 //! bluecaster-driver restore --records <dir> [--unrecorded] [--out <file>]
 //! bluecaster-driver unrecorded --records <dir> [--out <file>]
 //! bluecaster-driver windows-keys <radio-address> [--out <file>]
+//! bluecaster-driver remove-cable <setup> [--hifi] [--out <file>]
 //! ```
 //!
 //! The result is one JSON object on stdout (and in `--out`), logs go to
@@ -56,6 +57,12 @@
 //! prompt (exit code 4 when there is none), for the uninstaller to offer it
 //! (issue #86).
 //!
+//! `remove-cable` runs VB-Audio's own setup of VB-CABLE (or, with `--hifi`,
+//! of the Hi-Fi Cable) to remove it, without a window, then has Windows scan
+//! for hardware changes, which takes the removed output out of Windows'
+//! lists without a restart (issue #86). The scan needs administrator rights
+//! too, so both run in this one elevated step: one UAC prompt.
+//!
 //! A GUI-subsystem program, so that no console window flashes up when the
 //! core or the uninstaller starts it (issue #86: SW_HIDE alone does not
 //! hide it where Windows Terminal is the default console). Started from a
@@ -98,6 +105,7 @@ const USAGE: &str = "usage:
   bluecaster-driver restore --records <dir> [--unrecorded] [--out <file>]
   bluecaster-driver unrecorded --records <dir> [--out <file>]
   bluecaster-driver windows-keys <radio-address> [--out <file>]
+  bluecaster-driver remove-cable <setup> [--hifi] [--out <file>]
 every command: [--log <file>] [--verbose]";
 
 #[derive(Debug, PartialEq)]
@@ -109,6 +117,7 @@ enum Command {
     RestoreRecords { dir: PathBuf, unrecorded: bool },
     Unrecorded { dir: PathBuf },
     WindowsKeys { radio: [u8; 6] },
+    RemoveCable { setup: PathBuf, hifi: bool },
 }
 
 #[derive(Debug, PartialEq)]
@@ -210,6 +219,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut keys = None;
     let mut all = false;
     let mut unrecorded = false;
+    let mut hifi = false;
     let mut it = argv.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -219,6 +229,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--keys" => keys = Some(PathBuf::from(it.next().ok_or("--keys needs a file")?)),
             "--all" => all = true,
             "--unrecorded" => unrecorded = true,
+            "--hifi" => hifi = true,
             s if s.starts_with("--") => return Err(format!("unknown option {s}")),
             s => positional.push(s.to_string()),
         }
@@ -240,6 +251,10 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             let a = positional.next().ok_or("windows-keys needs the radio's address")?;
             Command::WindowsKeys { radio: parse_address(&a).ok_or(format!("bad address {a}"))? }
         }
+        "remove-cable" => {
+            let setup = positional.next().ok_or("remove-cable needs VB-Audio's setup")?;
+            Command::RemoveCable { setup: PathBuf::from(setup), hifi: std::mem::take(&mut hifi) }
+        }
         other => return Err(format!("unknown command {other}")),
     };
     if let Some(extra) = positional.next() {
@@ -257,6 +272,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     if unrecorded {
         return Err("--unrecorded is for restore --records only".into());
     }
+    if hifi {
+        return Err("--hifi is for remove-cable only".into());
+    }
     Ok(Args { command, out })
 }
 
@@ -272,7 +290,51 @@ fn run(command: &Command) -> (u8, Value) {
         Command::RestoreRecords { dir, unrecorded } => restore_records(dir, *unrecorded),
         Command::Unrecorded { dir } => list_unrecorded(dir),
         Command::WindowsKeys { radio } => windows_keys(radio),
+        Command::RemoveCable { setup, hifi } => remove_cable(setup, *hifi),
     }
+}
+
+/// VB-Audio's setup arguments that remove a cable without a window:
+/// VB-CABLE's as community packages run it, the Hi-Fi Cable's as ASIO
+/// Bridge's setup passes them
+fn remove_args(hifi: bool) -> &'static [&'static str] {
+    if hifi { &["-h", "-u", "-H"] } else { &["-u", "-h"] }
+}
+
+/// Runs VB-Audio's setup to remove the cable and waits for it, then scans
+/// for hardware changes (waiting for that too), so that the output leaves
+/// Windows' lists without a restart. The setup's exit code is reported, not
+/// judged: whether the cable went is what the caller checks.
+fn remove_cable(setup: &std::path::Path, hifi: bool) -> (u8, Value) {
+    if !win_sys::elevation::is_elevated() {
+        return (exit::NOT_ELEVATED, error_json("not_elevated", "remove-cable needs administrator rights"));
+    }
+    let name = if hifi { "Hi-Fi Cable" } else { "VB-CABLE" };
+    let started = std::time::Instant::now();
+    let status = {
+        use std::os::windows::process::CommandExt;
+        /// No console window for the setup
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = std::process::Command::new(setup);
+        command.args(remove_args(hifi)).creation_flags(CREATE_NO_WINDOW);
+        // In its own folder, as the uninstaller starts it
+        if let Some(dir) = setup.parent().filter(|d| !d.as_os_str().is_empty()) {
+            command.current_dir(dir);
+        }
+        command.status()
+    };
+    let setup_exit = match status {
+        Ok(status) => status.code(),
+        Err(e) => {
+            tracing::error!("{name}: VB-Audio's setup did not start: {}", e.kind());
+            return (exit::FAILED, error_json("setup", &format!("the setup did not start: {}", e.kind())));
+        }
+    };
+    tracing::info!("{name}: setup exit {setup_exit:?} after {} ms", started.elapsed().as_millis());
+    let started = std::time::Instant::now();
+    let rescanned = driver::rescan_devices(true);
+    tracing::info!("{name}: scan for hardware changes {rescanned} in {} ms", started.elapsed().as_millis());
+    (exit::OK, json!({ "ok": true, "command": "remove-cable", "setup_exit": setup_exit, "rescanned": rescanned }))
 }
 
 /// "XX:XX:XX:XX:XX:XX" (or with dashes) in display order
@@ -994,6 +1056,25 @@ mod tests {
         assert_eq!(rest, ["assign", "X", "--out", "o.json"]);
         let (log, verbose, _) = log_args(vec!["list".into()]);
         assert_eq!((log, verbose), (None, false));
+    }
+
+    #[test]
+    fn remove_cable_command_line() {
+        assert_eq!(
+            args(&["remove-cable", r"C:\VB\VBCABLE_Setup_x64.exe", "--hifi", "--out", "o.json"]).unwrap(),
+            Args {
+                command: Command::RemoveCable { setup: PathBuf::from(r"C:\VB\VBCABLE_Setup_x64.exe"), hifi: true },
+                out: Some(PathBuf::from("o.json")),
+            }
+        );
+        assert_eq!(
+            args(&["remove-cable", "s.exe"]).unwrap().command,
+            Command::RemoveCable { setup: PathBuf::from("s.exe"), hifi: false }
+        );
+        assert!(args(&["remove-cable"]).is_err());
+        assert!(args(&["list", "--hifi"]).is_err());
+        assert_eq!(remove_args(false), ["-u", "-h"]);
+        assert_eq!(remove_args(true), ["-h", "-u", "-H"]);
     }
 
     #[test]

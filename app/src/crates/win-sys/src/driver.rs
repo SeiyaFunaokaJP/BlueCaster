@@ -43,15 +43,15 @@ use std::time::{Duration, Instant};
 
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Get_Parent, CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW, CM_Query_And_Remove_SubTreeW,
-    CM_REENUMERATE_ASYNCHRONOUS, CM_REMOVE_NO_RESTART, CM_REMOVE_UI_NOT_OK, CM_Reenumerate_DevNode,
-    CMP_WaitNoPendingInstallEvents, CR_SUCCESS, DI_ENUMSINGLEINF, DI_FLAGSEX_ALLOWEXCLUDEDDRVS, DI_NEEDREBOOT,
-    DI_NEEDRESTART, DICS_FLAG_GLOBAL, DICS_PROPCHANGE, DIF_PROPERTYCHANGE, DIIDFLAG_NOFINISHINSTALLUI, DIREG_DEV,
-    DiInstallDevice, DiUninstallDevice, PNP_VETO_TYPE, SP_CLASSINSTALL_HEADER, SP_DEVINFO_DATA, SP_DEVINSTALL_PARAMS_W,
-    SP_DRVINFO_DATA_V2_W, SP_DRVINFO_DETAIL_DATA_W, SP_PROPCHANGE_PARAMS, SPDIT_CLASSDRIVER, SPDRP_CLASSGUID,
-    SetupDiBuildDriverInfoList, SetupDiCallClassInstaller, SetupDiCreateDevRegKeyW, SetupDiDestroyDriverInfoList,
-    SetupDiEnumDriverInfoW, SetupDiGetDeviceInstallParamsW, SetupDiGetDriverInfoDetailW, SetupDiOpenDevRegKey,
-    SetupDiSetClassInstallParamsW, SetupDiSetDeviceInstallParamsW, SetupDiSetDeviceRegistryPropertyW,
-    SetupDiSetSelectedDriverW,
+    CM_REENUMERATE_ASYNCHRONOUS, CM_REENUMERATE_FLAGS, CM_REENUMERATE_SYNCHRONOUS, CM_REMOVE_NO_RESTART,
+    CM_REMOVE_UI_NOT_OK, CM_Reenumerate_DevNode, CMP_WaitNoPendingInstallEvents, CR_SUCCESS, DI_ENUMSINGLEINF,
+    DI_FLAGSEX_ALLOWEXCLUDEDDRVS, DI_NEEDREBOOT, DI_NEEDRESTART, DICS_FLAG_GLOBAL, DICS_PROPCHANGE, DIF_PROPERTYCHANGE,
+    DIIDFLAG_NOFINISHINSTALLUI, DIREG_DEV, DiInstallDevice, DiUninstallDevice, PNP_VETO_TYPE, SP_CLASSINSTALL_HEADER,
+    SP_DEVINFO_DATA, SP_DEVINSTALL_PARAMS_W, SP_DRVINFO_DATA_V2_W, SP_DRVINFO_DETAIL_DATA_W, SP_PROPCHANGE_PARAMS,
+    SPDIT_CLASSDRIVER, SPDRP_CLASSGUID, SetupDiBuildDriverInfoList, SetupDiCallClassInstaller, SetupDiCreateDevRegKeyW,
+    SetupDiDestroyDriverInfoList, SetupDiEnumDriverInfoW, SetupDiGetDeviceInstallParamsW, SetupDiGetDriverInfoDetailW,
+    SetupDiOpenDevRegKey, SetupDiSetClassInstallParamsW, SetupDiSetDeviceInstallParamsW,
+    SetupDiSetDeviceRegistryPropertyW, SetupDiSetSelectedDriverW,
 };
 use windows::Win32::Foundation::{ERROR_INVALID_DEVINST_NAME, ERROR_NO_MORE_ITEMS, ERROR_NO_SUCH_DEVINST, HWND};
 use windows::Win32::System::Registry::{KEY_READ, REG_MULTI_SZ};
@@ -992,11 +992,8 @@ fn uninstall_and_reenumerate(set: &DevInfoSet, data: &SP_DEVINFO_DATA, instance_
     );
     if !reenumerated {
         // No parent known (the device was not present) or it failed: the
-        // whole tree, as "Scan for hardware changes" does
-        let mut root = 0u32;
-        // SAFETY: a NULL device ID locates the root of the device tree.
-        let cr = unsafe { CM_Locate_DevNodeW(&mut root, PCWSTR::null(), CM_LOCATE_DEVNODE_NORMAL) };
-        if cr != CR_SUCCESS || !reenumerate(root) {
+        // whole tree
+        if !rescan_devices(false) {
             tracing::warn!("driver: re-enumerating devices failed; replugging the adapter brings it back");
         }
     }
@@ -1045,12 +1042,32 @@ fn stop_device(devnode: u32) {
 /// (MediaTek's, issue #86) is the interfaces, the radio and a node per
 /// paired device.
 fn reenumerate(devinst: u32) -> bool {
+    reenumerate_with(devinst, CM_REENUMERATE_ASYNCHRONOUS)
+}
+
+fn reenumerate_with(devinst: u32, flags: CM_REENUMERATE_FLAGS) -> bool {
     // SAFETY: a devinst from CM_Locate_DevNode / CM_Get_Parent.
-    let cr = unsafe { CM_Reenumerate_DevNode(devinst, CM_REENUMERATE_ASYNCHRONOUS) };
+    let cr = unsafe { CM_Reenumerate_DevNode(devinst, flags) };
     if cr != CR_SUCCESS {
         tracing::debug!("driver: CM_Reenumerate_DevNode({devinst}) returned CR {}", cr.0);
     }
     cr == CR_SUCCESS
+}
+
+/// Device Manager's "Scan for hardware changes": the whole device tree
+/// enumerated again; `wait` returns only once that is done. A device whose
+/// driver was removed leaves Windows' lists then, without a restart (issue
+/// #86: the Hi-Fi Cable's output stayed in Sound until a rescan). Needs
+/// administrator rights (CR_ACCESS_DENIED otherwise).
+pub fn rescan_devices(wait: bool) -> bool {
+    let mut root = 0u32;
+    // SAFETY: a NULL device ID locates the root of the device tree.
+    let cr = unsafe { CM_Locate_DevNodeW(&mut root, PCWSTR::null(), CM_LOCATE_DEVNODE_NORMAL) };
+    if cr != CR_SUCCESS {
+        tracing::debug!("driver: locating the device tree's root returned CR {}", cr.0);
+        return false;
+    }
+    reenumerate_with(root, if wait { CM_REENUMERATE_SYNCHRONOUS } else { CM_REENUMERATE_ASYNCHRONOUS })
 }
 
 /// After a re-enumeration: waits until Windows has installed the device
