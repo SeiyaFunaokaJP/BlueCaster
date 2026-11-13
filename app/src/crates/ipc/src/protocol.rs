@@ -913,6 +913,13 @@ pub struct Settings {
     /// offers it
     #[serde(default)]
     pub hifi_cable_note_hidden: bool,
+    /// The virtual cables' dialog was opened by itself once after an update:
+    /// it does not open by itself again (a client that sends none: true)
+    #[serde(default = "yes")]
+    pub cables_dialog_shown: bool,
+    /// The warning before unlisted codec options was accepted: not asked again
+    #[serde(default)]
+    pub unlisted_options_warned: bool,
     /// Windows Volume Sync for every device (on by default): the audio
     /// device's volume and the captured device's Windows volume follow each
     /// other. Off: no stream syncs. A change starts the profile in use

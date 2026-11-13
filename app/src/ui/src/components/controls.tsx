@@ -154,6 +154,9 @@ export function Toggle(props: {
   help?: () => JSX.Element;
   checked: boolean;
   disabled?: boolean;
+  /** The switch shows `checked` once onChange returns: a change it did not
+   *  take (yet) is undone */
+  controlled?: boolean;
   onChange: (v: boolean) => void;
 }) {
   const id = createUniqueId();
@@ -179,7 +182,10 @@ export function Toggle(props: {
         disabled={props.disabled}
         aria-labelledby={`${id}-label`}
         aria-describedby={props.hint ? `${id}-hint` : undefined}
-        onChange={(e) => props.onChange(e.currentTarget.checked)}
+        onChange={(e) => {
+          props.onChange(e.currentTarget.checked);
+          if (props.controlled) e.currentTarget.checked = props.checked;
+        }}
       />
     </div>
   );
@@ -472,6 +478,8 @@ export function Dialog(props: {
   };
   const onKey = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
+      // A dialog over this one took it
+      if (e.defaultPrevented) return;
       e.preventDefault();
       cancel();
     } else if (e.key === "Tab" && box) {

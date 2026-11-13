@@ -197,6 +197,8 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
     auto_reconnect: true,
     vb_cable_note_hidden: false,
     hifi_cable_note_hidden: false,
+    cables_dialog_shown: true,
+    unlisted_options_warned: false,
     volume_sync: true,
     mute_output: false,
     volume_mixer: false,
@@ -1413,6 +1415,7 @@ export class MockCore implements Transport {
           auto_codec: next.auto_codec ?? before.auto_codec,
           // As the core's serde default for a client that sends none
           setup_done: next.setup_done ?? true,
+          cables_dialog_shown: next.cables_dialog_shown ?? true,
         };
         this.emit({ kind: "settings", value: this.snap.settings });
         let le_audio_deferred = false;

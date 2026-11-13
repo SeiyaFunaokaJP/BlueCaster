@@ -11,6 +11,7 @@ import { setLanguage, t } from "../i18n";
 import { MockCore, sampleProfile, type MockOptions } from "../ipc/mock";
 import type { UpdatePhase } from "../ipc/transport";
 import type { CodecStopKind } from "../ipc/bindings/CodecStopKind";
+import type { Snapshot } from "../ipc/types";
 import { createCore } from "../ipc/store";
 import { LINKS } from "../lib/links";
 import { toneParams } from "../lib/profile";
@@ -483,6 +484,63 @@ describe("Audio Devices without a virtual device (issue #86)", () => {
     await screen.findByRole("heading", { level: 1 });
     expect(screen.queryByText(t("vbcable.origin"), { exact: false })).toBeNull();
     expect(screen.queryByRole("button", { name: t("cables.install") })).toBeNull();
+  });
+});
+
+describe("virtual audio devices after an update (issue #86)", () => {
+  const updated = (m: MockCore) => {
+    (m as unknown as { snap: Snapshot }).snap.settings.cables_dialog_shown = false;
+  };
+  const cablesDialog = () => screen.queryByRole("dialog", { name: t("cables.title") });
+
+  it("opens once on the main window; closed, never again", async () => {
+    const { core, mock: m } = start("#/home");
+    updated(m);
+    const dialog = await screen.findByRole("dialog", { name: t("cables.title") });
+    // The Hi-Fi Cable is missing
+    expect(within(dialog).getByRole("button", { name: t("cables.download") })).toBeInTheDocument();
+    expect(core.state.snap!.settings.cables_dialog_shown).toBe(false);
+    fireEvent.click(within(dialog).getByRole("button", { name: t("modal.close") }));
+    await waitFor(() => expect(cablesDialog()).toBeNull());
+    await waitFor(() => expect(core.state.snap!.settings.cables_dialog_shown).toBe(true));
+    // The next start
+    cleanup();
+    location.hash = "#/home";
+    const again = createCore(m);
+    render(() => <App core={again} />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(cablesDialog()).toBeNull();
+  });
+
+  it("both cables installed: not shown, and not asked again", async () => {
+    location.hash = "#/home";
+    const m = new MockCore({ speed: 0 });
+    m.hifiCable = true;
+    mock = m;
+    updated(m);
+    const core = createCore(m);
+    render(() => <App core={core} />);
+    await waitFor(() => expect(core.state.snap?.settings.cables_dialog_shown).toBe(true));
+    expect(cablesDialog()).toBeNull();
+  });
+
+  it("not over a first setup, nor after it", async () => {
+    const { core, mock: m } = start("#/home", { scenario: "fresh" });
+    updated(m);
+    fireEvent.click(await screen.findByRole("button", { name: t("ui.setup.skip") }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
+    await waitFor(() => expect(core.state.snap!.settings.cables_dialog_shown).toBe(true));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(cablesDialog()).toBeNull();
+  });
+
+  it("a new install does not get it", async () => {
+    const { core } = start("#/home");
+    expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(cablesDialog()).toBeNull();
+    expect(core.state.snap!.settings.cables_dialog_shown).toBe(true);
   });
 });
 

@@ -92,9 +92,10 @@ export function Setup() {
   onMount(() => void core.transport.setupWindow?.(true).catch(() => {}));
   onCleanup(() => void core.transport.setupWindow?.(false).catch(() => {}));
 
-  // Finished or skipped: it does not open by itself again (issue #86)
+  // Finished or skipped: it does not open by itself again (issue #86), nor
+  // do the cables, shown here, after it
   const finish = () => {
-    if (!snap().settings.setup_done) void saveSettings(app, { setup_done: true });
+    if (!snap().settings.setup_done) void saveSettings(app, { setup_done: true, cables_dialog_shown: true });
     app.setSetupActive(false);
     app.navigate({ name: "home" });
   };
