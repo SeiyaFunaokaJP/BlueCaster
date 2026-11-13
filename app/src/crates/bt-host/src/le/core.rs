@@ -1720,9 +1720,15 @@ fn parse_ad(r: &mut LeScanResult, data: &[u8]) {
             _ => {}
         }
     }
-    if r.uuids16.iter().any(|u| {
-        matches!(*u, UUID_SERVICE_ASCS | UUID_SERVICE_PACS | UUID_SERVICE_CAS | UUID_SERVICE_TMAS | UUID_SERVICE_GMAS)
-    }) {
+    // CAS alone and no name: another advertising set of a device listed
+    // under its own address (issue #86: an EarFun's Fast Pair set for its
+    // bonded phones, on a random address), nothing to connect to
+    let audio_service = r
+        .uuids16
+        .iter()
+        .any(|u| matches!(*u, UUID_SERVICE_ASCS | UUID_SERVICE_PACS | UUID_SERVICE_TMAS | UUID_SERVICE_GMAS));
+    let named_cas = r.uuids16.contains(&UUID_SERVICE_CAS) && !r.name.trim().is_empty();
+    if audio_service || named_cas {
         r.le_audio = true;
     }
     // No LE Audio UUID, but an audio appearance (Audio Sink 0x0840-0x087F,
@@ -2305,6 +2311,14 @@ mod tests {
         parse_ad(&mut e, &[3, 0x19, 0x41, 0x09, 3, 0x03, 0x0F, 0x18]);
         assert!(e.le_audio);
         assert_eq!(e.note, "audio appearance, LE Audio not advertised");
+        // Fast Pair data and a bare CAS scan response, no name (issue #86):
+        // not listed; with a name it is
+        let mut c = LeScanResult { connectable: true, ..LeScanResult::default() };
+        parse_ad(&mut c, &[2, 0x01, 0x18, 6, 0x16, 0x2C, 0xFE, 0x10, 0x40, 0x00, 2, 0x0A, 0xF6]);
+        parse_ad(&mut c, &[3, 0x16, 0x53, 0x18]);
+        assert!(!c.le_audio);
+        parse_ad(&mut c, &[4, 0x09, b'B', b'u', b'd']);
+        assert!(c.le_audio);
         // Malformed: a length beyond the data ends the parsing
         let mut m = LeScanResult::default();
         parse_ad(&mut m, &[9, 0x09, b'A']);
