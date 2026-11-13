@@ -1379,12 +1379,12 @@ pub struct LeAudioDiag {
     pub devices: Vec<bt_host::LeDeviceInfo>,
 }
 
-/// The [LE Audio] section: only with the setting on or an LE stack running
+/// The [LE Audio (experimental)] section: only with the setting on or an LE stack running
 fn le_audio_section(out: &mut String, s: &Settings, le: Option<&LeAudioDiag>) {
     if !s.le_audio() && le.is_none() {
         return;
     }
-    out.push_str("\n[LE Audio]\n");
+    out.push_str("\n[LE Audio (experimental)]\n");
     let _ = writeln!(
         out,
         "  Setting: {}, low latency {}; BTstack LE {}",
@@ -2510,7 +2510,7 @@ mod tests {
         le_settings.debug_mode = true;
         input.settings = &le_settings;
         let text = diag_text(&input);
-        assert!(text.contains("[LE Audio]\n  Setting: on, low latency off; BTstack LE not running\n\n"));
+        assert!(text.contains("[LE Audio (experimental)]\n  Setting: on, low latency off; BTstack LE not running\n\n"));
         let le = LeAudioDiag {
             stream: Some("LC3 48 kHz 10 ms 100 octets (80 kbps/ch), 2 ch over 2 CIS, 48_4_2".into()),
             stats: Some(bt_host::LeStreamStats {

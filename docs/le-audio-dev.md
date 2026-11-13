@@ -5,11 +5,11 @@ nav_exclude: true
 english_only: true
 ---
 
-# LE Audio - developer note
+# LE Audio (experimental) - developer note
 
 BlueCaster can stream to LE Audio devices as a **BAP unicast client** (audio
 source): LC3 over Connected Isochronous Streams (CIS), on the same BTstack
-session and WinUSB adapter as A2DP. It is used only for a
+session and WinUSB adapter as A2DP. It is **experimental**, used only for a
 device's LE Audio entry (or `--le-audio` in CLI mode), and since issue #86
 only in developer mode (`Settings::le_audio`: the setting and `debug_mode`;
 the Adapters switch is shown only there). `le_audio_experimental`
@@ -663,7 +663,7 @@ keys of classic devices (issue #86):
   scanning in the emulator. The aarch64 build of the LE code has not been
   checked.
 
-## TODO
+## TODO (before LE Audio can leave "experimental")
 
 Collected from the v1 profile branches (2026-10-16) and the v2 port
 (2026-10-18). Everything so far is verified only against the Bumble

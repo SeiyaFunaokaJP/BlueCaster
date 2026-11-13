@@ -20,7 +20,7 @@ nav_order: 4
 
 BlueCaster는 Windows에서 LHDC V5, LDAC, aptX Adaptive, aptX HD,
 aptX Low Latency, aptX, Opus, AAC, SBC XQ, SBC Bluetooth 오디오를 사용할 수 있게 합니다
-(LE 오디오를 통한 LC3도 지원). Windows 자체 Bluetooth 스택은 A2DP에서
+(LE 오디오를 통한 LC3도 실험적으로 지원). Windows 자체 Bluetooth 스택은 A2DP에서
 SBC, 기본 aptX, (Windows 11만) AAC만 지원합니다. 이 도구는 커널 드라이버 없이
 나머지 코덱을 추가합니다.
 

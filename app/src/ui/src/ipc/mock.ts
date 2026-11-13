@@ -3150,7 +3150,7 @@ export class MockCore implements Transport {
       `Adapter: ${s.adapter.adapters.map((a) => `${a.display_name} [${a.driver_service}]`).join(", ") || "none"}`,
       `Firmware files: ${s.adapter.adapters.map((a) => `${a.display_name}: ${a.firmware_present === null ? "none needed" : a.firmware_present ? "present" : "MISSING"} (${a.firmware_files.join(", ")})`).join("; ")}`,
       `State: ${s.stream.state}${s.stream.info ? ` ${s.stream.info.codec} ${s.stream.info.bitrate_kbps} kbps` : ""}${s.stream.info?.le ? ` (${s.stream.info.le.summary})` : ""}`,
-      `LE Audio: ${s.settings.le_audio_experimental ? "on" : "off"}${s.settings.le_audio_low_latency ? ", low latency" : ""}`,
+      `LE Audio (experimental): ${s.settings.le_audio_experimental ? "on" : "off"}${s.settings.le_audio_low_latency ? ", low latency" : ""}`,
       `Profiles: ${s.profiles.map((p) => `${p.name} [${p.device_address}]`).join(", ")}`,
       `Config: ${s.config_dir}`,
     ].join("\n");

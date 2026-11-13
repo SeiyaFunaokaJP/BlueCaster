@@ -11,7 +11,7 @@ has_toc: false
 適用於 Windows、支援所有轉碼器的藍牙 A2DP 音訊串流工具。
 {: .fs-6 .fw-300 }
 
-把一般的藍牙介面卡（便宜的 USB 介面卡，或許多筆電的內建介面卡）從 Windows 只給的基本轉碼器，變成 Hi-Fi 發射器：**LHDC V5、LDAC 與 aptX Adaptive** 最高 96 kHz（LHDC V5 最高 192 kHz），以及 **aptX HD、aptX、aptX Low Latency、Opus、AAC、SBC XQ、SBC 與 FastStream**，還有 LE Audio（LC3）。BlueCaster 會自行設定介面卡，一鍵即可交還給 Windows（[運作方式](architecture)）。
+把一般的藍牙介面卡（便宜的 USB 介面卡，或許多筆電的內建介面卡）從 Windows 只給的基本轉碼器，變成 Hi-Fi 發射器：**LHDC V5、LDAC 與 aptX Adaptive** 最高 96 kHz（LHDC V5 最高 192 kHz），以及 **aptX HD、aptX、aptX Low Latency、Opus、AAC、SBC XQ、SBC 與 FastStream**，還有 LE Audio（LC3，實驗性，僅限開發人員模式）。BlueCaster 會自行設定介面卡，一鍵即可交還給 Windows（[運作方式](architecture)）。
 
 ![BlueCaster's Codecs screen, streaming LDAC 990 kbps / 48 kHz to Sony WH-1000XM4](../images/app_sample.png)
 
@@ -36,8 +36,8 @@ has_toc: false
 | SBC | 最高約 345 kbps | 44.1/48 kHz | 16 bit | 約 150 ms |
 | FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | -- |
 | Opus 05 | 256 kbps | 48 kHz | 16 bit | -- |
-| LC3（LE Audio） | 每聲道 32--124 kbps | 16/24/32/48 kHz | 16 bit | 約 140 ms |
-| LC3 LL（LE Audio GMAP） | 每聲道 64--96 kbps | 32/48 kHz | 16 bit | 約 30 ms |
+| LC3（LE Audio） 🧪 | 每聲道 32--124 kbps | 16/24/32/48 kHz | 16 bit | 約 140 ms |
+| LC3 LL（LE Audio GMAP） 🧪 | 每聲道 64--96 kbps | 32/48 kHz | 16 bit | 約 30 ms |
 
 ### 各平台的轉碼器支援（傳送到耳機）
 
@@ -55,9 +55,9 @@ has_toc: false
 | SBC | ✅ | ✅ | ✅ | ✅ |
 | FastStream | ❌ | ❌ | ✅ | ✅（僅限音樂，需明確選擇） |
 | Opus 05（PipeWire 自有的 Opus） | ❌ | ❌ | ✅ PipeWire 0.3.57+（`opus_05`，僅限 PipeWire 裝置） | ✅（需明確選擇，僅限開發人員模式） |
-| LC3（LE Audio，BAP 單播） | ❌ | ✅ 僅限藍牙硬體與驅動程式支援 LE Audio 的 PC | ✅ PipeWire BAP `lc3`（BlueZ LE Audio） | ✅（裝置的 LE Audio 項目；電競耳機使用 GMAP 低延遲；需要支援 ISO 的 Bluetooth 5.2 介面卡，[使用方式](usage#le-audio)） |
+| LC3（LE Audio，BAP 單播） | ❌ | ✅ 僅限藍牙硬體與驅動程式支援 LE Audio 的 PC | ✅ PipeWire BAP `lc3`（BlueZ LE Audio） | 🧪 實驗性，僅限開發人員模式（裝置的 LE Audio 項目；電競耳機使用 GMAP 低延遲；需要支援 ISO 的 Bluetooth 5.2 介面卡，[使用方式](usage#le-audio)） |
 
-✅ 支援 · ❌ 不支援。所有欄位皆為傳送端（PC → 耳機）。「內建」指不使用 BlueCaster 時作業系統本身的藍牙音訊；Ubuntu 欄位為 Ubuntu 26.04 的 PipeWire 轉碼器組合（`libspa-0.2-bluetooth`）。
+✅ 支援 · 🧪 實驗性 · ❌ 不支援。所有欄位皆為傳送端（PC → 耳機）。「內建」指不使用 BlueCaster 時作業系統本身的藍牙音訊；Ubuntu 欄位為 Ubuntu 26.04 的 PipeWire 轉碼器組合（`libspa-0.2-bluetooth`）。
 
 {: .warning }
 **aptX HD 與 aptX Low Latency** 依照 Android / PipeWire 的實作，並通過編碼/解碼往返測試，但尚未在實際耳機上驗證。此表中的延遲值為典型數值，並非以 BlueCaster 實測。
@@ -144,7 +144,7 @@ BlueCaster 完全繞過 Windows 藍牙堆疊。它透過 WinUSB 直接與 USB �
 ## 功能
 
 - **多轉碼器**：LHDC V5、LDAC、aptX Adaptive、aptX、AAC、aptX HD、aptX Low Latency、Opus、Opus 05、FastStream、SBC XQ 及 SBC，自動協商
-- **LE Audio**：以 LC3 傳送到 LE Audio 耳機與耳塞式耳機（BAP 單播、一對耳機的左右兩耳、耳機音量、媒體按鍵、GMAP 低延遲）。需要支援 Bluetooth 5.2 等時通道的介面卡；目前已在 MediaTek MT7925 與藍牙模擬器上測試過（請參閱[使用方式](usage#le-audio)）
+- **LE Audio（實驗性，僅限開發人員模式）**：以 LC3 傳送到 LE Audio 耳機與耳塞式耳機（BAP 單播、一對耳機的左右兩耳、耳機音量、媒體按鍵、GMAP 低延遲）。需要支援 Bluetooth 5.2 等時通道的介面卡；只在一台 MediaTek MT7925 上測試過，有已知問題（請參閱[使用方式](usage#le-audio)）
 - **三種擷取模式**：系統回送、虛擬音訊裝置路由，或單一應用程式的輸出
 - **視窗、系統匣與 CLI**：用於設定與診斷的視窗、日常連線用的系統匣快顯視窗與選單，以及命令列（請參閱 [使用方式](usage)）
 - **應用程式內的 WinUSB 設定**：為介面卡指派 WinUSB 驅動程式，並可還原原本的驅動程式，不需要 Zadig（請參閱 [安裝設定](setup#winusb)）；Windows 透過此介面卡配對的耳機不必重新配對即可連線
