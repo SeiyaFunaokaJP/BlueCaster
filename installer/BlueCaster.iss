@@ -585,12 +585,17 @@ const
     registers itself here (64-bit view); the key gone after its removal
     counts as removed. The Hi-Fi Cable comes with ASIO Bridge (its key in the
     32-bit view; its setup puts the Hi-Fi Cable's own setup into
-    VB\CABLEHiFi) or on its own (HiFiUninstKey); its driver file tells
-    whether it is installed. }
+    VB\CABLEHiFi) or on its own (HiFiUninstKey); its device tells whether
+    it is installed: a root device whose service runs its driver. Not the
+    driver file: its setup removes the device but leaves the file while the
+    driver runs, and nothing deletes it at the restart (tested on ASIO
+    Bridge's, issue #86). }
   VbCableUninstKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:VBCABLE {87459874-1236-4469}';
   HiFiUninstKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:VBHIFI {87459874-1236-4469}';
   AsioBridgeUninstKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:ASIOBridge {17359A74-1236-5467}';
-  HiFiDriverFiles = 'vbaudio_hfvaio*.sys';
+  HiFiDriverName = 'vbaudio_hfvaio';
+  RootMediaKey = 'SYSTEM\CurrentControlSet\Enum\ROOT\MEDIA';
+  ServicesKey = 'SYSTEM\CurrentControlSet\Services\';
   { Remove without a window: VB-CABLE's setup as community packages run it
     (BlueCaster installs it with -i -h); the Hi-Fi Cable's with the arguments
     ASIO Bridge's own setup passes it to remove it }
@@ -1358,31 +1363,40 @@ begin
     Result := '';
 end;
 
-{ In the 64-bit System32: this 32-bit uninstaller would otherwise look in
-  SysWOW64\drivers, where the driver never is (issue #86: Hi-Fi Cable not
-  offered) }
-function HiFiDriverInstalled: Boolean;
+{ A root media device whose service's driver is the Hi-Fi Cable's (no
+  administrator needed to read them) }
+function HiFiDeviceInstalled: Boolean;
 var
-  Find: TFindRec;
-  Dir: String;
+  Root: Integer;
+  Devices: TArrayOfString;
+  Service, Image: String;
+  I: Integer;
 begin
-  Dir := ExpandConstant('{sys}\drivers');
+  Result := False;
   if IsWin64 then
-    Dir := ApplyPathRedirRules(True, Dir, tpCurrent);
-  Result := FindFirst(AddBackslash(Dir) + HiFiDriverFiles, Find);
-  if Result then
-    FindClose(Find);
+    Root := HKLM64
+  else
+    Root := HKLM;
+  if not RegGetSubkeyNames(Root, RootMediaKey, Devices) then
+    Exit;
+  for I := 0 to GetArrayLength(Devices) - 1 do
+    if RegQueryStringValue(Root, RootMediaKey + '\' + Devices[I], 'Service', Service) and (Service <> '') and
+       RegQueryStringValue(Root, ServicesKey + Service, 'ImagePath', Image) and
+       (Pos(HiFiDriverName, Lowercase(Image)) > 0) then begin
+      Result := True;
+      Exit;
+    end;
 end;
 
 { The Hi-Fi Cable's setup: its own registration's, else the copy in
-  VB\CABLEHiFi, else the one in ASIO Bridge's folder; '' when its driver is
+  VB\CABLEHiFi, else the one in ASIO Bridge's folder; '' when its device is
   not installed or no setup is found }
 function HiFiRemover: String;
 var
   Path: String;
 begin
   Result := '';
-  if not HiFiDriverInstalled then
+  if not HiFiDeviceInstalled then
     Exit;
   if RegQueryStringValue(HKLM64, HiFiUninstKey, 'UninstallString', Path) and FileExists(UnquotedPath(Path)) then
     Result := UnquotedPath(Path)
@@ -1559,8 +1573,8 @@ begin
 end;
 
 { Runs a cable's setup elevated to remove it, then checks that it has gone
-  (VB-Audio documents no exit codes): IsHiFi checks the Hi-Fi Cable's driver
-  file, else VB-CABLE's registration. UAC cancelled: it stays, no message. }
+  (VB-Audio documents no exit codes): IsHiFi checks the Hi-Fi Cable's
+  device, else VB-CABLE's registration. UAC cancelled: it stays, no message. }
 procedure RemoveCable(const Name, Setup, Params: String; const IsHiFi: Boolean);
 var
   Code, I: Integer;
@@ -1576,7 +1590,7 @@ begin
   Removed := False;
   for I := 1 to 20 do begin
     if IsHiFi then
-      Removed := not HiFiDriverInstalled
+      Removed := not HiFiDeviceInstalled
     else
       Removed := not RegKeyExists(HKLM64, VbCableUninstKey);
     if Removed then
