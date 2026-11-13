@@ -4,7 +4,7 @@
 // as VB-Audio's donationware.
 
 import { createSignal } from "solid-js";
-import { useApp } from "../app/context";
+import { onAudioDevicesChanged, useApp } from "../app/context";
 import { CablesDialog } from "../components/CableNotes";
 import { Button, Section } from "../components/controls";
 import { t } from "../i18n";
@@ -23,6 +23,9 @@ export function About() {
       .request("audio.devices")
       .then(setDevices)
       .catch(() => {});
+  onAudioDevicesChanged(() => {
+    if (cables()) void loadDevices();
+  });
   // The licence texts shipped next to the programs; a development build
   // has none, so the release's copy online
   const openLicenses = () => {

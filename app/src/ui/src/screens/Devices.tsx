@@ -5,7 +5,7 @@
 // ones or type an address. Profiles then pick from this list.
 
 import { createSignal, onCleanup, onMount } from "solid-js";
-import { useApp } from "../app/context";
+import { onAudioDevicesChanged, useApp } from "../app/context";
 import { saveSettings } from "../app/settings";
 import { Toggle } from "../components/controls";
 import { DevicePicker } from "../components/DevicePicker";
@@ -29,6 +29,7 @@ export function Devices() {
     window.addEventListener("focus", load);
   });
   onCleanup(() => window.removeEventListener("focus", load));
+  onAudioDevicesChanged(() => void load());
   return (
     <div class="page">
       <header class="page-head">

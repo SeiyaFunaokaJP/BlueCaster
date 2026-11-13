@@ -4,6 +4,7 @@
 
 pub mod accent;
 pub mod app_icon;
+pub mod audio_notify;
 pub mod audio_policy;
 pub mod autostart;
 pub mod bt_keys;

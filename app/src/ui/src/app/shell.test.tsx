@@ -394,6 +394,22 @@ describe("Audio Devices without a virtual device (issue #86)", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
+  it("shows the Hi-Fi Cable installed as soon as Windows has it, without the window coming back", async () => {
+    location.hash = "#/devices";
+    const m = new MockCore({ speed: 0 });
+    mock = m;
+    render(() => <App core={createCore(m)} />);
+    fireEvent.click(await screen.findByRole("button", { name: t("cables.learn_more") }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("button", { name: t("cables.download") })).toBeInTheDocument();
+    // Installed by VB-Audio's own setup, outside BlueCaster
+    m.hifiCable = true;
+    m.audioEndpointsChanged();
+    await waitFor(() => expect(within(dialog).getAllByRole("button", { name: t("cables.uninstall") })).toHaveLength(2));
+    expect(within(dialog).queryByRole("button", { name: t("cables.download") })).toBeNull();
+    expect(screen.getByText(t("cables.installed_both"))).toBeInTheDocument();
+  });
+
   it("offers VB-Audio's page when VB-CABLE cannot be downloaded", async () => {
     location.hash = "#/devices";
     const m = new MockCore({ speed: 0 });

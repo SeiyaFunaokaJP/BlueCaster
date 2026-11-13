@@ -10,7 +10,7 @@
 
 import { createEffect, createMemo, createResource, createSignal, createUniqueId, on, onCleanup, onMount, Show } from "solid-js";
 import { createStore, unwrap } from "solid-js/store";
-import { useApp } from "../app/context";
+import { onAudioDevicesChanged, useApp } from "../app/context";
 import { allAudioDevices, devicesSwitchShown } from "../app/settings";
 import { t } from "../i18n";
 import { codecSpec } from "../lib/codecs";
@@ -83,6 +83,7 @@ export function DeviceSettings(props: { device: Device }) {
     window.addEventListener("focus", load);
   });
   onCleanup(() => window.removeEventListener("focus", load));
+  onAudioDevicesChanged(() => void loadDevices());
   const virtualDevices = createMemo(() => (devices() ?? []).filter((d) => d.is_virtual));
   // VB-Cable is suggested only when Windows has no capture source of that
   // kind at all: no virtual device (issue #86)

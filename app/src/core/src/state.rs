@@ -1772,6 +1772,7 @@ impl CoreState {
             v1_running: false,
             verbose: crate::logging::verbose(),
             crashes: crate::crashes::unseen(&dir, &settings),
+            audio_endpoints: 0,
             vendors: bluecaster_core::vendor::VENDORS
                 .iter()
                 .map(|v| ipc::VendorInfo {
@@ -1860,6 +1861,7 @@ impl CoreState {
                 Event::V1Running(b) => s.v1_running = *b,
                 Event::Verbose(v) => s.verbose = *v,
                 Event::Crashes(c) => s.crashes = c.clone(),
+                Event::AudioEndpoints(n) => s.audio_endpoints = *n,
                 // Not state: no revision
                 Event::Link(_)
                 | Event::Log(_)
@@ -1919,6 +1921,16 @@ impl CoreState {
         g.0 += 1;
         let event = Event::Stream(g.1.stream.clone());
         let _ = self.events.send((g.0, Arc::new(event)));
+    }
+
+    /// Windows' audio devices changed (resident.rs: watch_audio_endpoints):
+    /// a cable that came is taken into use, and the UI reads its lists again
+    pub fn audio_endpoints_changed(&self) {
+        if let Ok(devices) = audio_capture::render_devices() {
+            self.watch_cables(&devices);
+        }
+        let n = self.with_snapshot(|s| s.audio_endpoints).wrapping_add(1);
+        self.publish(Event::AudioEndpoints(n));
     }
 
     /// A2DPWB v1 started or exited: published when it changed

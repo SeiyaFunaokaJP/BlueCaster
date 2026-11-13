@@ -13,7 +13,7 @@
 // that are not. The setup has a window size of its own.
 
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
-import { errorText, useApp, type AppContext } from "../app/context";
+import { errorText, onAudioDevicesChanged, useApp, type AppContext } from "../app/context";
 import { saveSettings } from "../app/settings";
 import { Banner, Button, Dialog, Toggle } from "../components/controls";
 import { PairedDevicesNote, windowsDevices } from "../components/PairedDevices";
@@ -468,6 +468,7 @@ function StepDevice() {
     window.addEventListener("focus", load);
   });
   onCleanup(() => window.removeEventListener("focus", load));
+  onAudioDevicesChanged(() => void load());
   // The device being connected: its button spins
   const [connecting, setConnecting] = createSignal<string | null>(null);
   // No scan from a Connect until the stream it starts has ended; after a
