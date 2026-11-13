@@ -468,6 +468,7 @@
   "ui.dev.encode_at_send": "傳送時編碼",
   "ui.dev.encode_at_send_hint": "開啟 ABR 時，卡頓期間積壓的音訊也以降低後的位元率傳送。\n適用於 SBC、SBC XQ、LDAC、LHDC V5、aptX Adaptive。",
   "ui.dev.keep_bitrate_on_slow_link": "通話後連線變慢時也不降低位元率",
+  "ui.dev.auto_mic_tick_poll": "自動：僅每 200 毫秒檢查一次正在錄音的應用程式",
   "ui.dev.aac_config_bitrate0": "設定中的位元率為 0",
   "ui.dev.aac_config_bitrate0_hint": "設定音訊裝置時將位元率傳送為 0（未知）。",
   "ui.dev.aac_latm_v0": "舊 LATM 格式（2.0.2 及更早）",

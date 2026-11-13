@@ -2015,7 +2015,15 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     }
     let mut health = StreamHealth::start(host.stats().clone(), format.sample_rate, active.health());
     // Headset mode (developer mode): the voice link instead of A2DP
-    let mut headset = crate::voice::HeadsetMode::new(req.headset_mic, req.mic_output.clone(), req.voice_codec);
+    let mut headset = crate::voice::HeadsetMode::new(req.headset_mic, req.mic_output.clone(), req.voice_codec)
+        .with_waker({
+            let inner = Arc::downgrade(inner);
+            crate::voice::Waker::new(move || {
+                if let Some(i) = inner.upgrade() {
+                    i.wake_tick();
+                }
+            })
+        });
     headset.offer_codecs(&host);
     while !stopped() {
         inner.wait_tick(Duration::from_millis(200));

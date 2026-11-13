@@ -47,6 +47,9 @@ pub struct DevOverrides {
     /// A link slow after a voice link keeps the full bit rate (the encoder
     /// is not lowered; bt_host::esco_watch, issue #86)
     pub keep_bitrate_on_slow_link: bool,
+    /// Headset mode's Auto looks for recording apps on the session's tick
+    /// (200 ms), as before its watcher thread (50 ms, woken at once)
+    pub auto_mic_tick_poll: bool,
 }
 
 /// Range of [`DevOverrides::queue_max_wait_ms`] (ms)
@@ -73,6 +76,7 @@ static CURRENT: RwLock<DevOverrides> = RwLock::new(DevOverrides {
     queue_max_wait_ms: 0,
     encode_at_send: false,
     keep_bitrate_on_slow_link: false,
+    auto_mic_tick_poll: false,
 });
 
 /// The overrides in force

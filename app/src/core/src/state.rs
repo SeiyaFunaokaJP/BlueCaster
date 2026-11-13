@@ -348,6 +348,7 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
             queue_max_wait_ms: s.dev_overrides.queue_max_wait_ms,
             encode_at_send: s.dev_overrides.encode_at_send,
             keep_bitrate_on_slow_link: s.dev_overrides.keep_bitrate_on_slow_link,
+            auto_mic_tick_poll: s.dev_overrides.auto_mic_tick_poll,
         },
         dev_vendors: s
             .dev_vendors
@@ -455,6 +456,7 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
         },
         encode_at_send: s.dev_overrides.encode_at_send,
         keep_bitrate_on_slow_link: s.dev_overrides.keep_bitrate_on_slow_link,
+        auto_mic_tick_poll: s.dev_overrides.auto_mic_tick_poll,
     };
     // Known vendors and options only, defaults left out
     c.dev_vendors = s

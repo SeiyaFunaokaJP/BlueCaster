@@ -678,10 +678,15 @@ fn recording(device: &IMMDevice) -> windows::core::Result<bool> {
 /// The processes of the sessions on `device` that record, this process's own
 /// left out (0: a session that names none); `first`: stop at the first one
 fn recording_pids(device: &IMMDevice, first: bool) -> windows::core::Result<Vec<u32>> {
-    let own = std::process::id();
-    let mut out = Vec::new();
     // SAFETY: activating a documented endpoint service on a live device.
     let manager = unsafe { device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None)? };
+    session_pids(&manager, first)
+}
+
+/// [`recording_pids`] of a session manager
+fn session_pids(manager: &IAudioSessionManager2, first: bool) -> windows::core::Result<Vec<u32>> {
+    let own = std::process::id();
+    let mut out = Vec::new();
     // SAFETY: plain call on a live session manager.
     let sessions = unsafe { manager.GetSessionEnumerator()? };
     // SAFETY: plain call on a live session enumerator.
@@ -733,6 +738,33 @@ pub fn capture_sessions_active(render_device_id: &str) -> windows::core::Result<
         }
     }
     Ok(Some(false))
+}
+
+/// [`capture_sessions_active`] for polling often: the capture endpoints
+/// paired with a render endpoint and their session managers are looked up
+/// once, each [`CaptureSessions::active`] only lists their sessions (well
+/// under a millisecond instead of an endpoint enumeration). COM must be
+/// initialised on the thread that opens and uses it.
+pub struct CaptureSessions {
+    managers: Vec<IAudioSessionManager2>,
+}
+
+impl CaptureSessions {
+    /// None when `render_device_id` has no paired capture endpoint
+    pub fn open(render_device_id: &str) -> windows::core::Result<Option<CaptureSessions>> {
+        let Some(captures) = paired_captures(render_device_id)? else { return Ok(None) };
+        let managers = captures
+            .iter()
+            // SAFETY: activating a documented endpoint service on a live device.
+            .filter_map(|d| unsafe { d.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) }.ok())
+            .collect();
+        Ok(Some(CaptureSessions { managers }))
+    }
+
+    /// Whether an application records from them now (this process left out)
+    pub fn active(&self) -> bool {
+        self.managers.iter().any(|m| session_pids(m, true).is_ok_and(|pids| !pids.is_empty()))
+    }
 }
 
 /// Who records from the capture endpoints paired with `render_device_id`
