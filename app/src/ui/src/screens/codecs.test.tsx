@@ -2143,7 +2143,7 @@ describe("a device's capture source (Audio Devices, issue #86)", () => {
   });
 
   it("lists each output device (issue #193)", async () => {
-    const { calls } = start("#/devices");
+    const { calls, core } = start("#/devices");
     const entry = await deviceEntry(/WH-1000XM5/);
     const select = within(entry).getByLabelText(t("capture.mode"));
     const output = () =>
@@ -2174,12 +2174,21 @@ describe("a device's capture source (Audio Devices, issue #86)", () => {
     expect(
       await within(entry).findByText(t("capture.hint_output")),
     ).toBeInTheDocument();
-    // Never made the default output
+    // Made the Windows default output as a virtual device: always outside
+    // developer mode, a switch in it (issue #86)
     expect(
       within(entry).queryByRole("switch", {
         name: (n) => n.startsWith(t("capture.auto_switch")),
       }),
     ).toBeNull();
+    await core.request("settings.set", {
+      settings: { ...core.state.snap!.settings, developer_mode: true },
+    });
+    expect(
+      await within(entry).findByRole("switch", {
+        name: (n) => n.startsWith(t("capture.auto_switch")),
+      }),
+    ).toBeInTheDocument();
   });
 
   it("shows a chosen output device that is not there as not connected (issue #193)", async () => {

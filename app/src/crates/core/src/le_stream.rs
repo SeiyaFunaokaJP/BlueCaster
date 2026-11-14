@@ -532,11 +532,9 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     }
 
     // Audio at the LC3 rate
-    let switch_default = || match &req.source {
-        SourceRequest::VirtualDevice { id, name, auto_switch: true } if !id.is_empty() => {
-            DefaultDeviceGuard::switch_to(id, name)
-        }
-        _ => DefaultDeviceGuard(None),
+    let switch_default = || match req.source.default_switch_device() {
+        Some((id, name)) => DefaultDeviceGuard::switch_to(id, name),
+        None => DefaultDeviceGuard(None),
     };
     let mut default_guard = switch_default();
     // Restored while the headphones are off: switched again when they are back
@@ -1158,8 +1156,12 @@ mod tests {
         );
         assert!(matches!(LeAudioPath::capture_source(&SourceRequest::TestTone), Ok(Source::TestTone)));
         assert_eq!(
-            LeAudioPath::capture_source(&SourceRequest::OutputDevice { id: "{speakers}".into(), name: String::new() })
-                .unwrap(),
+            LeAudioPath::capture_source(&SourceRequest::OutputDevice {
+                id: "{speakers}".into(),
+                name: String::new(),
+                auto_switch: true,
+            })
+            .unwrap(),
             Source::RenderDevice { id: "{speakers}".into() }
         );
     }

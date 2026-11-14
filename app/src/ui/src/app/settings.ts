@@ -22,6 +22,11 @@ export function allAudioDevices(s: Pick<Settings, "developer_mode" | "all_audio_
 export function devicesSwitchShown(s: Pick<Settings, "developer_mode"> | undefined): boolean {
   return !!s?.developer_mode;
 }
+/** A capture mode the default output switch applies to: a virtual or a
+ *  physical output device (issue #86) */
+export function switchableSource(mode: string): boolean {
+  return mode === "virtual" || mode === "output";
+}
 export function defaultDeviceSwitch(s: Pick<Settings, "developer_mode"> | undefined, saved: boolean | undefined): boolean {
   return saved !== false || !devicesSwitchShown(s);
 }

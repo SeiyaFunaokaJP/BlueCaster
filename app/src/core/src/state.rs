@@ -1519,11 +1519,11 @@ fn default_output_for_cables<'a>(
 ) -> &'a str {
     let default = devices.iter().find(|d| d.is_default).map_or("", |d| d.id.as_str());
     let switched = matches!(stream.state, StreamState::Connecting | StreamState::Streaming | StreamState::Reconnecting)
-        && stream
-            .profile
-            .as_ref()
-            .and_then(|n| list.iter().find(|p| &p.name == n))
-            .is_some_and(|p| p.capture_mode == "virtual" && !default.is_empty() && p.audio_device_id == default);
+        && stream.profile.as_ref().and_then(|n| list.iter().find(|p| &p.name == n)).is_some_and(|p| {
+            matches!(p.capture_mode.as_str(), "virtual" | "output")
+                && !default.is_empty()
+                && p.audio_device_id == default
+        });
     if switched { "" } else { default }
 }
 
@@ -4713,6 +4713,9 @@ mod tests {
         assert_eq!(default_output_for_cables(&devices, &stream(StreamState::Idle), &list), "{hifi}");
         let loopback = CoreProfile { capture_mode: "loopback".into(), ..list[0].clone() };
         assert_eq!(default_output_for_cables(&devices, &stream(StreamState::Streaming), &[loopback]), "{hifi}");
+        // An Output Device source is made the default as well (issue #86)
+        let output = CoreProfile { capture_mode: "output".into(), ..list[0].clone() };
+        assert_eq!(default_output_for_cables(&devices, &stream(StreamState::Streaming), &[output]), "");
     }
 
     #[test]

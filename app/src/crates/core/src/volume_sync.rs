@@ -913,7 +913,8 @@ mod tests {
             Some(EndpointChoice::Default)
         );
         assert_eq!(EndpointChoice::for_stream(&VolumeSync::Auto, &app), Some(EndpointChoice::Default));
-        let output = SourceRequest::OutputDevice { id: "{speakers}".into(), name: "Speakers".into() };
+        let output =
+            SourceRequest::OutputDevice { id: "{speakers}".into(), name: "Speakers".into(), auto_switch: true };
         assert_eq!(
             EndpointChoice::for_stream(&VolumeSync::Auto, &output),
             Some(EndpointChoice::Device("{speakers}".into()))
