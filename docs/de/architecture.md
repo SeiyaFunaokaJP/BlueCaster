@@ -20,7 +20,7 @@ nav_order: 4
 
 BlueCaster ermöglicht Bluetooth-Audio mit LHDC V5, LDAC, aptX Adaptive, aptX HD,
 aptX Low Latency, aptX, Opus, AAC, SBC XQ und SBC unter Windows
-(und LC3 über LE Audio). Der eigene Bluetooth-Stack von Windows unterstützt für A2DP
+(und LC3 über LE Audio, experimentell). Der eigene Bluetooth-Stack von Windows unterstützt für A2DP
 nur SBC, klassisches aptX und (nur unter Windows 11) AAC — dieses Werkzeug ergänzt die
 übrigen, ohne einen Kerneltreiber zu benötigen.
 
@@ -424,7 +424,7 @@ wenn er endet.
 | LHDC V5 | lhdcv5-enc (C-Portierung des AOSP-Encoders) | 400/500/900/1000 kbps (Niedrig/Mittel/Mittel-hoch/Hoch), höchstens das von der Senke aufgeführte Maximum, ABR 160–400 kbps | 16/24 Bit, 5-ms-Frames, 2 Byte Header der Mediennutzdaten, RTP-Header |
 | LDAC | libldac (AOSP) | 330/660/990 kbps | Modi Hoch/Mittel/Niedrig (HQ/SQ/MQ), ABR |
 | aptX Adaptive | aptx-adaptive (reiner Rust-Encoder von AKS-Logic/aptx-adaptive-linux, MIT) | 427 kbps Hoch, 265 kbps Niedrige Latenz (R2-Senken: 270); ABR stuft auf 364/318 herunter (R2: 270/204) | 48 kHz Stereo (96 kHz in Hoch, wenn gewählt, an eine R2-Senke, die es aufführt: 646/340/255 kbps), 24 Bit; ein Codec-Paket pro Medienpaket hinter dem eigenen RTP-Header von BlueCaster; ABR in Hoch; Automatisch nimmt es nach LHDC V5 und LDAC |
-| Opus | libopus 1.5.2 | 256 kbps (Stereo; Mono die Hälfte) | A2DP Opus von Android: 48 kHz, 20-ms-Frames (10 ms, falls die Senke nur diese hat), Constrained VBR, begrenzt auf die Mediennutzdaten, ein Frame pro Paket, 1 Byte Header der Mediennutzdaten, RTP-Header |
+| Opus | libopus 1.6.1 | 256 kbps (Stereo; Mono die Hälfte) | A2DP Opus von Android: 48 kHz, 20-ms-Frames (10 ms, falls die Senke nur diese hat), Constrained VBR, begrenzt auf die Mediennutzdaten, ein Frame pro Paket, 1 Byte Header der Mediennutzdaten, RTP-Header |
 | aptX HD | libopenaptx | 576 kbps | 24-Bit-Eingang, feste Rate, RTP-Header |
 | aptX | libopenaptx | 352/384 kbps (44,1/48 kHz) | 16 Bit Stereo, kein RTP-Header |
 | aptX LL | libopenaptx | 352 kbps | ca. 32 ms Latenz, kein RTP-Header, Pakete ≤ ca. 7,5 ms |

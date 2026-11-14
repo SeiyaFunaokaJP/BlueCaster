@@ -94,7 +94,9 @@ describe("the Codecs screen", () => {
     const wh = await section("WH-1000XM5");
     // The name only: the address is on Audio Devices (issue #86)
     expect(wh).not.toHaveTextContent("AC:80:0A:12:34:56");
-    expect(wh).toHaveTextContent(t("device.tag_saved"));
+    // No "Paired" tag: that is for Audio Devices (issue #86)
+    expect(wh.querySelector(".device-codecs-head .tags")).not.toHaveTextContent(t("device.tag_saved"));
+    expect(wh).toHaveTextContent(t("device.tag_audio"));
     expect(within(wh).getByRole("radio", { name: /LDAC/ })).toBeChecked();
     // No Auto card: Auto is one switch for every device (issue #86), off
     // here, not the device's own
@@ -1071,6 +1073,12 @@ async function codecSettings(where: HTMLElement, label: string) {
   return screen.findByRole("dialog");
 }
 
+/** The warning before the first unlock of unlisted options: accepted */
+async function acceptUnlock() {
+  const warn = await screen.findByRole("dialog", { name: t("ui.profile.unlisted_warn_title") });
+  fireEvent.click(within(warn).getByRole("button", { name: t("ui.profile.unlisted_warn_accept") }));
+}
+
 describe("codec settings", () => {
   it("offers what the device does not list once its supported options are not the only ones (issue #86)", async () => {
     const { calls } = start("#/codecs", "capped");
@@ -1086,6 +1094,7 @@ describe("codec settings", () => {
     const rates = () => [...rate().options].map((o) => o.textContent);
     expect(rates()).not.toContain(t("ui.profile.sbc_not_offered", "96000 Hz"));
     fireEvent.click(listed);
+    await acceptUnlock();
     await waitFor(() =>
       expect(rates()).toContain(t("ui.profile.sbc_not_offered", "96000 Hz")),
     );
@@ -1150,6 +1159,58 @@ describe("codec settings", () => {
         name: t("ui.profile.codec_options_listed", "moto buds+"),
       }),
     ).toBeNull();
+  });
+
+  it("unlocking unlisted options asks once, for every device and codec (issue #86)", async () => {
+    const { calls, core } = start("#/codecs", "capped");
+    const moto = await section("moto buds+");
+    expect(core.state.snap!.settings.unlisted_options_warned).toBe(false);
+    let dialog = await codecSettings(moto, "codec.lhdc_v5");
+    const listed = () =>
+      within(dialog).getByRole("switch", {
+        name: t("ui.profile.codec_options_listed", "moto buds+"),
+      });
+    const warning = () =>
+      screen.queryByRole("dialog", { name: t("ui.profile.unlisted_warn_title") });
+    const unlocked = () =>
+      saves(calls).some((s) => (s.profile as { unlisted_options?: boolean }).unlisted_options);
+    // Cancel: the switch stays on, nothing saved
+    fireEvent.click(listed());
+    let warn = await screen.findByRole("dialog", { name: t("ui.profile.unlisted_warn_title") });
+    expect(warn).toHaveTextContent(t("ui.profile.unlisted_warn"));
+    expect(listed()).toBeChecked();
+    fireEvent.click(within(warn).getByRole("button", { name: t("modal.cancel") }));
+    await waitFor(() => expect(warning()).toBeNull());
+    expect(listed()).toBeChecked();
+    // Escape closes the warning only, not the codec's settings
+    fireEvent.click(listed());
+    warn = await screen.findByRole("dialog", { name: t("ui.profile.unlisted_warn_title") });
+    fireEvent.keyDown(within(warn).getByRole("button", { name: t("modal.cancel") }), { key: "Escape" });
+    await waitFor(() => expect(warning()).toBeNull());
+    expect(dialog).toBeInTheDocument();
+    expect(listed()).toBeChecked();
+    expect(core.state.snap!.settings.unlisted_options_warned).toBe(false);
+    expect(unlocked()).toBe(false);
+    // Accepted: unlocked and remembered
+    fireEvent.click(listed());
+    warn = await screen.findByRole("dialog", { name: t("ui.profile.unlisted_warn_title") });
+    fireEvent.click(within(warn).getByRole("button", { name: t("ui.profile.unlisted_warn_accept") }));
+    await waitFor(() => expect(listed()).not.toBeChecked());
+    await waitFor(() => expect(core.state.snap!.settings.unlisted_options_warned).toBe(true));
+    await waitFor(() => expect(unlocked()).toBe(true));
+    // On again, then off: no question, nor for another codec
+    fireEvent.click(listed());
+    await waitFor(() => expect(listed()).toBeChecked());
+    fireEvent.click(listed());
+    await waitFor(() => expect(listed()).not.toBeChecked());
+    expect(warning()).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: t("modal.close") }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    dialog = await codecSettings(moto, "codec.aac");
+    expect(listed()).toBeChecked();
+    fireEvent.click(listed());
+    await waitFor(() => expect(listed()).not.toBeChecked());
+    expect(warning()).toBeNull();
   });
 
   it("other codecs keep what the device reported", async () => {
@@ -1431,6 +1492,180 @@ describe("codec settings within what the device lists (issue #86: moto buds+)", 
     ]);
     fireEvent.click(hideSwitch());
     expect(await rates("SRS-XB13")).toEqual(["48000 Hz"]);
+  });
+
+  it("aptX Adaptive LL is a card of its own, saved as aptX Adaptive in Low Latency (issue #86)", async () => {
+    const { calls } = start("#/codecs", "capped");
+    const earfun = await section("EarFun Air Pro 4+");
+    const ids = cards(earfun).map((r) => r.value);
+    expect(ids.slice(ids.indexOf("aptxad"), ids.indexOf("aptxad") + 2)).toEqual(["aptxad", "aptxadll"]);
+    expect(cardNames(earfun)).toContain("aptX Adaptive LL");
+    // aptX Adaptive's own settings: High only (no Low Latency in it)
+    let dialog = await codecSettings(earfun, "codec.aptx_adaptive");
+    expect(within(dialog).getByLabelText(t("connection.quality"))).toHaveTextContent(`${t("quality.high")} (427 kbps)`);
+    fireEvent.click(within(dialog).getByRole("button", { name: t("modal.close") }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // LL's: its one bit rate, 48 kHz, 24-bit, no ABR
+    dialog = await codecSettings(earfun, "codec.aptx_adaptive_ll");
+    expect(within(dialog).getByLabelText(t("connection.quality"))).toHaveTextContent("265 kbps");
+    expect(within(dialog).getByLabelText(t("connection.sample_rate"))).toHaveTextContent("48000 Hz");
+    expect(within(dialog).getByLabelText(t("connection.bit_depth"))).toHaveTextContent(t("bitdepth.24"));
+    expect(within(dialog).queryByRole("switch", { name: (n) => n.startsWith(t("connection.abr")) })).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: t("modal.close") }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // Chosen: the profile asks for aptX Adaptive in Low Latency
+    fireEvent.click(earfun.querySelector<HTMLInputElement>('input[value="aptxadll"]')!);
+    await waitFor(() => expect(saves(calls).length).toBeGreaterThan(0));
+    expect(saves(calls).at(-1)!.profile).toMatchObject({ codec: "aptxad", quality: "ll", abr: false });
+    await waitFor(() => expect(earfun.querySelector('input[value="aptxadll"]')).toBeChecked());
+    expect(earfun.querySelector('input[value="aptxad"]')).not.toBeChecked();
+    // aptX Adaptive again: High
+    await settled(earfun);
+    fireEvent.click(earfun.querySelector<HTMLInputElement>('input[value="aptxad"]')!);
+    await waitFor(() => expect(saves(calls).at(-1)!.profile).toMatchObject({ codec: "aptxad", quality: "hq" }));
+    await waitFor(() => expect(earfun.querySelector('input[value="aptxad"]')).toBeChecked());
+  });
+});
+
+describe("each codec card keeps its own settings (issue #86: aptX Adaptive's leaked into LL's)", () => {
+  const close = async (dialog: HTMLElement) => {
+    fireEvent.click(within(dialog).getByRole("button", { name: t("modal.close") }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  };
+  const pick = async (where: HTMLElement, calls: { method: string; params: unknown }[], id: string) => {
+    const before = saves(calls).length;
+    fireEvent.click(where.querySelector<HTMLInputElement>(`input[value="${id}"]`)!);
+    await waitFor(() => expect(saves(calls).length).toBeGreaterThan(before));
+    await settled(where);
+    return saves(calls).at(-1)!.profile;
+  };
+  const rate = (dialog: HTMLElement) => within(dialog).getByLabelText(t("connection.sample_rate"));
+  const abr = (dialog: HTMLElement) => within(dialog).getByRole("switch", { name: (n) => n.startsWith(t("connection.abr")) });
+
+  it("aptX Adaptive and aptX Adaptive LL", async () => {
+    const { calls } = start("#/codecs", "capped");
+    const earfun = await section("EarFun Air Pro 4+");
+    const listed = (dialog: HTMLElement) =>
+      within(dialog).getByRole("switch", { name: t("ui.profile.codec_options_listed", "EarFun Air Pro 4+") });
+    // Chosen (Auto picks it too)
+    await pick(earfun, calls, "sbc");
+    await pick(earfun, calls, "aptxad");
+    // aptX Adaptive: 96 kHz and ABR
+    let dialog = await codecSettings(earfun, "codec.aptx_adaptive");
+    fireEvent.change(rate(dialog), { target: { value: "96000" } });
+    fireEvent.click(abr(dialog));
+    await close(dialog);
+    await waitFor(() => expect(saves(calls).at(-1)!.profile).toMatchObject({ codec: "aptxad", sample_rate: 96000, abr: true }));
+    await settled(earfun);
+    // LL's own: its 48 kHz, no ABR; beyond what the device lists
+    dialog = await codecSettings(earfun, "codec.aptx_adaptive_ll");
+    expect(rate(dialog)).toHaveTextContent("48000 Hz");
+    fireEvent.click(listed(dialog));
+    await acceptUnlock();
+    await close(dialog);
+    await waitFor(() =>
+      expect(saves(calls).at(-1)!.profile).toMatchObject({
+        quality: "hq",
+        sample_rate: 96000,
+        abr: true,
+        unlisted_options: false,
+        codec_settings: { aptxadll: { unlisted_options: true } },
+      }),
+    );
+    // LL chosen: its own, aptX Adaptive's kept
+    expect(await pick(earfun, calls, "aptxadll")).toMatchObject({
+      codec: "aptxad",
+      quality: "ll",
+      abr: false,
+      unlisted_options: true,
+      codec_settings: { aptxad: { quality: "hq", sample_rate: 96000, abr: true, unlisted_options: false } },
+    });
+    // ... and shown as they were
+    dialog = await codecSettings(earfun, "codec.aptx_adaptive");
+    expect(rate(dialog)).toHaveValue("96000");
+    expect(abr(dialog)).toBeChecked();
+    expect(listed(dialog)).toBeChecked();
+    await close(dialog);
+    // aptX Adaptive again: its own back, LL's kept
+    expect(await pick(earfun, calls, "aptxad")).toMatchObject({
+      quality: "hq",
+      sample_rate: 96000,
+      abr: true,
+      unlisted_options: false,
+      codec_settings: { aptxadll: { unlisted_options: true } },
+    });
+    dialog = await codecSettings(earfun, "codec.aptx_adaptive_ll");
+    expect(listed(dialog)).not.toBeChecked();
+  });
+
+  it("SBC and SBC XQ", async () => {
+    const { calls } = start("#/codecs");
+    const xb = await section("SRS-XB13");
+    fireEvent.click(hideSwitch());
+    const high = (dialog: HTMLElement) => within(dialog).getByRole("slider", { name: t("ui.profile.sbc_bitpool_max") });
+    await pick(xb, calls, "sbcxq");
+    let dialog = await codecSettings(xb, "codec.sbc_xq");
+    fireEvent.input(high(dialog), { target: { value: "35" } });
+    await close(dialog);
+    await waitFor(() => expect(saves(calls).at(-1)!.profile).toMatchObject({ codec: "sbcxq", sbcxq_bitpool: 35 }));
+    await settled(xb);
+    expect(await pick(xb, calls, "sbc")).toMatchObject({ codec: "sbc", sbc_bitpool: 0, sbcxq_bitpool: 0 });
+    dialog = await codecSettings(xb, "codec.sbc");
+    fireEvent.input(high(dialog), { target: { value: "40" } });
+    fireEvent.change(rate(dialog), { target: { value: "44100" } });
+    await close(dialog);
+    await waitFor(() =>
+      expect(saves(calls).at(-1)!.profile).toMatchObject({
+        codec: "sbc",
+        sbc_bitpool: 40,
+        sample_rate: 44100,
+        codec_settings: { sbcxq: { sbcxq_bitpool: 35, sample_rate: 0 } },
+      }),
+    );
+    await settled(xb);
+    // SBC XQ's as they were
+    dialog = await codecSettings(xb, "codec.sbc_xq");
+    expect(high(dialog)).toHaveValue("35");
+    expect(rate(dialog)).toHaveValue("0");
+    await close(dialog);
+    expect(await pick(xb, calls, "sbcxq")).toMatchObject({
+      sbcxq_bitpool: 35,
+      sbc_bitpool: 0,
+      sample_rate: 0,
+      codec_settings: { sbc: { sbc_bitpool: 40, sample_rate: 44100 } },
+    });
+  });
+
+  it("aptX, aptX HD and aptX LL", async () => {
+    const { calls } = start("#/codecs");
+    const wh = await section("WH-1000XM5");
+    fireEvent.click(hideSwitch());
+    const set = async (label: string, value: string) => {
+      const dialog = await codecSettings(wh, label);
+      fireEvent.change(rate(dialog), { target: { value } });
+      await close(dialog);
+    };
+    await set("codec.aptx_ll", "48000");
+    await waitFor(() => expect(saves(calls).at(-1)?.profile).toMatchObject({ codec_settings: { aptxll: { sample_rate: 48000 } } }));
+    await set("codec.aptx", "44100");
+    await waitFor(() => expect(saves(calls).at(-1)?.profile).toMatchObject({ codec_settings: { aptx: { sample_rate: 44100 } } }));
+    await set("codec.aptx_hd", "48000");
+    await waitFor(() =>
+      expect(saves(calls).at(-1)?.profile).toMatchObject({
+        codec: "ldac",
+        codec_settings: { aptx: { sample_rate: 44100 }, aptxll: { sample_rate: 48000 }, aptxhd: { sample_rate: 48000 } },
+      }),
+    );
+    expect(await pick(wh, calls, "aptxll")).toMatchObject({
+      codec: "aptxll",
+      sample_rate: 48000,
+      codec_settings: { aptx: { sample_rate: 44100 }, aptxhd: { sample_rate: 48000 } },
+    });
+    expect(await pick(wh, calls, "aptx")).toMatchObject({
+      codec: "aptx",
+      sample_rate: 44100,
+      codec_settings: { aptxll: { sample_rate: 48000 }, aptxhd: { sample_rate: 48000 } },
+    });
   });
 });
 
@@ -1893,7 +2128,7 @@ describe("a device's capture source (Audio Devices, issue #86)", () => {
     // device too), no "Loopback" (issue #86)
     const first = within(select).getAllByRole("option")[0];
     expect(first).toHaveTextContent(
-      t("capture.loopback_default", "Speakers (Realtek(R) Audio)"),
+      t("capture.loopback_default", "Speakers"),
     );
     expect(first.closest("optgroup")).toBeNull();
     // What the source does, below it, with no info button (issue #86)
@@ -1982,7 +2217,7 @@ describe("a device's capture source (Audio Devices, issue #86)", () => {
   });
 
   it("is saved into all the device's profiles when chosen", async () => {
-    const { calls } = start("#/devices");
+    const { calls, core } = start("#/devices");
     const snap = (await mock!.call("state.snapshot")) as {
       profiles: { name: string }[];
     };
@@ -2008,7 +2243,16 @@ describe("a device's capture source (Audio Devices, issue #86)", () => {
     await waitFor(() =>
       expect(calls.filter((c) => c.method === "profile.save")).toHaveLength(2),
     );
-    // A virtual device can become the Windows default output
+    // A virtual device becomes the Windows default output: always outside
+    // developer mode, a switch in it (issue #86)
+    expect(
+      within(entry).queryByRole("switch", {
+        name: (n) => n.startsWith(t("capture.auto_switch")),
+      }),
+    ).toBeNull();
+    await core.request("settings.set", {
+      settings: { ...core.state.snap!.settings, developer_mode: true },
+    });
     expect(
       await within(entry).findByRole("switch", {
         name: (n) => n.startsWith(t("capture.auto_switch")),

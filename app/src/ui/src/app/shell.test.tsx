@@ -11,6 +11,7 @@ import { setLanguage, t } from "../i18n";
 import { MockCore, sampleProfile, type MockOptions } from "../ipc/mock";
 import type { UpdatePhase } from "../ipc/transport";
 import type { CodecStopKind } from "../ipc/bindings/CodecStopKind";
+import type { Snapshot } from "../ipc/types";
 import { createCore } from "../ipc/store";
 import { LINKS } from "../lib/links";
 import { toneParams } from "../lib/profile";
@@ -272,7 +273,7 @@ describe("no device", () => {
     }
     expect(await screen.findByRole("button", { name: t("ui.home.add_device") })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
-    // With no Connect, "Open app" keeps its own row
+    // With no Connect, "Open BlueCaster" keeps its own row
     expect(screen.getByRole("button", { name: t("ui.flyout.open_app") }).closest(".fly-foot")).not.toBeNull();
   });
 
@@ -328,33 +329,86 @@ describe("Audio Devices without a virtual device (issue #86)", () => {
     m.noVirtual = true;
     mock = m;
     render(() => <App core={createCore(m)} />);
-    expect(await screen.findByText(t("ui.setup.vbcable_note"))).toBeInTheDocument();
+    expect(await screen.findByText(t("cables.recommended"))).toBeInTheDocument();
     m.noVirtual = false;
+    m.hifiCable = true;
     window.dispatchEvent(new Event("focus"));
-    await waitFor(() => expect(screen.queryByText(t("ui.setup.vbcable_note"))).toBeNull());
+    await waitFor(() => expect(screen.queryByText(t("cables.recommended"))).toBeNull());
   });
 
-  it("suggests both cables, each until installed or closed", async () => {
+  it("shows one line; Learn more lists both cables with Install or Uninstall", async () => {
     location.hash = "#/devices";
     const m = new MockCore({ speed: 0 });
     m.noVirtual = true;
     mock = m;
     const core = createCore(m);
     render(() => <App core={core} />);
-    expect(await screen.findByText(t("ui.setup.vbcable_note"))).toBeInTheDocument();
-    expect(screen.getByText(t("ui.setup.hificable_note"))).toBeInTheDocument();
-    // VB-Audio's donationware, named beside the Install button
-    expect(screen.getByText(t("vbcable.origin"), { exact: false })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "vb-cable.com" })).toBeInTheDocument();
-    // Installing VB-CABLE: its note goes, the Hi-Fi Cable's stays
-    fireEvent.click(screen.getByRole("button", { name: t("vbcable.install") }));
-    await waitFor(() => expect(screen.queryByText(t("ui.setup.vbcable_note"))).toBeNull());
-    expect(screen.getByText(t("ui.setup.hificable_note"))).toBeInTheDocument();
-    // Closed: gone, and saved
-    const note = screen.getByText(t("ui.setup.hificable_note")).closest(".cable-note") as HTMLElement;
-    fireEvent.click(within(note).getByRole("button", { name: t("modal.close") }));
-    await waitFor(() => expect(screen.queryByText(t("ui.setup.hificable_note"))).toBeNull());
-    expect(core.state.snap!.settings.hifi_cable_note_hidden).toBe(true);
+    expect(await screen.findByText(t("cables.recommended"))).toBeInTheDocument();
+    // The reasons and buttons wait in the dialog (issue #86)
+    expect(screen.queryByText(t("cables.intro"))).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: t("cables.learn_more") }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(t("cables.intro"))).toBeInTheDocument();
+    expect(within(dialog).getByText(t("cables.reason_separate"))).toBeInTheDocument();
+    // VB-Audio's donationware, named under each cable, and VB-Audio's links
+    expect(within(dialog).getByText(t("vbcable.origin"), { exact: false })).toBeInTheDocument();
+    expect(within(dialog).getByText(t("hificable.origin"), { exact: false })).toBeInTheDocument();
+    expect(within(dialog).getAllByRole("link", { name: "vb-cable.com" }).length).toBeGreaterThan(0);
+    expect(within(dialog).getByRole("link", { name: t("cables.licensing") })).toBeInTheDocument();
+    // VB-CABLE installs here, the Hi-Fi Cable is downloaded from VB-Audio
+    expect(within(dialog).getByRole("button", { name: t("cables.download") })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: t("cables.install") }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: t("cables.uninstall") })).toBeInTheDocument());
+    expect(within(dialog).queryByRole("button", { name: t("cables.install") })).toBeNull();
+    // ... and uninstalls again
+    fireEvent.click(within(dialog).getByRole("button", { name: t("cables.uninstall") }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: t("cables.install") })).toBeInTheDocument());
+    // The line cannot be closed: it stays while a cable is missing (issue #86)
+    fireEvent.click(within(dialog).getByRole("button", { name: t("modal.close") }));
+    const line = screen.getByText(t("cables.recommended")).closest(".cable-banner") as HTMLElement;
+    expect(within(line).queryByRole("button", { name: t("modal.close") })).toBeNull();
+    // Hidden on the Developer page: only while developer mode is on
+    const settings = () => core.state.snap!.settings;
+    await m.call("settings.set", {
+      settings: { ...settings(), vb_cable_note_hidden: true, hifi_cable_note_hidden: true },
+    });
+    expect(screen.getByText(t("cables.recommended"))).toBeInTheDocument();
+    await m.call("settings.set", { settings: { ...settings(), developer_mode: true } });
+    await waitFor(() => expect(screen.queryByText(t("cables.recommended"))).toBeNull());
+  });
+
+  it("keeps the dialog open when the last missing cable is installed", async () => {
+    location.hash = "#/devices";
+    const m = new MockCore({ speed: 0 });
+    m.hifiCable = true;
+    m.noVirtual = true;
+    mock = m;
+    render(() => <App core={createCore(m)} />);
+    fireEvent.click(await screen.findByRole("button", { name: t("cables.learn_more") }));
+    const dialog = await screen.findByRole("dialog");
+    // noVirtual hides the Hi-Fi Cable too: both missing
+    expect(within(dialog).getByRole("button", { name: t("cables.install") })).toBeInTheDocument();
+    m.noVirtual = false;
+    fireEvent.click(within(dialog).getByRole("button", { name: t("cables.install") }));
+    await waitFor(() => expect(within(dialog).getAllByRole("button", { name: t("cables.uninstall") })).toHaveLength(2));
+    expect(screen.queryByText(t("cables.recommended"))).toBeNull();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("shows the Hi-Fi Cable installed as soon as Windows has it, without the window coming back", async () => {
+    location.hash = "#/devices";
+    const m = new MockCore({ speed: 0 });
+    mock = m;
+    render(() => <App core={createCore(m)} />);
+    fireEvent.click(await screen.findByRole("button", { name: t("cables.learn_more") }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("button", { name: t("cables.download") })).toBeInTheDocument();
+    // Installed by VB-Audio's own setup, outside BlueCaster
+    m.hifiCable = true;
+    m.audioEndpointsChanged();
+    await waitFor(() => expect(within(dialog).getAllByRole("button", { name: t("cables.uninstall") })).toHaveLength(2));
+    expect(within(dialog).queryByRole("button", { name: t("cables.download") })).toBeNull();
+    expect(screen.getByText(t("cables.installed_both"))).toBeInTheDocument();
   });
 
   it("offers VB-Audio's page when VB-CABLE cannot be downloaded", async () => {
@@ -364,19 +418,129 @@ describe("Audio Devices without a virtual device (issue #86)", () => {
     m.vbCableDownloadFails = true;
     mock = m;
     render(() => <App core={createCore(m)} />);
-    fireEvent.click(await screen.findByRole("button", { name: t("vbcable.install") }));
-    expect(await screen.findByRole("button", { name: t("vbcable.download") })).toBeInTheDocument();
-    expect(screen.getByText(t("ui.setup.vbcable_note"))).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: t("cables.learn_more") }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: t("cables.install") }));
+    // The Hi-Fi Cable's Download, and now VB-CABLE's
+    await waitFor(() => expect(within(dialog).getAllByRole("button", { name: t("cables.download") })).toHaveLength(2));
   });
 
-  it("keeps the cables on Settings after their notes were closed", async () => {
-    location.hash = "#/settings";
+  it("shows VB-CABLE installed when the setup's answer comes too late, with no error or Download (issue #86)", async () => {
+    location.hash = "#/devices";
     const m = new MockCore({ speed: 0 });
+    m.hifiCable = true;
     m.noVirtual = true;
+    m.vbCableAnswerLate = true;
     mock = m;
     render(() => <App core={createCore(m)} />);
-    expect(await screen.findByRole("button", { name: t("vbcable.install") })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: t("hificable.download") })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: t("cables.learn_more") }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getAllByRole("button", { name: t("cables.install") })[0]);
+    await waitFor(() => expect(within(dialog).getAllByRole("button", { name: t("cables.uninstall") })).toHaveLength(2));
+    expect(within(dialog).queryByRole("button", { name: t("cables.download") })).toBeNull();
+    expect(within(dialog).queryByText(t("cables.restart"))).toBeNull();
+    expect(screen.queryByText(t("ipc.error.timeout", "audio.install_vb_cable"))).toBeNull();
+  });
+
+  it("turns the line green once both cables are installed, Learn more kept (issue #86)", async () => {
+    location.hash = "#/devices";
+    const m = new MockCore({ speed: 0 });
+    m.hifiCable = true;
+    mock = m;
+    const core = createCore(m);
+    render(() => <App core={core} />);
+    const line = (await screen.findByText(t("cables.installed_both"))).closest(".cable-banner") as HTMLElement;
+    expect(line).toHaveClass("banner-good");
+    expect(screen.queryByText(t("cables.recommended"))).toBeNull();
+    fireEvent.click(within(line).getByRole("button", { name: t("cables.learn_more") }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    // The developer switch hides it too
+    const settings = () => core.state.snap!.settings;
+    await m.call("settings.set", { settings: { ...settings(), developer_mode: true, vb_cable_note_hidden: true } });
+    await waitFor(() => expect(screen.queryByText(t("cables.installed_both"))).toBeNull());
+  });
+
+  it("About: the program, then third-party software with the cables' dialog, which names VB-Audio; nothing on Settings", async () => {
+    location.hash = "#/about";
+    const m = new MockCore({ speed: 0 });
+    mock = m;
+    render(() => <App core={createCore(m)} />);
+    const third = (await screen.findByRole("heading", { name: t("help.third_party_title") })).closest("section") as HTMLElement;
+    expect(within(third).getByText(t("help.third_party"))).toBeInTheDocument();
+    // VB-Audio's donationware is named in the cables' dialog only
+    expect(within(third).queryByText(t("vbcable.origin"), { exact: false })).toBeNull();
+    const about = screen.getByRole("heading", { name: t("help.about_title") }).closest("section") as HTMLElement;
+    expect(within(about).queryByText(t("help.third_party"))).toBeNull();
+    // The cables' dialog from there
+    fireEvent.click(within(third).getByRole("button", { name: t("cables.title") }));
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: t("cables.uninstall") })).toBeInTheDocument());
+    expect(within(dialog).getByText(t("vbcable.origin"), { exact: false })).toBeInTheDocument();
+    expect(within(dialog).getByText(t("hificable.origin"), { exact: false })).toBeInTheDocument();
+    cleanup();
+    location.hash = "#/settings";
+    m.noVirtual = true;
+    render(() => <App core={createCore(m)} />);
+    await screen.findByRole("heading", { level: 1 });
+    expect(screen.queryByText(t("vbcable.origin"), { exact: false })).toBeNull();
+    expect(screen.queryByRole("button", { name: t("cables.install") })).toBeNull();
+  });
+});
+
+describe("virtual audio devices after an update (issue #86)", () => {
+  const updated = (m: MockCore) => {
+    (m as unknown as { snap: Snapshot }).snap.settings.cables_dialog_shown = false;
+  };
+  const cablesDialog = () => screen.queryByRole("dialog", { name: t("cables.title") });
+
+  it("opens once on the main window; closed, never again", async () => {
+    const { core, mock: m } = start("#/home");
+    updated(m);
+    const dialog = await screen.findByRole("dialog", { name: t("cables.title") });
+    // The Hi-Fi Cable is missing
+    expect(within(dialog).getByRole("button", { name: t("cables.download") })).toBeInTheDocument();
+    expect(core.state.snap!.settings.cables_dialog_shown).toBe(false);
+    fireEvent.click(within(dialog).getByRole("button", { name: t("modal.close") }));
+    await waitFor(() => expect(cablesDialog()).toBeNull());
+    await waitFor(() => expect(core.state.snap!.settings.cables_dialog_shown).toBe(true));
+    // The next start
+    cleanup();
+    location.hash = "#/home";
+    const again = createCore(m);
+    render(() => <App core={again} />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(cablesDialog()).toBeNull();
+  });
+
+  it("both cables installed: not shown, and not asked again", async () => {
+    location.hash = "#/home";
+    const m = new MockCore({ speed: 0 });
+    m.hifiCable = true;
+    mock = m;
+    updated(m);
+    const core = createCore(m);
+    render(() => <App core={core} />);
+    await waitFor(() => expect(core.state.snap?.settings.cables_dialog_shown).toBe(true));
+    expect(cablesDialog()).toBeNull();
+  });
+
+  it("not over a first setup, nor after it", async () => {
+    const { core, mock: m } = start("#/home", { scenario: "fresh" });
+    updated(m);
+    fireEvent.click(await screen.findByRole("button", { name: t("ui.setup.skip") }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
+    await waitFor(() => expect(core.state.snap!.settings.cables_dialog_shown).toBe(true));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(cablesDialog()).toBeNull();
+  });
+
+  it("a new install does not get it", async () => {
+    const { core } = start("#/home");
+    expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(cablesDialog()).toBeNull();
+    expect(core.state.snap!.settings.cables_dialog_shown).toBe(true);
   });
 });
 
@@ -620,7 +784,7 @@ describe("setup device step", () => {
       await waitFor(() => expect(next).not.toBeDisabled());
       fireEvent.click(next);
     }
-    expect(await screen.findByText(t("ui.setup.vbcable_note"))).toBeInTheDocument();
+    expect(await screen.findByText(t("cables.recommended"))).toBeInTheDocument();
     await connectNew(calls, "Galaxy Buds2 Pro");
     expect(core.state.snap!.profiles.find((p) => p.name === "Galaxy Buds2 Pro | Auto")).toMatchObject({
       capture_mode: "loopback",
@@ -631,7 +795,7 @@ describe("setup device step", () => {
   it("scans until a device is added, then lists it no more; VB-Cable captures it (issue #86)", async () => {
     const { calls, core } = await toDeviceStep({ scenario: "normal" });
     await waitFor(() => expect(calls.some((c) => c.method === "audio.devices")).toBe(true));
-    expect(screen.queryByText(t("ui.setup.vbcable_note"))).toBeNull();
+    expect(screen.queryByText(t("cables.recommended"))).toBeNull();
     await waitFor(() => expect(calls.some((c) => c.method === "device.scan")).toBe(true));
     expect(calls.find((c) => c.method === "device.scan")!.params).toEqual({ seconds: 600 });
     const row = (await screen.findByText("Galaxy Buds2 Pro")).closest(".device-row") as HTMLElement;
@@ -662,7 +826,7 @@ describe("setup device step", () => {
       fireEvent.click(next);
     }
     await waitFor(() => expect(calls.some((c) => c.method === "audio.devices")).toBe(true));
-    expect(screen.queryByText(t("ui.setup.hificable_note"))).toBeNull();
+    expect(screen.queryByText(t("cables.intro"))).toBeNull();
     await connectNew(calls, "Galaxy Buds2 Pro");
     expect(core.state.snap!.profiles.find((p) => p.name === "Galaxy Buds2 Pro | Auto")).toMatchObject({
       capture_mode: "virtual",

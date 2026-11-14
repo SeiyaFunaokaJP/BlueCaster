@@ -222,6 +222,43 @@ pub(crate) fn utf16_string(data: &[u16]) -> String {
     String::from_utf16_lossy(&data[..end])
 }
 
+/// A REG_SZ value under HKEY_LOCAL_MACHINE, read in the 64-bit registry view
+/// or the 32-bit one (`view_32`); None when the key or the value is missing
+/// (VB-Audio's uninstall entries, for removing its cables)
+pub fn hklm_string(subkey: &str, value_name: &str, view_32: bool) -> Option<String> {
+    use windows::Win32::System::Registry::{
+        HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RRF_SUBKEY_WOW6432KEY, RRF_SUBKEY_WOW6464KEY, RegGetValueW,
+    };
+    let view = if view_32 { RRF_SUBKEY_WOW6432KEY } else { RRF_SUBKEY_WOW6464KEY };
+    let (key, name) = (HSTRING::from(subkey), HSTRING::from(value_name));
+    let mut size = 0u32;
+    // SAFETY: size query: no data buffer, valid out pointer.
+    let err =
+        unsafe { RegGetValueW(HKEY_LOCAL_MACHINE, &key, &name, RRF_RT_REG_SZ | view, None, None, Some(&mut size)) };
+    if err != ERROR_SUCCESS {
+        return None;
+    }
+    let mut data = vec![0u16; (size as usize).div_ceil(2) + 1];
+    let mut got = (data.len() * 2) as u32;
+    // SAFETY: `data` holds `got` bytes.
+    let err = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            &key,
+            &name,
+            RRF_RT_REG_SZ | view,
+            None,
+            Some(data.as_mut_ptr().cast()),
+            Some(&mut got),
+        )
+    };
+    if err != ERROR_SUCCESS {
+        return None;
+    }
+    data.truncate((got as usize).div_ceil(2));
+    Some(utf16_string(&data))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

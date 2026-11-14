@@ -131,6 +131,30 @@ describe("developer screen", () => {
         "40 01 0000ABCD 00000001",
       ),
     );
+    // LE Audio: empty fields are Auto, RTN 0 is a value of its own
+    const latency = screen.getByLabelText(t("ui.dev.le_latency_p_to_c")) as HTMLInputElement;
+    expect(latency.placeholder).toBe(t("codec.auto"));
+    fireEvent.change(latency, { target: { value: "100" } });
+    await waitFor(() =>
+      expect(core.state.snap!.settings.dev_debug.le_latency_p_to_c_ms).toBe(100),
+    );
+    const rtn = screen.getByLabelText(t("ui.dev.le_rtn_p_to_c"));
+    fireEvent.change(rtn, { target: { value: "0" } });
+    await waitFor(() => expect(core.state.snap!.settings.dev_debug.le_rtn_p_to_c).toBe(0));
+    fireEvent.change(rtn, { target: { value: "" } });
+    await waitFor(() => expect(core.state.snap!.settings.dev_debug.le_rtn_p_to_c).toBeNull());
+    fireEvent.change(screen.getByLabelText(t("ui.dev.le_mic_preset")), {
+      target: { value: "32_2_1" },
+    });
+    await waitFor(() =>
+      expect(core.state.snap!.settings.dev_debug.le_mic_preset).toBe("32_2_1"),
+    );
+    fireEvent.click(
+      screen.getByRole("switch", { name: t("ui.dev.le_mic_retry_same_link") }),
+    );
+    await waitFor(() =>
+      expect(core.state.snap!.settings.dev_debug.le_mic_retry_same_link).toBe(true),
+    );
     fireEvent.click(
       screen.getByRole("switch", { name: t("ui.dev.le_keys_to_windows") }),
     );
@@ -171,6 +195,13 @@ describe("developer screen", () => {
         mtk_register: "",
         le_keys_to_windows: false,
         realtek_driver_firmware: false,
+        le_latency_c_to_p_ms: 0,
+        le_latency_p_to_c_ms: 0,
+        le_rtn_c_to_p: null,
+        le_rtn_p_to_c: null,
+        le_interleaved: false,
+        le_mic_preset: "",
+        le_mic_retry_same_link: false,
       }),
     );
   });

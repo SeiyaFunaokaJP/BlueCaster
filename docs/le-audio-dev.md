@@ -5,15 +5,17 @@ nav_exclude: true
 english_only: true
 ---
 
-# LE Audio - developer note
+# LE Audio (experimental) - developer note
 
 BlueCaster can stream to LE Audio devices as a **BAP unicast client** (audio
 source): LC3 over Connected Isochronous Streams (CIS), on the same BTstack
-session and WinUSB adapter as A2DP. It is used only for a
-device's LE Audio entry (or `--le-audio` in CLI mode). `le_audio_experimental`
-in `settings.json` (on by default, no switch in the window) turns the LE side
-off altogether. With the setting off none of the LE code runs and HCI init is that of a build
-without LE (see "LE Audio off"). It has only been verified against the Bumble
+session and WinUSB adapter as A2DP. It is **experimental**, used only for a
+device's LE Audio entry (or `--le-audio` in CLI mode), and since issue #86
+only in developer mode (`Settings::le_audio`: the setting and `debug_mode`;
+the Adapters switch is shown only there). `le_audio_experimental`
+in `settings.json` (on by default, no switch in the window) turns LE Audio
+off altogether. With the setting off only SM and the bonds file are set up, for the LE keys
+of classic devices (see "LE Audio off"). It has only been verified against the Bumble
 emulator (`tools/emu`), not yet with real headphones or a real 5.2
 controller.
 
@@ -88,7 +90,8 @@ the GATT client or the GATT server runs on the **BTstack thread**, through an
 
 1. `HostConfig.le_audio = Some(LeConfig { bond_dir, media, ccp_sim,
    ccp_console })` (the service sets it from the setting, or from `--le-audio`;
-   None = LE hidden). LE is unhidden before `hci_init`.
+   None = no LE Audio: `HostConfig.le_keys` then sets up SM and the bonds file
+   alone). LE is unhidden before `hci_init`.
 2. Stack init (BTstack thread, after the classic endpoints): LE bond TLV,
    `le_device_db_tlv`, SM (Secure Connections, bonding, Just Works), GATT
    client, HCI / SM / ISO handlers, the modules (`modules::create_all`, once
@@ -241,6 +244,25 @@ presentation delay is clamped into every ASE's range, the max transport
 latency capped by the servers' preference; framed ISO when an ASE cannot do
 unframed.
 
+Developer > Debug > LE Audio stream (developer mode, read when the next
+stream is set up; issue #86) replaces some of that for trying what a
+controller does with other values, without a new build:
+
+- max transport latency C->P / P->C and RTN C->P / P->C
+  (`bt_host::CigOverrides`, `bap.rs` `apply_overrides`; Set CIG Parameters
+  and Config QoS get the same values, no server preference caps them,
+  clamped to 5-4000 ms and RTN 0-15), interleaved packing;
+- the microphone preset (`StreamRequest::source_preset_exact`: no
+  high-reliability twin, no GMAP order);
+- the retry without the microphone on the same link instead of a new one
+  (`le_stream.rs`).
+
+The log names them ("LE Audio: Developer > Debug CIG: ...", "LE Audio:
+Developer > Debug: ..."), and the diagnostics' settings.json has them. The
+ISO interval, NSE, BN and FT are the controller's choice: LE Set CIG
+Parameters Test would set them, but BTstack's CIG handling (`gap_cig_create`)
+sends only Set CIG Parameters, and extern/btstack is not patched.
+
 Streaming Audio Contexts (Enable): the requested contexts available on
 every device, else Unspecified if available; evaluated again right before
 Enable, which waits for an Available Audio Contexts notification when
@@ -262,7 +284,9 @@ preset (C->P) and adds a source direction (P->C) to the CIS plan
   own that carries P->C only (no SDU of the encode thread, not sent on)
 - the source preset: the first of `source_preset_order` (default `32_2_1,
   32_1_1, 24_2_1, 24_1_1, 16_2_1, 16_1_1`; those with the sink preset's frame
-  duration first) that every such device's Source PAC records allow;
+  duration first; with a high-reliability sink preset, the high-reliability
+  preset of the same rate, frame and octets instead of a low-latency one)
+  that every such device's Source PAC records allow;
   GMAP low latency with UGTs that all have the Source feature puts the `_gs`
   presets first; `source_rate` (the rate chosen, `--mic-rate`) takes the
   first of those at that rate, the first at any rate when none is;
@@ -353,10 +377,12 @@ controller (H4 over TCP) and one or two sinks on a Bumble `LocalLink`:
 
 It prints `READY 127.0.0.1:P sinks=<addr>[,<addr>]`. Options:
 `--ascs-release-waits-for-cis`, `--drop-link-after S`, `--privacy`,
-`--no-iso-buffers`, `--mic [SINKS]` / `--mic-rates` (a microphone: Source
-PAC 16 / 32 kHz 10 ms, a source ASE, a 1 kHz tone sent from pre-encoded LC3
-frames in `le_audio/mic_frames.py` once BlueCaster wrote Receiver Start
-Ready), and the profiles' own (`--csip-set`, `--vcp`, `--mcp-client`,
+`--no-iso-buffers`, `--refuse-cis N` / `--cis-up-after S` (the controller
+refuses the Nth CIS of LE Create CIS with 0x1E; the others come up, with
+`--cis-up-after` only S seconds later), `--mic [SINKS]` / `--mic-rates` (a
+microphone: Source PAC 16 / 32 kHz 10 ms, a source ASE, a 1 kHz tone sent
+from pre-encoded LC3 frames in `le_audio/mic_frames.py` once BlueCaster
+wrote Receiver Start Ready), and the profiles' own (`--csip-set`, `--vcp`, `--mcp-client`,
 `--ccp`, `--tmap-role`, `--gmap-role`, ...; see each `le_audio/<profile>.py`).
 
 Emulator facts to know:
@@ -392,7 +418,7 @@ tools\emu\.venv\Scripts\python.exe tools\emu\run_test.py --le-audio stereo earbu
 tools\emu\.venv\Scripts\python.exe tools\emu\run_test.py          # the A2DP codecs: must keep passing
 ```
 
-`--le-audio` without names runs all 44 cases; CI runs them after the A2DP set
+`--le-audio` without names runs all 51 cases; CI runs them after the A2DP set
 (`.github/workflows/ci.yml`, emulator job). Each case gets its own config
 folder (`BLUECASTER_CONFIG_DIR=<out>/le-<case>/config`), so nothing touches
 `%APPDATA%\BlueCaster`. Parallel runs need distinct `--base-port`s (each case
@@ -402,7 +428,7 @@ uses its own port from there). Per case `<out>/le-<case>/` has
 
 | File | Cases |
 |------|-------|
-| `core.py` | `stereo`, `two-ase`, `earbuds`, `mono-16k`, `link-loss`, `release-cis`, `contexts-later`, `afh`, `no-iso-buffers` |
+| `core.py` | `stereo`, `two-ase`, `earbuds`, `mono-16k`, `link-loss`, `release-cis`, `contexts-later`, `afh`, `no-iso-buffers`, `cis-refused`, `cis-refused-late` |
 | `privacy.py` | `privacy-rpa` |
 | `csip.py` | `csip-set`, `csip-encrypted-sirk`, `csip-missing-member`, `csip-both-named`, `csip-link-loss`, `csip-lock-denied`, `csip-no-lock` |
 | `vcp.py` | `vcp-set`, `vcp-remote`, `vcp-change-counter`, `vcp-earbuds`, `vcp-press-during-write`, `vcp-press-before-write` |
@@ -542,19 +568,25 @@ Real hardware: not tried.
 
 ## LE Audio off
 
-Users with the setting off get the behaviour of a build without LE:
+Users with the setting off get no LE Audio. LE itself stays up for the LE
+keys of classic devices (issue #86):
 
-- **HCI init.** BTstack is always built with LE and would set it up on any
-  dual-mode controller. With LE hidden (the default of every run;
-  `Stack::set_le_hidden(false)` only when `HostConfig.le_audio` is Some),
+- **LE keys.** The service always sets `HostConfig.le_keys`, so LE is not
+  hidden and HCI init is BTstack's for a dual-mode controller, as with LE
+  Audio on. `Stack::le_init` then sets up the bonds file and SM; the LE
+  core, its modules and the GATT server do not exist. A classic pairing
+  brings the device's LE keys (`btstack-sys/src/ctkd.rs`), as with Windows
+  and Linux, which get them of headphones without LE Audio too. Forgetting
+  the device forgets them (`BtHost::forget_link_key`). Emulator cases
+  `ctkd-developer-off` and `ctkd-le-off`.
+- **LE hidden.** A BtHost with neither `le_keys` nor `le_audio` (tests,
+  tools) keeps LE hidden, the default of every run:
   `btstack-sys/src/transport.rs` clears LE Supported (Controller) in Read
   Local Supported Features and the LE command bits BTstack looks up in Read
   Local Supported Commands, so BTstack skips all LE setup; LE commands it
   still sends (LE Set Scan Parameters, whose flag cannot be cleared from
   outside) are answered by the transport with Unknown HCI Command and never
-  reach the controller. The emulator's A2DP set sends the same HCI commands
-  as a build without LE, except that LE Set Scan Parameters is answered
-  locally.
+  reach the controller.
 - **Toggling the setting** takes effect when BTstack starts: an idle stack
   is stopped at once; while streaming or scanning the change waits for the
   next scan or connection (`Service::le_audio_deferred()`; the UI shows v1's
@@ -581,6 +613,20 @@ Users with the setting off get the behaviour of a build without LE:
   kind (`state.rs` `le_switched_profile`, an LE profile made from the
   classic one when missing). CTKD runs whenever SM is up, not only in
   developer mode, so a classic pairing brings the LE keys.
+- **Link key from an LE pairing.** The other way round, an LE pairing (the
+  LE Audio entry) brings the link key (issue #86): SM offers LinkKey and
+  CT2, and derives the BR/EDR link key (h6, or h7 with CT2 on both sides)
+  only when the device's Pairing Response carries LinkKey in both key
+  distributions, so the device derives the same key. `ctkd.rs`
+  (`bluecaster_rs_ctkd_from_le`) keeps it in `link_keys.txt` under a public
+  identity address only (type 7 or 8), replacing an older key: the device
+  replaced it too. An authenticated older key is dropped instead of being
+  replaced by an unauthenticated one (BLURtooth). Developer mode's Pairing
+  keys then show it for the LE Audio entry; forgetting the LE Audio entry
+  drops it unless the classic entry stays saved. The log has one `LE
+  pairing: BR/EDR link key ...` line per bonding, without an address.
+  Emulator cases `run_test.py --le-pairing` (one dual-mode sink, LE then
+  classic runs; the sink authenticates only with the key it derived).
 - **Conversational contexts.** With the microphone, the sink ASEs name the
   source contexts alone (Conversational), not Media | Conversational: EarFun
   earbuds answered that Enable with Rejected Metadata. A conversational
@@ -600,6 +646,10 @@ Users with the setting off get the behaviour of a build without LE:
   "succeeds" without sending LE Remove CIG); btstack-sys has 4 CIG slots,
   freed when LE Remove CIG is sent, after a failed CIG_CREATED or at power
   off.
+- `gap_cig_remove` inside `GAP_SUBEVENT_CIS_CREATED` is lost: `hci.c` sets
+  the CIG's state right after it emitted the event. `bap.rs` puts the
+  removal off until the event is done (`UnicastTimer::Remove`) and drops a
+  CIS that came up while stopping itself.
 - Only one LE connection can be set up at a time: connect set members one
   after the other.
 - LE ACL buffers can be small (27 bytes in the emulator): GATT writes are
@@ -627,7 +677,7 @@ Users with the setting off get the behaviour of a build without LE:
   scanning in the emulator. The aarch64 build of the LE code has not been
   checked.
 
-## TODO
+## TODO (before LE Audio can leave "experimental")
 
 Collected from the v1 profile branches (2026-10-16) and the v2 port
 (2026-10-18). Everything so far is verified only against the Bumble

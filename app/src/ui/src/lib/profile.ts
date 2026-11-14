@@ -9,7 +9,7 @@
 
 import type { CodecValues } from "../ipc/bindings/CodecValues";
 import type { AudioDevice, Device, ParamsOf, Profile, Snapshot } from "../ipc/types";
-import { carryToCodec, fitToCodec, PACKET_DEFAULT, PACKET_MAX, PACKET_MIN, type CodecCaps } from "./codecs";
+import { cardCodec, cardOf, carryToCodec, fitToCodec, PACKET_DEFAULT, PACKET_MAX, PACKET_MIN, type CodecCaps } from "./codecs";
 import { parseAddress } from "./format";
 
 /** What belongs to the audio device rather than the codec: the capture
@@ -93,11 +93,13 @@ export function newProfile(): Profile {
     volume_device_name: "",
     max_media_payload: PACKET_DEFAULT,
     le_audio: false,
-    le_low_latency: true,
+    // LE Audio: LC3 unless LC3 LL is chosen (issue #86)
+    le_low_latency: false,
     headset_mic: "auto",
     mic_device_id: "",
     mic_device_name: "",
     mic_muted: false,
+    mic_default_input: true,
     voice_codec: "",
     mic_rate: 0,
     sbc_bitpool: 0,
@@ -140,10 +142,15 @@ export function deviceProfile(
   );
 }
 
+/** LE Audio in force: its setting counts only in developer mode (issue
+ *  #86), as the core has it */
+export const leAudioOn = (s: { le_audio_experimental: boolean; developer_mode: boolean }) =>
+  s.le_audio_experimental && s.developer_mode;
+
 /** The saved devices with their profiles, in the saved list's order; LE
- *  Audio entries only with LE Audio (experimental) on. */
+ *  Audio entries only with LE Audio on. */
 export function audioEntries(snap: Pick<Snapshot, "profiles" | "active_profile" | "stream" | "devices" | "settings">): AudioEntry[] {
-  return listedDevices(snap.devices, snap.settings.le_audio_experimental)
+  return listedDevices(snap.devices, leAudioOn(snap.settings))
     .filter((d) => d.saved)
     .map((d) => ({
       key: deviceKey(d),
@@ -201,20 +208,63 @@ export function codecValues(p: Profile): CodecValues {
   };
 }
 
+/** Settings an earlier version kept for aptX Adaptive in Low Latency (the
+ *  core moves them to aptX Adaptive LL's card when it loads the profile) */
+const legacyLl = (v: CodecValues | undefined) => v?.quality === "ll";
+
+/** The settings kept for a codec card (aptX Adaptive LL: those an earlier
+ *  version kept for aptX Adaptive in Low Latency, until it has its own; never
+ *  aptX Adaptive's own, issue #86) */
+export function keptFor(p: Pick<Profile, "codec_settings">, card: string): CodecValues | undefined {
+  const kept = p.codec_settings ?? {};
+  if (card === "aptxadll" && !kept[card] && legacyLl(kept.aptxad)) return kept.aptxad;
+  if (card === "aptxad" && legacyLl(kept.aptxad)) return undefined;
+  return kept[card];
+}
+
 /**
- * The profile with `codec` chosen: the settings of the codec it used go to
- * its codec_settings, and `codec` gets `values` (its "..." dialog's), else
- * what it was set to before (issue #86: AAC's VBR came back off), else what
- * carries over from the codec it leaves (carryToCodec)
+ * The profile with the codec of card `codec` chosen: the settings of the
+ * card it used go to its codec_settings, and `codec` gets `values` (its
+ * "..." dialog's), else what it was set to before (issue #86: AAC's VBR came
+ * back off), else what carries over from the codec it leaves (carryToCodec).
+ * aptX Adaptive LL's card is saved as aptX Adaptive in Low Latency.
  */
 export function withCodec(p: Profile, codec: string, values?: CodecValues): Profile {
+  const from = cardOf(p);
   const kept: Record<string, CodecValues> = { ...(p.codec_settings ?? {}) };
-  if (p.codec !== codec) kept[p.codec] = codecValues(p);
-  const back = values ?? kept[codec];
+  const back = values ?? keptFor(p, codec);
+  // An earlier version's aptX Adaptive in Low Latency is LL's (issue #86)
+  if (legacyLl(kept.aptxad)) {
+    kept.aptxadll ??= kept.aptxad;
+    delete kept.aptxad;
+  }
+  if (from !== codec) kept[from] = codecValues(p);
   delete kept[codec];
   const base: Profile = { ...p, codec_settings: kept };
   // Values of its own come back as they were; else what carries over from the codec it leaves
-  return back ? fitToCodec({ ...base, ...back, codec }) : carryToCodec(base, codec);
+  return cardCodec(back ? fitToCodec({ ...base, ...back, codec }) : carryToCodec(base, codec));
+}
+
+/**
+ * The output device's name inside "Windows default (...)" (issue #86).
+ * Windows' friendly name already ends in "(adapter)", so not that. A
+ * virtual device goes by its adapter ("VB-Audio Hi-Fi Cable": its own
+ * "Hi-Fi Cable Input" reads as a microphone) unless another output has the
+ * same adapter (CABLE Input and CABLE In 16ch) or it holds parentheses; any
+ * other device by its own name ("Speakers": display audio and Realtek
+ * adapters say nothing of which device).
+ */
+export function defaultOutputName(d: AudioDevice, all: readonly AudioDevice[]): string {
+  const adapter = d.adapter_name?.trim();
+  if (
+    d.is_virtual &&
+    adapter &&
+    !/[()]/.test(adapter) &&
+    !all.some((o) => o.id !== d.id && o.adapter_name?.trim() === adapter)
+  ) {
+    return adapter;
+  }
+  return d.short_name?.trim() || d.name;
 }
 
 /**
@@ -319,6 +369,20 @@ export function isHifiCable(d: Pick<AudioDevice, "name">): boolean {
 /** The Hi-Fi Cable's playback device among Windows' outputs */
 export function hifiCable(devices: readonly AudioDevice[]): AudioDevice | null {
   return devices.find(isHifiCable) ?? null;
+}
+
+/** Windows' default output as a device's System Loopback takes it: none
+ *  while the stream made its own Output Source the default (issue #86: one
+ *  device's Output Source took cables from another device's lists; it goes
+ *  back when that stream ends). As the core's default_output_for_cables. */
+export function ownDefaultOutput(
+  devices: readonly AudioDevice[],
+  snap: Pick<Snapshot, "stream" | "profiles">,
+): string {
+  const id = devices.find((d) => d.is_default)?.id ?? "";
+  const running = ["connecting", "streaming", "reconnecting"].includes(snap.stream.state);
+  const streaming = running ? snap.profiles.find((p) => p.name === snap.stream.profile) : undefined;
+  return id && streaming?.capture_mode === "virtual" && streaming.audio_device_id === id ? "" : id;
 }
 
 /** A 16-channel cable ("CABLE In 16ch"): no use as a source or a

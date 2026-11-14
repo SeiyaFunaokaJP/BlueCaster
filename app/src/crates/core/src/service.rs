@@ -521,11 +521,16 @@ impl Inner {
         );
     }
 
-    /// LE Audio (experimental) for the next stack: the setting, or the
-    /// command line's --le-audio
+    /// LE Audio for the next stack: the setting in developer mode
+    /// ([`Settings::le_audio`]), or the command line's --le-audio
     pub fn le_wanted(&self) -> bool {
         self.le_cli.lock().unwrap_or_else(|e| e.into_inner()).is_some()
-            || self.settings.lock().unwrap_or_else(|e| e.into_inner()).le_audio_experimental
+            || self.settings.lock().unwrap_or_else(|e| e.into_inner()).le_audio()
+    }
+
+    /// Developer mode is on
+    pub fn developer(&self) -> bool {
+        self.settings.lock().unwrap_or_else(|e| e.into_inner()).debug_mode
     }
 
     /// The running stack has LE Audio
@@ -547,6 +552,12 @@ impl Inner {
         crate::adapter::configure(&mut c, &s, &self.opts.config_dir);
         let cli = self.le_cli.lock().unwrap_or_else(|e| e.into_inner()).clone();
         c.le_audio = le_config(le_on, cli.as_ref(), &self.opts);
+        // The LE keys of classic devices do not depend on LE Audio (issue
+        // #86: Windows and Linux get them of headphones without it)
+        c.le_keys = Some(bt_host::LeKeysConfig {
+            bonds_file: crate::paths::le_bonds_file(&self.opts.config_dir),
+            imported_bonds_file: Some(crate::paths::windows_le_keys_file(&self.opts.config_dir)),
+        });
         c.battery = true;
         // Headset microphone: the session's request, or the developer
         // CLI's --headset-mic-toggle
@@ -1066,6 +1077,18 @@ fn apply_dev_overrides(settings: &Settings) {
         None
     });
     bt_host::debug_command::set_register(register);
+    // LE Audio, read when the next stream is set up
+    bt_host::set_cig_overrides(bt_host::CigOverrides {
+        latency_c_to_p_ms: debug.le_latency_c_to_p_ms,
+        latency_p_to_c_ms: debug.le_latency_p_to_c_ms,
+        rtn_c_to_p: debug.le_rtn_c_to_p,
+        rtn_p_to_c: debug.le_rtn_p_to_c,
+        interleaved: debug.le_interleaved,
+    });
+    crate::le_stream::set_debug(crate::le_stream::LeDebug {
+        mic_preset: debug.le_mic_preset.clone(),
+        retry_same_link: debug.le_mic_retry_same_link,
+    });
 }
 
 impl Service {
@@ -1187,7 +1210,7 @@ impl Service {
             settings.media_keys,
             settings.volume_sync,
             settings.afh,
-            settings.le_audio_experimental,
+            settings.le_audio(),
             settings.debug_mode
         );
         apply_dev_overrides(&settings);
@@ -1197,8 +1220,8 @@ impl Service {
             h.set_afh_policy(self.inner.opts.afh.as_deref().unwrap_or(afh_policy(&settings)));
         }
         let old = std::mem::replace(&mut *self.inner.settings.lock().unwrap_or_else(|e| e.into_inner()), settings);
-        let new_le = self.inner.settings.lock().unwrap_or_else(|e| e.into_inner()).le_audio_experimental;
-        if old.le_audio_experimental != new_le && host.is_some() && self.inner.le_active() != self.inner.le_wanted() {
+        let new_le = self.inner.settings.lock().unwrap_or_else(|e| e.into_inner()).le_audio();
+        if old.le_audio() != new_le && host.is_some() && self.inner.le_active() != self.inner.le_wanted() {
             if self.is_running() || self.is_scanning() {
                 tracing::info!(
                     "LE Audio turned {}: BTstack restarts before the next scan or connection",
@@ -1436,6 +1459,12 @@ impl Service {
             }
         }
         if le_audio {
+            // A link key from its LE pairing (issue #86) goes with it unless
+            // its classic entry is still saved and connects with that key
+            let dir = &self.inner.opts.config_dir;
+            if !crate::devices::load(dir).iter().any(|d| d.address.eq_ignore_ascii_case(address)) {
+                self.forget_link_key_only(addr);
+            }
             return;
         }
         {
@@ -1448,6 +1477,14 @@ impl Service {
         }
         // A running stack holds the keys in memory and writes them in full
         if !self.host().is_some_and(|h| h.forget_link_key(addr)) {
+            bt_host::link_keys::forget(&crate::paths::link_keys_file(&self.inner.opts.config_dir), &addr);
+        }
+    }
+
+    /// Drops `addr`'s link key alone (its LE keys stay with its LE Audio
+    /// entry's own bond)
+    fn forget_link_key_only(&self, addr: [u8; 6]) {
+        if !self.host().is_some_and(|h| h.forget_link_key_only(addr)) {
             bt_host::link_keys::forget(&crate::paths::link_keys_file(&self.inner.opts.config_dir), &addr);
         }
     }
@@ -2097,19 +2134,29 @@ mod tests {
         let dir = s.inner.opts.config_dir.clone();
         std::fs::create_dir_all(crate::paths::pairing_dir(&dir)).unwrap();
         let line = format!("{} {} 4\n", address.replace(':', "-"), "00".repeat(16));
-        std::fs::write(crate::paths::link_keys_file(&dir), line).unwrap();
+        std::fs::write(crate::paths::link_keys_file(&dir), &line).unwrap();
         s.inner.codecs.lock().unwrap().insert(address.clone(), Default::default());
         *s.last_request.lock().unwrap() = Some(req);
-        // Another device, or the same address's other kind, changes nothing
+        crate::devices::save(&dir, &address, "Classic").unwrap();
+        let keys = || bt_host::link_keys::FileLinkKeyStore::open(&crate::paths::link_keys_file(&dir)).entries().len();
+        // Another device, or the same address's other kind while its classic
+        // entry is saved, changes nothing
         s.forget_device("00:11:22:33:44:66", false);
         s.forget_device(&address, true);
         assert!(s.last_request.lock().unwrap().is_some());
-        assert_eq!(bt_host::link_keys::FileLinkKeyStore::open(&crate::paths::link_keys_file(&dir)).entries().len(), 1);
+        assert_eq!(keys(), 1);
 
         s.forget_device(&address, false);
         assert!(s.last_request.lock().unwrap().is_none());
         assert!(s.device_codecs().is_empty());
-        assert!(bt_host::link_keys::FileLinkKeyStore::open(&crate::paths::link_keys_file(&dir)).entries().is_empty());
+        assert_eq!(keys(), 0);
+
+        // An LE Audio entry without a saved classic one: the link key from
+        // its LE pairing (issue #86) goes with it
+        crate::devices::remove(&dir, &address).unwrap();
+        std::fs::write(crate::paths::link_keys_file(&dir), line).unwrap();
+        s.forget_device(&address, true);
+        assert_eq!(keys(), 0);
     }
 
     #[test]

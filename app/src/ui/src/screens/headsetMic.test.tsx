@@ -116,26 +116,17 @@ describe("Input Source on Audio Devices", () => {
     expect(micSelect(wh).value).toBe(CABLE);
   });
 
-  it("recommends the Hi-Fi Cable over VB-Cable for the sound, and swaps them", async () => {
-    const { core } = start("#/devices", "voice");
+  it("says nothing about the cables below the sources (the banner's Learn more does)", async () => {
+    start("#/devices", "voice");
     const wh = await deviceEntry(/WH-1000XM5/);
     // The microphone off: VB-Cable is free to be the source
     fireEvent.click(mode(wh, "off"));
     const source = () => within(wh).getByLabelText(t("capture.mode")) as HTMLSelectElement;
     await within(source()).findByRole("option", { name: "CABLE Input (VB-Audio Virtual Cable)" });
     fireEvent.change(source(), { target: { value: `virtual:${CABLE}` } });
-    await waitFor(() => expect(wh.textContent).toContain(t("capture.vbcable_delay")));
-    // Not installed: where to get it
-    expect(within(wh).getByRole("button", { name: t("hificable.download") })).toBeInTheDocument();
-    mock!.hifiCable = true;
-    window.dispatchEvent(new Event("focus"));
-    fireEvent.click(await within(wh).findByRole("button", { name: t("capture.use_hificable") }));
-    await waitFor(() => {
-      const p = core.state.snap!.profiles.find((x) => x.device_address === "AC:80:0A:12:34:56" && !x.le_audio)!;
-      expect(p.audio_device_name).toBe("Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)");
-      expect(p.mic_device_id).toBe(CABLE);
-    });
-    expect(wh.textContent).not.toContain(t("capture.vbcable_delay"));
+    await waitFor(() => expect(source().value).toBe(`virtual:${CABLE}`));
+    expect(within(wh).queryByRole("button", { name: t("hificable.download") })).toBeNull();
+    expect(wh.textContent).not.toContain("Hi-Fi Cable is");
   });
 
   it("says when the Hi-Fi Cable's two sides run at different rates", async () => {
@@ -250,7 +241,7 @@ describe("Input Source on Audio Devices", () => {
     );
   });
 
-  it("keeps the device for Off, disabled", async () => {
+  it("keeps the device and the mode for Off (a mute), disabled", async () => {
     const { saves } = start("#/devices", "voice");
     const wh = await deviceEntry(/WH-1000XM5/);
     await waitFor(() => expect(mode(wh, "on")).toBeChecked());
@@ -262,15 +253,51 @@ describe("Input Source on Audio Devices", () => {
         mic_device_id: CABLE,
       }),
     );
+    // Off mutes, as the cards' button does: one state (issue #86)
+    await waitFor(() => expect(mode(wh, "auto")).toBeChecked());
+    await waitFor(() => expect(mode(wh, "off")).toBeEnabled());
     fireEvent.click(mode(wh, "off"));
     await waitFor(() =>
       expect(saves().at(-1)).toMatchObject({
-        headset_mic: "off",
+        headset_mic: "auto",
+        mic_muted: true,
         mic_device_id: CABLE,
       }),
     );
+    await waitFor(() => expect(mode(wh, "off")).toBeChecked());
     await waitFor(() => expect(micSelect(wh)).toBeDisabled());
     expect(micSelect(wh).value).toBe(CABLE);
+  });
+
+  it("makes the microphone's cable the default input while connected, a switch in developer mode", async () => {
+    const { core, saves } = start("#/devices", "voice");
+    const wh = await deviceEntry(/WH-1000XM5/);
+    const toggle = (await within(wh).findByRole("switch", {
+      name: t("capture.mic_default_input"),
+    })) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(saves().at(-1)).toMatchObject({
+        device_name: "WH-1000XM5",
+        mic_default_input: false,
+        mic_device_id: CABLE,
+      }),
+    );
+    await waitFor(() => expect(toggle.checked).toBe(false));
+    // Always on outside developer mode (issue #86)
+    await core.request("settings.set", {
+      settings: { ...core.state.snap!.settings, developer_mode: false },
+    });
+    await waitFor(() =>
+      expect(within(wh).queryByRole("switch", { name: t("capture.mic_default_input") })).toBeNull(),
+    );
+  });
+
+  it("says playback quality may drop, for LE Audio devices too", async () => {
+    start("#/devices", "voice");
+    const wh = await deviceEntry(/WH-1000XM5/);
+    await waitFor(() => expect(wh.textContent).toContain(t("ui.headset_mic_quality")));
   });
 
   it("lists only the cables a microphone can use, without the output source's", async () => {
@@ -323,7 +350,7 @@ describe("Input Source on Audio Devices", () => {
   });
 
   it("warns when Windows plays into the microphone's device (issue #86)", async () => {
-    start("#/devices", "voice");
+    const { core } = start("#/devices", "voice");
     mock!.defaultOutput = CABLE;
     const wh = await deviceEntry(/WH-1000XM5/);
     const source = within(wh).getByLabelText(t("capture.mode")) as HTMLSelectElement;
@@ -341,6 +368,17 @@ describe("Input Source on Audio Devices", () => {
     await waitFor(() =>
       expect(within(wh).queryByText(t("capture.mic_is_default_output"))).toBeNull(),
     );
+    // Turned off (developer mode): the warning again
+    fireEvent.click(autoSwitch);
+    await within(wh).findByText(t("capture.mic_is_default_output"));
+    // Outside developer mode the switch is always on (issue #86)
+    await core.request("settings.set", {
+      settings: { ...core.state.snap!.settings, developer_mode: false },
+    });
+    await waitFor(() =>
+      expect(within(wh).queryByText(t("capture.mic_is_default_output"))).toBeNull(),
+    );
+    expect(within(wh).queryByRole("switch", { name: t("capture.auto_switch") })).toBeNull();
   });
 
   it("refuses the other side of the cable the output source plays to", async () => {
@@ -548,7 +586,7 @@ describe("headset chip", () => {
     await within(wh).findByRole("button", { name: MUTE() });
   });
 
-  it("shows Auto waiting with no app recording, and is gone for Off", async () => {
+  it("shows Auto waiting with no app recording, and is muted by Off", async () => {
     const { core } = start("#/devices", "voice");
     const entry = await deviceEntry(/WH-1000XM5/);
     await waitFor(() => expect(mode(entry, "on")).toBeChecked());
@@ -566,7 +604,15 @@ describe("headset chip", () => {
     await waitFor(() => expect(mode(again, "off")).toBeChecked());
     location.hash = "#/home";
     const card = await homeCard("WH-1000XM5");
-    await waitFor(() => expect(card.querySelector(".headset-chip")).toBeNull());
+    const muted = await within(card).findByRole("button", { name: UNMUTE() });
+    expect(muted).toHaveClass("muted");
+    // The button opens it again in Auto, and Audio Devices follows
+    await waitFor(() => expect(muted).toBeEnabled());
+    fireEvent.click(muted);
+    await within(card).findByRole("button", { name: MUTE() });
+    location.hash = "#/devices";
+    const back = await deviceEntry(/WH-1000XM5/);
+    await waitFor(() => expect(mode(back, "auto")).toBeChecked());
   });
 
   it("shows why the microphone did not open on the chip, not as the card's status", async () => {
@@ -604,10 +650,11 @@ describe("headset chip", () => {
       expect(core.state.snap?.stream.voice ?? null).toBeNull(),
     );
     expect(core.state.snap?.stream.state).toBe("streaming");
-    // Choosing a mode on Audio Devices unmutes
+    // Audio Devices shows the mute as Off (issue #86); a mode unmutes
     location.hash = "#/devices";
     const entry = await deviceEntry(/WH-1000XM5/);
     await waitFor(() => expect(micModes(entry)).not.toBeNull());
+    await waitFor(() => expect(mode(entry, "off")).toBeChecked());
     fireEvent.click(mode(entry, "auto"));
     await waitFor(() =>
       expect(saves().at(-1)).toMatchObject({
@@ -666,8 +713,11 @@ describe("call codecs on Codecs (issue #86)", () => {
     // "..." shows its settings, read only
     fireEvent.click(within(wh).getByRole("button", { name: t("ui.profile.codec_settings", "mSBC") }));
     const dialog = await screen.findByRole("dialog", { name: t("ui.profile.codec_settings", "mSBC") });
-    expect(dialog).toHaveTextContent("16 kHz");
+    expect(dialog).toHaveTextContent("16000 Hz");
     expect(dialog).toHaveTextContent("64 kbps");
+    // As an A2DP codec's settings
+    for (const label of ["connection.quality", "connection.sample_rate", "connection.bit_depth", "ui.diag.cd_channel_mode"])
+      expect(within(dialog).getByText(t(label))).toBeInTheDocument();
     fireEvent.keyDown(dialog, { key: "Escape" });
     // All three with the toggle off, each saying whether the headphones list it
     fireEvent.click(screen.getByRole("switch", { name: t("ui.profile.codecs_hide") }));
@@ -761,12 +811,12 @@ describe("LE Audio microphone on Codecs (issue #86)", () => {
     const dialog = await openMic();
     expect(dialog).toHaveTextContent(t("ui.diag.cd_mode.mono"));
     // No stereo to choose, no bit rate to show
-    expect(within(dialog).queryByText(t("ui.codecs.bit_rate"))).toBeNull();
+    expect(within(dialog).queryByText(t("connection.quality"))).toBeNull();
     const select = within(dialog).getByRole("combobox") as HTMLSelectElement;
     expect([...select.options].map((o) => o.textContent)).toEqual([
-      t("codec.auto_value", "32 kHz"),
-      "32 kHz",
-      "16 kHz",
+      t("codec.auto_value", "32000 Hz"),
+      "32000 Hz",
+      "16000 Hz",
     ]);
     expect(select.value).toBe("0");
     fireEvent.change(select, { target: { value: "16000" } });
@@ -785,6 +835,6 @@ describe("LE Audio microphone on Codecs (issue #86)", () => {
     await waitFor(() => expect(core.state.snap?.stream.voice?.rate).toBe(32000));
     const dialog = await openMic();
     expect(within(dialog).queryByRole("combobox")).toBeNull();
-    expect(dialog).toHaveTextContent("32 kHz");
+    expect(dialog).toHaveTextContent("32000 Hz");
   });
 });

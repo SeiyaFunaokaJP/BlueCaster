@@ -55,7 +55,12 @@
 ; both on by default (InitializeUninstallProgressForm), with what 2.0.x may
 ; have left of them (%APPDATA%\A2DPWB, %LOCALAPPDATA%\io.github.seiyafunaokajp.a2dpwb);
 ; the core is closed; the Run value is removed when it points at this
-; installation.
+; installation. The same page offers to remove VB-CABLE and the Hi-Fi Cable
+; (VB-Audio's virtual audio drivers), each only when installed and off by
+; default (other apps may use them): VB-Audio's own setup runs elevated and
+; without its window, followed by a scan for hardware changes in the same
+; elevated step (bluecaster-driver remove-cable, RemoveCables). Windows is
+; offered a restart only when a removed cable's output is still in its list.
 ;
 ; Kept only for the step from 2.0.x (OldV2*, NsisUninstKey, V1*, OldCoreMutex,
 ; OldAppMutex, OldRunValue, OldLanguageKey, the [InstallDelete] of the old
@@ -279,6 +284,33 @@ es.DeleteChoiceText=Elimina la configuración, los códecs, los emparejamientos 
 ko.DeleteChoiceText=설정, 코덱, 기기 페어링, 다운로드한 펌웨어를 삭제합니다(%1).
 zhcn.DeleteChoiceText=删除设置、编解码器、设备配对和已下载的固件（%1）。
 zhtw.DeleteChoiceText=刪除設定、編解碼器、裝置配對和已下載的韌體（%1）。
+
+en.RemoveCableChoice=Remove %1
+ja.RemoveCableChoice=%1 を削除する
+de.RemoveCableChoice=%1 entfernen
+fr.RemoveCableChoice=Supprimer %1
+es.RemoveCableChoice=Quitar %1
+ko.RemoveCableChoice=%1 제거
+zhcn.RemoveCableChoice=移除 %1
+zhtw.RemoveCableChoice=移除 %1
+
+en.RemoveCableChoiceText=Other apps may use it too. Windows asks for administrator access.
+ja.RemoveCableChoiceText=ほかのアプリも使っていることがあります。Windows が管理者の許可を求めます。
+de.RemoveCableChoiceText=Andere Apps nutzen es vielleicht auch. Windows fragt nach Administratorrechten.
+fr.RemoveCableChoiceText=D'autres applications l'utilisent peut-être aussi. Windows demande les droits d'administrateur.
+es.RemoveCableChoiceText=Puede que otras aplicaciones también lo usen. Windows pedirá permisos de administrador.
+ko.RemoveCableChoiceText=다른 앱도 사용하고 있을 수 있습니다. Windows가 관리자 권한을 요청합니다.
+zhcn.RemoveCableChoiceText=其他应用也可能在使用它。Windows 会请求管理员权限。
+zhtw.RemoveCableChoiceText=其他應用程式也可能在使用它。Windows 會要求系統管理員權限。
+
+en.RemoveCableFailed=%1 could not be removed. Close the apps that use it, remove it in Settings > Apps, then restart Windows.
+ja.RemoveCableFailed=%1 を削除できませんでした。使っているアプリを閉じてから「設定 > アプリ」で削除し、Windows を再起動してください。
+de.RemoveCableFailed=%1 konnte nicht entfernt werden. Schließen Sie die Apps, die es nutzen, entfernen Sie es unter Einstellungen > Apps und starten Sie Windows neu.
+fr.RemoveCableFailed=Impossible de supprimer %1. Fermez les applications qui l'utilisent, supprimez-le dans Paramètres > Applications, puis redémarrez Windows.
+es.RemoveCableFailed=No se pudo quitar %1. Cierre las aplicaciones que lo usan, quítelo en Configuración > Aplicaciones y reinicie Windows.
+ko.RemoveCableFailed=%1을(를) 제거하지 못했습니다. 사용 중인 앱을 닫고 설정 > 앱에서 제거한 다음 Windows를 다시 시작하세요.
+zhcn.RemoveCableFailed=无法移除 %1。请关闭正在使用它的应用，在“设置 > 应用”中移除它，然后重启 Windows。
+zhtw.RemoveCableFailed=無法移除 %1。請關閉正在使用它的應用程式，在「設定 > 應用程式」中移除它，然後重新啟動 Windows。
 
 en.RestoreFailed=The adapter could not be given back to Windows completely: it may be unplugged, or Windows chose WinUSB again. Plug it in, right-click it in Device Manager, choose Uninstall device, then unplug and replug it (see "By hand in Device Manager" in the setup guide).
 ja.RestoreFailed=アダプターを Windows に戻しきれませんでした。アダプターが抜かれているか、Windows がまた WinUSB を選んだ可能性があります。アダプターを挿した状態でデバイス マネージャーを開き、アダプターを右クリックして「デバイスのアンインストール」を選んでから、抜いて挿し直してください（セットアップガイドの「デバイス マネージャーで手動で行う」を参照）。
@@ -551,9 +583,39 @@ const
   CoreMutex = 'Local\BlueCaster_Core';
   AppMutexes = 'Local\BlueCaster_Core,Local\A2DPWB_v2_Core,{#AppUserModelId}-sim,io.github.seiyafunaokajp.a2dpwb-sim';
   WebView2Key = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+  { VB-Audio's virtual audio drivers (RemoveCables). VB-CABLE's setup
+    registers itself here (64-bit view); the key gone after its removal
+    counts as removed. The Hi-Fi Cable comes with ASIO Bridge (its key in the
+    32-bit view; its setup puts the Hi-Fi Cable's own setup into
+    VB\CABLEHiFi) or on its own (HiFiUninstKey); its device tells whether
+    it is installed: a root device whose service runs its driver. Not the
+    driver file: its setup removes the device but leaves the file while the
+    driver runs, and nothing deletes it at the restart (tested on ASIO
+    Bridge's, issue #86). }
+  VbCableUninstKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:VBCABLE {87459874-1236-4469}';
+  HiFiUninstKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:VBHIFI {87459874-1236-4469}';
+  AsioBridgeUninstKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:ASIOBridge {17359A74-1236-5467}';
+  HiFiDriverName = 'vbaudio_hfvaio';
+  { Windows' audio outputs (CableListed): DeviceState's low bits 1 = active;
+    the name of the device the output belongs to }
+  RenderKey = 'SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render';
+  DeviceNameValue = '{b3f8fa53-0004-438e-9003-51a46e139bfc},6';
+  HiFiDeviceName = 'vb-audio hi-fi cable';
+  VbCableDeviceName = 'vb-audio virtual cable';
+  RootMediaKey = 'SYSTEM\CurrentControlSet\Enum\ROOT\MEDIA';
+  ServicesKey = 'SYSTEM\CurrentControlSet\Services\';
+  { Remove without a window: VB-CABLE's setup as community packages run it
+    (BlueCaster installs it with -i -h); the Hi-Fi Cable's with the arguments
+    ASIO Bridge's own setup passes it to remove it }
+  VbCableRemoveParams = '-u -h';
+  HiFiRemoveParams = '-h -u -H';
 
 var
   UpdateMode, PassiveMode, KeepV1, CoreWasRunning, RunWasSet, HadDesktopIcon, DeleteData, RestoreChosen, RestoreUnrecorded: Boolean;
+  { The setups of the cables chosen on the uninstall page; whether Windows
+    needs a restart after removing one (UninstallNeedRestart) }
+  VbCableSetup, HiFiSetup: String;
+  CableRestart: Boolean;
   { Setup replaces an installation: this one, 2.0.x (Inno Setup or NSIS) or v1 }
   IsUpgrade: Boolean;
   { An earlier version is uninstalled first: v1, the NSIS one of 2.0.x,
@@ -1299,6 +1361,60 @@ begin
   Log(Format('Bluetooth adapters on WinUSB without a record: %d', [Ord(Result)]));
 end;
 
+{ VB-CABLE's setup, as VB-CABLE registered it; '' when it is not installed }
+function VbCableRemover: String;
+begin
+  if not RegQueryStringValue(HKLM64, VbCableUninstKey, 'UninstallString', Result) then
+    Result := '';
+  Result := UnquotedPath(Result);
+  if (Result <> '') and not FileExists(Result) then
+    Result := '';
+end;
+
+{ A root media device whose service's driver is the Hi-Fi Cable's (no
+  administrator needed to read them) }
+function HiFiDeviceInstalled: Boolean;
+var
+  Root: Integer;
+  Devices: TArrayOfString;
+  Service, Image: String;
+  I: Integer;
+begin
+  Result := False;
+  if IsWin64 then
+    Root := HKLM64
+  else
+    Root := HKLM;
+  if not RegGetSubkeyNames(Root, RootMediaKey, Devices) then
+    Exit;
+  for I := 0 to GetArrayLength(Devices) - 1 do
+    if RegQueryStringValue(Root, RootMediaKey + '\' + Devices[I], 'Service', Service) and (Service <> '') and
+       RegQueryStringValue(Root, ServicesKey + Service, 'ImagePath', Image) and
+       (Pos(HiFiDriverName, Lowercase(Image)) > 0) then begin
+      Result := True;
+      Exit;
+    end;
+end;
+
+{ The Hi-Fi Cable's setup: its own registration's, else the copy in
+  VB\CABLEHiFi, else the one in ASIO Bridge's folder; '' when its device is
+  not installed or no setup is found }
+function HiFiRemover: String;
+var
+  Path: String;
+begin
+  Result := '';
+  if not HiFiDeviceInstalled then
+    Exit;
+  if RegQueryStringValue(HKLM64, HiFiUninstKey, 'UninstallString', Path) and FileExists(UnquotedPath(Path)) then
+    Result := UnquotedPath(Path)
+  else if FileExists(ExpandConstant('{commonpf64}\VB\CABLEHiFi\VBCABLE_Setup_x64.exe')) then
+    Result := ExpandConstant('{commonpf64}\VB\CABLEHiFi\VBCABLE_Setup_x64.exe')
+  else if RegQueryStringValue(HKLM32, AsioBridgeUninstKey, 'UninstallString', Path) and
+          FileExists(ExtractFilePath(UnquotedPath(Path)) + 'VBCABLE_Setup_x64.exe') then
+    Result := ExtractFilePath(UnquotedPath(Path)) + 'VBCABLE_Setup_x64.exe';
+end;
+
 { Adds a choice of the uninstall page below Top, from Left and Width wide:
   a bold check box and the text under it; returns the box, and Top below
   the text }
@@ -1334,7 +1450,9 @@ end;
   first is on when BlueCaster put an adapter on WinUSB (it has the record),
   off when only adapters without a record are on WinUSB (Windows then
   chooses their driver; one may be on WinUSB for something else), and not
-  shown with neither. The user data is on by default. No word of v1: Setup
+  shown with neither. The user data is on by default. VB-CABLE and the
+  Hi-Fi Cable are offered when installed, off by default: other apps may
+  use them (issue #86). No word of v1: Setup
   uninstalled it, and the running v2 core holds v1's mutex too (issue #86:
   "v1 is still on this PC" with no v1). The choices line up with the page
   description, as on Setup's pages. Uninstall goes on, Cancel stops the
@@ -1344,14 +1462,17 @@ end;
 procedure InitializeUninstallProgressForm();
 var
   Page, ProgressPage: TNewNotebookPage;
-  RestoreBox, DeleteBox: TNewCheckBox;
+  RestoreBox, DeleteBox, VbCableBox, HiFiBox: TNewCheckBox;
   UninstallButton: TNewButton;
+  VbCable, HiFi: String;
   PageName, PageDescription: String;
   Left, Width, Top: Integer;
 begin
   RestoreChosen := False;
   RestoreUnrecorded := False;
   DeleteData := False;
+  VbCableSetup := '';
+  HiFiSetup := '';
   if UninstallSilent then
     Exit;
   ProgressPage := UninstallProgressForm.InnerNotebook.ActivePage;
@@ -1378,6 +1499,16 @@ begin
   { Only the settings folder itself, not one BLUECASTER_CONFIG_DIR names }
   DeleteBox := AddChoice(Page, CustomMessage('DeleteChoice'),
     FmtMessage(CustomMessage('DeleteChoiceText'), [ExpandConstant('{userappdata}\BlueCaster')]), True, Left, Width, Top);
+  VbCable := VbCableRemover;
+  HiFi := HiFiRemover;
+  VbCableBox := nil;
+  HiFiBox := nil;
+  if VbCable <> '' then
+    VbCableBox := AddChoice(Page, FmtMessage(CustomMessage('RemoveCableChoice'), ['VB-CABLE']),
+      CustomMessage('RemoveCableChoiceText'), False, Left, Width, Top);
+  if HiFi <> '' then
+    HiFiBox := AddChoice(Page, FmtMessage(CustomMessage('RemoveCableChoice'), ['Hi-Fi Cable']),
+      CustomMessage('RemoveCableChoiceText'), False, Left, Width, Top);
 
   UninstallProgressForm.InnerNotebook.ActivePage := Page;
   PageName := UninstallProgressForm.PageNameLabel.Caption;
@@ -1406,7 +1537,12 @@ begin
 
   RestoreChosen := (RestoreBox <> nil) and RestoreBox.Checked;
   DeleteData := DeleteBox.Checked;
+  if (VbCableBox <> nil) and VbCableBox.Checked then
+    VbCableSetup := VbCable;
+  if (HiFiBox <> nil) and HiFiBox.Checked then
+    HiFiSetup := HiFi;
   Log(Format('Uninstall choices: restore drivers %d (without records %d), delete user data %d', [Ord(RestoreChosen), Ord(RestoreUnrecorded), Ord(DeleteData)]));
+  Log(Format('Remove VB-CABLE %d (offered %d), Hi-Fi Cable %d (offered %d)', [Ord(VbCableSetup <> ''), Ord(VbCable <> ''), Ord(HiFiSetup <> ''), Ord(HiFi <> '')]));
   { Back to the progress page }
   UninstallButton.Visible := False;
   UninstallProgressForm.CancelButton.Enabled := False;
@@ -1444,6 +1580,118 @@ begin
   end;
 end;
 
+{ An active output of the cable in Windows' list (Sound settings), as the
+  app lists them; no administrator needed to read it }
+function CableListed(const IsHiFi: Boolean): Boolean;
+var
+  Root: Integer;
+  Outputs: TArrayOfString;
+  Name, Want: String;
+  State: Cardinal;
+  I: Integer;
+begin
+  Result := False;
+  if IsWin64 then
+    Root := HKLM64
+  else
+    Root := HKLM;
+  if IsHiFi then
+    Want := HiFiDeviceName
+  else
+    Want := VbCableDeviceName;
+  if not RegGetSubkeyNames(Root, RenderKey, Outputs) then
+    Exit;
+  for I := 0 to GetArrayLength(Outputs) - 1 do
+    if RegQueryDWordValue(Root, RenderKey + '' + Outputs[I], 'DeviceState', State) and ((State and $F) = 1) and
+       RegQueryStringValue(Root, RenderKey + '' + Outputs[I] + '\Properties', DeviceNameValue, Name) and
+       (Pos(Want, Lowercase(Name)) > 0) then begin
+      Result := True;
+      Exit;
+    end;
+end;
+
+{ Runs a cable's setup elevated to remove it, then checks that it has gone
+  (VB-Audio documents no exit codes): IsHiFi checks the Hi-Fi Cable's
+  device, else VB-CABLE's registration. UAC cancelled: it stays, no message.
+  The setup runs through bluecaster-driver remove-cable, which then scans for
+  hardware changes (administrator rights, so in the same elevated step):
+  without the scan the output stayed in Windows' list until a restart
+  (issue #86). Windows is offered a restart only if it is still listed after
+  the scan, or when the scan could not run (no helper: the setup alone). }
+procedure RemoveCable(const Name, Setup, Params: String; const IsHiFi: Boolean);
+var
+  Code, I: Integer;
+  Removed, Rescanned, Listed: Boolean;
+  Exe, Line, Dir: String;
+begin
+  Exe := ExpandConstant('{app}\{#DriverExe}');
+  Rescanned := FileExists(Exe);
+  if Rescanned then begin
+    Line := 'remove-cable "' + Setup + '"';
+    if IsHiFi then
+      Line := Line + ' --hifi';
+    Dir := '';
+    Log(Format('Removing %s: %s remove-cable, then a scan for hardware changes', [Name, ExtractFileName(Setup)]));
+  end else begin
+    Exe := Setup;
+    Line := Params;
+    Dir := ExtractFileDir(Setup);
+    Log(Format('Removing %s: %s %s', [Name, ExtractFileName(Setup), Params]));
+  end;
+  if not ShellExec('runas', Exe, Line, Dir, SW_HIDE, ewWaitUntilTerminated, Code) then begin
+    { 1223: UAC cancelled }
+    Log(Format('The setup of %s did not start (%d): it stays', [Name, Code]));
+    Exit;
+  end;
+  Log(Format('The removal of %s: exit code %d', [Name, Code]));
+  { The helper's 0: the setup ran and the scan was asked for }
+  Rescanned := Rescanned and (Code = 0);
+  Removed := False;
+  for I := 1 to 20 do begin
+    if IsHiFi then
+      Removed := not HiFiDeviceInstalled
+    else
+      Removed := not RegKeyExists(HKLM64, VbCableUninstKey);
+    if Removed then
+      Break;
+    Sleep(500);
+  end;
+  if not Removed then begin
+    Log(Name + ' is still installed');
+    MsgBox(FmtMessage(CustomMessage('RemoveCableFailed'), [Name]), mbError, MB_OK);
+    Exit;
+  end;
+  Log(Name + ' removed');
+  { Windows' list may follow the scan a moment later }
+  Listed := True;
+  for I := 1 to 20 do begin
+    Listed := CableListed(IsHiFi);
+    if not Listed then
+      Break;
+    Sleep(500);
+  end;
+  Log(Format('%s: scan for hardware changes %d, still listed %d', [Name, Ord(Rescanned), Ord(Listed)]));
+  if Listed or not Rescanned then
+    CableRestart := True;
+end;
+
+{ The cables chosen on the uninstall page, once the core (which captures
+  them) has closed: one UAC prompt each }
+procedure RemoveCables;
+begin
+  if VbCableSetup <> '' then
+    RemoveCable('VB-CABLE', VbCableSetup, VbCableRemoveParams, False);
+  if HiFiSetup <> '' then
+    RemoveCable('Hi-Fi Cable', HiFiSetup, HiFiRemoveParams, True);
+end;
+
+{ A removed cable Windows still lists (or one removed without the scan):
+  VB-Audio's setups ask for a restart then }
+function UninstallNeedRestart: Boolean;
+begin
+  Result := CableRestart;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Cmd: String;
@@ -1457,6 +1705,7 @@ begin
           RestoreDrivers
         else if CanRestoreDrivers or RestoreUnrecorded then
           Log('The adapters stay on WinUSB');
+        RemoveCables;
       end;
     usPostUninstall:
       begin

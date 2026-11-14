@@ -22,7 +22,9 @@ Connection Complete carries no link parameters. HfpEmuController adds that:
     Number Of Completed Packets when each one is out.
 
 HfSide is the HF: Bumble's HfProtocol (the service level connection, codec
-negotiation with the codecs of the case), an HF SDP record, accepting the
+negotiation with the codecs of the case), the battery level right after it
+(AT+IPHONEACCEV behind AT+XAPL without waiting for OK, as a WH-1000XM4 sends
+it), an HF SDP record, accepting the
 AG's audio connection, and SCO both ways. What arrives is checked: CVSD, the 1 kHz
 tone in the 16-bit PCM (BlueCaster's test tone mixed to mono: 1 kHz and
 1.5 kHz, or 1 kHz alone); mSBC and LC3-SWB, which have no decoder
@@ -69,6 +71,7 @@ SCO_PACKET_LENGTH = 60
 SCO_BUFFERS = 8
 ESCO_INTERVAL = 0.0075      # 12 slots (eSCO S4 / T2: 2-EV3)
 ESCO_AIR_BYTES = 60         # air bytes per interval and direction
+BATTERY_LEVEL = 6           # AT+IPHONEACCEV 0..9: 70 %
 
 # The voice setting of the link being set up, by the pair of addresses: the
 # acceptor's controller reports the same air mode (one link on this bus)
@@ -368,8 +371,34 @@ class HfSide:
         log.info('HFP: RFCOMM channel open')
         self.protocol = hfp.HfProtocol(dlc, self.configuration)
         self.protocol.on('codec_negotiation', self.on_codec)
-        asyncio.ensure_future(self.protocol.run())
+        asyncio.ensure_future(self.run_protocol())
         print('HFP: service level connection starting', flush=True)
+
+    async def run_protocol(self):
+        try:
+            await self.protocol.initiate_slc()
+            await self.send_battery()
+        except Exception:
+            log.exception('HFP-HF protocol failed')
+            print('HFP-HF protocol failed', flush=True)
+            return
+        await self.protocol.run()
+
+    async def send_battery(self):
+        """The battery level as an Apple accessory (a WH-1000XM4) sends it:
+        AT+IPHONEACCEV right behind AT+XAPL, before the AG's OK to it. Prints
+        the status of both: "OK OK" when the AG took both"""
+        protocol = self.protocol
+        async with protocol.command_lock:
+            protocol.pending_command = 'AT+XAPL AT+IPHONEACCEV'
+            protocol.dlc.write(f'AT+XAPL=054C-0D58-0100,2\rAT+IPHONEACCEV=1,1,{BATTERY_LEVEL}\r')
+            codes = []
+            while len(codes) < 2:
+                result = await asyncio.wait_for(protocol.response_queue.get(), timeout=2.0)
+                if result.code in hfp.STATUS_CODES:
+                    codes.append(result.code)
+            protocol.pending_command = None
+        print(f'HFP: battery sent with AT+XAPL: {" ".join(codes)}', flush=True)
 
     def on_codec(self, codec):
         self.codec = codec

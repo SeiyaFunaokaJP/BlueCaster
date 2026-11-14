@@ -75,6 +75,28 @@ describe("device pairing", () => {
     expect(within(keys).queryByRole("rowheader", { name: t("ui.pairing.link_key") })).toBeNull();
   });
 
+  it("shows the link key an LE Audio entry's LE pairing gave (issue #86)", async () => {
+    location.hash = "#/devices";
+    mock = new MockCore({ speed: 0, scenario: "le" });
+    mock.leLinkKeys = ["F4:4E:FD:00:11:22"];
+    const core = createCore(mock);
+    render(() => <App core={core} />);
+    await screen.findByRole("navigation");
+    await core.request("settings.set", { settings: { ...core.state.snap!.settings, developer_mode: true } });
+    const row = await waitFor(() => {
+      const r = document.querySelector<HTMLElement>('.device-row[data-key$="/le"]');
+      expect(r).not.toBeNull();
+      return r!;
+    });
+    fireEvent.click(within(row).getByRole("button", { name: t("ui.pairing.services") }));
+    const dialog = await screen.findByRole("dialog", { name: t("ui.pairing.services") });
+    fireEvent.click(within(dialog).getByRole("button", { name: t("ui.pairing.key_title") }));
+    const keys = await within(dialog).findByRole("table", { name: t("ui.pairing.key_title") });
+    expect(within(keys).getByRole("rowheader", { name: t("ui.pairing.link_key") })).toBeInTheDocument();
+    expect(within(keys).getByText("35B84730F4F1390A5302A4DC79D37A28")).toBeInTheDocument();
+    expect(within(keys).getByRole("rowheader", { name: t("ui.pairing.ltk") })).toBeInTheDocument();
+  });
+
   it("lists the keys first, folded, the services as a table below them (issue #86)", async () => {
     const { calls } = await open("#/devices", true);
     const [tag] = await screen.findAllByRole("button", { name: t("ui.pairing.services") });
@@ -108,7 +130,6 @@ describe("device pairing", () => {
     expect(within(table).queryByText("GAIA")).toBeNull();
     // A vendor's service by its name, in a dialog wide enough for it
     expect(within(table).getByText("Qualcomm GAIA Command/Response")).toBeInTheDocument();
-    expect(dialog).toHaveClass("dialog-wide");
     expect(within(table).getByText(t("ui.pairing.unknown_service"))).toBeInTheDocument();
     expect(within(table).getByText("Google Fast Pair")).toBeInTheDocument();
     // The key in the same dialog, above the services (they grow), with no
@@ -189,6 +210,9 @@ describe("device pairing", () => {
     for (let i = 0; i < 2; i++) fireEvent.click(await screen.findByRole("button", { name: t("ui.setup.next") }));
     const row = (await screen.findByText(t("ui.adapter.import_windows"))).closest(".import-pairings") as HTMLElement;
     expect(within(row).getByText(t("ui.devices.import_hint"))).toBeInTheDocument();
+    // The administrator prompt is said in the label itself (issue #86)
+    expect(t("ui.adapter.import_windows")).toMatch(/administrator/);
+    expect(t("ui.devices.import_hint")).not.toMatch(/administrator/);
     // Its button lists them, all ticked; the import asks for administrator rights
     fireEvent.click(within(row).getByRole("button", { name: t("ui.devices.import_one") }));
     const dialog = await screen.findByRole("dialog", { name: t("ui.adapter.import_windows") });

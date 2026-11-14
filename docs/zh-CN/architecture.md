@@ -18,7 +18,7 @@ nav_order: 4
 
 ## 概述 {#overview}
 
-BlueCaster 让 Windows 能够使用 LHDC V5、LDAC、aptX Adaptive、aptX HD、aptX Low Latency、aptX、Opus、AAC、SBC XQ 和 SBC 的 Bluetooth 音频（以及通过 LE Audio 使用 LC3）。Windows 自带的 Bluetooth 堆栈在 A2DP 上只支持 SBC、经典 aptX 以及（仅限 Windows 11）AAC——本工具无需内核驱动即可增加其他编解码器。
+BlueCaster 让 Windows 能够使用 LHDC V5、LDAC、aptX Adaptive、aptX HD、aptX Low Latency、aptX、Opus、AAC、SBC XQ 和 SBC 的 Bluetooth 音频（以及通过 LE Audio 使用 LC3，实验性）。Windows 自带的 Bluetooth 堆栈在 A2DP 上只支持 SBC、经典 aptX 以及（仅限 Windows 11）AAC——本工具无需内核驱动即可增加其他编解码器。
 
 使用 **BTstack + WinUSB**——完全在用户模式下运行，无需驱动签名。
 
@@ -283,7 +283,7 @@ sequenceDiagram
 | LHDC V5 | lhdcv5-enc（AOSP 编码器的 C 语言移植版） | 400/500/900/1000 kbps（低/中/中高/高），不超过接收端列出的最大值，ABR 160–400 kbps | 16/24-bit，5 ms 帧，2 字节媒体负载标头，RTP 标头 |
 | LDAC | libldac (AOSP) | 330/660/990 kbps | 高/中/低（HQ/SQ/MQ）模式，ABR |
 | aptX Adaptive | aptx-adaptive（AKS-Logic/aptx-adaptive-linux 的纯 Rust 编码器，MIT） | 高 427 kbps，低延迟 265 kbps（R2 接收端：270）；ABR 降至 364/318（R2：270/204） | 48 kHz 立体声（选择时，对列出 96 kHz 的 R2 接收端在高音质下使用 96 kHz：646/340/255 kbps），24-bit；每个媒体数据包一个编解码器数据包，位于 BlueCaster 自己的 RTP 标头之后；高音质下支持 ABR；“自动”在 LHDC V5 和 LDAC 之后选择它 |
-| Opus | libopus 1.5.2 | 256 kbps（立体声；单声道减半） | Android 的 A2DP Opus：48 kHz，20 ms 帧（接收端只支持 10 ms 时为 10 ms），以媒体负载为上限的受约束 VBR，每个数据包一帧，1 字节媒体负载标头，RTP 标头 |
+| Opus | libopus 1.6.1 | 256 kbps（立体声；单声道减半） | Android 的 A2DP Opus：48 kHz，20 ms 帧（接收端只支持 10 ms 时为 10 ms），以媒体负载为上限的受约束 VBR，每个数据包一帧，1 字节媒体负载标头，RTP 标头 |
 | aptX HD | libopenaptx | 576 kbps | 24-bit 输入，固定码率，RTP 标头 |
 | aptX | libopenaptx | 352/384 kbps（44.1/48 kHz） | 16-bit 立体声，无 RTP 标头 |
 | aptX LL | libopenaptx | 352 kbps | 约 32 ms 延迟，无 RTP 标头，数据包 ≤ 约 7.5 ms |

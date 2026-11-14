@@ -698,14 +698,6 @@ fn loopback_may_replace(source: &SourceRequest) -> bool {
     matches!(source, SourceRequest::VirtualDevice { id, .. } | SourceRequest::OutputDevice { id, .. } if !id.is_empty())
 }
 
-/// What the session says while System Loopback stands in for `source`
-fn stand_in_text(source: &SourceRequest) -> Msg {
-    match source {
-        SourceRequest::OutputDevice { .. } => Msg::new("status.connected_output_fallback"),
-        _ => Msg::new("status.connected_source_fallback"),
-    }
-}
-
 /// What the source [`open_source`] opened delivers. Application capture:
 /// float stereo at the requested rate, known before the app runs.
 fn source_format(opened: &Option<(DeviceSource, Capture)>, rate: u32) -> Format {
@@ -1751,9 +1743,9 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     default_guard.follow(&req.source);
     // A virtual device that cannot be opened (another app may hold it), or
     // an output device that is gone: this session sends what Windows plays,
-    // the profile stays as it is
+    // the profile stays as it is; the source line shows it, the status
+    // stays a plain Connected (issue #86)
     let mut source = req.source.clone();
-    let mut source_text = None;
     let opened = match open_source(&source, preferred) {
         Ok(o) => o,
         Err(m) => {
@@ -1766,7 +1758,6 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
                 host.disconnect();
                 return inner.notify(StreamState::Error, m);
             };
-            source_text = Some(stand_in_text(&source));
             source = SourceRequest::SystemLoopback;
             o
         }
@@ -1933,8 +1924,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     }
 
     tracing::debug!("stream: started {} ms after the request", session_start.elapsed().as_millis());
-    let connected = fallback_text.clone().or(source_text);
-    inner.notify(StreamState::Streaming, connected.unwrap_or_else(|| Msg::new("status.connected")));
+    inner.notify(StreamState::Streaming, fallback_text.clone().unwrap_or_else(|| Msg::new("status.connected")));
     let mut info = StreamInfo {
         codec: kind.name().into(),
         bitrate_kbps: bitrate,
@@ -2707,9 +2697,6 @@ mod tests {
         let out = |id: &str| SourceRequest::OutputDevice { id: id.into(), name: "Speakers".into() };
         assert!(loopback_may_replace(&out("{speakers}")));
         assert!(!loopback_may_replace(&out("")));
-        assert_eq!(stand_in_text(&out("{speakers}")).key, "status.connected_output_fallback");
-        let virt = SourceRequest::VirtualDevice { id: "{x}".into(), name: "CABLE".into(), auto_switch: true };
-        assert_eq!(stand_in_text(&virt).key, "status.connected_source_fallback");
         // Never made the default output
         assert_eq!(out("{speakers}").default_switch(), None);
         let info = out("{speakers}").info();

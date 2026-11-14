@@ -55,6 +55,8 @@ cargo build --release -p bluecaster-ui
 git submodule update --init --recursive
 ```
 
+Relancez-la aussi après un pull qui met à jour une bibliothèque. La compilation s'arrête si une bibliothèque de `extern/` n'est pas au commit indiqué dans `extern/versions.txt` ; le message explique comment compiler malgré tout avec une autre version.
+
 ## Structure du projet
 
 ```
@@ -156,16 +158,16 @@ Les bibliothèques C sont des sous-modules git ; les crates Rust et les paquets 
 
 | Bibliothèque | Méthode | Version figée | Licence |
 |:--------|:-------|:---------------|:--------|
-| BTstack | sous-module git | v1.8.1-6-g5bc5cbdbe | BTstack License (de type BSD-3-Clause avec une clause non commerciale) |
+| BTstack | sous-module git | v1.8.3 | BTstack License (de type BSD-3-Clause avec une clause non commerciale) |
 | Codec SBC Bluedroid | encodeur porté en Rust ; le décodeur (tests, outils) provient de la copie de BTstack | celle de BTstack | Apache-2.0 |
 | rijndael | inclus dans BTstack (`3rd-party/rijndael`) | celle de BTstack | Domaine public |
 | liblc3 (lc3-google) | inclus dans BTstack (`3rd-party/lc3-google`) | celle de BTstack | Apache-2.0 |
 | micro-ecc | inclus dans BTstack (`3rd-party/micro-ecc`) | celle de BTstack | BSD-2-Clause |
 | libldac (AOSP) | sous-module git | android-15.0.0_r36-4-geeee1a3 | Apache-2.0 |
 | libopenaptx | sous-module git | 0.2.0 (ne pas mettre à jour) | LGPL-2.1+ |
-| fdk-aac | sous-module git | v2.0.3-158-gd8e6b1a | FDK AAC License |
+| fdk-aac | sous-module git | v3.0.0 | FDK AAC License |
 | Encodeur LHDC V5 | sous-module git | celle du sous-module | Apache-2.0 |
-| libopus | sous-module git | v1.5.2 | BSD-3-Clause |
+| libopus | sous-module git | v1.6.1 | BSD-3-Clause |
 | Tauri, SolidJS, crates Rust | Cargo / pnpm | `Cargo.lock`, `pnpm-lock.yaml` | MIT / Apache-2.0 et autres (`licenses/third-party/rust-crates.txt` dans la version publiée) |
 
 {: .warning }

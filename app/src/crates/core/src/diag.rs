@@ -1379,16 +1379,16 @@ pub struct LeAudioDiag {
     pub devices: Vec<bt_host::LeDeviceInfo>,
 }
 
-/// The [LE Audio] section: only with the setting on or an LE stack running
+/// The [LE Audio (experimental)] section: only with the setting on or an LE stack running
 fn le_audio_section(out: &mut String, s: &Settings, le: Option<&LeAudioDiag>) {
-    if !s.le_audio_experimental && le.is_none() {
+    if !s.le_audio() && le.is_none() {
         return;
     }
-    out.push_str("\n[LE Audio]\n");
+    out.push_str("\n[LE Audio (experimental)]\n");
     let _ = writeln!(
         out,
         "  Setting: {}, low latency {}; BTstack LE {}",
-        on_off(s.le_audio_experimental),
+        on_off(s.le_audio()),
         on_off(s.le_audio_low_latency),
         if le.is_some() { "active" } else { "not running" }
     );
@@ -2500,11 +2500,17 @@ mod tests {
         let text = diag_text(&input);
         assert!(!text.contains("[LE Audio"));
 
+        // The setting counts in developer mode only
         let mut le_settings = settings.clone();
         le_settings.le_audio_experimental = true;
+        le_settings.debug_mode = false;
+        let outside = le_settings.clone();
+        input.settings = &outside;
+        assert!(!diag_text(&input).contains("[LE Audio"));
+        le_settings.debug_mode = true;
         input.settings = &le_settings;
         let text = diag_text(&input);
-        assert!(text.contains("[LE Audio]\n  Setting: on, low latency off; BTstack LE not running\n\n"));
+        assert!(text.contains("[LE Audio (experimental)]\n  Setting: on, low latency off; BTstack LE not running\n\n"));
         let le = LeAudioDiag {
             stream: Some("LC3 48 kHz 10 ms 100 octets (80 kbps/ch), 2 ch over 2 CIS, 48_4_2".into()),
             stats: Some(bt_host::LeStreamStats {

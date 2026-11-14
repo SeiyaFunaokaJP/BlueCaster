@@ -19,6 +19,7 @@ import {
   REALTEK_CHIPS,
 } from "../lib/chips";
 import { FlowTracker, flowView } from "../lib/flow";
+import { leAudioOn as leOn } from "../lib/profile";
 import type {
   ConnStatus,
   Transport,
@@ -155,11 +156,12 @@ export function sampleProfile(over: Partial<Profile> = {}): Profile {
     volume_device_name: "",
     max_media_payload: 1023,
     le_audio: false,
-    le_low_latency: true,
+    le_low_latency: false,
     headset_mic: "off",
     mic_device_id: "",
     mic_device_name: "",
     mic_muted: false,
+    mic_default_input: true,
     voice_codec: "",
     mic_rate: 0,
     sbc_bitpool: 0,
@@ -195,6 +197,8 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
     auto_reconnect: true,
     vb_cable_note_hidden: false,
     hifi_cable_note_hidden: false,
+    cables_dialog_shown: true,
+    unlisted_options_warned: false,
     volume_sync: true,
     mute_output: false,
     volume_mixer: false,
@@ -213,6 +217,7 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
       ignore_sink_max: false,
       queue_max_wait_ms: 0,
       encode_at_send: false,
+      keep_bitrate_on_slow_link: false,
     },
     dev_vendors: {},
     dev_log: {
@@ -230,6 +235,13 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
       mtk_register: "",
       le_keys_to_windows: false,
       realtek_driver_firmware: false,
+      le_latency_c_to_p_ms: 0,
+      le_latency_p_to_c_ms: 0,
+      le_rtn_c_to_p: null,
+      le_rtn_p_to_c: null,
+      le_interleaved: false,
+      le_mic_preset: "",
+      le_mic_retry_same_link: false,
     },
     bt_chip_pid: 0,
     bt_chip_fw_stem: "",
@@ -435,6 +447,7 @@ export function sampleSnapshot(scenario: MockScenario = "normal"): Snapshot {
       le_audio:
         scenario === "le_unsupported" ? false : scenario === "le" ? true : null,
       rom_firmware: false,
+      hung: false,
     },
     devices: fresh
       ? []
@@ -497,10 +510,11 @@ export function sampleSnapshot(scenario: MockScenario = "normal"): Snapshot {
     settings: sampleSettings({
       // The first run: the setup opens by itself
       setup_done: !fresh,
+      // LE Audio counts in developer mode only (issue #86)
       ...(voice
-        ? { le_audio_experimental: true }
+        ? { le_audio_experimental: true, developer_mode: true }
         : le
-          ? { le_audio_experimental: true }
+          ? { le_audio_experimental: true, developer_mode: true }
           : long
             ? { language: "ja" }
             : {}),
@@ -541,6 +555,7 @@ export function sampleSnapshot(scenario: MockScenario = "normal"): Snapshot {
             },
           ]
         : [],
+    audio_endpoints: 0,
     vendors: [
       { id: "huawei", name: "Huawei", options: [] },
       { id: "oppo", name: "OPPO", options: ["every_connection"] },
@@ -591,6 +606,8 @@ const sameEntry = (
 const CABLE: AudioDevice = {
   id: "{0.0.0.00000000}.{cable}",
   name: "CABLE Input (VB-Audio Virtual Cable)",
+  short_name: "CABLE Input",
+  adapter_name: "VB-Audio Virtual Cable",
   is_default: false,
   is_virtual: true,
   mix_rate: 44100,
@@ -603,6 +620,8 @@ const CABLE: AudioDevice = {
 const HIFI_CABLE: AudioDevice = {
   id: "{0.0.0.00000000}.{hificable}",
   name: "Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)",
+  short_name: "Hi-Fi Cable Input",
+  adapter_name: "VB-Audio Hi-Fi Cable",
   is_default: false,
   is_virtual: true,
   mix_rate: 48000,
@@ -616,6 +635,8 @@ const AUDIO_DEVICES: AudioDevice[] = [
   {
     id: "{0.0.0.00000000}.{cable16}",
     name: "CABLE In 16ch (VB-Audio Virtual Cable)",
+    short_name: "CABLE In 16ch",
+    adapter_name: "VB-Audio Virtual Cable",
     is_default: false,
     is_virtual: true,
     mix_rate: 48000,
@@ -627,6 +648,8 @@ const AUDIO_DEVICES: AudioDevice[] = [
   {
     id: "{0.0.0.00000000}.{speakers}",
     name: "Speakers (Realtek(R) Audio)",
+    short_name: "Speakers",
+    adapter_name: "Realtek(R) Audio",
     is_default: true,
     is_virtual: false,
     mix_rate: 48000,
@@ -639,6 +662,8 @@ const AUDIO_DEVICES: AudioDevice[] = [
   {
     id: "{0.0.0.00000000}.{voicemeeter}",
     name: "Voicemeeter Input (VB-Audio Voicemeeter VAIO)",
+    short_name: "Voicemeeter Input",
+    adapter_name: "VB-Audio Voicemeeter VAIO",
     is_default: false,
     is_virtual: true,
     mix_rate: 48000,
@@ -650,6 +675,8 @@ const AUDIO_DEVICES: AudioDevice[] = [
   {
     id: "{0.0.0.00000000}.{display}",
     name: "M28U (NVIDIA High Definition Audio)",
+    short_name: "M28U",
+    adapter_name: "NVIDIA High Definition Audio",
     is_default: false,
     is_virtual: false,
     mix_rate: 48000,
@@ -1021,6 +1048,8 @@ export class MockCore implements Transport {
   adapterDevices: { address: string; name: string; audio: boolean }[] | null = [];
   /** LE keys of the saved devices (device.pairing), as derived with LE Audio on */
   leKeys: DevicePairing["le_keys"] = null;
+  /** Devices whose LE pairing gave a link key too (device.pairing, issue #86) */
+  leLinkKeys: string[] = [];
   /** Why there are none (device.pairing) */
   leKeysMissing: NonNullable<DevicePairing["le_keys_missing"]> = "not_asked";
   /** device.services answers "busy" this many times first (another query runs) */
@@ -1180,10 +1209,15 @@ export class MockCore implements Transport {
         const saved = this.snap.devices.some(
           (d) => d.saved && d.address === String(p.address),
         );
+        const classic = this.snap.devices.some(
+          (d) => d.saved && !d.le_audio && d.address === String(p.address),
+        );
         return {
-          link_key: saved
+          link_key: classic
             ? { key: "00112233445566778899aabbccddeeff", key_type: 4 }
-            : null,
+            : saved && this.leLinkKeys.includes(String(p.address))
+              ? { key: "35b84730f4f1390a5302a4dc79d37a28", key_type: 7 }
+              : null,
           le_keys: saved ? this.leKeys : null,
           le_keys_missing: saved && this.leKeys ? null : this.leKeysMissing,
         };
@@ -1311,7 +1345,12 @@ export class MockCore implements Transport {
         return null;
       }
       case "profile.save": {
-        const profile = p.profile as Profile;
+        const sent = p.profile as Profile;
+        // As the core keeps it: the card in use has its settings in the
+        // profile's own fields (aptX Adaptive in Low Latency: LL's card)
+        const card = sent.codec === "aptxad" && sent.quality === "ll" ? "aptxadll" : sent.codec;
+        const settings = Object.entries(sent.codec_settings ?? {}).filter(([k]) => k !== card);
+        const profile: Profile = { ...sent, codec_settings: Object.fromEntries(settings) };
         const original = (p.original_name as string | null) ?? profile.name;
         if (!profile.name.trim())
           throw errorInfo("profile.invalid", "profile.name");
@@ -1383,13 +1422,11 @@ export class MockCore implements Transport {
           auto_codec: next.auto_codec ?? before.auto_codec,
           // As the core's serde default for a client that sends none
           setup_done: next.setup_done ?? true,
+          cables_dialog_shown: next.cables_dialog_shown ?? true,
         };
         this.emit({ kind: "settings", value: this.snap.settings });
         let le_audio_deferred = false;
-        if (
-          before.le_audio_experimental !==
-          this.snap.settings.le_audio_experimental
-        ) {
+        if (leOn(before) !== leOn(this.snap.settings)) {
           // As v1: LE is set up when BTstack starts; an idle one stops so that
           // the next scan or connection starts it with the setting
           const st = this.snap.stream.state;
@@ -1398,7 +1435,7 @@ export class MockCore implements Transport {
             st === "connecting" ||
             st === "streaming" ||
             st === "reconnecting";
-          const on = this.snap.settings.le_audio_experimental ? "on" : "off";
+          const on = leOn(this.snap.settings) ? "on" : "off";
           this.log(
             "info",
             "bluecaster_core_exe::state",
@@ -1483,7 +1520,8 @@ export class MockCore implements Transport {
       case "audio.devices": {
         const hifi = { ...HIFI_CABLE, capture_rate: this.hifiCaptureRate };
         const all = this.hifiCable ? [...AUDIO_DEVICES, hifi] : AUDIO_DEVICES;
-        const list = this.noVirtual ? all.filter((d) => !d.is_virtual) : all;
+        const kept = this.vbCableRemoved ? all.filter((d) => !/Virtual Cable/.test(d.name)) : all;
+        const list = this.noVirtual ? kept.filter((d) => !d.is_virtual) : kept;
         const def = this.defaultOutput;
         return def === null ? list : list.map((d) => ({ ...d, is_default: d.id === def }));
       }
@@ -1493,6 +1531,12 @@ export class MockCore implements Transport {
         if (this.vbCableDownloadFails)
           throw errorInfo("vb_cable.download_failed", "error.vb_cable_download_failed");
         this.noVirtual = false;
+        this.vbCableRemoved = false;
+        if (this.vbCableAnswerLate) throw errorInfo("ipc.timeout", "ipc.error.timeout", ["audio.install_vb_cable"]);
+        return true;
+      case "audio.uninstall_cable":
+        if (p.hifi) this.hifiCable = false;
+        else this.vbCableRemoved = true;
         return true;
       case "audio.mixer":
         return this.mixer;
@@ -1703,15 +1747,37 @@ export class MockCore implements Transport {
   /** The sample rate of the Hi-Fi Cable's recording side (its playback
    *  side runs at 48 kHz) */
   hifiCaptureRate = 48000;
+  /** VB-CABLE removed with audio.uninstall_cable */
+  vbCableRemoved = false;
   /** audio.install_vb_cable cannot reach VB-Audio */
   vbCableDownloadFails = false;
+  /** audio.install_vb_cable installs, but its answer comes too late */
+  vbCableAnswerLate = false;
   /** Now and then the capture falls behind (?capturedrops): audio dropped at capture */
   captureDrops = false;
   /** Windows' default output (audio.devices), if not the speakers */
   defaultOutput: string | null = null;
 
+  /** Windows' audio devices changed (a cable installed by its own setup) */
+  audioEndpointsChanged() {
+    this.snap.audio_endpoints += 1;
+    this.emit({ kind: "audio_endpoints", value: this.snap.audio_endpoints });
+  }
+
   setOtherRadio(radio: Snapshot["adapter"]["other_radio"]) {
     this.snap.adapter.other_radio = radio;
+  }
+  /** The adapter hung after a crash (issue #86): gone from the list, an
+   *  unknown USB device in its place, the stack's start failed */
+  setHung() {
+    this.snap.adapter = {
+      ...this.snap.adapter,
+      adapters: [],
+      hung: true,
+      status: "error",
+      error: { key: "error.btstack_init", args: [] },
+    };
+    this.emit({ kind: "adapter", value: this.snap.adapter });
   }
   /** The MediaTek adapter of the first run on WinUSB, with its loader */
   useMediaTek() {
@@ -2007,8 +2073,10 @@ export class MockCore implements Transport {
     if (!profile) throw errorInfo("profile.not_found", "profile.none_selected");
     if (profile.le_audio) {
       // The core refuses these when the stream starts (le_stream.rs)
-      const refused = !this.snap.settings.le_audio_experimental
-        ? "error.le_audio_disabled"
+      const refused = !leOn(this.snap.settings)
+        ? this.snap.settings.developer_mode
+          ? "error.le_audio_disabled"
+          : "error.le_audio_developer"
         : profile.capture_mode === "app"
           ? "error.le_audio_capture"
           : null;
@@ -2541,7 +2609,7 @@ export class MockCore implements Transport {
       this.scanStop = () => finish(SCAN_RESULTS);
       this.later(Math.min(seconds, 3) * 1000, () => {
         if (done) return;
-        if (!this.snap.settings.le_audio_experimental) {
+        if (!leOn(this.snap.settings)) {
           finish(SCAN_RESULTS);
           return;
         }
@@ -3092,7 +3160,7 @@ export class MockCore implements Transport {
       `Adapter: ${s.adapter.adapters.map((a) => `${a.display_name} [${a.driver_service}]`).join(", ") || "none"}`,
       `Firmware files: ${s.adapter.adapters.map((a) => `${a.display_name}: ${a.firmware_present === null ? "none needed" : a.firmware_present ? "present" : "MISSING"} (${a.firmware_files.join(", ")})`).join("; ")}`,
       `State: ${s.stream.state}${s.stream.info ? ` ${s.stream.info.codec} ${s.stream.info.bitrate_kbps} kbps` : ""}${s.stream.info?.le ? ` (${s.stream.info.le.summary})` : ""}`,
-      `LE Audio: ${s.settings.le_audio_experimental ? "on" : "off"}${s.settings.le_audio_low_latency ? ", low latency" : ""}`,
+      `LE Audio (experimental): ${s.settings.le_audio_experimental ? "on" : "off"}${s.settings.le_audio_low_latency ? ", low latency" : ""}`,
       `Profiles: ${s.profiles.map((p) => `${p.name} [${p.device_address}]`).join(", ")}`,
       `Config: ${s.config_dir}`,
     ].join("\n");
@@ -3164,6 +3232,8 @@ export function mockFromUrl(): MockCore {
   mock.noVirtual = q.has("novirtual");
   mock.hifiCable = q.has("hificable");
   mock.captureDrops = q.has("capturedrops");
+  // ?hung: the adapter hung after a crash (issue #86)
+  if (q.has("hung")) mock.setHung();
   // ?winpaired: headphones Windows paired through the adapter (the setup's import)
   if (q.has("winpaired")) {
     mock.windowsPaired = ["00:A2:D0:00:00:02", "38:18:4C:00:00:07"];

@@ -33,6 +33,21 @@ fn record_path(state: &CoreState, instance_id: &str) -> PathBuf {
 }
 
 pub(crate) fn run(config: &Path, args: &[&str]) -> Result<(u32, Value), ErrorInfo> {
+    run_with(config, args, |e| match e {
+        ElevationError::Cancelled => err("adapter.uac_cancelled", "error.uac_cancelled"),
+        _ => {
+            tracing::error!("driver helper: {e}");
+            err("adapter.driver_failed", "error.driver_failed")
+        }
+    })
+}
+
+/// `run` with the caller's errors for a failed start (UAC cancelled, ...)
+pub(crate) fn run_with(
+    config: &Path,
+    args: &[&str],
+    start_failed: impl FnOnce(ElevationError) -> ErrorInfo,
+) -> Result<(u32, Value), ErrorInfo> {
     let out = std::env::temp_dir().join(format!("bluecaster-driver-{}.json", std::process::id()));
     let _ = std::fs::remove_file(&out);
     let mut all: Vec<&str> = args.to_vec();
@@ -49,13 +64,7 @@ pub(crate) fn run(config: &Path, args: &[&str]) -> Result<(u32, Value), ErrorInf
     if crate::logging::verbose_now().is_some() {
         all.push("--verbose");
     }
-    let code = elevation::run_elevated(&helper(), &all).map_err(|e| match e {
-        ElevationError::Cancelled => err("adapter.uac_cancelled", "error.uac_cancelled"),
-        _ => {
-            tracing::error!("driver helper: {e}");
-            err("adapter.driver_failed", "error.driver_failed")
-        }
-    })?;
+    let code = elevation::run_elevated(&helper(), &all).map_err(start_failed)?;
     let json: Option<Value> =
         std::fs::read_to_string(&out).ok().and_then(|t| serde_json::from_str(t.trim_start_matches('\u{feff}')).ok());
     let _ = std::fs::remove_file(&out);

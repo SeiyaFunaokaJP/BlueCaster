@@ -51,6 +51,27 @@ describe("Home", () => {
     await waitFor(() => expect(screen.queryByText(t("ui.home.hi_res_set"))).toBeNull());
   });
 
+  it("warns on the card and in the sidebar while the bit rate is lowered for a slow link (issue #86)", async () => {
+    start("#/home");
+    const wh = await homeCard("WH-1000XM5");
+    fireEvent.click(within(wh).getByRole("button", { name: "Connect" }));
+    await within(wh).findByRole("button", { name: "Disconnect" });
+    const m = mock as unknown as { snap: Snapshot; emit: (e: unknown) => void };
+    await waitFor(() => expect(m.snap.stream.info).toBeTruthy());
+    expect(screen.queryByText(t("ui.codec.slow_link"))).toBeNull();
+    m.snap.stream = { ...m.snap.stream, slow_link: 330 };
+    m.emit({ kind: "stream", value: m.snap.stream });
+    await waitFor(() => expect(wh.querySelector(".codec-slow")).toHaveTextContent(t("ui.codec.slow_link")));
+    // The bit rate in force, not the one asked for
+    expect(wh.querySelector(".codec-badge")).toHaveTextContent("330 kbps");
+    expect(document.querySelector(".status-pill .codec-slow")).not.toBeNull();
+    // As before again
+    m.snap.stream = { ...m.snap.stream, slow_link: null };
+    m.emit({ kind: "stream", value: m.snap.stream });
+    await waitFor(() => expect(screen.queryByText(t("ui.codec.slow_link"))).toBeNull());
+    expect(wh.querySelector(".codec-badge")).toHaveTextContent("990 kbps");
+  });
+
   it("drops the driver error once the error's own button put the adapter on WinUSB", async () => {
     start("#/home");
     const wh = await homeCard("WH-1000XM5");
@@ -83,6 +104,7 @@ describe("Home", () => {
     // The codec is chosen right on the card, by name only (issue #86)
     expect(within(wh).getByRole("combobox", { name: "Codec" })).toHaveDisplayValue("LDAC");
     expect(within(wh).getByRole("status")).toHaveTextContent(/^Connected$/);
+    expect(within(wh).getByRole("status").querySelector(".dot")).not.toBeNull();
     // The other device: ready, not connected, its own Connect
     expect(xb).toHaveTextContent("Disconnected");
     expect(xb).not.toHaveTextContent("—");
@@ -294,6 +316,17 @@ describe("Home", () => {
     await waitFor(() => expect(screen.queryByText("Another BlueCaster is running")).toBeNull());
   });
 
+  it("asks for a power cycle when the adapter hung (issue #86)", async () => {
+    start("#/home");
+    await homeCard("WH-1000XM5");
+    expect(screen.queryByText("Windows cannot read the Bluetooth adapter")).toBeNull();
+    mock!.setHung();
+    expect(await screen.findByText("Windows cannot read the Bluetooth adapter")).toBeInTheDocument();
+    expect(screen.getByText(/hold Shift while choosing Shut down/)).toBeInTheDocument();
+    // Not "check the WinUSB driver" beside it
+    expect(screen.queryByText(/Check that it uses the WinUSB driver/)).toBeNull();
+  });
+
   it("shows the cause of an error and a fix", async () => {
     start("#/home", { scenario: "error" });
     const alert = await screen.findByRole("alert");
@@ -305,6 +338,8 @@ describe("Home", () => {
     const { calls } = start("#/home", { scenario: "error" });
     const wh = await homeCard("WH-1000XM5");
     expect(wh).toHaveTextContent("Error");
+    // The red word alone: a red dot read as recording (issue #86)
+    expect(within(wh).getByRole("status").querySelector(".dot")).toBeNull();
     expect(within(wh).queryByRole("button", { name: "Disconnect" })).toBeNull();
     fireEvent.click(within(wh).getByRole("button", { name: "Connect" }));
     await waitFor(() => expect(calls.some((c) => c.method === "stream.start")).toBe(true));
@@ -499,7 +534,7 @@ describe("every screen renders", () => {
     start("", { window: "flyout" });
     expect(await screen.findByRole("button", { name: "Connect" })).toBeInTheDocument();
     // Beside Connect, not in a row of its own (issue #86)
-    const open = screen.getByRole("button", { name: "Open app" });
+    const open = screen.getByRole("button", { name: "Open BlueCaster" });
     expect(open.closest(".fly-actions")).not.toBeNull();
     expect(document.querySelector(".fly-foot")).toBeNull();
   });

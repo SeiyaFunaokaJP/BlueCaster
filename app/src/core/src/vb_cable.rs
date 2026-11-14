@@ -143,12 +143,161 @@ fn run(setup: &Path) -> Result<(), ErrorInfo> {
     Ok(())
 }
 
+/// VB-Audio's uninstall entries, as the BlueCaster uninstaller reads them
+/// (installer/BlueCaster.iss: RemoveCables). VB-CABLE's setup registers
+/// itself in the 64-bit view. The Hi-Fi Cable comes on its own (its key) or
+/// with ASIO Bridge (32-bit view; the Hi-Fi Cable's setup is in its folder,
+/// or in VB\CABLEHiFi)
+const VB_CABLE_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:VBCABLE {87459874-1236-4469}";
+const HIFI_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:VBHIFI {87459874-1236-4469}";
+const ASIO_BRIDGE_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:ASIOBridge {17359A74-1236-5467}";
+
+/// The program of an UninstallString: the quoted path, else the string up
+/// to ".exe"
+fn program_of(command: &str) -> Option<PathBuf> {
+    let s = command.trim();
+    let path = match s.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or(rest).to_string(),
+        None => match s.to_ascii_lowercase().find(".exe") {
+            Some(i) => s[..i + 4].to_string(),
+            None => s.to_string(),
+        },
+    };
+    let path = PathBuf::from(path);
+    path.is_file().then_some(path)
+}
+
+fn uninstall_entry(key: &str, view_32: bool) -> Option<PathBuf> {
+    program_of(&win_sys::autostart::hklm_string(key, "UninstallString", view_32)?)
+}
+
+/// The Hi-Fi Cable's driver file is in place
+fn hifi_driver_installed() -> bool {
+    let dir = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| r"C:\Windows".into());
+    std::fs::read_dir(dir.join(r"System32\drivers")).is_ok_and(|list| {
+        list.flatten().any(|f| {
+            let n = f.file_name().to_string_lossy().to_lowercase();
+            n.starts_with("vbaudio_hfvaio") && n.ends_with(".sys")
+        })
+    })
+}
+
+fn hifi_remover() -> Option<PathBuf> {
+    if !hifi_driver_installed() {
+        return None;
+    }
+    if let Some(p) = uninstall_entry(HIFI_KEY, false) {
+        return Some(p);
+    }
+    let pf = std::env::var_os("ProgramW6432")
+        .or_else(|| std::env::var_os("ProgramFiles"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| r"C:\Program Files".into());
+    let copy = pf.join(r"VB\CABLEHiFi").join(SETUP);
+    if copy.is_file() {
+        return Some(copy);
+    }
+    let bridge = uninstall_entry(ASIO_BRIDGE_KEY, true)?;
+    let setup = bridge.parent()?.join(SETUP);
+    setup.is_file().then_some(setup)
+}
+
+fn listed(hifi: bool) -> bool {
+    audio_capture::render_devices().is_ok_and(|list| {
+        list.iter().any(|d| {
+            if hifi {
+                bluecaster_core::profiles::is_hifi_cable(&d.name)
+            } else {
+                bluecaster_core::profiles::is_vb_cable(&d.name, d.is_virtual)
+            }
+        })
+    })
+}
+
+/// Has VB-Audio's own setup remove VB-CABLE or the Hi-Fi Cable (`hifi`),
+/// without a window, then Windows scan for hardware changes: both in the
+/// elevated helper (bluecaster-driver.exe `remove-cable`), as the scan needs
+/// administrator rights too, so the user sees one UAC prompt. Without the
+/// scan the removed output stayed in Windows' list until a restart (issue
+/// #86). Then waits for the output to go. Ok(false): it is still listed;
+/// Windows needs a restart.
+pub fn uninstall(config: &Path, hifi: bool) -> Result<bool, ErrorInfo> {
+    let name = if hifi { "Hi-Fi Cable" } else { "VB-CABLE" };
+    let failed = || err("vb_cable.uninstall_failed", "error.vb_cable_uninstall_failed");
+    let setup = if hifi { hifi_remover() } else { uninstall_entry(VB_CABLE_KEY, false) };
+    let Some(setup) = setup else {
+        tracing::warn!("{name}: no setup found to remove it");
+        return Err(failed());
+    };
+    let setup = setup.to_string_lossy().into_owned();
+    let mut args = vec!["remove-cable", setup.as_str()];
+    if hifi {
+        args.push("--hifi");
+    }
+    let (code, result) = crate::driver::run_with(config, &args, |e| match e {
+        ElevationError::Cancelled => err("vb_cable.uac_cancelled", "error.vb_cable_uninstall_uac_cancelled"),
+        e => {
+            tracing::error!("{name} removal: {e}");
+            failed()
+        }
+    })?;
+    if code != 0 {
+        tracing::warn!("{name} removal: helper exit {code}");
+        return Err(failed());
+    }
+    wait_until_gone(name, &result, || listed(hifi), APPEAR_WAIT, Duration::from_millis(500))
+}
+
+/// After the helper: Ok(true) once `listed` says the output is gone, Ok(false)
+/// if it still is after `wait`
+fn wait_until_gone(
+    name: &str,
+    result: &serde_json::Value,
+    mut listed: impl FnMut() -> bool,
+    wait: Duration,
+    every: Duration,
+) -> Result<bool, ErrorInfo> {
+    let rescanned = result.get("rescanned").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let started = Instant::now();
+    loop {
+        if !listed() {
+            return Ok(true);
+        }
+        if started.elapsed() >= wait {
+            tracing::info!("{name}: still among the outputs {wait:?} after its removal (rescanned {rescanned})");
+            return Ok(false);
+        }
+        std::thread::sleep(every);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// Network: VB-Audio still serves the pinned pack, and it unpacks with
     /// its setup (the setup is not run)
+    #[test]
+    fn gone_once_no_longer_listed() {
+        let result = serde_json::json!({ "ok": true, "rescanned": true });
+        let mut calls = 0;
+        let gone = wait_until_gone(
+            "X",
+            &result,
+            || {
+                calls += 1;
+                calls < 3
+            },
+            Duration::from_secs(5),
+            Duration::ZERO,
+        );
+        assert!(gone.unwrap());
+        assert_eq!(calls, 3);
+        // Still listed: a restart is needed
+        let gone = wait_until_gone("X", &serde_json::Value::Null, || true, Duration::ZERO, Duration::ZERO);
+        assert!(!gone.unwrap());
+    }
+
     #[test]
     #[ignore]
     fn fetches_and_unpacks_the_pack() {

@@ -18,9 +18,13 @@ import {
   sbcCapsForSettings,
   capsOf,
   CARD_ORDER,
+  cardOf,
   cardOrder,
   carryToCodec,
+  codecKey,
   codecLabelKey,
+  codecSpec,
+  codecSupport,
   CODECS,
   developerOnly,
   effectiveCodec,
@@ -42,7 +46,7 @@ import {
 import { FlowTracker, stepDetail } from "./flow";
 import { knowAdapters, maskIdentifiers, parseAddress } from "./format";
 import { bugReportUrl, thirdPartyUrl } from "./links";
-import { deviceProfile, followedName, validateProfile, vbCable, withCodec } from "./profile";
+import { deviceProfile, followedName, keptFor, ownDefaultOutput, validateProfile, vbCable, withCodec } from "./profile";
 
 const line = (time_ms: number, message: string, level: LogLine["level"] = "info"): LogLine => ({
   time_ms,
@@ -180,6 +184,40 @@ describe("a device's profile (Codecs screen, issue #86)", () => {
     expect(withCodec(sampleProfile({ codec: "sbc", sbc_bitpool: 40 }), "aac").sbc_bitpool).toBe(0);
   });
 
+  it("saves aptX Adaptive LL's card as aptX Adaptive in Low Latency, each card with its own settings (issue #86)", () => {
+    const hq = sampleProfile({ codec: "aptxad", quality: "hq", abr: true, sample_rate: 96000 });
+    expect(cardOf(hq)).toBe("aptxad");
+    const ll = withCodec(hq, "aptxadll");
+    // No ABR and no 96 kHz in Low Latency
+    expect(ll).toMatchObject({ codec: "aptxad", quality: "ll", abr: false, sample_rate: 0 });
+    expect(cardOf(ll)).toBe("aptxadll");
+    expect(ll.codec_settings.aptxad).toMatchObject({ quality: "hq", abr: true, sample_rate: 96000 });
+    // Back to aptX Adaptive: High with what it had, LL's kept apart
+    const back = withCodec(ll, "aptxad");
+    expect(back).toMatchObject({ codec: "aptxad", quality: "hq", abr: true, sample_rate: 96000 });
+    expect(back.codec_settings.aptxadll).toMatchObject({ quality: "ll" });
+    expect(back.codec_settings).not.toHaveProperty("aptxad");
+    // From another codec, and away to it
+    expect(withCodec(sampleProfile({ codec: "ldac", quality: "sq" }), "aptxadll")).toMatchObject({ codec: "aptxad", quality: "ll" });
+    expect(withCodec(ll, "ldac")).toMatchObject({ codec: "ldac", quality: "hq" });
+    // A profile saved before the card (aptX Adaptive, Low Latency) is on it
+    const old = sampleProfile({ codec: "aptxad", quality: "ll" });
+    expect(cardOf(old)).toBe("aptxadll");
+    expect(withCodec(old, "aptxad")).toMatchObject({ codec: "aptxad", quality: "hq" });
+    // Low Latency kept for aptX Adaptive by an earlier version comes back on LL's card, not on its own
+    const kept = sampleProfile({ codec: "aac", codec_settings: { aptxad: { ...ll.codec_settings.aptxad, quality: "ll", sample_rate: 48000 } } });
+    expect(keptFor(kept, "aptxadll")).toMatchObject({ quality: "ll" });
+    expect(withCodec(kept, "aptxadll")).toMatchObject({ codec: "aptxad", quality: "ll", sample_rate: 48000 });
+    expect(withCodec(kept, "aptxad")).toMatchObject({ codec: "aptxad", quality: "hq" });
+    // ... never as aptX Adaptive's own: they move to LL's card
+    expect(keptFor(kept, "aptxad")).toBeUndefined();
+    expect(withCodec(kept, "aptxad").codec_settings).toMatchObject({ aptxadll: { quality: "ll", sample_rate: 48000 } });
+    expect(withCodec(kept, "aptxad").codec_settings).not.toHaveProperty("aptxad");
+    const viaLl = withCodec(withCodec(kept, "aptxadll"), "aptxad");
+    expect(viaLl).toMatchObject({ codec: "aptxad", quality: "hq" });
+    expect(viaLl.codec_settings.aptxadll).toMatchObject({ quality: "ll", sample_rate: 48000 });
+  });
+
   it("names it after the device and codec unless the user named it", () => {
     const p = sampleProfile({ name: "Buds | Auto", device_name: "Buds", codec: "aac" });
     expect(followedName(p, "AAC", [])).toBe("Buds | AAC");
@@ -299,6 +337,12 @@ describe("profiles", () => {
     expect(ids("ldac")).toEqual(["hq", "sq", "mq"]);
     expect(ids("lhdcv5")).toEqual(["hq", "mhq", "sq", "mq"]);
     expect(ids("aptxad")).toEqual(["hq", "ll"]);
+    // Low Latency has its own card, aptX Adaptive LL: not in aptX Adaptive's (issue #86)
+    expect(offeredQualities("aptxad", 0).map((q) => q.id)).toEqual(["hq"]);
+    expect(codecSpec("aptxadll")).toMatchObject({ label: "codec.aptx_adaptive_ll", qualities: [], abr: false, bits: 24 });
+    expect(fixedKbpsText("aptxadll", 48000)).toBe("265 kbps");
+    expect(sampleRates("aptxadll")).toEqual([0, 48000]);
+    expect(CODECS.some((c) => c.id === "aptxadll")).toBe(false);
     for (const c of ["auto", "aac", "opus", "opus05", "sbc", "sbcxq"]) expect(ids(c)).toEqual(["hq"]);
     for (const c of ["aptx", "aptxhd", "aptxll", "faststream"]) expect(ids(c)).toEqual([]);
   });
@@ -518,6 +562,19 @@ describe("VB-Cable", () => {
     expect(vbCable([device("CABLE In 16ch (VB-Audio Virtual Cable)")])?.name).toMatch(/16ch/);
     expect(vbCable([device("Speakers", false)])).toBeNull();
   });
+  it("leaves out the default output another device's stream switched to", () => {
+    // issue #86: EarFun's Output Source, the default while it streams,
+    // locked that cable out of Moto Buds' lists
+    const list = [device("Speakers", false), { ...device("Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)"), is_default: true }];
+    const earfun = sampleProfile({ name: "EarFun", capture_mode: "virtual", audio_device_id: list[1].id });
+    const snap = (state: "streaming" | "idle", p = earfun) => ({
+      stream: { state, profile: "EarFun" } as Parameters<typeof ownDefaultOutput>[1]["stream"],
+      profiles: [p],
+    });
+    expect(ownDefaultOutput(list, snap("streaming"))).toBe("");
+    expect(ownDefaultOutput(list, snap("idle"))).toBe(list[1].id);
+    expect(ownDefaultOutput(list, snap("streaming", { ...earfun, capture_mode: "loopback" }))).toBe(list[1].id);
+  });
 });
 
 describe("about", () => {
@@ -634,6 +691,22 @@ describe("A device's codec order (issue #86 round 8)", () => {
     const o = autoOrder(["AAC", "nope", "ldac", "aac", "faststream"]);
     expect(o.slice(0, 3)).toEqual(["aac", "ldac", "lhdcv5"]);
     expect(o).toHaveLength(AUTO_ORDER.length);
+  });
+
+  it("puts aptX Adaptive LL's card beside aptX Adaptive, supported as it is (issue #86)", () => {
+    expect(CARD_ORDER.slice(2, 4)).toEqual(["aptxad", "aptxadll"]);
+    // An order saved before the card
+    expect(cardOrder(["sbc", "aptxad", "ldac"]).slice(0, 4)).toEqual(["sbc", "aptxad", "aptxadll", "ldac"]);
+    expect(cardOrder(["aptxadll", "sbc"]).slice(0, 2)).toEqual(["aptxadll", "sbc"]);
+    expect(codecKey("aptxadll")).toBe("aptxad");
+    const earfun = ["sbc", "aac", "aptxad"];
+    expect(codecSupport("aptxadll", earfun)).toBe("offered");
+    expect(codecSupport("aptxadll", ["sbc"])).toBe("not_offered");
+    expect(effectiveCodec("aptxadll", earfun)).toBe("aptxadll");
+    // Auto never takes Low Latency
+    expect(effectiveCodec("auto", earfun, cardOrder(["aptxadll", "aac"]))).toBe("aac");
+    expect(capsOf([{ codec: "aptxad", sample_rates: [48000], bit_depths: [], max_bitrate: 0 }], "aptxadll")).not.toBeNull();
+    expect(autoBitDepth("aptxadll", null)).toBe(24);
   });
 
   it("puts every card once, the ones given first", () => {

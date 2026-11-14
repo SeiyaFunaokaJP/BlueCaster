@@ -55,6 +55,8 @@ cargo build --release -p bluecaster-ui
 git submodule update --init --recursive
 ```
 
+拉取了更新库的提交之后也要再运行一次。如果 `extern/` 下的库不在 `extern/versions.txt` 所列的提交上，构建会停止，并在消息中说明如何仍用其他版本构建。
+
 ## 项目结构 {#project-structure}
 
 ```
@@ -156,16 +158,16 @@ C 库以 git 子模块的形式包含；Rust crate 和 UI 的 npm 软件包由 C
 
 | 库 | 方式 | 固定版本 | 许可证 |
 |:--------|:-------|:---------------|:--------|
-| BTstack | git 子模块 | v1.8.1-6-g5bc5cbdbe | BTstack License（BSD-3-Clause 风格，附带非商业条款） |
+| BTstack | git 子模块 | v1.8.3 | BTstack License（BSD-3-Clause 风格，附带非商业条款） |
 | Bluedroid SBC codec | 编码器已移植为 Rust；解码器（测试、工具用）取自 BTstack 附带的副本 | 与 BTstack 相同 | Apache-2.0 |
 | rijndael | 随 BTstack 附带（`3rd-party/rijndael`） | 与 BTstack 相同 | 公有领域 |
 | liblc3 (lc3-google) | 随 BTstack 附带（`3rd-party/lc3-google`） | 与 BTstack 相同 | Apache-2.0 |
 | micro-ecc | 随 BTstack 附带（`3rd-party/micro-ecc`） | 与 BTstack 相同 | BSD-2-Clause |
 | libldac (AOSP) | git 子模块 | android-15.0.0_r36-4-geeee1a3 | Apache-2.0 |
 | libopenaptx | git 子模块 | 0.2.0（请勿更新） | LGPL-2.1+ |
-| fdk-aac | git 子模块 | v2.0.3-158-gd8e6b1a | FDK AAC License |
+| fdk-aac | git 子模块 | v3.0.0 | FDK AAC License |
 | LHDC V5 编码器 | git 子模块 | 以固定的版本为准 | Apache-2.0 |
-| libopus | git 子模块 | v1.5.2 | BSD-3-Clause |
+| libopus | git 子模块 | v1.6.1 | BSD-3-Clause |
 | Tauri、SolidJS、Rust crate | Cargo / pnpm | `Cargo.lock`、`pnpm-lock.yaml` | MIT / Apache-2.0 等（见发布包中的 `licenses/third-party/rust-crates.txt`） |
 
 {: .warning }

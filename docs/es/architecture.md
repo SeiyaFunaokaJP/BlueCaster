@@ -20,7 +20,7 @@ nav_order: 4
 
 BlueCaster habilita el audio Bluetooth LHDC V5, LDAC, aptX Adaptive, aptX HD,
 aptX Low Latency, aptX, Opus, AAC, SBC XQ y SBC en Windows
-(y LC3 sobre LE Audio). La pila Bluetooth propia de Windows solo admite
+(y LC3 sobre LE Audio, experimental). La pila Bluetooth propia de Windows solo admite
 SBC, aptX clásico y (solo en Windows 11) AAC para A2DP; esta herramienta añade los
 demás sin necesidad de un controlador de kernel.
 
@@ -424,7 +424,7 @@ termina.
 | LHDC V5 | lhdcv5-enc (port en C del codificador de AOSP) | 400/500/900/1000 kbps (Baja/Media/Media-alta/Alta), como máximo el máximo que anuncia el receptor, ABR 160–400 kbps | 16/24 bits, tramas de 5 ms, encabezado de carga útil multimedia de 2 bytes, encabezado RTP |
 | LDAC | libldac (AOSP) | 330/660/990 kbps | Modos Alta/Media/Baja (HQ/SQ/MQ), ABR |
 | aptX Adaptive | aptx-adaptive (codificador en Rust puro de AKS-Logic/aptx-adaptive-linux, MIT) | 427 kbps en Alta, 265 kbps en Baja latencia (receptores R2: 270); ABR baja a 364/318 (R2: 270/204) | 48 kHz estéreo (96 kHz en Alta cuando se eligen, a un receptor R2 que los anuncia: 646/340/255 kbps), 24 bits; un paquete del códec por paquete multimedia tras el encabezado RTP propio de BlueCaster; ABR en Alta; Automático lo toma después de LHDC V5 y LDAC |
-| Opus | libopus 1.5.2 | 256 kbps (estéreo; mono la mitad) | Opus A2DP de Android: 48 kHz, tramas de 20 ms (10 ms si el receptor solo admite eso), VBR restringida limitada a la carga útil multimedia, una trama por paquete, encabezado de carga útil multimedia de 1 byte, encabezado RTP |
+| Opus | libopus 1.6.1 | 256 kbps (estéreo; mono la mitad) | Opus A2DP de Android: 48 kHz, tramas de 20 ms (10 ms si el receptor solo admite eso), VBR restringida limitada a la carga útil multimedia, una trama por paquete, encabezado de carga útil multimedia de 1 byte, encabezado RTP |
 | aptX HD | libopenaptx | 576 kbps | Entrada de 24 bits, tasa fija, encabezado RTP |
 | aptX | libopenaptx | 352/384 kbps (44.1/48 kHz) | Estéreo de 16 bits, sin encabezado RTP |
 | aptX LL | libopenaptx | 352 kbps | Latencia de ~32 ms, sin encabezado RTP, paquetes ≤ ~7.5 ms |

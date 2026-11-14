@@ -175,6 +175,11 @@ pub struct AdapterState {
     /// (issue #81)
     #[serde(default)]
     pub rom_firmware: bool,
+    /// No adapter on WinUSB, but a USB device Windows cannot read, after
+    /// BlueCaster used an adapter: most likely that adapter with its chip
+    /// hung, back only after a power cycle (issue #86)
+    #[serde(default)]
+    pub hung: bool,
     /// A radio Windows' own Bluetooth runs beside the adapter BlueCaster uses:
     /// the two may interfere (issue #86). None: no such radio
     #[ts(optional = nullable)]
@@ -491,6 +496,13 @@ pub struct StreamStatus {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub codec_stop: Option<CodecStop>,
+    /// The link carries less since the microphone was used (#86): the bit
+    /// rate in kbps the codec is lowered to until the link is as before
+    /// (info.bitrate_kbps stays the one asked for). Some only while
+    /// streaming.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub slow_link: Option<u32>,
 }
 
 /// Why the stream stopped over its codec (StreamStatus.codec_stop)
@@ -593,9 +605,9 @@ pub struct Profile {
     /// Settings.le_audio_experimental (error.le_audio_disabled)
     #[serde(default)]
     pub le_audio: bool,
-    /// LE Audio: GMAP low-latency presets with a gaming headset (on by
-    /// default; other headsets get the media configuration either way)
-    #[serde(default = "yes")]
+    /// LE Audio: GMAP low-latency presets with a gaming headset (LC3 LL; off
+    /// by default: LC3); other headsets get the media configuration either way
+    #[serde(default)]
     pub le_low_latency: bool,
     /// Headset mode: the headphones' microphone is
     /// rendered to mic_device_id. "off" (the default) | "on" | "auto";
@@ -618,6 +630,10 @@ pub struct Profile {
     /// as with headset_mic "off"; headset_mic is kept for unmuting
     #[serde(default)]
     pub mic_muted: bool,
+    /// The microphone output's recording side is Windows' default input
+    /// while the device is connected (on by default)
+    #[serde(default = "yes")]
+    pub mic_default_input: bool,
     /// Classic devices: the call codec chosen on its card with Auto-select
     /// off ("cvsd", "msbc", "lc3_swb"; "" = none chosen, the best both
     /// sides have). The voice link takes it, or the next lower one the
@@ -747,6 +763,8 @@ pub struct DevOverrides {
     /// Audio waits unencoded while the send queue is backed up (ABR then
     /// lowers its bit rate too). Applies to the next stream
     pub encode_at_send: bool,
+    /// A link slow after a call keeps the full bit rate (not lowered)
+    pub keep_bitrate_on_slow_link: bool,
 }
 
 /// Developer mode's override of one vendor's protocol
@@ -805,6 +823,21 @@ pub struct DevDebug {
     /// A Realtek chip's firmware from Realtek's Windows driver on this PC
     /// instead of the firmware folder's (the RTL8761B, issue #427)
     pub realtek_driver_firmware: bool,
+    /// LE Audio CIG: max transport latency C->P / P->C in ms; 0: as planned
+    pub le_latency_c_to_p_ms: u16,
+    pub le_latency_p_to_c_ms: u16,
+    /// LE Audio CIG: RTN C->P / P->C; None: as planned
+    #[ts(optional = nullable)]
+    pub le_rtn_c_to_p: Option<u8>,
+    #[ts(optional = nullable)]
+    pub le_rtn_p_to_c: Option<u8>,
+    /// LE Audio CIG: interleaved packing
+    pub le_interleaved: bool,
+    /// The LE Audio microphone's preset, taken as it is; empty: as planned
+    pub le_mic_preset: String,
+    /// A stream with the microphone that failed is retried without it on
+    /// the same link
+    pub le_mic_retry_same_link: bool,
 }
 
 /// Developer mode's logging (bluecaster_core::settings::DevLog), in force while
@@ -880,6 +913,13 @@ pub struct Settings {
     /// offers it
     #[serde(default)]
     pub hifi_cable_note_hidden: bool,
+    /// The virtual cables' dialog was opened by itself once after an update:
+    /// it does not open by itself again (a client that sends none: true)
+    #[serde(default = "yes")]
+    pub cables_dialog_shown: bool,
+    /// The warning before unlisted codec options was accepted: not asked again
+    #[serde(default)]
+    pub unlisted_options_warned: bool,
     /// Windows Volume Sync for every device (on by default): the audio
     /// device's volume and the captured device's Windows volume follow each
     /// other. Off: no stream syncs. A change starts the profile in use
@@ -1010,6 +1050,10 @@ pub struct Snapshot {
     /// yet (diag.crashes_seen), newest first
     #[serde(default)]
     pub crashes: Vec<CrashReport>,
+    /// Counts the changes to Windows' audio devices since the core started
+    /// (one came, went, or a default changed): the UI reads its lists again
+    #[serde(default)]
+    pub audio_endpoints: u32,
     /// The vendors with protocols of their own (developer mode's overrides)
     #[serde(default)]
     pub vendors: Vec<VendorInfo>,
@@ -1531,6 +1575,8 @@ pub enum Event {
     Verbose(Option<VerboseState>),
     /// Crash reports appeared or were dismissed (state, crashes)
     Crashes(Vec<CrashReport>),
+    /// Windows' audio devices changed (state, audio_endpoints)
+    AudioEndpoints(u32),
     /// Subscription (diag.subscribe receiver): the receiver test, once a
     /// second and on every change
     Receiver(Box<ReceiverState>),
@@ -1761,6 +1807,11 @@ pub enum Method {
     /// need a restart first)
     #[serde(rename = "audio.install_vb_cable")]
     AudioInstallVbCable,
+    /// Removes VB-CABLE, or the Hi-Fi Cable (`hifi`), with VB-Audio's own
+    /// setup (UAC prompt) -> bool: it is gone from Windows' outputs (false:
+    /// Windows may need a restart first)
+    #[serde(rename = "audio.uninstall_cable")]
+    AudioUninstallCable { hifi: bool },
     /// -> MixerApp[]
     #[serde(rename = "audio.mixer")]
     AudioMixer,
@@ -1909,7 +1960,18 @@ pub enum Method {
 
 pub struct AudioDevice {
     pub id: String,
+    /// Windows' friendly name, which already ends in the adapter's name in
+    /// parentheses: "Speakers (Realtek(R) Audio)"
     pub name: String,
+    /// The endpoint's own name without the adapter's ("Speakers"); None:
+    /// Windows has none
+    #[ts(optional = nullable)]
+    #[serde(default)]
+    pub short_name: Option<String>,
+    /// The adapter's name ("VB-Audio Hi-Fi Cable"); None: Windows has none
+    #[ts(optional = nullable)]
+    #[serde(default)]
+    pub adapter_name: Option<String>,
     pub is_default: bool,
     pub is_virtual: bool,
     /// Windows' shared-mode mix format: what capturing it delivers without
@@ -2185,8 +2247,6 @@ pub struct DevicePairing {
 pub enum LeKeysMissing {
     /// No stack runs
     NoStack,
-    /// LE Audio is off, so nothing is asked
-    NoLe,
     /// Not asked since Bluetooth started (no connection since)
     NotAsked,
     /// Asked, no answer yet
@@ -2603,6 +2663,7 @@ mod tests {
             v1_running: false,
             verbose: None,
             crashes: Vec::new(),
+            audio_endpoints: 0,
             vendors: Vec::new(),
         })
         .unwrap();

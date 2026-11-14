@@ -11,7 +11,7 @@ has_toc: false
 Windows 向け Bluetooth A2DP オーディオストリーミングツール（全コーデック対応）
 {: .fs-6 .fw-300 }
 
-安価な USB ドングル、または多くのノート PC に内蔵の、Windows では基本的なコーデックしか使えない普通の Bluetooth アダプターを、Hi-Fi 送信機に変えます。**LHDC V5・LDAC・aptX Adaptive** を最大 96 kHz（LHDC V5 は 192 kHz）で、ほかに **aptX HD・aptX・aptX Low Latency・Opus・AAC・SBC XQ・SBC・FastStream**、LE Audio（LC3）に対応。アダプターの設定は BlueCaster が行い、ワンクリックで Windows に戻せます（[仕組み](architecture)）。
+安価な USB ドングル、または多くのノート PC に内蔵の、Windows では基本的なコーデックしか使えない普通の Bluetooth アダプターを、Hi-Fi 送信機に変えます。**LHDC V5・LDAC・aptX Adaptive** を最大 96 kHz（LHDC V5 は 192 kHz）で、ほかに **aptX HD・aptX・aptX Low Latency・Opus・AAC・SBC XQ・SBC・FastStream**、LE Audio（LC3、実験的、開発者モードのみ）に対応。アダプターの設定は BlueCaster が行い、ワンクリックで Windows に戻せます（[仕組み](architecture)）。
 
 ![BlueCaster's Codecs screen, streaming LDAC 990 kbps / 48 kHz to Sony WH-1000XM4](../images/app_sample.png)
 
@@ -36,8 +36,8 @@ Windows 向け Bluetooth A2DP オーディオストリーミングツール（�
 | SBC | 最大約 345 kbps | 44.1/48 kHz | 16 bit | 約 150 ms |
 | FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | -- |
 | Opus 05 | 256 kbps | 48 kHz | 16 bit | -- |
-| LC3（LE Audio） | 1 チャネルあたり 32--124 kbps | 16/24/32/48 kHz | 16 bit | 約 140 ms |
-| LC3 低遅延（LE Audio GMAP） | 1 チャネルあたり 64--96 kbps | 32/48 kHz | 16 bit | 約 30 ms |
+| LC3（LE Audio） 🧪 | 1 チャネルあたり 32--124 kbps | 16/24/32/48 kHz | 16 bit | 約 140 ms |
+| LC3 LL（LE Audio GMAP） 🧪 | 1 チャネルあたり 64--96 kbps | 32/48 kHz | 16 bit | 約 30 ms |
 
 ### プラットフォーム別のコーデック対応（ヘッドホンへの送信）
 
@@ -55,9 +55,9 @@ Windows 向け Bluetooth A2DP オーディオストリーミングツール（�
 | SBC | ✅ | ✅ | ✅ | ✅ |
 | FastStream | ❌ | ❌ | ✅ | ✅（音楽のみ、明示的に選んだとき） |
 | Opus 05（PipeWire 独自の Opus） | ❌ | ❌ | ✅ PipeWire 0.3.57 以降（`opus_05`、相手も PipeWire のときだけ） | ✅（明示的に選んだとき、開発者モードのみ） |
-| LC3（LE Audio、BAP ユニキャスト） | ❌ | ✅ Bluetooth のハードウェアとドライバーが LE Audio に対応した PC のみ | ✅ PipeWire の BAP `lc3`（BlueZ の LE Audio） | ✅（デバイスの LE Audio の項目、ゲーミングヘッドセットでは GMAP の低遅延、ISO 対応の Bluetooth 5.2 アダプターが必要、[使い方](usage#le-audio)） |
+| LC3（LE Audio、BAP ユニキャスト） | ❌ | ✅ Bluetooth のハードウェアとドライバーが LE Audio に対応した PC のみ | ✅ PipeWire の BAP `lc3`（BlueZ の LE Audio） | 🧪 実験的、開発者モードのみ（デバイスの LE Audio の項目、ゲーミングヘッドセットでは GMAP の低遅延、ISO 対応の Bluetooth 5.2 アダプターが必要、[使い方](usage#le-audio)） |
 
-✅ 対応 · ❌ 非対応。どの列も送信側（PC → ヘッドホン）です。「標準」は BlueCaster を使わない OS 自身の Bluetooth オーディオで、Ubuntu の列は Ubuntu 26.04 の PipeWire（`libspa-0.2-bluetooth`）が持つコーデックです。
+✅ 対応 · 🧪 実験的 · ❌ 非対応。どの列も送信側（PC → ヘッドホン）です。「標準」は BlueCaster を使わない OS 自身の Bluetooth オーディオで、Ubuntu の列は Ubuntu 26.04 の PipeWire（`libspa-0.2-bluetooth`）が持つコーデックです。
 
 {: .warning }
 **aptX HD・aptX Low Latency** は Android / PipeWire の実装に合わせ、エンコード→デコードの往復テストは通っていますが、実機のヘッドホンでの検証はまだです。表のレイテンシーは一般的な目安で、BlueCaster で測定した値ではありません。
@@ -66,7 +66,7 @@ Windows 向け Bluetooth A2DP オーディオストリーミングツール（�
 **LHDC V5 について。** Google が Android 17（AOSP、Apache-2.0）に追加した LHDC V5 エンコーダーの C 移植版を使用しています。移植版は AOSP の Rust 版エンコーダーとビット単位で一致することを確認済みで、A2DP のシグナリングは Android の `a2dp_vendor_lhdcv5` に合わせています。実機の LHDC V5 ヘッドホンでも、ユーザーにより v1.1.1-beta.1 で 1000 kbps / 192 kHz での動作が確認されています（[#50](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/50)）。v2 も同じエンコーダーを使います。対応するのはロッシーの LHDC V5 のみで、LHDC V2/V3（従来機）とロスレスの「LHDC-RAW」にはオープンソースのエンコーダーがありません。自動選択では LHDC V5 が最上位で、LDAC より上に位置します。
 
 {: .warning }
-**Opus** は Android の A2DP Opus ベンダーコーデック（Android 13 以降、ベンダー ID 0x000000E0 Google）で、48 kHz・20 ms フレーム・ステレオ 256 kbps（Android が要求する値。標準 192、モバイル 128 kbps）を libopus 1.5.2 でエンコードします。仮想シンクとのエンドツーエンドテストには合格していますが、実際の Opus 対応ヘッドホンでは未確認です。自動選択では aptX Adaptive の下、aptX HD の上です。
+**Opus** は Android の A2DP Opus ベンダーコーデック（Android 13 以降、ベンダー ID 0x000000E0 Google）で、48 kHz・20 ms フレーム・ステレオ 256 kbps（Android が要求する値。標準 192、モバイル 128 kbps）を libopus 1.6.1 でエンコードします。仮想シンクとのエンドツーエンドテストには合格していますが、実際の Opus 対応ヘッドホンでは未確認です。自動選択では aptX Adaptive の下、aptX HD の上です。
 
 {: .warning }
 **Opus 05** は PipeWire 独自の A2DP Opus ベンダーコーデック（ベンダー ID 0x000005F1、コーデック ID 0x1005、PipeWire の `opus_05`）で、実装しているのは PipeWire だけなので、受け手は A2DP シンクとして動く PipeWire の PC に限られます。BlueCaster が送るのはステレオの音楽の方向だけ（5.1 / 7.1 や戻りの音声はなし）で、48 kHz・10 ms フレーム（シンクが 20 ms だけならそれ）、エンコーダーとビットレートは Opus と同じで、シンクの上限で頭打ちにします。自動選択では選ばないので、**コーデック** 画面か `-c opus05` で選んでください。PipeWire と同じ能力を出す仮想シンクとのエンドツーエンドテストには合格していますが、実際の PipeWire では試していません。A2DP シンクとしての PipeWire は、Opus 05 を 0.3.57 から、Android の Opus（`opus_g`）を 1.2.0 から受けられます。Ubuntu 24.04 LTS の PipeWire 1.0.5 は Opus 05 だけ、Ubuntu 25.10（1.4.7）と 26.04 LTS（1.6.2）は両方です。どちらも BlueCaster ではまだ確かめていません。
@@ -144,7 +144,7 @@ BlueCaster は Windows の Bluetooth スタックを完全にバイパスしま�
 ## 主な機能
 
 - **マルチコーデック**: LHDC V5、LDAC、aptX Adaptive、aptX、AAC、aptX HD、aptX Low Latency、Opus、Opus 05、FastStream、SBC XQ、SBC（自動ネゴシエーション対応）
-- **LE Audio**: LE Audio のヘッドホン・イヤホンへ LC3 で送信（BAP ユニキャスト、左右一組のイヤホン、ヘッドセットの音量、メディアボタン、GMAP の低遅延）。Bluetooth 5.2 のアイソクロナスチャネルに対応したアダプターが必要です。これまでに MediaTek MT7925 と Bluetooth のエミュレータで確かめています（[使い方](usage#le-audio)を参照）
+- **LE Audio（実験的、開発者モードのみ）**: LE Audio のヘッドホン・イヤホンへ LC3 で送信（BAP ユニキャスト、左右一組のイヤホン、ヘッドセットの音量、メディアボタン、GMAP の低遅延）。Bluetooth 5.2 のアイソクロナスチャネルに対応したアダプターが必要です。確かめたのは MediaTek MT7925 1 台だけで、既知の問題があります（[使い方](usage#le-audio)を参照）
 - **3 つのキャプチャモード**: システムループバック、仮想オーディオデバイスルーティング、または 1 つのアプリの出力
 - **ウィンドウ・トレイ・CLI**: セットアップと診断はウィンドウ、毎日の接続はトレイのフライアウトとメニュー、ほかにコマンドライン（[使い方](usage)を参照）
 - **アプリ内で WinUSB を割り当て**: アダプターへの WinUSB ドライバーの割り当てと元のドライバーへの復元。Zadig は不要です（[セットアップ](setup#winusb)を参照）。Windows がこのアダプターでペアリングしたヘッドホンは、ペアリングし直さずに接続できます

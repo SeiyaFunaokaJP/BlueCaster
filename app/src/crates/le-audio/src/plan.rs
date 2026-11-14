@@ -19,7 +19,9 @@
 //! source ASEs only gets a CIS of its own that carries P->C only. The source
 //! preset is the first of [`StreamRequest::source_preset_order`] (those with
 //! the sink preset's frame duration first) that every such device's Source
-//! PAC records allow. [`StreamRequest::source_rate`] (a rate the user
+//! PAC records allow; with a high-reliability sink preset, the
+//! high-reliability preset of the same rate, frame and octets stands in for
+//! a low-latency one (one latency class per CIG). [`StreamRequest::source_rate`] (a rate the user
 //! chose) takes the first of those at that rate instead, and the first at
 //! any rate when none is. When none fits, or no device has a source ASE, the
 //! plan has no source direction and says why in [`StreamPlan::source_note`]:
@@ -28,7 +30,7 @@
 use crate::defs::{
     CFG_CHANNEL_ALLOCATION, CFG_FRAME_BLOCKS_PER_SDU, CFG_FRAME_DURATION, CFG_OCTETS_PER_FRAME, CFG_SAMPLING_FREQUENCY,
     CONTEXT_CONVERSATIONAL, CONTEXT_MEDIA, CONTEXT_UNSPECIFIED, FD_BIT_7500US, FD_BIT_10000US, LOCATION_FRONT_LEFT,
-    LOCATION_FRONT_RIGHT, LOCATION_MONO, PHY_2M, sf_hz_to_cap_bit, sf_hz_to_code,
+    LOCATION_FRONT_RIGHT, LOCATION_MONO, PHY_2M, TARGET_LATENCY_HIGH_RELIABILITY, sf_hz_to_cap_bit, sf_hz_to_code,
 };
 use crate::ltv;
 use crate::pacs_ascs::{Ase, PacRecord};
@@ -60,6 +62,9 @@ pub struct StreamRequest {
     /// Presets of the source direction, best first (only with
     /// `conversational`)
     pub source_preset_order: Vec<String>,
+    /// `source_preset_order` as given (Developer > Debug's microphone
+    /// preset): no high-reliability twin, no GMAP order
+    pub source_preset_exact: bool,
     /// Streaming Audio Contexts in the Enable of source ASEs (CONTEXT_*)
     pub source_contexts: u16,
     /// The microphone's sampling rate chosen (Hz): the first source preset
@@ -79,6 +84,7 @@ impl Default for StreamRequest {
             prefer_two_channel_ase: true,
             conversational: false,
             source_preset_order: DEFAULT_SOURCE_PRESET_ORDER.iter().map(|s| s.to_string()).collect(),
+            source_preset_exact: false,
             source_contexts: CONTEXT_CONVERSATIONAL,
             source_rate: None,
         }
@@ -526,6 +532,21 @@ fn plan_source(
     // ISO interval for both directions)
     let mut candidates: Vec<&StreamPreset> =
         request.source_preset_order.iter().filter_map(|n| presets.find(n)).collect();
+    // One latency class per CIG: next to a high-reliability sink, a
+    // low-latency microphone preset becomes its high-reliability twin (same
+    // rate, frame and octets). Its 10 ms max transport latency would make
+    // the controller pick a 10 ms ISO interval for every CIS of the CIG,
+    // and EarFun earbuds refused the second CIS then (0x1E, issue #86).
+    if sink.target_latency == TARGET_LATENCY_HIGH_RELIABILITY && !request.source_preset_exact {
+        for p in candidates.iter_mut() {
+            if let Some(hr) = presets.presets().iter().find(|q| {
+                q.target_latency == TARGET_LATENCY_HIGH_RELIABILITY
+                    && (q.sampling_hz, q.frame_us, q.octets) == (p.sampling_hz, p.frame_us, p.octets)
+            }) {
+                *p = hr;
+            }
+        }
+    }
     candidates.sort_by_key(|p| p.frame_us != sink.frame_us);
     let fitting: Vec<&StreamPreset> = candidates
         .into_iter()
@@ -1024,7 +1045,14 @@ mod tests {
         assert_eq!(p.preset.name, "48_6_2");
         assert_eq!(layout(&p), vec![(1, 1, 0, vec![(FL, Left), (FR, Right)])]);
         let s = p.source.as_ref().unwrap();
-        assert_eq!(s.preset.name, "32_2_1");
+        // 48_6_2 is high reliability: so is the microphone (one latency
+        // class per CIG, issue #86)
+        assert_eq!((s.preset.name.as_str(), s.preset.rtn, s.preset.max_transport_latency_ms), ("32_2_2", 13, 95));
+        // Developer > Debug's microphone preset is taken as it is
+        let exact =
+            StreamRequest { source_preset_order: vec!["32_2_1".into()], source_preset_exact: true, ..conversational() };
+        let d = with_mic(sink(1, FL | FR, 2, 0x03), FL);
+        assert_eq!(plan(&[d], &exact, EMU_ISO).unwrap().source.unwrap().preset.name, "32_2_1");
         assert_eq!((s.requested_contexts, s.contexts), (CONTEXT_CONVERSATIONAL, CONTEXT_CONVERSATIONAL));
         assert_eq!(s.presentation_delay_us, 40000);
         assert_eq!(p.cis[0].source_ase, Some(SourceDir { ase_id: 3, channels: 1, allocation: FL, octets: 80 }));
@@ -1045,7 +1073,7 @@ mod tests {
         assert_eq!(p.describe(), "LC3 48 kHz 10 ms 155 octets (124 kbps/ch), 2 ch over 1 CIS, 48_6_2");
         assert_eq!(
             p.describe_source().unwrap(),
-            "microphone: LC3 32 kHz 10 ms 80 octets (64 kbps), 1 ch over 1 CIS, 32_2_1"
+            "microphone: LC3 32 kHz 10 ms 80 octets (64 kbps), 1 ch over 1 CIS, 32_2_2"
         );
         assert_eq!(
             source_codec_config_ltvs(&p, &p.cis[0].source_ase.unwrap()),
@@ -1065,6 +1093,7 @@ mod tests {
         d.source_pacs[0].caps.sampling_frequencies = SF_BIT_16000;
         let request = StreamRequest { preset_order: vec!["16_2_1".into()], ..conversational() };
         let p = plan(&[d.clone()], &request, EMU_ISO).unwrap();
+        // A low-latency sink preset keeps the low-latency microphone
         assert_eq!(p.source.as_ref().unwrap().preset.name, "16_2_1");
         assert_eq!(p.cis[0].source_ase.unwrap().octets, 40);
         // A 7.5 ms sink preset prefers a 7.5 ms microphone preset when the
@@ -1100,16 +1129,16 @@ mod tests {
         // The emulator's microphone: 16 and 32 kHz, Auto takes 32 kHz
         let d = with_mic(sink(1, 0, 1, 0x01), 0);
         let s = plan(std::slice::from_ref(&d), &conversational(), EMU_ISO).unwrap().source.unwrap();
-        assert_eq!((s.preset.name.as_str(), s.rates.as_slice()), ("32_2_1", &[32000, 16000][..]));
+        assert_eq!((s.preset.name.as_str(), s.rates.as_slice()), ("32_2_2", &[32000, 16000][..]));
         // 16 kHz chosen
         let request = StreamRequest { source_rate: Some(16000), ..conversational() };
         let s = plan(std::slice::from_ref(&d), &request, EMU_ISO).unwrap().source.unwrap();
-        assert_eq!(s.preset.name, "16_2_1");
+        assert_eq!(s.preset.name, "16_2_2");
         assert_eq!(s.rates, [32000, 16000]);
         // A rate the device does not allow: the first that fits
         let request = StreamRequest { source_rate: Some(24000), ..conversational() };
         let s = plan(&[d], &request, EMU_ISO).unwrap().source.unwrap();
-        assert_eq!(s.preset.name, "32_2_1");
+        assert_eq!(s.preset.name, "32_2_2");
     }
 
     #[test]
@@ -1134,7 +1163,7 @@ mod tests {
         assert_eq!(p.cis[1].source_ase.unwrap().allocation, FR);
         assert_eq!(
             p.describe_source().unwrap(),
-            "microphone: LC3 32 kHz 10 ms 80 octets (64 kbps), 2 ch over 2 CIS, 32_2_1"
+            "microphone: LC3 32 kHz 10 ms 80 octets (64 kbps), 2 ch over 2 CIS, 32_2_2"
         );
     }
 

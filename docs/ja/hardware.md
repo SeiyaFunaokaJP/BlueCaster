@@ -29,7 +29,7 @@ BlueCaster で使われたことのあるアダプターとヘッドホンです
 | 「Realtek Bluetooth 6.0」ドングル | Realtek RTL8761B | 0BDA:A760 | USB ドングル | ✅ | まだ自動では認識しない（LMP サブバージョン 0x8761）。LE Audio は不可 | [#208](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/208) |
 | CSR8510 A10 ドングル | CSR8510 | 0A12:0001 | USB ドングル | ✅ | ファームウェアのファイルは不要 | [#32](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/32) |
 | Intel AX211（内蔵の Wi-Fi / Bluetooth カード） | Intel AX211（TLV ブートローダー） | 8087:0033 | 内蔵 | ✅ | ファームウェアは linux-firmware の `intel/` から、ブートローダーから 1.5–1.7 秒で読み込む: `ibt-0180-0041`（バリアント 0x1B）または `ibt-1040-0041`（バリアント 0x19）。ファイル名はログに出る。ペアリング、AAC、LDAC が動作。BlueCaster が使っている間、Windows 自身の Bluetooth はなくなる | [#261](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/261) |
-| MediaTek MT7925（内蔵の Wi-Fi / Bluetooth カード） | MediaTek MT7925 | 0E8D:7925 | 内蔵 | ✅ | ファームウェアは MediaTek の Windows ドライバーから読み込む。A2DP が動作。LE Audio は 開発者 > Debug の設定で再生できた | [#86](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/86) |
+| MediaTek MT7925（内蔵の Wi-Fi / Bluetooth カード） | MediaTek MT7925 | 0E8D:7925 | 内蔵 | ✅ | ファームウェアは MediaTek の Windows ドライバーから読み込む。A2DP が動作。LE Audio（実験的）は 開発者 > Debug の設定で再生できたが、既知の問題あり | [#86](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/86) |
 | MediaTek MT7921（内蔵の Wi-Fi / Bluetooth カード） | MediaTek MT7921 | 13D3:3606 | 内蔵 | ✅ | – | [#432](https://github.com/SeiyaFunaokaJP/BlueCaster/pull/432) |
 | 「MA530」アダプター | 不明 | – | USB ドングル | ✅ | v1.0.9 での報告 | [#3](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/3)、[#9](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/9) |
 | UGREEN Bluetooth 5.4 / 6.0 ドングル | 不明 | – | USB ドングル | ✅ | 2.0.1 での報告 | [#11](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/11#issuecomment-6563908711) |
@@ -65,5 +65,5 @@ Qualcomm のアダプターはまだ報告がありません。どう動くと�
 ## まだ検証していないもの {#not-verified-yet}
 
 - **実際のヘッドホンでのコーデック**: aptX HD、aptX Low Latency、Opus、Opus 05、FastStream
-- **LE Audio**: テストしたのはエミュレーターと MediaTek MT7925 だけです
+- **LE Audio**（実験的、開発者モードのみ）: テストしたのはエミュレーターと MediaTek MT7925 だけで、既知の問題があります
 - **ARM64 版 Windows** と **v2 での Windows 10**（v1 は Windows 10 22H2 で動きました: [#18](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/18)、[#30](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/30)）

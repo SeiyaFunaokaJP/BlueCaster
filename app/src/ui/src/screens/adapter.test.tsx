@@ -14,7 +14,7 @@ function start(scenario: MockScenario = "normal") {
   mock = new MockCore({ speed: 0, scenario, onCall: (method, params) => calls.push({ method, params }) });
   const core = createCore(mock);
   render(() => <App core={core} />);
-  return { calls, mock };
+  return { calls, mock, core };
 }
 
 afterEach(() => {
@@ -65,6 +65,13 @@ describe("LE Audio switch (issue #86)", () => {
         settings: { le_audio_experimental: !on },
       }),
     );
+  });
+
+  it("is there in developer mode only", async () => {
+    const { core } = start("le");
+    await screen.findByRole("switch", { name: t("ui.adapter.le_audio") });
+    await core.request("settings.set", { settings: { ...core.state.snap!.settings, developer_mode: false } });
+    await waitFor(() => expect(screen.queryByText(t("ui.adapter.le_audio"))).toBeNull());
   });
 
   it("is not there when no adapter supports it", async () => {
@@ -349,5 +356,17 @@ describe("Firmware loader progress", () => {
     expect(await screen.findByText(/^Intel firmware: ready/)).toHaveTextContent("(firmware ibt-0040-0041.sfi loaded)");
     show({ vendor: "Intel", step: "no answer from the controller (Read Version)", ok: false });
     expect(await screen.findByText(/^Intel firmware could not be loaded/)).toHaveTextContent("(no answer");
+  });
+});
+
+describe("Hung adapter (issue #86)", () => {
+  it("asks for a power cycle instead of Zadig or the WinUSB driver", async () => {
+    const { mock } = start();
+    await screen.findByRole("heading", { level: 1, name: "Adapters" });
+    mock.setHung();
+    expect(await screen.findByText(t("ui.adapter.hung_title"))).toBeInTheDocument();
+    expect(screen.queryByText(t("firmware.no_adapters"))).toBeNull();
+    expect(screen.queryByText(t("firmware.auto_no_adapter"))).toBeNull();
+    expect(screen.queryByText(t("error.btstack_init"))).toBeNull();
   });
 });

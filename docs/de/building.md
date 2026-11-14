@@ -55,6 +55,8 @@ cargo build --release -p bluecaster-ui
 git submodule update --init --recursive
 ```
 
+Führen Sie den Befehl auch nach einem Pull aus, der eine Bibliothek aktualisiert. Der Build bricht ab, wenn eine Bibliothek unter `extern/` nicht auf dem in `extern/versions.txt` eingetragenen Commit steht; die Meldung sagt, wie man trotzdem mit einer anderen Version baut.
+
 ## Projektstruktur {#project-structure}
 
 ```
@@ -156,16 +158,16 @@ Die C-Bibliotheken sind Git-Submodule; Rust-Crates und die npm-Pakete der Oberfl
 
 | Bibliothek | Methode | Feste Version | Lizenz |
 |:--------|:-------|:---------------|:--------|
-| BTstack | Git-Submodul | v1.8.1-6-g5bc5cbdbe | BTstack License (BSD-3-Clause-artig mit einer Klausel gegen kommerzielle Nutzung) |
+| BTstack | Git-Submodul | v1.8.3 | BTstack License (BSD-3-Clause-artig mit einer Klausel gegen kommerzielle Nutzung) |
 | Bluedroid-SBC-Codec | Encoder nach Rust portiert; der Decoder (Tests, Werkzeuge) aus der Kopie in BTstack | wie in BTstack | Apache-2.0 |
 | rijndael | in BTstack enthalten (`3rd-party/rijndael`) | wie in BTstack | Gemeinfrei (Public Domain) |
 | liblc3 (lc3-google) | in BTstack enthalten (`3rd-party/lc3-google`) | wie in BTstack | Apache-2.0 |
 | micro-ecc | in BTstack enthalten (`3rd-party/micro-ecc`) | wie in BTstack | BSD-2-Clause |
 | libldac (AOSP) | Git-Submodul | android-15.0.0_r36-4-geeee1a3 | Apache-2.0 |
 | libopenaptx | Git-Submodul | 0.2.0 (nicht aktualisieren) | LGPL-2.1+ |
-| fdk-aac | Git-Submodul | v2.0.3-158-gd8e6b1a | FDK AAC License |
+| fdk-aac | Git-Submodul | v3.0.0 | FDK AAC License |
 | LHDC-V5-Encoder | Git-Submodul | wie festgelegt | Apache-2.0 |
-| libopus | Git-Submodul | v1.5.2 | BSD-3-Clause |
+| libopus | Git-Submodul | v1.6.1 | BSD-3-Clause |
 | Tauri, SolidJS, Rust-Crates | Cargo / pnpm | `Cargo.lock`, `pnpm-lock.yaml` | MIT / Apache-2.0 und weitere (`licenses/third-party/rust-crates.txt` im Release) |
 
 {: .warning }

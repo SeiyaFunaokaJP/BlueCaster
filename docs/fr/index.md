@@ -11,7 +11,7 @@ has_toc: false
 Diffusion audio Bluetooth A2DP pour Windows, avec tous les codecs.
 {: .fs-6 .fw-300 }
 
-Transforme un adaptateur Bluetooth ordinaire -- une clé USB bon marché ou, sur de nombreux portables, l'adaptateur intégré -- limité aux codecs de base de Windows en émetteur Hi-Fi : **LHDC V5, LDAC et aptX Adaptive** jusqu'à 96 kHz (LHDC V5 jusqu'à 192 kHz), ainsi que **aptX HD, aptX, aptX Low Latency, Opus, AAC, SBC XQ, SBC et FastStream**, et LE Audio (LC3). BlueCaster configure l'adaptateur lui-même et le rend à Windows en un clic ([fonctionnement](architecture)).
+Transforme un adaptateur Bluetooth ordinaire -- une clé USB bon marché ou, sur de nombreux portables, l'adaptateur intégré -- limité aux codecs de base de Windows en émetteur Hi-Fi : **LHDC V5, LDAC et aptX Adaptive** jusqu'à 96 kHz (LHDC V5 jusqu'à 192 kHz), ainsi que **aptX HD, aptX, aptX Low Latency, Opus, AAC, SBC XQ, SBC et FastStream**, et LE Audio (LC3, expérimental, en mode développeur uniquement). BlueCaster configure l'adaptateur lui-même et le rend à Windows en un clic ([fonctionnement](architecture)).
 
 ![BlueCaster's Codecs screen, streaming LDAC 990 kbps / 48 kHz to Sony WH-1000XM4](../images/app_sample.png)
 
@@ -36,8 +36,8 @@ Transforme un adaptateur Bluetooth ordinaire -- une clé USB bon marché ou, sur
 | SBC | jusqu'à ~345 kbps | 44.1/48 kHz | 16 bit | ~150 ms |
 | FastStream | 198/216 kbps | 44.1/48 kHz | 16 bit | -- |
 | Opus 05 | 256 kbps | 48 kHz | 16 bit | -- |
-| LC3 (LE Audio) | 32--124 kbps par canal | 16/24/32/48 kHz | 16 bit | ~140 ms |
-| LC3 faible latence (LE Audio GMAP) | 64--96 kbps par canal | 32/48 kHz | 16 bit | ~30 ms |
+| LC3 (LE Audio) 🧪 | 32--124 kbps par canal | 16/24/32/48 kHz | 16 bit | ~140 ms |
+| LC3 LL (LE Audio GMAP) 🧪 | 64--96 kbps par canal | 32/48 kHz | 16 bit | ~30 ms |
 
 ### Codecs pris en charge selon la plateforme (envoi vers le casque)
 
@@ -55,9 +55,9 @@ Transforme un adaptateur Bluetooth ordinaire -- une clé USB bon marché ou, sur
 | SBC | ✅ | ✅ | ✅ | ✅ |
 | FastStream | ❌ | ❌ | ✅ | ✅ (musique uniquement, choisi explicitement) |
 | Opus 05 (Opus propre à PipeWire) | ❌ | ❌ | ✅ PipeWire 0.3.57+ (`opus_05`, uniquement vers des appareils PipeWire) | ✅ (choisi explicitement, en mode développeur uniquement) |
-| LC3 (LE Audio, BAP unicast) | ❌ | ✅ sur les PC dont le matériel et le pilote Bluetooth prennent en charge LE Audio | ✅ PipeWire BAP `lc3` (LE Audio de BlueZ) | ✅ (l'entrée LE Audio d'un appareil ; faible latence GMAP avec les casques gaming ; adaptateur Bluetooth 5.2 avec ISO, [Utilisation](usage#le-audio)) |
+| LC3 (LE Audio, BAP unicast) | ❌ | ✅ sur les PC dont le matériel et le pilote Bluetooth prennent en charge LE Audio | ✅ PipeWire BAP `lc3` (LE Audio de BlueZ) | 🧪 expérimental, en mode développeur uniquement (l'entrée LE Audio d'un appareil ; faible latence GMAP avec les casques gaming ; adaptateur Bluetooth 5.2 avec ISO, [Utilisation](usage#le-audio)) |
 
-✅ pris en charge · ❌ non pris en charge. Toutes les colonnes concernent le côté émetteur (PC → casque). « Natif » désigne l'audio Bluetooth propre au système, sans BlueCaster ; la colonne Ubuntu correspond aux codecs PipeWire d'Ubuntu 26.04 (`libspa-0.2-bluetooth`).
+✅ pris en charge · 🧪 expérimental · ❌ non pris en charge. Toutes les colonnes concernent le côté émetteur (PC → casque). « Natif » désigne l'audio Bluetooth propre au système, sans BlueCaster ; la colonne Ubuntu correspond aux codecs PipeWire d'Ubuntu 26.04 (`libspa-0.2-bluetooth`).
 
 {: .warning }
 **aptX HD et aptX Low Latency** suivent les implémentations d'Android / PipeWire et réussissent les tests d'aller-retour encodage/décodage, mais n'ont pas encore été vérifiés avec un vrai casque. Les latences de ce tableau sont des valeurs typiques, non mesurées avec BlueCaster.
@@ -66,7 +66,7 @@ Transforme un adaptateur Bluetooth ordinaire -- une clé USB bon marché ou, sur
 **À propos de LHDC V5.** Il utilise un portage en C de l'encodeur LHDC V5 que Google a ajouté à Android 17 (AOSP, Apache-2.0) ; ce portage a été vérifié bit à bit par rapport à l'encodeur Rust d'AOSP, et la signalisation A2DP suit `a2dp_vendor_lhdcv5` d'Android. Un utilisateur l'a vérifié avec un vrai casque LHDC V5 à 1000 kbps / 192 kHz sur la v1.1.1-beta.1 ([#50](https://github.com/SeiyaFunaokaJP/BlueCaster/issues/50)) ; la v2 utilise le même encodeur. Seul le LHDC V5 avec perte est pris en charge : LHDC V2/V3 (casques plus anciens) et le mode sans perte « LHDC-RAW » n'ont pas d'encodeur open source. En mode Auto, LHDC V5 passe en premier, avant LDAC.
 
 {: .warning }
-**Opus** est le codec propriétaire Opus A2DP d'Android (Android 13+, identifiant fabricant 0x000000E0 Google) : 48 kHz, trames de 20 ms, 256 kbps en stéréo comme le demande Android (Standard 192, Mobile 128 kbps), encodé avec libopus 1.5.2. Il réussit le test de bout en bout face à un récepteur virtuel, mais n'a pas encore été vérifié avec un vrai casque Opus. En mode Auto, il passe après aptX Adaptive et avant aptX HD.
+**Opus** est le codec propriétaire Opus A2DP d'Android (Android 13+, identifiant fabricant 0x000000E0 Google) : 48 kHz, trames de 20 ms, 256 kbps en stéréo comme le demande Android (Standard 192, Mobile 128 kbps), encodé avec libopus 1.6.1. Il réussit le test de bout en bout face à un récepteur virtuel, mais n'a pas encore été vérifié avec un vrai casque Opus. En mode Auto, il passe après aptX Adaptive et avant aptX HD.
 
 {: .warning }
 **Opus 05** est le codec propriétaire Opus A2DP propre à PipeWire (identifiant fabricant 0x000005F1, codec 0x1005 ; `opus_05` de PipeWire), que seul PipeWire implémente : le récepteur doit donc être un PC où PipeWire fait office de récepteur A2DP. BlueCaster n'envoie que le sens musique en stéréo (pas de 5.1 / 7.1, pas de voie de retour) : 48 kHz, trames de 10 ms (20 ms si le récepteur ne gère que celles-ci), le même encodeur libopus et les mêmes débits qu'Opus, plafonnés à la limite du récepteur. Auto ne le choisit jamais ; choisissez-le dans **Codecs** ou avec `-c opus05`. Il réussit le test de bout en bout face à un récepteur virtuel qui offre les capacités de PipeWire, mais n'a pas été essayé avec un vrai récepteur PipeWire. PipeWire en récepteur A2DP décode Opus 05 depuis la 0.3.57 et l'Opus d'Android (`opus_g`) depuis la 1.2.0 : Ubuntu 24.04 LTS fournit PipeWire 1.0.5 (Opus 05 seulement), Ubuntu 25.10 (1.4.7) et 26.04 LTS (1.6.2) fournissent les deux ; ni l'un ni l'autre n'est encore vérifié avec BlueCaster.
@@ -144,7 +144,7 @@ BlueCaster contourne entièrement la pile Bluetooth de Windows. Il communique di
 ## Fonctionnalités
 
 - **Multi-codec** : LHDC V5, LDAC, aptX Adaptive, aptX, AAC, aptX HD, aptX Low Latency, Opus, Opus 05, FastStream, SBC XQ et SBC, avec négociation automatique
-- **LE Audio** : LC3 vers des casques et écouteurs LE Audio (BAP unicast, les deux écouteurs d'une paire, volume du casque, boutons multimédia, faible latence GMAP). Nécessite un adaptateur avec canaux isochrones Bluetooth 5.2 ; testé jusqu'ici sur un MediaTek MT7925 et avec l'émulateur Bluetooth ([Utilisation](usage#le-audio))
+- **LE Audio (expérimental, en mode développeur uniquement)** : LC3 vers des casques et écouteurs LE Audio (BAP unicast, les deux écouteurs d'une paire, volume du casque, boutons multimédia, faible latence GMAP). Nécessite un adaptateur avec canaux isochrones Bluetooth 5.2 ; testé seulement sur un MediaTek MT7925, avec des problèmes connus ([Utilisation](usage#le-audio))
 - **Trois modes de capture** : bouclage système, routage via un périphérique audio virtuel, ou sortie d'une seule application
 - **Fenêtre, zone de notification et CLI** : une fenêtre pour la configuration et le diagnostic, un volet et un menu dans la zone de notification pour se connecter au quotidien, et une ligne de commande (voir [Utilisation](usage))
 - **WinUSB depuis l'application** : attribue le pilote WinUSB à l'adaptateur et restaure le pilote d'origine, sans Zadig (voir [Installation](setup#winusb)) ; les casques que Windows a associés via l'adaptateur se connectent sans nouvelle association

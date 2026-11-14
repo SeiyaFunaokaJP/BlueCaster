@@ -55,6 +55,8 @@ cargo build --release -p bluecaster-ui
 git submodule update --init --recursive
 ```
 
+라이브러리를 업데이트하는 pull 뒤에도 다시 실행하세요. `extern/`의 라이브러리가 `extern/versions.txt`에 적힌 커밋이 아니면 빌드가 멈추고, 그래도 다른 버전으로 빌드하는 방법을 메시지로 알려 줍니다.
+
 ## 프로젝트 구조 {#project-structure}
 
 ```
@@ -156,16 +158,16 @@ C 라이브러리는 git 서브모듈이며, Rust 크레이트와 UI의 npm 패�
 
 | 라이브러리 | 방식 | 고정 버전 | 라이선스 |
 |:-----------|:-----|:----------|:---------|
-| BTstack | git submodule | v1.8.1-6-g5bc5cbdbe | BTstack License (비상업적 조항이 있는 BSD-3-Clause 형식) |
+| BTstack | git submodule | v1.8.3 | BTstack License (비상업적 조항이 있는 BSD-3-Clause 형식) |
 | Bluedroid SBC codec | 인코더는 Rust로 포팅, 디코더(테스트, 도구)는 BTstack에 포함된 사본 사용 | BTstack과 동일 | Apache-2.0 |
 | rijndael | BTstack에 포함 (`3rd-party/rijndael`) | BTstack과 동일 | Public domain |
 | liblc3 (lc3-google) | BTstack에 포함 (`3rd-party/lc3-google`) | BTstack과 동일 | Apache-2.0 |
 | micro-ecc | BTstack에 포함 (`3rd-party/micro-ecc`) | BTstack과 동일 | BSD-2-Clause |
 | libldac (AOSP) | git submodule | android-15.0.0_r36-4-geeee1a3 | Apache-2.0 |
 | libopenaptx | git submodule | 0.2.0 (업데이트 금지) | LGPL-2.1+ |
-| fdk-aac | git submodule | v2.0.3-158-gd8e6b1a | FDK AAC License |
+| fdk-aac | git submodule | v3.0.0 | FDK AAC License |
 | LHDC V5 encoder | git submodule | 고정된 버전 | Apache-2.0 |
-| libopus | git submodule | v1.5.2 | BSD-3-Clause |
+| libopus | git submodule | v1.6.1 | BSD-3-Clause |
 | Tauri, SolidJS, Rust 크레이트 | Cargo / pnpm | `Cargo.lock`, `pnpm-lock.yaml` | MIT / Apache-2.0 등 (릴리스의 `licenses/third-party/rust-crates.txt`) |
 
 {: .warning }

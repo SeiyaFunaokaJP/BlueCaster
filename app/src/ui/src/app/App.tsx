@@ -3,6 +3,7 @@
 // flyout: one compact view.
 
 import { createEffect, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js";
+import { CablesOnce } from "../components/CableNotes";
 import { Icon } from "../components/Icon";
 import { NoticeLine } from "../components/Notice";
 import type { IconName } from "../components/icons";
@@ -238,6 +239,7 @@ function MainWindow() {
               </Match>
             </Switch>
           </main>
+          <CablesOnce />
         </div>
       </Show>
       <NoticeLine />

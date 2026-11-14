@@ -2,7 +2,7 @@
 // As Home's card (issue #86): the ring, and beside it the device chooser
 // in the title's place, battery and state (and headset mode in developer
 // mode), the codec (chosen right there) and link quality;
-// then the volume, the big Connect / Disconnect with "Open app" beside it. No close
+// then the volume, the big Connect / Disconnect with "Open BlueCaster" beside it. No close
 // button: the flyout hides on Escape and when it loses the focus. Its
 // window is as tall as the page (issue #86: no empty space).
 
@@ -44,7 +44,7 @@ export function Flyout() {
   const profile = () => currentProfile(snap());
   const entry = () => entryOf(audioEntries(snap()), profile());
   const noDevice = () => audioEntries(snap()).length === 0;
-  /** Connect is shown, with "Open app" beside it */
+  /** Connect is shown, with "Open BlueCaster" beside it */
   const actionsShown = () => !noDevice() && !!profile();
   const [reqError, setReqError] = createSignal<IpcError | null>(null);
   // As on Home: until the state moves on or an adapter's driver changes
@@ -110,7 +110,10 @@ export function Flyout() {
                 </span>
               </Show>
               <div class={`status-line st-${stream().state}`} role="status" aria-live="polite">
-                <span class="dot" aria-hidden="true" />
+                {/* No red dot for an error, as on Home (issue #86) */}
+                <Show when={stream().state !== "error"}>
+                  <span class="dot" aria-hidden="true" />
+                </Show>
                 <span class="ellipsis">{statusText(stream())}</span>
               </div>
             </div>
@@ -127,7 +130,7 @@ export function Flyout() {
           <Show when={stream().state !== "idle"}>
             <VolumeControl />
           </Show>
-          {/* "Open app" beside Connect: no row of its own (issue #86) */}
+          {/* "Open BlueCaster" beside Connect: no row of its own (issue #86) */}
           <div class="fly-actions">
             <IconButton icon="open" class="fly-open" label={t("ui.flyout.open_app")} onClick={() => void openMain()} />
             <ConnectButton compact onError={(e) => setReqError(IpcError.from(e))} />
@@ -197,7 +200,7 @@ export function Flyout() {
         }}
       </Show>
 
-      {/* Only when there is something to show: an update, or "Open app" with no Connect beside it */}
+      {/* Only when there is something to show: an update, or "Open BlueCaster" with no Connect beside it */}
       <Show when={snap().update.available || !actionsShown()}>
         <footer class="fly-foot">
           <Show when={snap().update.available}>

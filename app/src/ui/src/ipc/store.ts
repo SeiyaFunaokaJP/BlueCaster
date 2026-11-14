@@ -165,6 +165,9 @@ export function createCore(transport: Transport) {
       case "crashes":
         setState("snap", "crashes", reconcile(ev.value));
         break;
+      case "audio_endpoints":
+        setState("snap", "audio_endpoints", ev.value);
+        break;
       default:
         // An event kind of a newer core: the next snapshot has it
         break;

@@ -18,6 +18,7 @@ import {
   deviceKey,
   deviceProfile,
   entryBase,
+  leAudioOn,
   listedDevices,
   newProfile,
   normalizeProfile,
@@ -147,7 +148,7 @@ export function DevicePicker(props: {
   const snap = () => app.core.state.snap!;
   // LE Audio entries with the setting on and an adapter known to stream it
   const leListed = () =>
-    snap().settings.le_audio_experimental &&
+    leAudioOn(snap().settings) &&
     snap().adapter.le_audio === true &&
     !props.classicOnly;
   const devices = createMemo(() => {
@@ -518,10 +519,18 @@ export function DevicePicker(props: {
         >
           <For each={saved()}>
             {(d, i) => (
-              <div class="device-entry">
-                {row(d, i, "s")}
-                {props.settings?.(d)}
-              </div>
+              // The core's list is reconciled by position: the same entry
+              // object may hold another device after one is added or
+              // forgotten. One device, one entry (issue #86: a device's
+              // settings showed on, and were saved into, the next one).
+              <Show when={deviceKey(d)} keyed>
+                {(_key) => (
+                  <div class="device-entry">
+                    {row(d, i, "s")}
+                    {props.settings?.(d)}
+                  </div>
+                )}
+              </Show>
             )}
           </For>
         </Show>
@@ -549,7 +558,7 @@ export function DevicePicker(props: {
       <Show when={props.paired && pairedList().length > 0}>
         <section class="paired-devices" aria-labelledby={`${uid}-paired`}>
           <h3 id={`${uid}-paired`}>{t("ui.setup.paired_title")}</h3>
-          <div class="device-list saved-devices">
+          <div class="device-list">
             <For each={pairedList()}>{(d, i) => row(d, i, "p")}</For>
           </div>
         </section>

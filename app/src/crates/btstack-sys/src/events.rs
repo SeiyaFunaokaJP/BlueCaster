@@ -144,8 +144,9 @@ pub fn big_created(packet: &[u8]) -> Option<BigCreated> {
     if gap_meta_subevent(packet)? != GAP_SUBEVENT_BIG_CREATED {
         return None;
     }
-    let n = *packet.get(5)? as usize;
-    let bis_handles = (0..n).map(|i| u16_at(packet, 6 + 2 * i)).collect::<Option<Vec<u16>>>()?;
+    // Bytes 5..7: iso_interval_1250us (since BTstack 1.8.3)
+    let n = *packet.get(7)? as usize;
+    let bis_handles = (0..n).map(|i| u16_at(packet, 8 + 2 * i)).collect::<Option<Vec<u16>>>()?;
     Some(BigCreated { status: *packet.get(3)?, big_handle: *packet.get(4)?, bis_handles })
 }
 
@@ -627,9 +628,10 @@ mod tests {
         let c = cis_created(&p).unwrap();
         assert_eq!((c.cig_id, c.cis_id, c.cis_handle, c.acl_handle, c.iso_interval_1250us), (1, 2, 0x60, 0x40, 8));
 
-        let p = [0xE7, 6, GAP_SUBEVENT_BIG_CREATED, 0, 0, 2, 0x10, 0x00, 0x11, 0x00];
+        // status, BIG handle, ISO interval (BTstack 1.8.3), BIS count, handles
+        let p = [0xE7, 10, GAP_SUBEVENT_BIG_CREATED, 0, 0, 8, 0, 2, 0x10, 0x00, 0x11, 0x00];
         assert_eq!(big_created(&p), Some(BigCreated { status: 0, big_handle: 0, bis_handles: vec![0x10, 0x11] }));
-        assert!(big_created(&p[..9]).is_none());
+        assert!(big_created(&p[..11]).is_none());
         assert_eq!(big_terminated(&[0xE7, 2, GAP_SUBEVENT_BIG_TERMINATED, 0]), Some(0));
         assert!(big_terminated(&p).is_none());
         let p = [HCI_EVENT_BIS_CAN_SEND_NOW, 4, 0, 1, 0x11, 0x00];

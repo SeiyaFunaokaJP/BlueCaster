@@ -154,6 +154,9 @@ export function Toggle(props: {
   help?: () => JSX.Element;
   checked: boolean;
   disabled?: boolean;
+  /** The switch shows `checked` once onChange returns: a change it did not
+   *  take (yet) is undone */
+  controlled?: boolean;
   onChange: (v: boolean) => void;
 }) {
   const id = createUniqueId();
@@ -179,7 +182,10 @@ export function Toggle(props: {
         disabled={props.disabled}
         aria-labelledby={`${id}-label`}
         aria-describedby={props.hint ? `${id}-hint` : undefined}
-        onChange={(e) => props.onChange(e.currentTarget.checked)}
+        onChange={(e) => {
+          props.onChange(e.currentTarget.checked);
+          if (props.controlled) e.currentTarget.checked = props.checked;
+        }}
       />
     </div>
   );
@@ -435,8 +441,6 @@ export function Dialog(props: {
   /** A warning sign before the title: confirming loses something (issue #86) */
   warn?: boolean;
   busy?: boolean;
-  /** Room for a table whose rows should not wrap */
-  wide?: boolean;
   /** A second way to go on, before the confirm button and the one
    *  recommended: the confirm button then is a plain one */
   extra?: { label: string; icon?: IconName; onClick: () => void };
@@ -446,8 +450,21 @@ export function Dialog(props: {
   const id = createUniqueId();
   let box: HTMLDivElement | undefined;
   let before: Element | null = null;
+  // As wide as the page's cards (the page beside the navigation, short of
+  // its scroll bar), centred in the window (issue #86). No page (the
+  // setup): the window's width. Measured before the dialog is drawn, again
+  // when the window is resized.
+  const [resized, setResized] = createSignal(0);
+  const pageWidth = createMemo(() => {
+    resized();
+    const c = props.open ? document.querySelector<HTMLElement>(".content") : null;
+    return c ? `${c.clientWidth}px` : "100vw";
+  });
   createEffect(() => {
     if (!props.open) return;
+    const onResize = () => setResized((n) => n + 1);
+    window.addEventListener("resize", onResize);
+    onCleanup(() => window.removeEventListener("resize", onResize));
     before = document.activeElement;
     queueMicrotask(() => box?.querySelector<HTMLElement>("[data-autofocus]")?.focus());
     onCleanup(() => {
@@ -461,6 +478,8 @@ export function Dialog(props: {
   };
   const onKey = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
+      // A dialog over this one took it
+      if (e.defaultPrevented) return;
       e.preventDefault();
       cancel();
     } else if (e.key === "Tab" && box) {
@@ -480,9 +499,13 @@ export function Dialog(props: {
   return (
     <Show when={props.open}>
       <Portal>
-        <div class="backdrop" onClick={(e) => e.target === e.currentTarget && cancel()}>
+        <div
+          class="backdrop"
+          style={{ "--page-width": pageWidth() }}
+          onClick={(e) => e.target === e.currentTarget && cancel()}
+        >
           <div
-            class={props.wide ? "dialog dialog-wide card" : "dialog card"}
+            class="dialog card"
             role="dialog"
             aria-modal="true"
             aria-labelledby={id}

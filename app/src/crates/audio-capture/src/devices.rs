@@ -32,6 +32,12 @@ pub struct DeviceInfo {
     pub id: String,
     /// Friendly name, e.g. "Speakers (Realtek(R) Audio)"
     pub name: String,
+    /// The endpoint's own name without the adapter's, e.g. "Speakers"
+    /// (PKEY_Device_DeviceDesc); None when Windows has none
+    pub short_name: Option<String>,
+    /// The adapter's name, e.g. "VB-Audio Hi-Fi Cable"
+    /// (PKEY_DeviceInterface_FriendlyName); None when Windows has none
+    pub adapter_name: Option<String>,
     /// The default output device (Console role)
     pub is_default: bool,
     /// Looks like a virtual device (VB-Cable, VoiceMeeter, ...): v1's
@@ -58,12 +64,16 @@ pub fn render_devices() -> Result<Vec<DeviceInfo>, CaptureError> {
         let Ok(device) = device else { continue };
         let Ok(id) = device.get_id() else { continue };
         let name = device.get_friendlyname().unwrap_or_default();
+        let short_name = device.get_description().ok().filter(|s| !s.trim().is_empty());
+        let adapter_name = device.get_interface_friendlyname().ok().filter(|s| !s.trim().is_empty());
         let hints = audio_policy::endpoint_hints(&id).unwrap_or_default();
         out.push(DeviceInfo {
             is_default: default_id.as_deref() == Some(id.as_str()),
             is_virtual: is_virtual_device(&name, &hints),
             id,
             name,
+            short_name,
+            adapter_name,
             capture_name: None,
             capture_rate: None,
         });
@@ -113,6 +123,41 @@ pub fn set_default_render_device(id: &str) -> Result<(), CaptureError> {
     tracing::debug!("audio devices: setting default render endpoint to {id}");
     audio_policy::set_default_endpoint(id).map_err(|e| {
         tracing::debug!("audio devices: SetDefaultEndpoint({id}) failed: HRESULT 0x{:08x}", e.code().0 as u32);
+        if not_found(e.code().0) {
+            CaptureError::DeviceNotFound(id.to_owned())
+        } else {
+            CaptureError::windows("SetDefaultEndpoint", e.code().0, e.message())
+        }
+    })
+}
+
+/// ID of the default capture device for `role`, if there is one
+pub fn default_capture_device(role: audio_policy::EndpointRole) -> Option<String> {
+    let _com = com().ok()?;
+    audio_policy::default_capture_endpoint(role).ok().flatten()
+}
+
+/// The capture endpoint paired with the render endpoint `id` ("CABLE
+/// Output" for "CABLE Input"), if there is one
+pub fn paired_capture_device(id: &str) -> Option<String> {
+    let _com = com().ok()?;
+    audio_policy::paired_capture_endpoint(id)
+        .inspect_err(|e| {
+            tracing::debug!("audio devices: capture side of {id} not read: HRESULT 0x{:08x}", e.code().0 as u32)
+        })
+        .ok()
+        .flatten()
+}
+
+/// Make the capture endpoint `id` the default input device for `role`.
+/// Changes the user's system setting: the caller restores the previous
+/// default.
+pub fn set_default_capture_device(id: &str, role: audio_policy::EndpointRole) -> Result<(), CaptureError> {
+    if id.is_empty() {
+        return Err(CaptureError::DeviceNotFound(String::new()));
+    }
+    let _com = com()?;
+    audio_policy::set_default_capture_endpoint(id, role).map_err(|e| {
         if not_found(e.code().0) {
             CaptureError::DeviceNotFound(id.to_owned())
         } else {

@@ -35,22 +35,46 @@ const ERROR_CODE_UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE: u8 = 0x11;
 /// liveness probe that waits behind it.
 pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_millis(1500);
 
-/// A reading of a link
+/// A reading of a link, or a setting given to it again
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LinkRead {
     FailedContacts,
     LinkQuality,
     RemoteVersion,
     SupervisionTimeout,
+    /// Change Connection Packet Type with every type BTstack asks for at
+    /// set-up, after a voice link (eSCO) ended: a controller can stay on
+    /// slower packets afterwards (issue #86, A2DP at under half its rate
+    /// after some eSCO links, the next eSCO link fixing it again)
+    PacketTypes,
+    /// Write Link Policy Settings without sniff, after a voice link ended
+    /// and until the stream runs again: headphones that take 2 s to accept
+    /// the stream can change their sniff mode twice in that wait, and a
+    /// controller stopped sending right after (issue #86)
+    SniffOff,
+    /// Sniff allowed again, as at connection set-up
+    SniffOn,
 }
 
 impl LinkRead {
+    const ALL: [LinkRead; 7] = [
+        LinkRead::FailedContacts,
+        LinkRead::LinkQuality,
+        LinkRead::RemoteVersion,
+        LinkRead::SupervisionTimeout,
+        LinkRead::PacketTypes,
+        LinkRead::SniffOff,
+        LinkRead::SniffOn,
+    ];
+
     fn opcode(self) -> u16 {
         match self {
             LinkRead::FailedContacts => HCI_OPCODE_READ_FAILED_CONTACT_COUNTER,
             LinkRead::LinkQuality => HCI_OPCODE_READ_LINK_QUALITY,
             LinkRead::RemoteVersion => HCI_OPCODE_READ_REMOTE_VERSION_INFORMATION,
             LinkRead::SupervisionTimeout => HCI_OPCODE_READ_LINK_SUPERVISION_TIMEOUT,
+            LinkRead::PacketTypes => HCI_OPCODE_CHANGE_CONNECTION_PACKET_TYPE,
+            LinkRead::SniffOff | LinkRead::SniffOn => HCI_OPCODE_WRITE_LINK_POLICY_SETTINGS,
         }
     }
 
@@ -61,6 +85,8 @@ impl LinkRead {
             LinkRead::LinkQuality => (15, 4),
             LinkRead::RemoteVersion => (2, 7),
             LinkRead::SupervisionTimeout => (11, 0),
+            LinkRead::PacketTypes => (1, 6),
+            LinkRead::SniffOff | LinkRead::SniffOn => (5, 2),
         }
     }
 
@@ -70,6 +96,9 @@ impl LinkRead {
             LinkRead::LinkQuality => stack.cmd_read_link_quality(handle),
             LinkRead::RemoteVersion => stack.cmd_read_remote_version(handle),
             LinkRead::SupervisionTimeout => stack.cmd_read_link_supervision_timeout(handle),
+            LinkRead::PacketTypes => stack.cmd_restore_acl_packet_types(handle),
+            LinkRead::SniffOff => stack.cmd_allow_sniff(handle, false),
+            LinkRead::SniffOn => stack.cmd_allow_sniff(handle, true),
         }
     }
 }
@@ -80,6 +109,8 @@ struct Acl {
     d: LinkDetails,
     /// The last Failed Contact Counter reading and when
     fcc_last: Option<(u16, Instant)>,
+    /// Sniff is refused for now ([`LinkRead::SniffOff`])
+    sniff_off: bool,
 }
 
 #[derive(Debug, Default)]
@@ -149,12 +180,53 @@ impl LinkTracker {
     pub fn connected(&mut self, stack: &Stack, handle: u16, addr: [u8; 6]) {
         let d =
             LinkDetails { central: stack.acl_role_central(handle), mode: Some(LinkMode::Active), ..Default::default() };
-        self.links.insert(handle, Acl { addr, d, fcc_last: None });
+        self.links.insert(handle, Acl { addr, d, fcc_last: None, sniff_off: false });
     }
 
     pub fn disconnected(&mut self, handle: u16) {
         self.links.remove(&handle);
         self.reads.retain(|&(_, h)| h != handle);
+    }
+
+    /// A voice link (SCO/eSCO) on the ACL link `handle` ended: its packet
+    /// types are set again, and with a stream to `resume` on it, sniff is
+    /// refused until that runs
+    pub fn voice_link_ended(&mut self, handle: u16, resume: bool) {
+        if self.links.contains_key(&handle) {
+            self.queue(LinkRead::PacketTypes, handle);
+            if resume {
+                self.allow_sniff(handle, false);
+            }
+        }
+    }
+
+    /// A voice link to `addr` is up: sniff as the headphones like it
+    pub fn voice_link_started(&mut self, addr: [u8; 6]) {
+        if let Some(handle) = self.links.iter().find(|(_, acl)| acl.addr == addr).map(|(&h, _)| h) {
+            self.allow_sniff(handle, true);
+        }
+    }
+
+    fn allow_sniff(&mut self, handle: u16, allow: bool) {
+        let Some(acl) = self.links.get(&handle) else { return };
+        if acl.sniff_off != allow {
+            return;
+        }
+        let (now, other) =
+            if allow { (LinkRead::SniffOn, LinkRead::SniffOff) } else { (LinkRead::SniffOff, LinkRead::SniffOn) };
+        // One still waiting for the other way never went out
+        let before = self.reads.len();
+        self.reads.retain(|&r| r != (other, handle));
+        if self.reads.len() == before {
+            self.queue(now, handle);
+            if !self.reads.contains(&(now, handle)) {
+                // The controller does not have the command
+                return;
+            }
+        }
+        if let Some(acl) = self.links.get_mut(&handle) {
+            acl.sniff_off = !allow;
+        }
     }
 
     /// The A2DP signaling channel is up on `handle`: what is read once per
@@ -182,6 +254,9 @@ impl LinkTracker {
             acl.d.role_changes = 0;
             acl.d.sniff_entries = 0;
             acl.d.failed_contacts_stream = 0;
+        }
+        if let Some(h) = handle {
+            self.allow_sniff(h, true);
         }
     }
 
@@ -246,6 +321,14 @@ impl LinkTracker {
         Some(opcode)
     }
 
+    /// How long our command still has before [`overdue`](Self::overdue)
+    /// counts it: the run loop timer can fire a little before `Instant`
+    /// says the time is up
+    pub fn due_in(&self, now: Instant) -> Option<Duration> {
+        let (_, at) = self.in_flight?;
+        COMMAND_TIMEOUT.checked_sub(now.saturating_duration_since(at)).filter(|d| !d.is_zero())
+    }
+
     /// A command the controller did not take: unknown ones are not sent
     /// again
     fn refused(&mut self, opcode: u16, status: u8) {
@@ -259,9 +342,7 @@ impl LinkTracker {
     }
 
     fn ours(opcode: u16) -> bool {
-        [LinkRead::FailedContacts, LinkRead::LinkQuality, LinkRead::RemoteVersion, LinkRead::SupervisionTimeout]
-            .iter()
-            .any(|r| r.opcode() == opcode)
+        LinkRead::ALL.iter().any(|r| r.opcode() == opcode)
     }
 
     /// An HCI event; true when a link's details changed
@@ -279,17 +360,9 @@ impl LinkTracker {
                         let mut s = [0u8; 64];
                         s.copy_from_slice(bitmap);
                         self.supported = Some(s);
-                        let skipped: Vec<LinkRead> = [
-                            LinkRead::FailedContacts,
-                            LinkRead::LinkQuality,
-                            LinkRead::RemoteVersion,
-                            LinkRead::SupervisionTimeout,
-                        ]
-                        .into_iter()
-                        .filter(|&r| !self.listed(r))
-                        .collect();
+                        let skipped: Vec<LinkRead> = LinkRead::ALL.into_iter().filter(|&r| !self.listed(r)).collect();
                         if !skipped.is_empty() {
-                            tracing::info!("link details: the controller does not list {skipped:?}, not read");
+                            tracing::info!("link details: the controller does not list {skipped:?}, not sent");
                         }
                     }
                     return false;
@@ -411,6 +484,18 @@ impl LinkTracker {
                 );
                 true
             }
+            HCI_EVENT_CONNECTION_PACKET_TYPE_CHANGED => {
+                let (Some(status), Some(handle), Some(types)) = (u8_at(p, 2), le16(p, 3), le16(p, 5)) else {
+                    return false;
+                };
+                tracing::info!("ACL packet types of 0x{:04x}: 0x{types:04x} (status 0x{status:02X})", handle & 0x0FFF);
+                false
+            }
+            HCI_EVENT_MAX_SLOTS_CHANGED => {
+                let (Some(handle), Some(slots)) = (le16(p, 2), u8_at(p, 4)) else { return false };
+                tracing::debug!("ACL link 0x{:04x}: up to {slots}-slot packets", handle & 0x0FFF);
+                false
+            }
             HCI_EVENT_MODE_CHANGE => {
                 let (Some(status), Some(handle), Some(mode), Some(interval)) =
                     (u8_at(p, 2), le16(p, 3), u8_at(p, 5), le16(p, 6))
@@ -481,7 +566,7 @@ mod tests {
     fn tracker_with(handle: u16, addr: [u8; 6]) -> LinkTracker {
         let mut t = LinkTracker::default();
         let d = LinkDetails { central: Some(true), mode: Some(LinkMode::Active), ..Default::default() };
-        t.links.insert(handle, Acl { addr, d, fcc_last: None });
+        t.links.insert(handle, Acl { addr, d, fcc_last: None, sniff_off: false });
         t
     }
 
@@ -526,12 +611,68 @@ mod tests {
         assert!(!t.on_hci(HCI_EVENT_COMMAND_COMPLETE, &p, false));
         // Kept over the reset when HCI is up
         t.reset();
-        for r in
-            [LinkRead::FailedContacts, LinkRead::LinkQuality, LinkRead::RemoteVersion, LinkRead::SupervisionTimeout]
-        {
+        for r in LinkRead::ALL {
             t.queue(r, 0x0B);
         }
         assert_eq!(t.reads, [(LinkRead::LinkQuality, 0x0B), (LinkRead::RemoteVersion, 0x0B)]);
+    }
+
+    #[test]
+    fn packet_types_are_set_again_after_a_voice_link() {
+        let mut t = tracker_with(0x0B, [1; 6]);
+        // Only for a link we know, once while queued
+        t.voice_link_ended(0x0C, false);
+        assert!(t.reads.is_empty());
+        t.voice_link_ended(0x0B, false);
+        t.voice_link_ended(0x0B, false);
+        assert_eq!(t.reads, [(LinkRead::PacketTypes, 0x0B)]);
+        // A controller without the command: never sent again
+        t.reads.clear();
+        let mut p = vec![HCI_EVENT_COMMAND_STATUS, 4, 0x01, 1];
+        p.extend_from_slice(&HCI_OPCODE_CHANGE_CONNECTION_PACKET_TYPE.to_le_bytes());
+        assert!(!t.on_hci(HCI_EVENT_COMMAND_STATUS, &p, true));
+        t.voice_link_ended(0x0B, false);
+        assert!(t.reads.is_empty());
+    }
+
+    #[test]
+    fn sniff_is_refused_from_a_voice_link_until_the_stream_runs() {
+        let mut t = tracker_with(0x0B, [1; 6]);
+        // Nothing to take back on a first stream start
+        t.stream_started(Some(0x0B));
+        assert!(t.reads.is_empty());
+        t.voice_link_ended(0x0B, true);
+        t.voice_link_ended(0x0B, true);
+        assert_eq!(t.reads, [(LinkRead::PacketTypes, 0x0B), (LinkRead::SniffOff, 0x0B)]);
+        // Sent, then the stream starts
+        t.reads.clear();
+        t.stream_started(Some(0x0B));
+        t.stream_started(Some(0x0B));
+        assert_eq!(t.reads, [(LinkRead::SniffOn, 0x0B)]);
+        // The next voice link opens before the refusal went out: neither
+        t.reads.clear();
+        t.voice_link_ended(0x0B, true);
+        t.voice_link_started([1; 6]);
+        assert_eq!(t.reads, [(LinkRead::PacketTypes, 0x0B)]);
+        t.reads.clear();
+        // Sent, then another voice link instead of the stream
+        t.voice_link_ended(0x0B, true);
+        t.reads.clear();
+        t.voice_link_started([2; 6]);
+        assert!(t.reads.is_empty());
+        t.voice_link_started([1; 6]);
+        assert_eq!(t.reads, [(LinkRead::SniffOn, 0x0B)]);
+        // A voice link with no stream to resume: sniff stays allowed
+        t.reads.clear();
+        t.voice_link_ended(0x0B, false);
+        assert_eq!(t.reads, [(LinkRead::PacketTypes, 0x0B)]);
+        // A controller without the command
+        t.reads.clear();
+        let p = command_complete(HCI_OPCODE_WRITE_LINK_POLICY_SETTINGS, &[0x01, 0x0B, 0x00]);
+        assert!(!t.on_hci(HCI_EVENT_COMMAND_COMPLETE, &p, true));
+        t.voice_link_ended(0x0B, true);
+        t.stream_started(Some(0x0B));
+        assert_eq!(t.reads, [(LinkRead::PacketTypes, 0x0B)]);
     }
 
     #[test]
@@ -541,7 +682,13 @@ mod tests {
         t.in_flight = Some((HCI_OPCODE_READ_REMOTE_VERSION_INFORMATION, sent));
         t.reads.push_back((LinkRead::LinkQuality, 0x0B));
         assert_eq!(t.overdue(sent + COMMAND_TIMEOUT / 2), None);
+        // A timer that fired early waits for the rest
+        let early = sent + COMMAND_TIMEOUT - Duration::from_micros(300);
+        assert_eq!(t.overdue(early), None);
+        assert_eq!(t.due_in(early), Some(Duration::from_micros(300)));
+        assert_eq!(t.due_in(sent + COMMAND_TIMEOUT), None);
         assert_eq!(t.overdue(sent + COMMAND_TIMEOUT), Some(HCI_OPCODE_READ_REMOTE_VERSION_INFORMATION));
+        assert_eq!(t.due_in(sent + COMMAND_TIMEOUT), None);
         // Once only, the other readings stay queued, never asked again
         assert_eq!(t.overdue(sent + COMMAND_TIMEOUT * 2), None);
         assert_eq!(t.reads, [(LinkRead::LinkQuality, 0x0B)]);

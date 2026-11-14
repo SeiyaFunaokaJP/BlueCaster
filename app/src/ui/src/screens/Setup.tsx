@@ -13,7 +13,7 @@
 // that are not. The setup has a window size of its own.
 
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
-import { errorText, useApp, type AppContext } from "../app/context";
+import { errorText, onAudioDevicesChanged, useApp, type AppContext } from "../app/context";
 import { saveSettings } from "../app/settings";
 import { Banner, Button, Dialog, Toggle } from "../components/controls";
 import { PairedDevicesNote, windowsDevices } from "../components/PairedDevices";
@@ -35,7 +35,7 @@ import {
   driverText,
   usableFirst,
 } from "./Adapter";
-import { entryState, V1Running } from "./Home";
+import { AdapterHung, entryState, V1Running } from "./Home";
 import { BatteryLowChoice, ThemeChoice } from "./Settings";
 
 export function needsSetup(snap: Snapshot): boolean {
@@ -92,9 +92,10 @@ export function Setup() {
   onMount(() => void core.transport.setupWindow?.(true).catch(() => {}));
   onCleanup(() => void core.transport.setupWindow?.(false).catch(() => {}));
 
-  // Finished or skipped: it does not open by itself again (issue #86)
+  // Finished or skipped: it does not open by itself again (issue #86), nor
+  // do the cables, shown here, after it
   const finish = () => {
-    if (!snap().settings.setup_done) void saveSettings(app, { setup_done: true });
+    if (!snap().settings.setup_done) void saveSettings(app, { setup_done: true, cables_dialog_shown: true });
     app.setSetupActive(false);
     app.navigate({ name: "home" });
   };
@@ -225,12 +226,15 @@ function StepAdapter(props: { chosen: AdapterInfo | null; onChoose: (id: string)
   };
   return (
     <div class="stack">
+      <AdapterHung />
       <Show
         when={adapters().length > 0}
         fallback={
-          <Banner kind="warn" title={t("firmware.no_adapters")}>
-            {t("ui.adapter.none_hint")}
-          </Banner>
+          <Show when={!app.core.state.snap!.adapter.hung}>
+            <Banner kind="warn" title={t("firmware.no_adapters")}>
+              {t("ui.adapter.none_hint")}
+            </Banner>
+          </Show>
         }
       >
         <div class="choice-list" role="radiogroup" aria-label={t("firmware.detected_adapters")}>
@@ -465,6 +469,7 @@ function StepDevice() {
     window.addEventListener("focus", load);
   });
   onCleanup(() => window.removeEventListener("focus", load));
+  onAudioDevicesChanged(() => void load());
   // The device being connected: its button spins
   const [connecting, setConnecting] = createSignal<string | null>(null);
   // No scan from a Connect until the stream it starts has ended; after a
@@ -481,6 +486,9 @@ function StepDevice() {
     setConnecting(address);
     setPaused(true);
     try {
+      // Windows' outputs not read yet (a click as the step opens): read
+      // first, or the device would start without its cable (issue #86)
+      if (devices() === null) await load();
       const profile = await saveWithProfile(app, address, name, false, cable());
       const ok =
         profile &&
@@ -528,6 +536,8 @@ function StepDevice() {
 
   return (
     <div class="stack">
+      {/* At the top, above the paired devices, as on Devices (issue #86) */}
+      <CableNotes devices={devices()} reload={() => void load()} />
       <DevicePicker
         address=""
         classicOnly
@@ -540,7 +550,6 @@ function StepDevice() {
         noScan={running()}
         continuous={!paused()}
       >
-        <CableNotes devices={devices()} reload={() => void load()} />
         <ImportPairings />
       </DevicePicker>
       <Show when={running()}>

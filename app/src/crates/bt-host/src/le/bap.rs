@@ -381,6 +381,69 @@ const STOP_STEP_TIMEOUT_MS: u32 = 3000;
 /// Bumble sent Idle before Releasing), leaving a stale state that only the
 /// step timeout would end
 const REFRESH_MS: u32 = 500;
+/// After the CIS are up, the ASEs that are not Streaming yet are read again
+/// this often: EarFun earbuds left ASE 2 in Enabling with its CIS up and sent
+/// nothing more (issue #86); the read tells a lost notification from a
+/// server that did not start
+const WAIT_REFRESH_MS: u32 = 2000;
+
+/// Developer > Debug: LE Set CIG Parameters values that replace what the
+/// plan and the servers' preferences give (Config QoS gets the same), for
+/// trying a controller's ISO interval choice without a new build (issue
+/// #86). Taken as they are: no server preference caps them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CigOverrides {
+    /// Max transport latency C->P in ms; 0: as planned
+    pub latency_c_to_p_ms: u16,
+    /// Max transport latency P->C in ms; 0: as planned
+    pub latency_p_to_c_ms: u16,
+    /// RTN C->P; None: as planned
+    pub rtn_c_to_p: Option<u8>,
+    /// RTN P->C; None: as planned
+    pub rtn_p_to_c: Option<u8>,
+    /// Interleaved packing instead of sequential
+    pub interleaved: bool,
+}
+
+static CIG_OVERRIDES: std::sync::Mutex<CigOverrides> = std::sync::Mutex::new(CigOverrides {
+    latency_c_to_p_ms: 0,
+    latency_p_to_c_ms: 0,
+    rtn_c_to_p: None,
+    rtn_p_to_c: None,
+    interleaved: false,
+});
+
+/// Sets the overrides the next CIG is created with (default: none)
+pub fn set_cig_overrides(o: CigOverrides) {
+    *CIG_OVERRIDES.lock().unwrap_or_else(|e| e.into_inner()) = o;
+}
+
+fn cig_overrides() -> CigOverrides {
+    *CIG_OVERRIDES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Max transport latency (0..=4000 ms) and RTN (0..=15) out of range are
+/// clamped
+fn apply_overrides(o: CigOverrides, latency: &mut [u16; 2], rtn: &mut [u8; 2], packing: &mut u8) -> bool {
+    let mut any = false;
+    for (v, ms) in latency.iter_mut().zip([o.latency_c_to_p_ms, o.latency_p_to_c_ms]) {
+        if ms != 0 {
+            *v = ms.clamp(5, 4000);
+            any = true;
+        }
+    }
+    for (v, r) in rtn.iter_mut().zip([o.rtn_c_to_p, o.rtn_p_to_c]) {
+        if let Some(r) = r {
+            *v = r.min(15);
+            any = true;
+        }
+    }
+    if o.interleaved {
+        *packing = 1;
+        any = true;
+    }
+    any
+}
 
 /// Step of the unicast procedure
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -436,10 +499,12 @@ pub enum UnicastTimer {
     Drop,
     /// Reading the ASEs again while stopping ([`Unicast::on_refresh`])
     Refresh,
+    /// The CIG removal put off in a CIS event ([`Unicast::on_remove_timer`])
+    Remove,
 }
 
 impl UnicastTimer {
-    pub(crate) const ALL: usize = 3;
+    pub(crate) const ALL: usize = 4;
 }
 
 /// What the state machine needs of the LE core
@@ -451,6 +516,10 @@ pub trait UnicastEnv {
     /// The CCIDs of the modules for Enable with these contexts
     fn ccids(&mut self, contexts: u16) -> Vec<u8>;
     fn cig_create(&mut self, params: &CigParams) -> u8;
+    /// Developer > Debug's CIG values ([`set_cig_overrides`])
+    fn cig_overrides(&self) -> CigOverrides {
+        cig_overrides()
+    }
     fn cig_remove(&mut self, cig_id: u8) -> u8;
     fn cis_create(&mut self, cig_id: u8, cis_handles: &[u16], acl_handles: &[u16]) -> u8;
     fn can_send_command(&self) -> bool;
@@ -490,6 +559,8 @@ pub struct Unicast {
     cig_removing: bool,
     /// GAP_SUBEVENT_CIS_CREATED still to come
     cis_pending: usize,
+    /// Inside on_cis_created (BTstack is still handling the CIS event)
+    in_cis_event: bool,
     cis_up: usize,
     /// start() not reported yet
     starting: bool,
@@ -508,6 +579,8 @@ pub struct Unicast {
     cis_dropping: Vec<u16>,
     /// The source direction (P->C): max transport latency
     latency_src_ms: u16,
+    /// RTN C->P and P->C of the CIG (Config QoS sends the same)
+    rtn: [u8; 2],
     /// Source ASEs (device, ASE) Receiver Start Ready / Stop Ready went to
     start_ready_sent: Vec<(u32, u8)>,
     stop_ready_sent: Vec<(u32, u8)>,
@@ -566,6 +639,15 @@ fn connected(env: &dyn UnicastEnv, id: u32) -> bool {
 
 fn ase_of<'e>(env: &'e dyn UnicastEnv, a: &PlannedAse) -> Option<&'e Ase> {
     env.device(a.device_id)?.ase(a.ase_id)
+}
+
+/// How often the ASEs are read again in this step (on_refresh); None: not
+fn refresh_ms(p: Phase) -> Option<u32> {
+    match p {
+        Phase::WaitStreaming => Some(WAIT_REFRESH_MS),
+        Phase::Disable | Phase::Release => Some(REFRESH_MS),
+        _ => None,
+    }
 }
 
 /// All planned ASEs satisfy pred (devices that are gone count as done while
@@ -647,6 +729,7 @@ impl Unicast {
         self.cis_to_drop.clear();
         self.cis_dropping.clear();
         env.disarm(UnicastTimer::Drop);
+        env.disarm(UnicastTimer::Remove);
         self.enter(env, Phase::ConfigCodec);
     }
 
@@ -679,10 +762,9 @@ impl Unicast {
         } else {
             env.arm(UnicastTimer::Step, if p.stopping() { STOP_STEP_TIMEOUT_MS } else { START_STEP_TIMEOUT_MS });
         }
-        if matches!(p, Phase::Disable | Phase::Release) {
-            env.arm(UnicastTimer::Refresh, REFRESH_MS);
-        } else {
-            env.disarm(UnicastTimer::Refresh);
+        match refresh_ms(p) {
+            Some(ms) => env.arm(UnicastTimer::Refresh, ms),
+            None => env.disarm(UnicastTimer::Refresh),
         }
         tracing::info!("LE Audio: unicast: {}", p.name());
         let Some(plan) = self.plan.clone() else { return };
@@ -755,7 +837,7 @@ impl Unicast {
                                     framing: self.framing,
                                     phy: self.phy,
                                     max_sdu: dir.sdu_len(),
-                                    rtn: src.preset.rtn,
+                                    rtn: self.rtn[1],
                                     max_transport_latency_ms: self.latency_src_ms,
                                     presentation_delay_us: src.presentation_delay_us,
                                 },
@@ -767,7 +849,7 @@ impl Unicast {
                                     framing: self.framing,
                                     phy: self.phy,
                                     max_sdu: c.sdu_len(plan.preset.octets),
-                                    rtn: plan.preset.rtn,
+                                    rtn: self.rtn[0],
                                     max_transport_latency_ms: self.latency_ms,
                                     presentation_delay_us: plan.presentation_delay_us,
                                 },
@@ -929,10 +1011,17 @@ impl Unicast {
         // (sink ASEs: C->P, source ASEs: P->C); framing and PHY for all
         let mut range = [(0u32, 0xFF_FFFFu32); 2];
         let src = plan.source.as_ref();
-        let mut latency = [
-            plan.preset.max_transport_latency_ms,
-            src.map_or(plan.preset.max_transport_latency_ms, |s| s.preset.max_transport_latency_ms),
-        ];
+        // One max transport latency for both directions, the larger of the
+        // two presets: the controller picks one ISO interval for the whole
+        // CIG, and a lower one for the microphone (32_2_2: 95 ms next to
+        // 48_6_2: 100 ms) made a MediaTek controller give up its 30 ms
+        // interval for 10 ms, where the earbuds refused the second CIS
+        // (0x1E, issue #86). The servers' preferences still cap each
+        // direction below.
+        let shared = src.map_or(plan.preset.max_transport_latency_ms, |s| {
+            s.preset.max_transport_latency_ms.max(plan.preset.max_transport_latency_ms)
+        });
+        let mut latency = [shared; 2];
         let mut phy = plan.phy;
         let mut framing = plan.preset.framing | src.map_or(0, |s| s.preset.framing);
         for pa in plan.ases() {
@@ -968,10 +1057,24 @@ impl Unicast {
             }
         }
         let pd = plan.preset.presentation_delay_us.min(range[0].1).max(range[0].0);
-        let latency_c_to_p = latency[0].max(5);
-        let latency_p_to_c = latency[1].max(5);
+        let mut latency = [latency[0].max(5), latency[1].max(5)];
+        let mut rtn = [plan.preset.rtn, src.map_or(plan.preset.rtn, |s| s.preset.rtn)];
+        let mut packing = 0;
+        let overrides = env.cig_overrides();
+        if apply_overrides(overrides, &mut latency, &mut rtn, &mut packing) {
+            tracing::info!(
+                "LE Audio: Developer > Debug CIG: max latency {} / {} ms, RTN {} / {}, {} packing ({overrides:?})",
+                latency[0],
+                latency[1],
+                rtn[0],
+                rtn[1],
+                if packing != 0 { "interleaved" } else { "sequential" }
+            );
+        }
+        let [latency_c_to_p, latency_p_to_c] = latency;
         self.latency_ms = latency_c_to_p;
         self.latency_src_ms = latency_p_to_c;
+        self.rtn = rtn;
         self.phy = phy;
         self.framing = framing;
         let src_pd = src.map(|s| s.preset.presentation_delay_us.min(range[1].1).max(range[1].0));
@@ -987,24 +1090,23 @@ impl Unicast {
              presentation delay {pd} us",
             plan.preset.sdu_interval_us(),
             if framing != 0 { "framed" } else { "unframed" },
-            plan.preset.rtn
+            rtn[0]
         );
         if let (Some(s), Some(v)) = (src, src_pd) {
             tracing::info!(
                 "LE Audio: microphone QoS: SDU interval {} us, max latency {latency_p_to_c} ms, RTN {}, presentation \
                  delay {v} us",
                 s.preset.sdu_interval_us(),
-                s.preset.rtn
+                rtn[1]
             );
         }
         let src_interval = src.map_or(plan.preset.sdu_interval_us(), |s| s.preset.sdu_interval_us());
-        let src_rtn = src.map_or(plan.preset.rtn, |s| s.preset.rtn);
         let mut params = CigParams {
             cig_id: plan.cig_id,
             sdu_interval_c_to_p: plan.preset.sdu_interval_us(),
             sdu_interval_p_to_c: src_interval,
             worst_case_sca: 0,
-            packing: 0,
+            packing,
             framing,
             max_transport_latency_c_to_p: latency_c_to_p,
             max_transport_latency_p_to_c: latency_p_to_c,
@@ -1017,8 +1119,8 @@ impl Unicast {
                     max_sdu_p_to_c: c.source_ase.map_or(0, |s| s.sdu_len()),
                     phy_c_to_p: phy,
                     phy_p_to_c: phy,
-                    rtn_c_to_p: plan.preset.rtn,
-                    rtn_p_to_c: if c.source_ase.is_some() { src_rtn } else { plan.preset.rtn },
+                    rtn_c_to_p: rtn[0],
+                    rtn_p_to_c: if c.source_ase.is_some() { rtn[1] } else { rtn[0] },
                 })
                 .collect(),
         };
@@ -1074,6 +1176,13 @@ impl Unicast {
                 self.cis_to_drop,
                 self.cis_dropping
             );
+            return;
+        }
+        // ... nor from inside its CIS event: BTstack sets the CIG's state
+        // right after it, which undoes the removal (no LE Remove CIG)
+        if self.in_cis_event && !self.cig_removing {
+            tracing::debug!("LE Audio: CIG removal waits for the end of the CIS event");
+            env.arm(UnicastTimer::Remove, 1);
             return;
         }
         if !self.cig_removing {
@@ -1292,6 +1401,13 @@ impl Unicast {
         }
     }
 
+    /// The CIS event that put the CIG removal off is done
+    pub fn on_remove_timer(&mut self, env: &mut dyn UnicastEnv) {
+        if self.phase == Phase::RemoveCig {
+            self.try_remove_cig(env);
+        }
+    }
+
     /// LE Remove CIG completed
     pub fn on_cig_removed(&mut self, env: &mut dyn UnicastEnv) {
         if !self.cig_removing {
@@ -1312,6 +1428,7 @@ impl Unicast {
         env.disarm(UnicastTimer::Step);
         env.disarm(UnicastTimer::Drop);
         env.disarm(UnicastTimer::Refresh);
+        env.disarm(UnicastTimer::Remove);
         self.waiting_contexts = false;
         self.cis_connected.clear();
         self.cis_to_drop.clear();
@@ -1338,14 +1455,15 @@ impl Unicast {
         self.enter(env, Phase::Disable);
     }
 
-    /// While stopping: read the ASEs again that did not reach the state the
-    /// step waits for
+    /// While stopping, and while waiting for Streaming: read the ASEs again
+    /// that did not reach the state the step waits for
     pub fn on_refresh(&mut self, env: &mut dyn UnicastEnv) {
         let Some(plan) = self.plan.clone() else { return };
+        let Some(ms) = refresh_ms(self.phase) else { return };
         let done: fn(AseState) -> bool = match self.phase {
+            Phase::WaitStreaming => |s| s == AseState::Streaming,
             Phase::Disable => |s| !matches!(s, AseState::Enabling | AseState::Streaming | AseState::Disabling),
-            Phase::Release => |s| matches!(s, AseState::Idle | AseState::CodecConfigured | AseState::Unknown),
-            _ => return,
+            _ => |s| matches!(s, AseState::Idle | AseState::CodecConfigured | AseState::Unknown),
         };
         for c in plan.ases() {
             if !connected(env, c.device_id) {
@@ -1362,7 +1480,7 @@ impl Unicast {
                 env.read_ase(c.device_id, c.ase_id);
             }
         }
-        env.arm(UnicastTimer::Refresh, REFRESH_MS);
+        env.arm(UnicastTimer::Refresh, ms);
     }
 
     /// The step timer fired
@@ -1588,6 +1706,7 @@ impl Unicast {
             return;
         }
         self.cis_pending -= 1;
+        self.in_cis_event = true;
         if ev.status != 0 {
             let why = format!("CIS 0x{:04x} could not be established (0x{:02x})", ev.cis_handle, ev.status);
             if self.phase == Phase::CreateCis {
@@ -1603,8 +1722,14 @@ impl Unicast {
                 ev.cis_handle,
                 ev.iso_interval_1250us
             );
+            if matches!(self.phase, Phase::Release | Phase::RemoveCig) {
+                // Up after Release dropped the others: dropped as they were
+                self.cis_to_drop.push(ev.cis_handle);
+                self.drop_cis(env);
+            }
         }
         self.advance(env);
+        self.in_cis_event = false;
     }
 
     /// An ACL or CIS of the stream went down
@@ -1664,6 +1789,7 @@ mod tests {
         cig: Option<CigParams>,
         /// Every ASE Control Point write in full
         cp: Vec<Vec<u8>>,
+        overrides: CigOverrides,
     }
 
     impl Fake {
@@ -1677,6 +1803,7 @@ mod tests {
                 lost: None,
                 cig: None,
                 cp: Vec::new(),
+                overrides: CigOverrides::default(),
             }
         }
         fn take(&mut self) -> Vec<String> {
@@ -1688,6 +1815,9 @@ mod tests {
     }
 
     impl UnicastEnv for Fake {
+        fn cig_overrides(&self) -> CigOverrides {
+            self.overrides
+        }
         fn device(&self, id: u32) -> Option<&LeDevice> {
             self.devices.get(id as usize)
         }
@@ -1741,8 +1871,10 @@ mod tests {
             self.log.push(format!("streaming {streaming}"));
         }
         fn arm(&mut self, timer: UnicastTimer, ms: u32) {
-            if timer == UnicastTimer::Drop {
-                self.log.push(format!("arm drop {ms}"));
+            match timer {
+                UnicastTimer::Drop => self.log.push(format!("arm drop {ms}")),
+                UnicastTimer::Remove => self.log.push(format!("arm remove {ms}")),
+                _ => {}
             }
         }
         fn disarm(&mut self, _timer: UnicastTimer) {}
@@ -1985,6 +2117,59 @@ mod tests {
         plan
     }
 
+    #[test]
+    fn the_microphone_shares_the_media_latency_within_the_server_preference() {
+        // A source ASE that allows less keeps its own cap
+        let mut d = mic_device(0, 0x40, true);
+        d.ases[1].pref_max_latency_ms = 60;
+        let mut env = Fake::new(vec![d]);
+        let mut u = Unicast::default();
+        u.start(&mut env, conversational_plan(false), Box::new(|_| {}));
+        env.take();
+        for (ase, state) in [(1, AseState::CodecConfigured), (3, AseState::CodecConfigured)] {
+            env.set_state(0, ase, state);
+            u.on_ase_update(&mut env, LeDeviceId(0), ase);
+        }
+        let cig = env.cig.clone().unwrap();
+        assert_eq!((cig.max_transport_latency_c_to_p, cig.max_transport_latency_p_to_c), (100, 60));
+    }
+
+    #[test]
+    fn developer_cig_overrides_reach_the_cig_and_config_qos() {
+        let mut env = Fake::new(vec![mic_device(0, 0x40, true)]);
+        env.overrides = CigOverrides {
+            latency_c_to_p_ms: 60,
+            latency_p_to_c_ms: 9000,
+            rtn_c_to_p: Some(2),
+            rtn_p_to_c: Some(40),
+            interleaved: true,
+        };
+        let mut u = Unicast::default();
+        u.start(&mut env, conversational_plan(false), Box::new(|_| {}));
+        for ase in [1, 3] {
+            env.set_state(0, ase, AseState::CodecConfigured);
+            u.on_ase_update(&mut env, LeDeviceId(0), ase);
+        }
+        let cig = env.cig.clone().unwrap();
+        // Out of range: clamped (4000 ms, RTN 15)
+        assert_eq!((cig.max_transport_latency_c_to_p, cig.max_transport_latency_p_to_c, cig.packing), (60, 4000, 1));
+        assert_eq!((cig.cis[0].rtn_c_to_p, cig.cis[0].rtn_p_to_c), (2, 15));
+        u.on_cig_created(&mut env, &cig_created(1, &[0x60]));
+        // Config QoS: per ASE 16 bytes after opcode and count; RTN at +10,
+        // max transport latency at +11
+        let qos = env.cp.last().unwrap().clone();
+        let ases: Vec<(u8, u8, u16)> =
+            qos[2..].chunks(16).map(|a| (a[0], a[10], u16::from_le_bytes([a[11], a[12]]))).collect();
+        assert_eq!(ases, [(1, 2, 60), (3, 15, 4000)]);
+    }
+
+    #[test]
+    fn no_developer_overrides_leave_the_plan_as_it_is() {
+        let (mut latency, mut rtn, mut packing) = ([100, 95], [13, 13], 0);
+        assert!(!apply_overrides(CigOverrides::default(), &mut latency, &mut rtn, &mut packing));
+        assert_eq!((latency, rtn, packing), ([100, 95], [13, 13], 0));
+    }
+
     fn mic_device(id: u32, acl: u16, sink: bool) -> LeDevice {
         let mut d = device(id, acl, if sink { &[1] } else { &[] }, CONTEXT_MEDIA);
         d.available_source_contexts = CONTEXT_CONVERSATIONAL;
@@ -2011,7 +2196,8 @@ mod tests {
         assert_eq!(env.take(), ["cig create 1 (1 CIS)"]);
         let cig = env.cig.clone().unwrap();
         assert_eq!((cig.sdu_interval_c_to_p, cig.sdu_interval_p_to_c), (10000, 10000));
-        assert_eq!((cig.max_transport_latency_c_to_p, cig.max_transport_latency_p_to_c), (100, 10));
+        // One max transport latency for the CIG: the larger (issue #86)
+        assert_eq!((cig.max_transport_latency_c_to_p, cig.max_transport_latency_p_to_c), (100, 100));
         assert_eq!((cig.cis[0].max_sdu_c_to_p, cig.cis[0].max_sdu_p_to_c), (155, 80));
         assert_eq!((cig.cis[0].rtn_c_to_p, cig.cis[0].rtn_p_to_c), (13, 2));
         u.on_cig_created(&mut env, &cig_created(1, &[0x60]));
@@ -2227,6 +2413,58 @@ mod tests {
         assert_eq!(env2.take(), ["disconnect 60", "disconnect 61"]);
     }
 
+    /// The second CIS refused, the stream torn down as far as the CIG
+    /// removal, which waits for the first CIS's event
+    fn refused_and_waiting_to_remove(u: &mut Unicast, env: &mut Fake) -> Outcome {
+        let outcome = start(u, env);
+        both(u, env, AseState::CodecConfigured);
+        u.on_cig_created(env, &cig_created(1, &[0x60, 0x61]));
+        both(u, env, AseState::QosConfigured);
+        both(u, env, AseState::Enabling);
+        env.take();
+        u.on_cis_created(env, &cis_created(1, 0x61, 0x1E));
+        assert_eq!(u.phase(), Phase::Disable);
+        assert_eq!(env.take(), ["stop sending", "Disable dev 0 [05, 01]", "Disable dev 1 [05, 01]"]);
+        both(u, env, AseState::QosConfigured);
+        assert_eq!(env.take(), ["Release dev 0 [08, 01]", "Release dev 1 [08, 01]"]);
+        both(u, env, AseState::Idle);
+        assert_eq!(u.phase(), Phase::RemoveCig);
+        assert!(env.take().is_empty(), "one CIS event is still to come");
+        outcome
+    }
+
+    #[test]
+    fn a_cis_up_while_the_cig_removal_waits_is_dropped_before_it() {
+        let mut env = Fake::new(vec![device(0, 0x40, &[1], CONTEXT_MEDIA), device(1, 0x41, &[1], CONTEXT_MEDIA)]);
+        let mut u = Unicast::default();
+        let outcome = refused_and_waiting_to_remove(&mut u, &mut env);
+        // BTstack would undo a removal asked for inside this event
+        u.on_cis_created(&mut env, &cis_created(1, 0x60, 0));
+        assert_eq!(env.take(), ["disconnect 60"]);
+        u.on_link_lost(&mut env, 0x60);
+        assert_eq!(env.take(), ["cis down 60", "cig remove 1"]);
+        u.on_cig_removed(&mut env);
+        assert_eq!(u.phase(), Phase::Idle);
+        let r = outcome.borrow().clone().unwrap();
+        assert_eq!(r.unwrap_err(), "CIS 0x0061 could not be established (0x1e)");
+    }
+
+    #[test]
+    fn the_last_cis_refused_while_the_cig_removal_waits_removes_it_after_the_event() {
+        let mut env = Fake::new(vec![device(0, 0x40, &[1], CONTEXT_MEDIA), device(1, 0x41, &[1], CONTEXT_MEDIA)]);
+        let mut u = Unicast::default();
+        refused_and_waiting_to_remove(&mut u, &mut env);
+        u.on_cis_created(&mut env, &cis_created(1, 0x60, 0x1E));
+        assert_eq!(env.take(), ["arm remove 1"]);
+        u.on_remove_timer(&mut env);
+        assert_eq!(env.take(), ["cig remove 1"]);
+        // The timer again changes nothing
+        u.on_remove_timer(&mut env);
+        assert!(env.take().is_empty());
+        u.on_cig_removed(&mut env);
+        assert_eq!(u.phase(), Phase::Idle);
+    }
+
     #[test]
     fn a_stale_state_while_stopping_is_read_again() {
         let mut env = Fake::new(vec![device(0, 0x40, &[1], CONTEXT_MEDIA), device(1, 0x41, &[1], CONTEXT_MEDIA)]);
@@ -2248,6 +2486,34 @@ mod tests {
         u.on_ase_update(&mut env, LeDeviceId(1), 1);
         assert_eq!(u.phase(), Phase::RemoveCig);
         // Not stopping in a step that waits for ASEs: nothing to read
+        u.on_refresh(&mut env);
+        assert!(!env.take().iter().any(|l| l.starts_with("read")));
+    }
+
+    #[test]
+    fn an_ase_still_enabling_with_its_cis_up_is_read_again() {
+        // Issue #86: one ASE went Streaming, the other stayed Enabling
+        let mut env = Fake::new(vec![device(0, 0x40, &[1], CONTEXT_MEDIA), device(1, 0x41, &[1], CONTEXT_MEDIA)]);
+        let mut u = Unicast::default();
+        let outcome = start(&mut u, &mut env);
+        both(&mut u, &mut env, AseState::CodecConfigured);
+        u.on_cig_created(&mut env, &cig_created(1, &[0x60, 0x61]));
+        both(&mut u, &mut env, AseState::QosConfigured);
+        both(&mut u, &mut env, AseState::Enabling);
+        u.on_cis_created(&mut env, &cis_created(1, 0x60, 0));
+        u.on_cis_created(&mut env, &cis_created(1, 0x61, 0));
+        env.set_state(0, 1, AseState::Streaming);
+        u.on_ase_update(&mut env, LeDeviceId(0), 1);
+        assert_eq!(u.phase(), Phase::WaitStreaming);
+        env.take();
+        u.on_refresh(&mut env);
+        assert_eq!(env.take(), ["read ASE 1 dev 1"]);
+        // The read finds it Streaming: the stream starts
+        env.set_state(1, 1, AseState::Streaming);
+        u.on_ase_update(&mut env, LeDeviceId(1), 1);
+        assert_eq!(u.phase(), Phase::Streaming);
+        assert_eq!(*outcome.borrow(), Some(Ok(())));
+        // Streaming: nothing to read
         u.on_refresh(&mut env);
         assert!(!env.take().iter().any(|l| l.starts_with("read")));
     }

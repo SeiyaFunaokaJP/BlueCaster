@@ -7,8 +7,9 @@
 //! identity address (le_device_db, the bond TLV file); which classic device
 //! a bond came from is kept beside it in the same file (one tag per bond).
 //!
-//! Runs only while [`set_ctkd`] is on (always, since issue #86) and SM is set up (LE
-//! Audio on, [`Stack::le_init`]): after a new pairing, and on a connection
+//! Runs only while [`set_ctkd`] is on (always, since issue #86) and SM is set up
+//! ([`Stack::le_init`]; bt-host does that with and without LE Audio, as the
+//! keys do not depend on it): after a new pairing, and on a connection
 //! of a device without keys from it yet (once per device and run). A device
 //! that does not list the channel is not asked; one that refuses, or does
 //! not answer (SM's 30 s timeout), keeps its classic link as it is.
@@ -39,7 +40,7 @@ thread_local! {
 /// available" alone did not say)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CtkdOutcome {
-    /// SM is not set up (LE Audio off), so nothing is asked
+    /// SM is not set up, so nothing is asked
     NoLe,
     /// Not asked during this run yet (no connection since)
     NotAsked,
@@ -166,6 +167,27 @@ impl Stack {
         })
     }
 
+    /// Forgets the LE keys derived from the classic device `addr`'s link
+    /// key (its bond and the note of where it came from). False without one.
+    pub fn delete_le_keys_of_classic(&self, addr: &[u8; 6]) -> bool {
+        if !self.le_initialized() {
+            return false;
+        }
+        let Some(index) = (0..self.le_device_db_max_count())
+            .find(|&i| self.tlv_get(tag(i)).is_some_and(|v| v.len() == MAPPING_LEN && v[..6] == addr[..]))
+        else {
+            return false;
+        };
+        let entry = self.le_device_db_info(index);
+        self.tlv_delete(tag(index));
+        if let Some(e) = entry {
+            self.le_delete_bonding(e.addr_type, &e.addr);
+        }
+        OUTCOMES.with(|o| o.borrow_mut().retain(|(a, _)| a != addr));
+        ASKED.with(|a| a.borrow_mut().retain(|a| a != addr));
+        true
+    }
+
     /// The LE keys of the classic device `addr`, else why there are none
     pub fn le_keys_or_why(&self, addr: &[u8; 6]) -> Result<LeKeys, CtkdOutcome> {
         if !self.le_initialized() {
@@ -248,7 +270,7 @@ pub enum LeBondAdded {
     Added,
     /// The device has LE keys already
     Kept,
-    /// SM is not set up (LE Audio off)
+    /// SM is not set up
     NoLe,
     Failed,
 }
@@ -369,9 +391,178 @@ extern "C" fn bluecaster_rs_ctkd_note(addr: *const u8, what: c_int) {
     })
 }
 
+// ---- The other direction: a BR/EDR link key from an LE pairing ----
+//
+// Issue #86: a dual-mode device paired over LE (its LE Audio entry) had no
+// link key, so its classic side paired again. LE pairing offers LinkKey (and
+// CT2); the patched sm.c derives the key (h6 / h7) only when the device
+// agreed to it in its Pairing Response, and hands what came of it here
+// after the bonding.
+//
+// Why replacing a classic key is right only then: a device that agreed
+// derives the same key from the same LTK and, per Core Vol 3 Part H 3.6.1,
+// uses it as its BR/EDR link key with us from then on, in place of the one
+// it had. Our older key is then the wrong one, and keeping it would fail
+// the next classic authentication. A device that did not agree keeps its
+// classic key, so nothing is derived or stored and ours stays as it is.
+//
+// Kept under a public identity address only: a dual-mode device's public
+// identity is its BR/EDR address. A random one names no classic device
+// (the device may still have derived a key, which then cannot be tied to
+// a classic address here; its classic key, if it replaced it, fails once
+// and the device pairs again).
+//
+// As BTstack does (BLURtooth), an authenticated classic key is not replaced
+// by an unauthenticated derived one: anyone who can pair over LE under the
+// device's address with Just Works could otherwise take over its classic
+// link. That key is dropped instead (the device replaced it, so it is
+// wrong), and the classic side pairs again on its next connection.
+
+/// What sm.c says of an LE bonding (bluecaster_rs_ctkd_from_le `why`)
+const FROM_LE_DERIVED: c_int = 0;
+const FROM_LE_NOT_SECURE: c_int = 1;
+const FROM_LE_NOT_AGREED: c_int = 2;
+
+/// HCI link key types (BTstack link_key_type_t)
+const AUTHENTICATED_COMBINATION_KEY_GENERATED_FROM_P192: i32 = 5;
+const UNAUTHENTICATED_COMBINATION_KEY_GENERATED_FROM_P256: i32 = 7;
+const AUTHENTICATED_COMBINATION_KEY_GENERATED_FROM_P256: i32 = 8;
+
+/// What came of the BR/EDR link key of an LE pairing
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FromLe {
+    /// Stored; the device had no link key here before
+    Stored,
+    /// Stored in place of the device's older link key
+    Replaced,
+    /// Not stored; the older, authenticated link key dropped
+    Dropped,
+    /// LE legacy pairing: no link key derived
+    NotSecure,
+    /// The device did not agree to a link key: none derived
+    NotAgreed,
+    /// Derived, but the identity address is not public
+    NotPublic,
+    /// Not derived for another reason
+    NotDerived,
+}
+
+impl FromLe {
+    fn text(self) -> &'static str {
+        match self {
+            FromLe::Stored => "derived and stored",
+            FromLe::Replaced => "derived and stored in place of the older one",
+            FromLe::Dropped => {
+                "derived without authentication; the older authenticated one dropped, the classic side pairs again"
+            }
+            FromLe::NotSecure => "not derived (LE legacy pairing)",
+            FromLe::NotAgreed => "not derived (the device does not distribute one)",
+            FromLe::NotPublic => "derived but not stored (the identity address is not public)",
+            FromLe::NotDerived => "not derived",
+        }
+    }
+}
+
+fn authenticated(key_type: i32) -> bool {
+    matches!(
+        key_type,
+        AUTHENTICATED_COMBINATION_KEY_GENERATED_FROM_P192 | AUTHENTICATED_COMBINATION_KEY_GENERATED_FROM_P256
+    )
+}
+
+/// What to do with the link key of an LE bonding: `why` as sm.c says it,
+/// the identity address type, the derived key's type, the type of the
+/// link key stored for that address now
+fn from_le_decision(why: c_int, addr_type: u8, key_type: i32, existing: Option<i32>) -> FromLe {
+    match why {
+        FROM_LE_DERIVED => {}
+        FROM_LE_NOT_SECURE => return FromLe::NotSecure,
+        FROM_LE_NOT_AGREED => return FromLe::NotAgreed,
+        _ => return FromLe::NotDerived,
+    }
+    if !matches!(
+        key_type,
+        UNAUTHENTICATED_COMBINATION_KEY_GENERATED_FROM_P256 | AUTHENTICATED_COMBINATION_KEY_GENERATED_FROM_P256
+    ) {
+        return FromLe::NotDerived;
+    }
+    if !matches!(addr_type, BD_ADDR_TYPE_LE_PUBLIC | BD_ADDR_TYPE_LE_PUBLIC_IDENTITY) {
+        return FromLe::NotPublic;
+    }
+    match existing {
+        None => FromLe::Stored,
+        Some(t) if authenticated(t) && !authenticated(key_type) => FromLe::Dropped,
+        Some(_) => FromLe::Replaced,
+    }
+}
+
+/// SM, after an LE bonding (both sides bondable): the BR/EDR link key
+/// derived from it (`key` in HCI order, valid when `why` is 0) for the
+/// device's identity address
+#[unsafe(no_mangle)]
+extern "C" fn bluecaster_rs_ctkd_from_le(
+    why: c_int,
+    addr_type: c_int,
+    addr: *const u8,
+    key: *const u8,
+    key_type: c_int,
+) {
+    guard((), || {
+        if addr.is_null() || key.is_null() {
+            return;
+        }
+        let (mut a, mut k) = ([0u8; 6], [0u8; 16]);
+        // SAFETY: SM passes its bd_addr_t (6 bytes) and a link_key_t (16).
+        unsafe {
+            std::ptr::copy_nonoverlapping(addr, a.as_mut_ptr(), 6);
+            std::ptr::copy_nonoverlapping(key, k.as_mut_ptr(), 16);
+        }
+        let existing = crate::LINK_KEYS.with(|s| s.borrow_mut().as_mut().and_then(|s| s.get(&a))).map(|(_, t)| t);
+        let outcome = from_le_decision(why, u8::try_from(addr_type).unwrap_or(u8::MAX), key_type, existing);
+        crate::LINK_KEYS.with(|s| {
+            let mut s = s.borrow_mut();
+            let Some(s) = s.as_mut() else { return };
+            match outcome {
+                FromLe::Stored | FromLe::Replaced => s.put(&a, &k, key_type),
+                FromLe::Dropped => s.delete(&a),
+                _ => {}
+            }
+        });
+        // No address or key here (issue #86: logs go into public issues)
+        tracing::info!(target: "le", "LE pairing: BR/EDR link key {}", outcome.text());
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_key_from_le_pairing() {
+        const UNAUTH: i32 = UNAUTHENTICATED_COMBINATION_KEY_GENERATED_FROM_P256;
+        const AUTH: i32 = AUTHENTICATED_COMBINATION_KEY_GENERATED_FROM_P256;
+        const PUBLIC: u8 = BD_ADDR_TYPE_LE_PUBLIC;
+        let d = from_le_decision;
+        // Derived for a public identity: stored, or in place of the older key
+        assert_eq!(d(FROM_LE_DERIVED, PUBLIC, UNAUTH, None), FromLe::Stored);
+        assert_eq!(d(FROM_LE_DERIVED, BD_ADDR_TYPE_LE_PUBLIC_IDENTITY, AUTH, None), FromLe::Stored);
+        assert_eq!(d(FROM_LE_DERIVED, PUBLIC, UNAUTH, Some(4)), FromLe::Replaced);
+        assert_eq!(d(FROM_LE_DERIVED, PUBLIC, UNAUTH, Some(UNAUTH)), FromLe::Replaced);
+        assert_eq!(d(FROM_LE_DERIVED, PUBLIC, AUTH, Some(AUTH)), FromLe::Replaced);
+        assert_eq!(d(FROM_LE_DERIVED, PUBLIC, AUTH, Some(UNAUTH)), FromLe::Replaced);
+        // Never an unauthenticated key over an authenticated one
+        assert_eq!(d(FROM_LE_DERIVED, PUBLIC, UNAUTH, Some(AUTH)), FromLe::Dropped);
+        assert_eq!(d(FROM_LE_DERIVED, PUBLIC, UNAUTH, Some(5)), FromLe::Dropped);
+        // A random identity names no classic device
+        assert_eq!(d(FROM_LE_DERIVED, 1, UNAUTH, None), FromLe::NotPublic);
+        assert_eq!(d(FROM_LE_DERIVED, 3, UNAUTH, Some(UNAUTH)), FromLe::NotPublic);
+        // Nothing derived: nothing stored, whatever is stored stays
+        assert_eq!(d(FROM_LE_NOT_AGREED, PUBLIC, 0xFFFF, Some(UNAUTH)), FromLe::NotAgreed);
+        assert_eq!(d(FROM_LE_NOT_SECURE, PUBLIC, 0xFFFF, None), FromLe::NotSecure);
+        assert_eq!(d(3, PUBLIC, 0xFFFF, None), FromLe::NotDerived);
+        // Only a P-256 key type counts as derived
+        assert_eq!(d(FROM_LE_DERIVED, PUBLIC, 0xFFFF, None), FromLe::NotDerived);
+    }
 
     #[test]
     fn mapping_layout() {

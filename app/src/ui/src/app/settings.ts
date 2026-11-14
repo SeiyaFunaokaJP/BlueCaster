@@ -15,6 +15,17 @@ export function allAudioDevices(s: Pick<Settings, "developer_mode" | "all_audio_
   return !!s?.developer_mode && s.all_audio_devices;
 }
 
+/** A device's "Set as Windows default output/input while connected" in
+ *  force: shown and as saved in developer mode, on for everyone else (issue
+ *  #86: apps without an output picker and the microphone need them; the
+ *  core does the same) */
+export function devicesSwitchShown(s: Pick<Settings, "developer_mode"> | undefined): boolean {
+  return !!s?.developer_mode;
+}
+export function defaultDeviceSwitch(s: Pick<Settings, "developer_mode"> | undefined, saved: boolean | undefined): boolean {
+  return saved !== false || !devicesSwitchShown(s);
+}
+
 /** Changes some settings: the core takes the whole object and sends it back as an event */
 export function saveSettings(app: AppContext, patch: Partial<Settings>): Promise<boolean> {
   return applySettings(app, patch).then((r) => r !== null);

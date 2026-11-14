@@ -90,6 +90,11 @@ int bluecaster_ctkd_enabled(void) { return bluecaster_rs_ctkd_enabled(); }
 int bluecaster_ctkd_wanted(const unsigned char *addr) { return bluecaster_rs_ctkd_wanted(addr); }
 void bluecaster_rs_ctkd_note(const uint8_t *addr, int what);
 void bluecaster_ctkd_note(const unsigned char *addr, int what) { bluecaster_rs_ctkd_note(addr, what); }
+void bluecaster_rs_ctkd_from_le(int why, int addr_type, const uint8_t *addr, const uint8_t *key, int key_type);
+void bluecaster_ctkd_from_le(int why, int addr_type, const unsigned char *addr, const unsigned char *key,
+                             int key_type) {
+    bluecaster_rs_ctkd_from_le(why, addr_type, addr, key, key_type);
+}
 
 static void cig_slot_release(uint8_t cig_id);
 
@@ -701,6 +706,10 @@ void bluecaster_gap_setup(uint32_t class_of_device, uint16_t page_timeout, const
     /* SSP: Just Works (no display, no keyboard), General Bonding without MITM */
     gap_ssp_set_io_capability(SSP_IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
     gap_ssp_set_authentication_requirement(SSP_IO_AUTHREQ_MITM_PROTECTION_NOT_REQUIRED_GENERAL_BONDING);
+    /* BTstack 1.8.2 changed these defaults (auto accept off, key size 16):
+     * kept as they were, so that pairing and older sinks behave as before */
+    gap_ssp_set_auto_accept(1);
+    gap_set_required_encryption_key_size(7);
     strncpy(local_name, (name && name[0]) ? name : "BlueCaster", sizeof(local_name) - 1);
     local_name[sizeof(local_name) - 1] = 0;
     gap_set_local_name(local_name);
@@ -876,6 +885,22 @@ uint8_t bluecaster_cmd_read_remote_version(uint16_t con_handle) {
 
 uint8_t bluecaster_cmd_read_link_supervision_timeout(uint16_t con_handle) {
     return hci_send_cmd(&hci_read_link_supervision_timeout, con_handle);
+}
+
+/* The ACL packet types BTstack asks for when it creates a connection (from
+   the controller's buffer size and features, "may not be used" bits set) */
+uint16_t bluecaster_usable_acl_packet_types(void) {
+    return hci_usable_acl_packet_types();
+}
+
+uint8_t bluecaster_cmd_change_connection_packet_type(uint16_t con_handle, uint16_t packet_types) {
+    return hci_send_cmd(&hci_change_connection_packet_type, con_handle, packet_types);
+}
+
+/* Role switch always; sniff as asked (the default set at init allows both) */
+uint8_t bluecaster_cmd_write_link_policy(uint16_t con_handle, int allow_sniff) {
+    uint16_t policy = LM_LINK_POLICY_ENABLE_ROLE_SWITCH | (allow_sniff ? LM_LINK_POLICY_ENABLE_SNIFF_MODE : 0);
+    return hci_send_cmd(&hci_write_link_policy_settings, con_handle, policy);
 }
 
 /* What BTstack holds of a link; -1 when it has no such connection */
@@ -1116,6 +1141,10 @@ int bluecaster_le_init(void) {
     sm_init();
     sm_set_io_capabilities(IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
     sm_set_authentication_requirements(SM_AUTHREQ_SECURE_CONNECTION | SM_AUTHREQ_BONDING);
+    /* BTstack 1.8.2 changed these defaults (Secure Connections Only, key
+     * size 16 only): kept as they were (legacy pairing allowed, 7..16) */
+    sm_set_secure_connections_only_mode(false);
+    sm_set_encryption_key_size_range(7, 16);
     memset(&sm_event_registration, 0, sizeof(sm_event_registration));
     sm_event_registration.callback = &handler_sm;
     sm_add_event_handler(&sm_event_registration);

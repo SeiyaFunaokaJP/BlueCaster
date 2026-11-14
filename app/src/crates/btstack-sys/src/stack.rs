@@ -639,6 +639,27 @@ impl Stack {
         status
     }
 
+    /// Asks the controller to use again every ACL packet type BTstack asks
+    /// for at connection set-up; answered by a Command Status, then a
+    /// Connection Packet Type Changed event
+    pub fn cmd_restore_acl_packet_types(&self, con_handle: u16) -> u8 {
+        // SAFETY: on the BTstack thread, after hci_init.
+        let types = unsafe { ffi::bluecaster_usable_acl_packet_types() };
+        // SAFETY: on the BTstack thread.
+        let status = unsafe { ffi::bluecaster_cmd_change_connection_packet_type(con_handle, types) };
+        tracing::debug!(target: "btstack", "change packet type 0x{con_handle:04X} to 0x{types:04X}: 0x{status:02X}");
+        status
+    }
+
+    /// Lets the remote put the link into sniff mode or not (role switch
+    /// stays allowed); answered by a Command Complete
+    pub fn cmd_allow_sniff(&self, con_handle: u16, allow: bool) -> u8 {
+        // SAFETY: on the BTstack thread.
+        let status = unsafe { ffi::bluecaster_cmd_write_link_policy(con_handle, i32::from(allow)) };
+        tracing::debug!(target: "btstack", "link policy 0x{con_handle:04X}, sniff {allow}: 0x{status:02X}");
+        status
+    }
+
     /// Frees BTstack's command slot held by `opcode`, a command the
     /// controller never answered: BTstack gets a Command Status with
     /// `status` as if from the controller. Only for commands BTstack does not

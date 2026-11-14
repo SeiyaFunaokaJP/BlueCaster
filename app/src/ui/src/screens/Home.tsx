@@ -33,7 +33,7 @@ import {
 } from "../components/stream";
 import { t, tm } from "../i18n";
 import { IpcError, type AdapterInfo, type Snapshot, type StreamState } from "../ipc/types";
-import { CARD_ORDER, cardOrder, codecSpec, offeredCodecs } from "../lib/codecs";
+import { CARD_ORDER, cardOf, cardOrder, codecSpec, offeredCodecs } from "../lib/codecs";
 import {
   audioEntries,
   codecsOnRequest,
@@ -121,6 +121,26 @@ function FirmwareMissing() {
       </Banner>
     </Show>
   );
+}
+
+/** The adapter seems hung (issue #86: Windows lists an unknown USB device
+ *  in its place): only a power cycle brings it back. On Home, the Adapter
+ *  screen and in the setup */
+export function AdapterHung() {
+  const { core } = useApp();
+  return (
+    <Show when={core.state.snap?.adapter.hung}>
+      <Banner kind="warn" title={t("ui.adapter.hung_title")}>
+        {t("ui.adapter.hung_text")}
+      </Banner>
+    </Show>
+  );
+}
+
+/** The stack's start-up error while the adapter seems hung: AdapterHung
+ *  tells what to do instead of "check the WinUSB driver" */
+export function hiddenByHung(snap: Snapshot, message: { key: string } | null | undefined): boolean {
+  return snap.adapter.hung === true && !!message?.key.startsWith("error.btstack");
 }
 
 /** v1 still runs (both cannot use the adapter): on Home and in the setup */
@@ -226,7 +246,10 @@ export function Home() {
       </header>
 
       <V1Running />
-      <Show when={error()}>{(e) => <ErrorPanel code={e().code} message={e().message} />}</Show>
+      <AdapterHung />
+      <Show when={!hiddenByHung(snap(), error()?.message) && error()}>
+        {(e) => <ErrorPanel code={e().code} message={e().message} />}
+      </Show>
       <FirmwareMissing />
       <OtherRadio />
       <HiResSet />
@@ -314,7 +337,10 @@ function DeviceCard(props: { entry: AudioEntry; onError: (e: unknown) => void })
               </span>
             </Show>
             <div class={`status-line st-${state()}`} role="status" aria-live="polite">
-              <span class="dot" aria-hidden="true" />
+              {/* No red dot for an error: it read as recording (issue #86) */}
+              <Show when={state() !== "error"}>
+                <span class="dot" aria-hidden="true" />
+              </Show>
               <span>
                 {/* An error's text is in the panel above, with its fix */}
                 {live() ? statusText({ ...stream(), state: state() }) : t("status.ready")}
@@ -446,7 +472,7 @@ export function CodecPicker(props: { entry: AudioEntry }) {
   const snap = () => app.core.state.snap!;
   const e = () => props.entry;
   const autoAll = () => snap().settings.auto_codec;
-  const codec = () => (e().profile ?? entryBase(e(), snap().profiles)).codec;
+  const codec = () => cardOf(e().profile ?? entryBase(e(), snap().profiles));
   const order = () => (autoAll() ? [...CARD_ORDER] : cardOrder(e().profile?.codec_order));
   const picked = () => pickedCodec(snap(), e(), autoAll(), order());
   // What it streams with; else Auto's pick, or the one used instead of a

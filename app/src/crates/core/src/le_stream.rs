@@ -353,6 +353,34 @@ pub fn le_mic_target(
 /// one tried. GMAP low latency: the request's flag or (from a profile) the
 /// setting, not with an explicit preset. The headset microphone asks for
 /// the conversational configuration.
+/// Developer > Debug for LE Audio streams (service.rs apply_dev_overrides)
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct LeDebug {
+    /// The microphone's preset, taken as it is; empty: as planned
+    pub mic_preset: String,
+    /// The retry without the microphone stays on the same link
+    pub retry_same_link: bool,
+}
+
+static LE_DEBUG: std::sync::Mutex<LeDebug> =
+    std::sync::Mutex::new(LeDebug { mic_preset: String::new(), retry_same_link: false });
+
+pub(crate) fn set_debug(d: LeDebug) {
+    *LE_DEBUG.lock().unwrap_or_else(|e| e.into_inner()) = d;
+}
+
+fn debug() -> LeDebug {
+    LE_DEBUG.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Developer > Debug's microphone preset into the request
+fn apply_debug(request: &mut LeStreamRequest, d: &LeDebug) {
+    if !d.mic_preset.is_empty() {
+        request.source_preset_order = vec![d.mic_preset.clone()];
+        request.source_preset_exact = true;
+    }
+}
+
 pub(crate) fn stream_request(le: &LeRequest) -> (LeStreamRequest, bool) {
     let mut request = LeStreamRequest::default();
     if let Some(p) = &le.preset {
@@ -366,9 +394,10 @@ pub(crate) fn stream_request(le: &LeRequest) -> (LeStreamRequest, bool) {
 }
 
 /// Why a session refuses an LE request before BTstack is touched
-pub(crate) fn refusal(le_enabled: bool, source: &SourceRequest) -> Option<&'static str> {
+pub(crate) fn refusal(le_enabled: bool, developer: bool, source: &SourceRequest) -> Option<&'static str> {
     if !le_enabled {
-        Some("error.le_audio_disabled")
+        // Its switch is there in developer mode only (issue #86)
+        Some(if developer { "error.le_audio_disabled" } else { "error.le_audio_developer" })
     } else if matches!(source, SourceRequest::Application { .. }) {
         Some("error.le_audio_capture")
     } else {
@@ -390,7 +419,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     let ready = || inner.notify(StreamState::Idle, Msg::new("status.ready"));
     let session_start = Instant::now();
 
-    if let Some(key) = refusal(inner.le_wanted(), &req.source) {
+    if let Some(key) = refusal(inner.le_wanted(), inner.developer(), &req.source) {
         tracing::debug!("le stream: refused ({key}), LE wanted {}, source {}", inner.le_wanted(), req.source);
         return inner.notify(StreamState::Error, Msg::new(key));
     }
@@ -429,7 +458,12 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         le.headset_mic = bt_host::HeadsetMic::Off;
     }
     let mut mic_note = mic_note;
-    let (request, low_latency) = stream_request(&le);
+    let (mut request, low_latency) = stream_request(&le);
+    let le_debug = debug();
+    apply_debug(&mut request, &le_debug);
+    if le_debug != LeDebug::default() {
+        tracing::info!("LE Audio: Developer > Debug: {le_debug:?}");
+    }
     tracing::debug!("le stream: stream request {request:?}, low latency {low_latency}");
     host.le_set_low_latency(low_latency);
     let mut devices = vec![req.device];
@@ -458,6 +492,16 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
             host.le_stop_stream();
             mic_refused.set(true);
             asked.conversational = false;
+            // On a new link: right after the refused CIS, EarFun earbuds
+            // left ASE 2 in Enabling on the same link, while a fresh
+            // connection streamed every time (issue #86). Developer > Debug
+            // can keep the link, to compare.
+            let ids = if le_debug.retry_same_link {
+                ids
+            } else {
+                host.le_disconnect_all();
+                connect_devices(&host, &devices, &req.device_name, &stopped)?
+            };
             r = host.le_start_stream(ids, asked, &le_silence_set);
         }
         let r = r.map_err(|e| {
@@ -773,7 +817,7 @@ fn run_broadcast(inner: &Arc<Inner>, req: StreamRequest) {
     tracing::info!("Auracast (developer mode): broadcast {}", crate::diag::quoted(&req.device_name));
     tracing::debug!("broadcast: request {req:?}");
 
-    if let Some(key) = refusal(inner.le_wanted(), &req.source) {
+    if let Some(key) = refusal(inner.le_wanted(), inner.developer(), &req.source) {
         tracing::debug!("broadcast: refused ({key})");
         return inner.notify(StreamState::Error, Msg::new(key));
     }
@@ -975,17 +1019,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_developer_microphone_preset_is_taken_as_it_is() {
+        let le = LeRequest { headset_mic: bt_host::HeadsetMic::On, ..LeRequest::default() };
+        let (mut r, _) = stream_request(&le);
+        apply_debug(&mut r, &LeDebug::default());
+        assert!(!r.source_preset_exact);
+        apply_debug(&mut r, &LeDebug { mic_preset: "32_2_1".into(), retry_same_link: false });
+        assert_eq!((r.source_preset_order.as_slice(), r.source_preset_exact), (&["32_2_1".to_string()][..], true));
+    }
+
+    #[test]
     fn refused_while_off_or_for_app_capture() {
         let app = SourceRequest::Application { exe: "x.exe".into() };
-        assert_eq!(refusal(false, &SourceRequest::SystemLoopback), Some("error.le_audio_disabled"));
-        assert_eq!(refusal(false, &app), Some("error.le_audio_disabled"));
-        assert_eq!(refusal(true, &app), Some("error.le_audio_capture"));
-        assert_eq!(refusal(true, &SourceRequest::SystemLoopback), None);
-        assert_eq!(refusal(true, &SourceRequest::TestTone), None);
+        assert_eq!(refusal(false, true, &SourceRequest::SystemLoopback), Some("error.le_audio_disabled"));
+        assert_eq!(refusal(false, true, &app), Some("error.le_audio_disabled"));
+        // Outside developer mode there is no switch to point to
+        assert_eq!(refusal(false, false, &SourceRequest::SystemLoopback), Some("error.le_audio_developer"));
+        assert_eq!(refusal(true, true, &app), Some("error.le_audio_capture"));
+        assert_eq!(refusal(true, true, &SourceRequest::SystemLoopback), None);
+        assert_eq!(refusal(true, true, &SourceRequest::TestTone), None);
         let virt = SourceRequest::VirtualDevice { id: "{x}".into(), name: "CABLE".into(), auto_switch: true };
-        assert_eq!(refusal(true, &virt), None);
+        assert_eq!(refusal(true, true, &virt), None);
         // The messages exist in English
-        for key in ["error.le_audio_disabled", "error.le_audio_capture", "error.le_audio_unavailable"] {
+        for key in [
+            "error.le_audio_disabled",
+            "error.le_audio_developer",
+            "error.le_audio_capture",
+            "error.le_audio_unavailable",
+        ] {
             assert_ne!(Msg::new(key).english(), key);
         }
         assert!(Msg::with("error.le_audio_connect", &[&"timeout"]).english().contains("(timeout)"));

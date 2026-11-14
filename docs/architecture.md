@@ -19,7 +19,7 @@ nav_order: 5
 
 BlueCaster enables LHDC V5, LDAC, aptX Adaptive, aptX HD,
 aptX Low Latency, aptX, Opus, AAC, SBC XQ and SBC Bluetooth audio on Windows
-(and LC3 over LE Audio). Windows' own Bluetooth stack supports
+(and LC3 over LE Audio, experimental). Windows' own Bluetooth stack supports
 only SBC, classic aptX and (Windows 11 only) AAC for A2DP — this tool adds the
 others without requiring a kernel driver.
 
@@ -425,7 +425,7 @@ administrator) and is deleted when the helper ends.
 | LHDC V5 | lhdcv5-enc (C port of the AOSP encoder) | 400/500/900/1000 kbps (Low/Medium/Medium-High/High), at most the sink's listed maximum, ABR 160–400 kbps | 16/24-bit, 5 ms frames, 2-byte media payload header, RTP header |
 | LDAC | libldac (AOSP) | 330/660/990 kbps | High/Medium/Low (HQ/SQ/MQ) modes, ABR |
 | aptX Adaptive | aptx-adaptive (pure-Rust encoder of AKS-Logic/aptx-adaptive-linux, MIT) | 427 kbps High, 265 kbps Low Latency (R2 sinks: 270); ABR steps down to 364/318 (R2: 270/204) | 48 kHz stereo (96 kHz in High when chosen, to an R2 sink that lists it: 646/340/255 kbps), 24-bit; one codec packet per media packet behind BlueCaster's own RTP header; ABR in High; Auto takes it after LHDC V5 and LDAC |
-| Opus | libopus 1.5.2 | 256 kbps (stereo; mono half) | Android's A2DP Opus: 48 kHz, 20 ms frames (10 ms if the sink has only that), constrained VBR capped to the media payload, one frame per packet, 1-byte media payload header, RTP header |
+| Opus | libopus 1.6.1 | 256 kbps (stereo; mono half) | Android's A2DP Opus: 48 kHz, 20 ms frames (10 ms if the sink has only that), constrained VBR capped to the media payload, one frame per packet, 1-byte media payload header, RTP header |
 | aptX HD | libopenaptx | 576 kbps | 24-bit input, fixed rate, RTP header |
 | aptX | libopenaptx | 352/384 kbps (44.1/48 kHz) | 16-bit stereo, no RTP header |
 | aptX LL | libopenaptx | 352 kbps | ~32 ms latency, no RTP header, packets ≤ ~7.5 ms |
@@ -522,7 +522,7 @@ below):
 | `devices\device_codecs.json` | What each classic device offered when it last connected (and whether OPPO earbuds were asked for Hi-Res) |
 | `pairing\link_keys.txt` | Link keys: headphones paired with v1 or 2.0.x reconnect without pairing again |
 | `pairing\le_audio_bonds.tlv`, `pairing\le_audio_csip.txt` | LE Audio: LE bonds (with the GATT server's persistent CCC values) and coordinated sets |
-| `pairing\windows_le_keys.txt`, `pairing\replaced_windows_keys.json` | LE keys taken from Windows until a stack with LE adds them; Windows' keys that **Restore original driver** replaced |
+| `pairing\windows_le_keys.txt`, `pairing\replaced_windows_keys.json` | LE keys taken from Windows until a stack adds them; Windows' keys that **Restore original driver** replaced |
 | `adapters\adapter_caps.json` | What a stack learnt about each adapter (LE Audio support, address, HCI version, Windows' name for it) |
 | `adapters\driver\<instance id>.json` | The previous driver of each adapter WinUSB was assigned to |
 | `firmware\` | Firmware files (`*.bin`, `*.hcd`, `ibt-*`; Intel's also in `firmware\intel\`, as linux-firmware lays them out); files earlier versions kept loose in the settings folder are moved there |

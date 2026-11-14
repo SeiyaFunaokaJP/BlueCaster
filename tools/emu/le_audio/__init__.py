@@ -26,6 +26,12 @@ def add_arguments(parser):
     # The emulated controllers themselves (controller.py)
     parser.add_argument('--no-iso-buffers', action='store_true',
                         help="BlueCaster's controller has LE but no ISO buffers (LE Read Buffer Size v2: 0)")
+    parser.add_argument('--refuse-cis', type=int, metavar='N',
+                        help="BlueCaster's controller refuses the Nth CIS of LE Create CIS (0: the first) "
+                             'with 0x1E; the others come up')
+    parser.add_argument('--cis-up-after', type=float, metavar='SECONDS',
+                        help='with --refuse-cis: the other CIS come up this much later, '
+                             "on BlueCaster's side only")
     for module in MODULES:
         if hasattr(module, 'add_arguments'):
             module.add_arguments(parser)
@@ -34,6 +40,8 @@ def add_arguments(parser):
 def configure_sink(sink, args):
     if args.no_iso_buffers:
         controller.NO_ISO_BUFFERS.add('BlueCaster')   # the controller served over H4 (emu_le_audio_sink.py)
+    if args.refuse_cis is not None:
+        controller.REFUSE_CIS = (args.refuse_cis, args.cis_up_after)
     for module in MODULES:
         if hasattr(module, 'configure_sink'):
             module.configure_sink(sink, args)

@@ -26,7 +26,11 @@
 // keeps one per device and starts a stream in use again with it). What
 // belongs to the device rather than the codec (capture source, volume sync,
 // packet size) is on Audio Devices. An LE Audio entry (experimental) has LC3
-// only.
+// only: its cards LC3 (the default) and LC3 LL (the profile's
+// le_low_latency, issue #86). aptX Adaptive's low latency mode is a card of
+// its own, aptX Adaptive LL (lib/codecs.ts APTXAD_LL: aptX Adaptive with
+// quality "ll" in the profile; Auto never takes it). The LE Audio and call
+// codec cards' "..." shows the fields of an A2DP codec's, read only.
 // The microphone's codec (issue #86): while a classic device's call link
 // is open its call codec cards replace the music ones, and while an LE Audio
 // device's microphone runs an LC3 card for it follows LC3's. Under
@@ -52,7 +56,7 @@
 
 import { batch, createEffect, createSignal, createUniqueId, For, on, onCleanup, Show, type JSX } from "solid-js";
 import { unwrap } from "solid-js/store";
-import { useApp } from "../app/context";
+import { onAudioDevicesChanged, useApp } from "../app/context";
 import { saveSettings } from "../app/settings";
 import { CodecCard, CodecSettings, type CardSpec, type CodecChoice } from "../components/CodecCards";
 import { Banner, Button, Dialog, Field, Select, Toggle } from "../components/controls";
@@ -63,8 +67,10 @@ import type { AudioDevice, Profile, Snapshot } from "../ipc/types";
 import {
   autoKeepsCodecSettings,
   CARD_ORDER,
+  cardOf,
   cardOrder,
   CODECS,
+  codecKey,
   codecLabelKey,
   codecSpec,
   codecSupport,
@@ -86,13 +92,13 @@ import {
   entryBase,
   entryByKey,
   followedName,
+  keptFor,
   knownCodecCaps,
   knownCodecs,
   normalizeProfile,
   withCodec,
   type AudioEntry,
 } from "../lib/profile";
-import { khz } from "../lib/format";
 import { knownSbcCaps } from "../lib/sbc";
 import { entryState } from "./Home";
 
@@ -173,21 +179,23 @@ async function saveEntry(
   const cur = entry.profile ? structuredClone(unwrap(entry.profile)) : null;
   const next = edit(cur ?? entryBase(entry, snap.profiles));
   const taken = snap.profiles.map((p) => p.name).filter((n) => n !== cur?.name);
-  next.name = followedName(next, entry.le_audio ? "" : t(codecSpec(next.codec).label), taken);
+  next.name = followedName(next, entry.le_audio ? "" : t(codecSpec(cardOf(next)).label), taken);
   if (cur && JSON.stringify(next) === JSON.stringify(cur)) return cur.name;
   const saved = normalizeProfile(next);
   const ok = await app.run(() => app.core.request("profile.save", { profile: saved, original_name: cur?.name ?? null }));
   return ok ? saved.name : null;
 }
 
-/** Saves a device's headset mode, microphone output (Codecs) or mute
- *  (Home's and the flyout's chip). The core opens or
+/** Saves a device's headset mode, microphone output, default input
+ *  (Audio Devices) or mute (Home's and the flyout's chip). The core opens or
  *  closes the microphone link (Auto: as apps record from the output).
  *  True once saved. */
 export async function saveHeadsetMic(
   app: ReturnType<typeof useApp>,
   entry: AudioEntry,
-  patch: Partial<Pick<Profile, "headset_mic" | "mic_device_id" | "mic_device_name" | "mic_muted">>,
+  patch: Partial<
+    Pick<Profile, "headset_mic" | "mic_device_id" | "mic_device_name" | "mic_muted" | "mic_default_input">
+  >,
 ): Promise<boolean> {
   return (await saveEntry(app, entry, (base) => ({ ...base, ...patch }))) !== null;
 }
@@ -232,13 +240,18 @@ export function saveCodecOrder(app: ReturnType<typeof useApp>, entry: AudioEntry
   return saveEntry(app, entry, (base) => ({ ...base, codec_order: orderKeys(order) }));
 }
 
-/** The codec a device streams with now, when its profile streams */
+/** The codec a device streams with now, when its profile streams (aptX
+ *  Adaptive LL's card while aptX Adaptive streams as its profile chose it in
+ *  Low Latency: not under Auto-select, which picks aptX Adaptive with its own
+ *  settings) */
 export function streamingCodec(snap: Snapshot, entry: AudioEntry): CodecId | null {
   const st = snap.stream;
   const p = entry.profile;
   if (st.state !== "streaming" || !st.info || !p || st.profile !== p.name) return null;
   const key = codecLabelKey(st.info.codec);
-  return CODECS.find((c) => c.id !== "auto" && c.label === key)?.id ?? null;
+  const id = CODECS.find((c) => c.id !== "auto" && c.label === key)?.id ?? null;
+
+  return id === "aptxad" && cardOf(p) === "aptxadll" && !snap.settings.auto_codec ? "aptxadll" : id;
 }
 
 /** The codec a device's cards (and Home's Codec card) show chosen: under
@@ -253,14 +266,14 @@ export function pickedCodec(
   order: readonly CodecId[],
 ): string | null {
   const p = entry.profile ?? entryBase(entry, snap.profiles);
-  const codec = p.codec;
+  const codec = cardOf(p);
   // Outside developer mode its codecs are left out, as the core does: one
   // chosen is used as one the device does not offer, never asked for anyway
   const developer = snap.settings.developer_mode;
   const known = offeredCodecs(knownCodecs(snap.devices, entry.address), developer);
   const blocked = !developer && developerOnly(codec);
   // One it may offer once chosen stays chosen (issue #30)
-  if (!autoAll && !blocked && codecsOnRequest(snap.devices, entry.address).includes(codec)) return codec;
+  if (!autoAll && !blocked && codecsOnRequest(snap.devices, entry.address).includes(codecKey(codec))) return codec;
   // One chosen on its card though the device does not offer it: that one;
   // one it no longer offers: the one used instead (issue #86)
   if (!autoAll && codec !== "auto") {
@@ -320,6 +333,7 @@ export function Codecs() {
   loadDevices();
   window.addEventListener("focus", loadDevices);
   onCleanup(() => window.removeEventListener("focus", loadDevices));
+  onAudioDevicesChanged(loadDevices);
 
   return (
     <div class="page codecs">
@@ -451,7 +465,7 @@ function DeviceCodecs(props: {
   // A card the device does not offer is asked for anyway (issue #86); the
   // codec chosen keeps how it was chosen when only its settings change
   const forcedFor = (id: string) =>
-    id === shown().codec && id === picked() ? shown().codec_forced : support(id) === "not_offered";
+    id === cardOf(shown()) && id === picked() ? shown().codec_forced : support(id) === "not_offered";
   const choose = async (id: string, values?: Omit<CodecChoice, "codec">, live = false) => {
     // A "..." dialog's change while the cards wait: applied after (the cards
     // themselves are disabled meanwhile)
@@ -472,7 +486,8 @@ function DeviceCodecs(props: {
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
   const apply = async ({ codec: id, ...values }: CodecChoice) => {
     const p = shown();
-    if (id === p.codec || id === picked()) await choose(id, values, id === p.codec && onlyBitpools(p, values));
+    const mine = id === cardOf(p);
+    if (mine || id === picked()) await choose(id, values, mine && onlyBitpools(p, values));
     else
       await queued(() =>
         saveEntry(app, e(), (base) => ({ ...base, codec_settings: { ...base.codec_settings, [id]: values } })),
@@ -747,16 +762,17 @@ function DeviceCodecs(props: {
       aria-busy={busy() || ordering() ? "true" : undefined}
     >
       <div class="device-codecs-head">
-        {/* Which device is in use (issue #86 round 8), as the sidebar's dot */}
-        <span class={`dot st-${state()}`} role="img" aria-label={stateLabel(state())} title={stateLabel(state())} />
+        {/* Which device is in use (issue #86 round 8), as the sidebar's dot;
+            never red here, it looked like recording (issue #86) */}
+        <span class={`dot st-${state() === "error" ? "idle" : state()}`} role="img" aria-label={stateLabel(state())} title={stateLabel(state())} />
         <Icon name="headphones" />
         <div class="device-codecs-title">
           <h2 id={titleId()} class="ellipsis">
             {e().name || t("device.name_unknown")}
           </h2>
         </div>
+        {/* No "Paired": that is the Audio Devices page's (issue #86) */}
         <span class="tags">
-          <span class="tag">{t("device.tag_saved")}</span>
           {/* LE Audio: that tag alone (issue #86) */}
           <Show when={e().device.audio && !e().le_audio}>
             <span class="tag">{t("device.tag_audio")}</span>
@@ -773,15 +789,9 @@ function DeviceCodecs(props: {
             <FixedCards
               entry={e()}
               cards={e().le_audio ? LE_CARDS : callCards()}
-              // LE Audio: none until the device has a profile (made by the choice)
+              // LE Audio: LC3 unless LC3 LL is chosen (issue #86)
               picked={
-                e().le_audio
-                  ? e().profile
-                    ? e().profile!.le_low_latency
-                      ? "lc3_ll"
-                      : "lc3"
-                    : ""
-                  : (callCodec() ?? reopening()?.to ?? "")
+                e().le_audio ? (shown().le_low_latency ? "lc3_ll" : "lc3") : (callCodec() ?? reopening()?.to ?? "")
               }
               disabled={locked()}
               // LE Audio: LC3 or its low latency configuration, from the
@@ -904,13 +914,15 @@ function DeviceCodecs(props: {
         <CodecSettings
           spec={settingsOf()}
           profile={shown()}
-          kept={(id) => shown().codec_settings?.[id]}
+          kept={(id) => keptFor(shown(), id)}
           sbcCaps={sbcCapsForSettings(knownSbcCaps(snap().devices, e().address), snap().settings)}
           caps={capsForSettings(knownCodecCaps(snap().devices, e().address), snap().settings)}
           developer={snap().settings.developer_mode}
           matchSource={snap().settings.developer_mode && snap().settings.dev_overrides.match_source}
           sourceFormat={sourceFormat()}
           deviceName={e().name}
+          warnUnlisted={!snap().settings.unlisted_options_warned}
+          onUnlistedWarned={() => void saveSettings(app, { unlisted_options_warned: true })}
           onForgetReport={() => void app.run(() => app.core.request("device.forget_codecs", { address: e().address }))}
           onChange={(values) => {
             pending = values;
@@ -953,8 +965,8 @@ export const LE_MIC_CARD: FixedCard = {
   noBitRate: true,
 };
 
-/** LE Audio's: LC3 as the device offers it best, or its low latency
- *  configuration (the profile's le_low_latency) */
+/** LE Audio's: LC3 as the device offers it best (the default), or its low
+ *  latency configuration (the profile's le_low_latency) */
 export const LE_CARDS: readonly FixedCard[] = [
   { id: "lc3", label: "codec.lc3", bars: { quality: 4, latency: 3, stability: 4 } },
   { id: "lc3_ll", label: "codec.lc3_ll", bars: { quality: 3, latency: 5, stability: 3 } },
@@ -996,7 +1008,7 @@ function FixedCards(props: {
   const rateOptions = () => {
     const r = props.rateChoice;
     if (!r || r.rates.length < 2) return null;
-    const label = (hz: number) => `${khz(hz)} kHz`;
+    const label = (hz: number) => `${hz} Hz`;
     const listed = r.value === 0 || r.rates.includes(r.value) ? [...r.rates] : [...r.rates, r.value];
     return [
       { value: 0, label: t("codec.auto_value", label(r.rates[0])) },
@@ -1006,8 +1018,8 @@ function FixedCards(props: {
       })),
     ];
   };
-  const value = (id: string, text: string) => (
-    <output id={id} class="input readonly num">
+  const value = (id: string, text: string, described?: string) => (
+    <output id={id} class="input readonly num" aria-describedby={described}>
       {text}
     </output>
   );
@@ -1039,19 +1051,27 @@ function FixedCards(props: {
         <Show when={open()}>
           {(c) => (
             <div class="codec-settings">
+              {/* As an A2DP codec's settings, read only, with the same
+                  descriptions (issue #86) */}
+              <Show when={!c().noBitRate}>
+                <Field label={t("connection.quality")} hint={t("tooltip.quality")}>
+                  {(id, described) => value(id, kbps(c()) ? `${kbps(c())} kbps` : "—", described)}
+                </Field>
+              </Show>
               <Show
                 when={rateOptions()}
                 fallback={
-                  <Field label={t("connection.sample_rate")}>
-                    {(id) => value(id, rate(c()) ? `${khz(rate(c())!)} kHz` : "—")}
+                  <Field label={t("connection.sample_rate")} hint={t("tooltip.sample_rate")}>
+                    {(id, described) => value(id, rate(c()) ? `${rate(c())} Hz` : "—", described)}
                   </Field>
                 }
               >
                 {(options) => (
-                  <Field label={t("connection.sample_rate")}>
-                    {(id) => (
+                  <Field label={t("connection.sample_rate")} hint={t("tooltip.sample_rate")}>
+                    {(id, described) => (
                       <Select
                         id={id}
+                        describedBy={described}
                         value={props.rateChoice!.value}
                         options={options()}
                         disabled={props.disabled}
@@ -1061,14 +1081,15 @@ function FixedCards(props: {
                   </Field>
                 )}
               </Show>
-              <Show when={!c().noBitRate}>
-                <Field label={t("ui.codecs.bit_rate")}>
-                  {(id) => value(id, kbps(c()) ? `${kbps(c())} kbps` : "—")}
-                </Field>
-              </Show>
+              {/* LC3 and the call codecs carry 16-bit samples */}
+              <Field label={t("connection.bit_depth")} hint={t("tooltip.bit_depth")}>
+                {(id, described) => value(id, t("bitdepth.16"), described)}
+              </Field>
               {/* The call link and the microphone are one channel */}
               <Show when={props.mono}>
-                <Field label={t("ui.diag.cd_channels")}>{(id) => value(id, t("ui.diag.cd_mode.mono"))}</Field>
+                <Field label={t("ui.diag.cd_channel_mode")} hint={t("tooltip.channel_mode")}>
+                  {(id, described) => value(id, t("ui.diag.cd_mode.mono"), described)}
+                </Field>
               </Show>
             </div>
           )}

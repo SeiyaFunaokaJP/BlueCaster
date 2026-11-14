@@ -155,6 +155,15 @@ pub struct Settings {
     /// The suggestion to get the Hi-Fi Cable was closed
     #[serde(default)]
     pub hifi_cable_note_hidden: bool,
+    /// The virtual cables' dialog was opened by itself once after an update
+    /// (issue #86). A new folder goes through the setup, which shows the
+    /// cables: true; a file written before this key: false.
+    #[serde(default)]
+    pub cables_dialog_shown: bool,
+    /// The warning before options the device does not list are unlocked was
+    /// accepted once: it is not asked again for any device or codec (issue #86)
+    #[serde(default)]
+    pub unlisted_options_warned: bool,
     /// Each device's volume (address -> AVRCP volume 0..127), set again when
     /// it connects (issue #86: one device's volume must not carry over to
     /// another)
@@ -283,6 +292,21 @@ pub struct DevDebug {
     /// instead of the firmware folder's, where the driver has it (the
     /// RTL8761B, issue #427; adapter::configure)
     pub realtek_driver_firmware: bool,
+    /// LE Audio CIG (bt_host::CigOverrides): max transport latency C->P
+    /// and P->C in ms, 0: as planned
+    pub le_latency_c_to_p_ms: u16,
+    pub le_latency_p_to_c_ms: u16,
+    /// RTN C->P and P->C; None: as planned
+    pub le_rtn_c_to_p: Option<u8>,
+    pub le_rtn_p_to_c: Option<u8>,
+    /// Interleaved CIS packing instead of sequential
+    pub le_interleaved: bool,
+    /// The LE Audio microphone's preset ("32_2_1"), taken as it is; empty:
+    /// as planned
+    pub le_mic_preset: String,
+    /// A stream with the microphone that failed is retried without it on
+    /// the same link instead of a new one
+    pub le_mic_retry_same_link: bool,
 }
 
 impl DevDebug {
@@ -368,6 +392,8 @@ impl Default for Settings {
             awaiting_hifi_cable: false,
             vb_cable_note_hidden: false,
             hifi_cable_note_hidden: false,
+            cables_dialog_shown: true,
+            unlisted_options_warned: false,
             saved_volumes: BTreeMap::new(),
             device_options: None,
             volume_sync: true,
@@ -473,9 +499,34 @@ impl Settings {
         }
     }
 
+    /// LE Audio in force: its setting counts only in developer mode (issue
+    /// #86: off for everyone else until a later version)
+    pub fn le_audio(&self) -> bool {
+        self.le_audio_experimental && self.debug_mode
+    }
+
     /// Whether a stream mutes the default output device
     pub fn mutes_output(&self) -> bool {
         self.mute_output && self.volume_mixer && self.debug_mode
+    }
+
+    /// A profile's "Set as Windows default output/input while connected"
+    /// in force: as stored in developer mode, on for everyone else (issue
+    /// #86: apps without an output picker and the microphone need them)
+    pub fn default_device_switch(&self, stored: bool) -> bool {
+        stored || !self.debug_mode
+    }
+
+    /// A profile's source with the default output switch in force
+    /// ([`Settings::default_device_switch`])
+    pub fn source_in_force(&self, source: crate::stream::SourceRequest) -> crate::stream::SourceRequest {
+        use crate::stream::SourceRequest::VirtualDevice;
+        match source {
+            VirtualDevice { id, name, auto_switch } => {
+                VirtualDevice { id, name, auto_switch: self.default_device_switch(auto_switch) }
+            }
+            other => other,
+        }
     }
 
     /// The SBC frame setup a stream takes from its profile: the fixed one
@@ -523,6 +574,16 @@ mod tests {
     }
 
     #[test]
+    fn le_audio_counts_only_in_developer_mode() {
+        let mut s = Settings { le_audio_experimental: true, ..Settings::default() };
+        assert!(!s.le_audio());
+        s.debug_mode = true;
+        assert!(s.le_audio());
+        s.le_audio_experimental = false;
+        assert!(!s.le_audio());
+    }
+
+    #[test]
     fn dev_log_counts_only_in_developer_mode() {
         let mut s: Settings = serde_json::from_str(r#"{"dev_log":{"keep_days":0,"always_verbose":"loud"}}"#).unwrap();
         assert_eq!(s.dev_log.day_cap_mb, LOG_DAY_CAP_MB);
@@ -533,6 +594,20 @@ mod tests {
         s.dev_log.always_verbose = "trace".into();
         s.dev_log.day_cap_mb = 1 << 20;
         assert_eq!((s.log().always_verbose.as_str(), s.log().day_cap_mb), ("trace", 10240));
+    }
+
+    #[test]
+    fn default_device_switch_counts_only_in_developer_mode() {
+        use crate::stream::SourceRequest;
+        let off = || SourceRequest::VirtualDevice { id: "{x}".into(), name: "CABLE".into(), auto_switch: false };
+        let mut s = Settings::default();
+        assert!(s.default_device_switch(false));
+        assert_eq!(s.source_in_force(off()).default_switch(), Some("{x}"));
+        assert_eq!(s.source_in_force(SourceRequest::SystemLoopback), SourceRequest::SystemLoopback);
+        s.debug_mode = true;
+        assert!(!s.default_device_switch(false));
+        assert!(s.default_device_switch(true));
+        assert_eq!(s.source_in_force(off()), off());
     }
 
     #[test]
@@ -648,6 +723,30 @@ mod tests {
         // Saved before the setup ended (its last step saves settings)
         let back: Settings = serde_json::from_value(serde_json::to_value(Settings::default()).unwrap()).unwrap();
         assert!(!back.setup_done);
+    }
+
+    #[test]
+    fn cables_dialog_opens_by_itself_after_an_update_only() {
+        // No file yet: the setup shows the cables
+        assert!(Settings::default().cables_dialog_shown);
+        let back: Settings = serde_json::from_value(serde_json::to_value(Settings::default()).unwrap()).unwrap();
+        assert!(back.cables_dialog_shown);
+        // A file of an earlier version: once
+        let s: Settings = serde_json::from_str(r#"{"schema_version":8,"language":"en","setup_done":true}"#).unwrap();
+        assert!(!s.cables_dialog_shown);
+        let s = Settings { cables_dialog_shown: true, ..s };
+        let back: Settings = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+        assert!(back.cables_dialog_shown);
+    }
+
+    #[test]
+    fn unlisted_options_warning_is_kept_once_accepted() {
+        assert!(!Settings::default().unlisted_options_warned);
+        let s: Settings = serde_json::from_str(r#"{"schema_version":8,"language":"en"}"#).unwrap();
+        assert!(!s.unlisted_options_warned);
+        let s = Settings { unlisted_options_warned: true, ..Settings::default() };
+        let back: Settings = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+        assert!(back.unlisted_options_warned);
     }
 
     #[test]

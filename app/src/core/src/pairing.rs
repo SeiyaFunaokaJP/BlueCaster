@@ -1,5 +1,5 @@
 //! Developer mode: a classic device's pairing as BlueCaster keeps it (the
-//! link key, and the LE keys derived from it while LE Audio is on) and the
+//! link key, and the LE keys derived from it) and the
 //! services the device lists. For everyone: taking over the link keys
 //! Windows' Bluetooth kept for the adapter BlueCaster now uses (issue #86:
 //! devices paired in Windows then connect without pairing again; the audio
@@ -64,14 +64,12 @@ pub fn pairing(state: &CoreState, addr: &str) -> Result<Value, ErrorInfo> {
         .iter()
         .find(|e| e.addr == addr)
         .map(|e| LinkKeyInfo { key: hex(&e.key), key_type: e.key_type.clamp(0, 255) as u8 });
-    // Held by the running stack (its bond file is open there); without its
-    // LE side, the bond as kept on disk (issue #86: a classic stream showed
-    // none of the earbuds' LE keys)
+    // Held by the running stack (its bond file is open there); without
+    // one, the bond as kept on disk
     let (le_keys, le_keys_missing) = match state.service.host().and_then(|h| h.le_keys(addr)) {
         Some(Ok(k)) => (Some(le_keys_info(k)), None),
         Some(Err(bt_host::CtkdOutcome::NoLe)) | None => match stored_le_keys(&state.config_dir(), &addr) {
             Some(k) => (Some(le_keys_info(k)), None),
-            None if state.service.host().is_some() => (None, Some(LeKeysMissing::NoLe)),
             None => (None, Some(LeKeysMissing::NoStack)),
         },
         Some(Err(why)) => (None, Some(missing(why))),
@@ -99,7 +97,7 @@ fn stored_le_keys(config: &Path, addr: &[u8; 6]) -> Option<bt_host::LeKeys> {
 fn missing(why: bt_host::CtkdOutcome) -> LeKeysMissing {
     use bt_host::CtkdOutcome as O;
     match why {
-        O::NoLe => LeKeysMissing::NoLe,
+        O::NoLe => LeKeysMissing::NoStack,
         O::NotAsked => LeKeysMissing::NotAsked,
         O::Asking => LeKeysMissing::Asking,
         O::NotSecure => LeKeysMissing::NotSecure,

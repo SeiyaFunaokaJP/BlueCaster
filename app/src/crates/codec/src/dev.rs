@@ -44,6 +44,9 @@ pub struct DevOverrides {
     /// Audio waits unencoded while the send queue is backed up, so it goes
     /// out at the bit rate ABR has lowered to meanwhile (issue #279)
     pub encode_at_send: bool,
+    /// A link slow after a voice link keeps the full bit rate (the encoder
+    /// is not lowered; bt_host::esco_watch, issue #86)
+    pub keep_bitrate_on_slow_link: bool,
 }
 
 /// Range of [`DevOverrides::queue_max_wait_ms`] (ms)
@@ -69,6 +72,7 @@ static CURRENT: RwLock<DevOverrides> = RwLock::new(DevOverrides {
     ignore_sink_max: false,
     queue_max_wait_ms: 0,
     encode_at_send: false,
+    keep_bitrate_on_slow_link: false,
 });
 
 /// The overrides in force

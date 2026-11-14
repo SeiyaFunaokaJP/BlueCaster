@@ -119,6 +119,7 @@ fn main() {
         "BTstack not found at {} (git submodule update --init extern/btstack)",
         btstack.display()
     );
+    extern_version::check(&manifest, "btstack", &btstack);
     let csrc = manifest.join("csrc");
 
     let mut build = cc::Build::new();
@@ -174,6 +175,7 @@ fn main() {
         "a2dp.c" => patched_a2dp(&btstack),
         "avdtp_initiator.c" => patched_avdtp_initiator(&btstack),
         "avrcp_target.c" => patched_avrcp_target(&btstack),
+        "hfp_ag.c" => patched_hfp_ag(&btstack),
         f => btstack.join("src/classic").join(f),
     }));
     build.file(btstack.join("platform/windows/btstack_run_loop_windows.c"));
@@ -370,6 +372,93 @@ fn patched_avrcp_target(btstack: &Path) -> PathBuf {
     path
 }
 
+/// src/classic/hfp_ag.c holding a command that arrives before the answer to
+/// the previous one went out, written to OUT_DIR.
+///
+/// BTstack 1.8.3 answers such a command with ERROR ("Received a command while
+/// ok pending"). A WH-1000XM4 sends its battery level (AT+IPHONEACCEV) right
+/// after AT+XAPL, before our +XAPL and OK, and does not send it again: after
+/// about every other connection BlueCaster showed no battery. The bytes from
+/// the start of such a command line on are kept and parsed once OK or ERROR
+/// for the previous command has been sent. A line that started before (or
+/// more than the buffer holds) gets the ERROR as before.
+fn patched_hfp_ag(btstack: &Path) -> PathBuf {
+    const FILE: &str = "hfp_ag.c";
+    // LF patterns: a checkout with core.autocrlf (CI) has CRLF
+    let mut source = std::fs::read_to_string(btstack.join("src/classic").join(FILE)).unwrap().replace("\r\n", "\n");
+    replace_once(
+        &mut source,
+        FILE,
+        "static void hfp_ag_run_for_context(hfp_connection_t *hfp_connection){\n",
+        r#"/* BlueCaster: patched by btstack-sys build.rs (patched_hfp_ag) */
+static void hfp_ag_handle_rfcomm_data(hfp_connection_t * hfp_connection, uint8_t *packet, uint16_t size);
+#define BLUECASTER_HELD_MAX 256
+static uint16_t bluecaster_held_cid;
+static uint16_t bluecaster_held_len;
+static uint8_t bluecaster_held[BLUECASTER_HELD_MAX];
+static bool bluecaster_holding(const hfp_connection_t * hfp_connection){
+    return (bluecaster_held_len > 0) && (bluecaster_held_cid == hfp_connection->rfcomm_cid);
+}
+/* Keeps received bytes for later; false if they don't fit */
+static bool bluecaster_hold(hfp_connection_t * hfp_connection, const uint8_t * data, uint16_t len){
+    if ((bluecaster_held_len > 0) && (bluecaster_held_cid != hfp_connection->rfcomm_cid)){
+        if (get_hfp_connection_context_for_rfcomm_cid(bluecaster_held_cid) != NULL) return false;
+        /* their connection is gone */
+        bluecaster_held_len = 0;
+    }
+    if (len > (BLUECASTER_HELD_MAX - bluecaster_held_len)) return false;
+    bluecaster_held_cid = hfp_connection->rfcomm_cid;
+    memcpy(&bluecaster_held[bluecaster_held_len], data, len);
+    bluecaster_held_len += len;
+    return true;
+}
+/* Parses the kept bytes once no OK or ERROR is waiting to be sent */
+static void bluecaster_release(hfp_connection_t * hfp_connection){
+    if (!bluecaster_holding(hfp_connection)) return;
+    if ((hfp_connection->ok_pending > 0) || (hfp_connection->send_error > 0)) return;
+    uint8_t data[BLUECASTER_HELD_MAX];
+    uint16_t len = bluecaster_held_len;
+    memcpy(data, bluecaster_held, len);
+    bluecaster_held_len = 0;
+    log_info("HFP AG: parsing %u bytes held while a response was pending", len);
+    hfp_ag_handle_rfcomm_data(hfp_connection, data, len);
+}
+
+static void hfp_ag_run_for_context(hfp_connection_t *hfp_connection){
+"#,
+    );
+    // Kept bytes first, before anything is sent: their answer follows the
+    // pending one
+    replace_once(
+        &mut source,
+        FILE,
+        "\tif (hfp_connection->rfcomm_cid == 0) return;\n",
+        "\tif (hfp_connection->rfcomm_cid == 0) return;\n\n    bluecaster_release(hfp_connection);\n",
+    );
+    // Before parsing a byte: hold it, and the rest of the packet, if bytes
+    // are held already (order), or if it starts a command line while a
+    // response is pending
+    replace_once(
+        &mut source,
+        FILE,
+        "        hfp_parse(hfp_connection, packet[pos], 0);\n",
+        r#"        if (bluecaster_holding(hfp_connection) ||
+            (((hfp_connection->ok_pending > 0) || (hfp_connection->send_error > 0)) &&
+             (hfp_connection->parser_state == HFP_PARSER_CMD_HEADER) && (hfp_connection->line_size == 0) &&
+             !hfp_parser_is_end_of_line(packet[pos]))){
+            if (bluecaster_hold(hfp_connection, &packet[pos], size - pos)){
+                log_info("HFP AG: holding a command until the pending response is sent");
+                return;
+            }
+        }
+        hfp_parse(hfp_connection, packet[pos], 0);
+"#,
+    );
+    let path = PathBuf::from(env::var("OUT_DIR").unwrap()).join(FILE);
+    std::fs::write(&path, source).unwrap();
+    path
+}
+
 /// src/ble/sm.c with Cross-Transport Key Derivation from BR/EDR (issue #86),
 /// written to OUT_DIR.
 ///
@@ -386,11 +475,18 @@ fn patched_avrcp_target(btstack: &Path) -> PathBuf {
 /// (bluecaster_ctkd_wanted). A device that does not list CID 7 is not
 /// asked; a failure ends SMP on that link only, never the link.
 ///
-/// The other direction (a BR/EDR link key derived from an LE pairing) stays
-/// off, as before: BTstack would derive and store it whether or not the
-/// device distributes one, replacing the device's classic key. LE pairing
-/// keeps its key distribution and AuthReq of today (no LinkKey, no CT2),
-/// and SM never stores a link key.
+/// The other direction, a BR/EDR link key derived from an LE pairing (issue
+/// #86: a dual-mode device paired as LE Audio had no link key): LE pairing
+/// offers LinkKey and CT2 (BTstack's own key distribution and AuthReq with
+/// the flag), but SM derives the key only when the device agreed, i.e. the
+/// Pairing Request and Response both carry LinkKey in the initiator and the
+/// responder key distribution (Core Vol 3 Part H 3.6.1: only then does
+/// either side derive it; unpatched BTstack 1.8.x derives it on every LE
+/// Secure Connections bonding). h6, or h7 when both set CT2 (Part H
+/// 2.4.2.4), from the full LTK before it is masked (ESR09 E6405). SM then
+/// does not store it itself: it hands the outcome to Rust
+/// (bluecaster_rs_ctkd_from_le, see src/ctkd.rs), which keeps the key under
+/// a public identity address only.
 fn patched_sm(btstack: &Path) -> PathBuf {
     const FILE: &str = "sm.c";
     let mut source = std::fs::read_to_string(btstack.join("src/ble/sm.c")).unwrap();
@@ -400,7 +496,10 @@ fn patched_sm(btstack: &Path) -> PathBuf {
          #define ENABLE_CROSS_TRANSPORT_KEY_DERIVATION\n\
          int bluecaster_ctkd_enabled(void);\n\
          int bluecaster_ctkd_wanted(const unsigned char *addr);\n\
-         void bluecaster_ctkd_note(const unsigned char *addr, int what);\n",
+         void bluecaster_ctkd_note(const unsigned char *addr, int what);\n\
+         void bluecaster_ctkd_from_le(int why, int addr_type, const unsigned char *addr, const unsigned char *key,\n\
+                                      int key_type);\n\
+         static int bluecaster_link_key_agreed(void);\n",
     );
     // Why a link is not asked over, so the Services dialog can say (issue
     // #86): 1 not Secure Connections, 2 the device opened it, 3 no CID 7
@@ -444,19 +543,58 @@ fn patched_sm(btstack: &Path) -> PathBuf {
         "} else if (sm_conn->sm_pairing_requested){",
         "} else if (sm_conn->sm_pairing_requested || bluecaster_ctkd_wanted(sm_conn->sm_peer_address)){",
     );
-    // No link key derived from an LE pairing, none offered in it
+    // A link key from an LE pairing only when both sides agreed to it: the
+    // device derives one only then, so only then is ours the same as its
     let from_le = "static bool sm_ctkd_from_le(void) {";
-    replace_once(&mut source, FILE, from_le, &format!("{from_le}\n    if (setup != NULL) return false;"));
-    replace_once(&mut source, FILE, "flags |= SM_KEYDIST_LINK_KEY;", "/* BlueCaster: no LinkKey over LE */");
-    replace_once(&mut source, FILE, "auth_req |= SM_AUTHREQ_CT2;", "/* BlueCaster: no CT2 over LE */");
-    // Nor stored: after a derivation from BR/EDR, BTstack 1.8.1 stores the
-    // link key it read for it (setup->sm_link_key, most significant octet
-    // first for h6 / h7) back as a link key, byte-reversed and under the
-    // device's identity address. With a public identity that replaces the
-    // device's link key with a wrong one (the next connection fails
-    // authentication); with a random one it adds a stray key.
+    replace_once(
+        &mut source,
+        FILE,
+        from_le,
+        &format!(
+            "static int bluecaster_link_key_agreed(void) {{\n\
+             \x20   return (sm_pairing_packet_get_initiator_key_distribution(setup->sm_m_preq)\n\
+             \x20         & sm_pairing_packet_get_responder_key_distribution(setup->sm_m_preq)\n\
+             \x20         & sm_pairing_packet_get_initiator_key_distribution(setup->sm_s_pres)\n\
+             \x20         & sm_pairing_packet_get_responder_key_distribution(setup->sm_s_pres)\n\
+             \x20         & SM_KEYDIST_LINK_KEY) != 0;\n\
+             }}\n\
+             {from_le}\n    if (!bluecaster_link_key_agreed()) return false;"
+        ),
+    );
+    // Stored by Rust, not here (BTstack: under the identity address of any
+    // type, kept back when the stored key is authenticated and the derived
+    // one is not). BTstack 1.8.3 calls this after an LE bonding (both sides
+    // bondable) only; sm_init_setup resets sm_link_key_type for each LE
+    // pairing, so a key read for a derivation from BR/EDR never comes here.
+    // why: 0 derived, 1 no LE Secure Connections, 2 the device did not
+    // agree to LinkKey, 3 not derived otherwise. The key goes over in HCI
+    // order (least significant octet first; SM's h6 / h7 result is most
+    // significant first), as BTstack's own store and link_keys.txt keep it.
     let store = "static void sm_store_classic_bonding_information(sm_connection_t * sm_conn) {";
-    replace_once(&mut source, FILE, store, &format!("{store}\n    if (sm_conn != NULL) return;"));
+    replace_once(
+        &mut source,
+        FILE,
+        store,
+        &format!(
+            "{store}\n\
+             \x20   if (sm_conn != NULL) {{\n\
+             \x20       link_key_t bluecaster_key;\n\
+             \x20       int why = 3;\n\
+             \x20       memset(bluecaster_key, 0, sizeof(bluecaster_key));\n\
+             \x20       if (setup->sm_link_key_type != INVALID_LINK_KEY) {{\n\
+             \x20           why = 0;\n\
+             \x20           reverse_128(setup->sm_link_key, bluecaster_key);\n\
+             \x20       }} else if (!setup->sm_use_secure_connections) {{\n\
+             \x20           why = 1;\n\
+             \x20       }} else if (!bluecaster_link_key_agreed()) {{\n\
+             \x20           why = 2;\n\
+             \x20       }}\n\
+             \x20       bluecaster_ctkd_from_le(why, setup->sm_peer_addr_type, setup->sm_peer_address, bluecaster_key,\n\
+             \x20                               (int) setup->sm_link_key_type);\n\
+             \x20       return;\n\
+             \x20   }}"
+        ),
+    );
     let path = PathBuf::from(env::var("OUT_DIR").unwrap()).join("sm.c");
     std::fs::write(&path, source).unwrap();
     path

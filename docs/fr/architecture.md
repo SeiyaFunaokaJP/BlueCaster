@@ -20,7 +20,7 @@ nav_order: 4
 
 BlueCaster permet l'audio Bluetooth LHDC V5, LDAC, aptX Adaptive, aptX HD,
 aptX Low Latency, aptX, Opus, AAC, SBC XQ et SBC sous Windows
-(ainsi que LC3 via LE Audio). La pile Bluetooth propre à Windows ne prend en charge
+(ainsi que LC3 via LE Audio, à titre expérimental). La pile Bluetooth propre à Windows ne prend en charge
 que SBC, l'aptX classique et (Windows 11 uniquement) AAC pour A2DP — cet outil ajoute les
 autres sans nécessiter de pilote noyau.
 
@@ -424,7 +424,7 @@ quand il se termine.
 | LHDC V5 | lhdcv5-enc (portage en C de l'encodeur AOSP) | 400/500/900/1000 kbps (Basse/Moyenne/Moyenne-haute/Haute), au plus le maximum annoncé par le récepteur, ABR 160–400 kbps | 16/24 bits, trames de 5 ms, en-tête de charge utile média de 2 octets, en-tête RTP |
 | LDAC | libldac (AOSP) | 330/660/990 kbps | Modes Haute/Moyenne/Basse (HQ/SQ/MQ), ABR |
 | aptX Adaptive | aptx-adaptive (encodeur en Rust pur d'AKS-Logic/aptx-adaptive-linux, MIT) | 427 kbps en Haute, 265 kbps en Faible latence (récepteurs R2 : 270) ; l'ABR descend à 364/318 (R2 : 270/204) | 48 kHz stéréo (96 kHz en Haute sur demande, vers un récepteur R2 qui l'annonce : 646/340/255 kbps), 24 bits ; un paquet codec par paquet média derrière l'en-tête RTP propre à BlueCaster ; ABR en Haute ; Auto le prend après LHDC V5 et LDAC |
-| Opus | libopus 1.5.2 | 256 kbps (stéréo ; mono : moitié) | Opus A2DP d'Android : 48 kHz, trames de 20 ms (10 ms si le récepteur ne propose que cela), VBR contraint plafonné à la charge utile média, une trame par paquet, en-tête de charge utile média de 1 octet, en-tête RTP |
+| Opus | libopus 1.6.1 | 256 kbps (stéréo ; mono : moitié) | Opus A2DP d'Android : 48 kHz, trames de 20 ms (10 ms si le récepteur ne propose que cela), VBR contraint plafonné à la charge utile média, une trame par paquet, en-tête de charge utile média de 1 octet, en-tête RTP |
 | aptX HD | libopenaptx | 576 kbps | Entrée 24 bits, débit fixe, en-tête RTP |
 | aptX | libopenaptx | 352/384 kbps (44.1/48 kHz) | Stéréo 16 bits, sans en-tête RTP |
 | aptX LL | libopenaptx | 352 kbps | Latence ~32 ms, sans en-tête RTP, paquets ≤ ~7,5 ms |

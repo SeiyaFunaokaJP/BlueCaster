@@ -90,8 +90,8 @@ add_subdirectory(${OPUS_DIR} ${CMAKE_BINARY_DIR}/opus EXCLUDE_FROM_ALL)
 add_executable(bluecaster_decode a2dp_decode.cpp le_audio_decode.cpp)
 target_link_libraries(bluecaster_decode PRIVATE sbc_decoder fdk-aac openaptx lc3 opus)
 target_include_directories(bluecaster_decode PRIVATE
-    ${FDK_AAC_DIR}/libAACdec/include
-    ${FDK_AAC_DIR}/libSYS/include
+    ${FDK_AAC_DIR}/cpp/libAACdec/include
+    ${FDK_AAC_DIR}/cpp/libSYS/include
 )
 
 if(MSVC)

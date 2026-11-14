@@ -59,6 +59,15 @@ vb_cable_note_hidden: boolean,
  */
 hifi_cable_note_hidden: boolean, 
 /**
+ * The virtual cables' dialog was opened by itself once after an update:
+ * it does not open by itself again (a client that sends none: true)
+ */
+cables_dialog_shown: boolean, 
+/**
+ * The warning before unlisted codec options was accepted: not asked again
+ */
+unlisted_options_warned: boolean, 
+/**
  * Windows Volume Sync for every device (on by default): the audio
  * device's volume and the captured device's Windows volume follow each
  * other. Off: no stream syncs. A change starts the profile in use

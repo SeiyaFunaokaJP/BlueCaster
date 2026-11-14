@@ -208,15 +208,25 @@ records the microphone, and full-quality A2DP otherwise.
   (`audio_capture::mic_recorders` over
   `audio_policy::capture_session_recorders`), to tell an app from a
   Windows meter or "Listen to this device".
-- **The poll** (`voice.rs` `AutoWatch`): on the session tick (200 ms), at
-  most once a second (`AUTO_POLL`); the output is resolved once per mode or
-  output change, not on every poll. A WAV `mic_output` counts as always
+- **The poll** (`voice.rs` `AutoWatch`): on every session tick (200 ms;
+  `AUTO_POLL`, about 2 ms a poll), so little of a recording's start is
+  lost. Windows reports a recording's start and end at once (measured with
+  the `watch_capture` win-sys example), so the poll and the hysteresis
+  below are all the delay there is. The output is resolved once per mode
+  or output change, not on every poll. A WAV `mic_output` counts as always
   recorded from (the CLI's test path).
 - **Hysteresis**: the first poll that sees a recording turns the voice link
-  on; it goes back to A2DP only after the polls have seen nobody for 2 s
-  (`AUTO_IDLE`), so an app that opens the device again does not bounce the
+  on; it goes back to A2DP only after the polls have seen nobody for
+  500 ms (`AUTO_IDLE`; 2 s, then 1 s, before issue #86 asked for a way
+  back as fast as the way to the microphone), so an app that opens the
+  device again does not bounce the
   link. The link going down by Auto leaves the plain Streaming status (no
   message); `StreamStatus.voice` is None while Auto is idle.
+- **A slow stream after a voice link** (`bt_host::esco_watch`): the bit
+  rate is lowered (`StreamStatus.slow_link`, the warning under the codec)
+  and stays lowered until the next voice link or another stream setting
+  chosen by hand. There are no timed tries of the full bit rate and no
+  voice link of our own to put it right any more.
 - `held_off` (after a failure or a refusal) is not cleared by Auto's own on
   and off, only by a mode or output change. The headphones hanging up in
   Auto keep the link closed until nobody has recorded (then the next
@@ -416,6 +426,20 @@ received payload. `Released` comes after `voice_stop`, a release by the
 headphones, the SCO link's HCI Disconnection Complete, or the service level
 connection going down (once: whichever comes first).
 
+**Frames start on a frame boundary of the link (#86).** Over USB a
+transparent SCO packet carries 24 bytes and an mSBC / LC3-SWB frame is 60,
+and the session arms the encoder some packets after the link is up, so the
+first frame used to start 0, 12, 24, 36 or 48 bytes into a frame's length,
+another place on every link. `ShellTx` (core `voice.rs`) counts the bytes
+sent since the link's first one and sends zeros up to the next multiple of
+60 before the encoder's first byte, and again after zeros for a busy slot
+or a packet that was not sent (`VoiceTx::unsent`). The link's last log line
+says where the stream was when the frames started, how often they were put
+on a boundary and how many packets of zeros went out while the slot was
+busy; "SCO link: ..." has the interval and retransmission window of
+Synchronous Connection Complete. The emulator sends 60 bytes a packet, so
+its frames always start on a boundary: the 24-byte case is a unit test.
+
 **The SCO path is checked before BTstack sizes a packet.** On an H2
 transport `hci_get_sco_packet_length_for_connection` asserts that the
 controller's SCO data packet length holds 3 ms of audio (24 samples × 2
@@ -456,11 +480,23 @@ silent until it is switched off or the adapter fails as a whole.
   `StreamPlan::source: Option<SourcePlan>` and `source_note` (why a
   requested microphone is missing: the stream then plays without it).
 - Source presets: `32_2_1, 32_1_1, 24_2_1, 24_1_1, 16_2_1, 16_1_1`, those
-  with the sink preset's frame duration first; GMAP (UGTs with the Source
+  with the sink preset's frame duration first; next to a high-reliability
+  sink preset (`48_6_2` etc.) the `_2` twin of the same rate and octets
+  (`32_2_2`), so the CIG keeps one latency class (a 10 ms microphone made
+  the controller pick a 10 ms ISO interval, and EarFun refused the second
+  CIS, #86); GMAP (UGTs with the Source
   feature) puts `32_1_gs, 32_2_gs, 48_1_gs, 48_2_gs` first. Contexts:
   Conversational (GMAP: Game + Conversational) on the source ASEs, and next
   to Media on the sink ASEs where available.
 - CIG: `max_sdu_p_to_c`, `rtn_p_to_c`, `phy_p_to_c`, the P->C SDU interval.
+  Both directions ask for the larger of the two presets' max transport
+  latency (each still capped by its ASEs' preference): with 95 ms for
+  `32_2_2` next to 100 ms for `48_6_2`, a MediaTek MT7925 left the 30 ms
+  ISO interval it uses for media (98 ms transport latency) for 10 ms, and
+  EarFun earbuds refused the second CIS (#86).
+- A stream with the microphone that fails is set up again without it on a
+  new link (`le_stream.rs`): on the same link the EarFun earbuds left ASE 2
+  in Enabling after the refused CIS.
   Source ASEs go through Config Codec / QoS / Enable; the client writes
   Receiver Start Ready once all CIS are up and Receiver Stop Ready on
   Disable. `IsoSender` gets only CIS with a C->P direction.
