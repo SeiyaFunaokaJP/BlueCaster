@@ -208,13 +208,21 @@ records the microphone, and full-quality A2DP otherwise.
   (`audio_capture::mic_recorders` over
   `audio_policy::capture_session_recorders`), to tell an app from a
   Windows meter or "Listen to this device".
-- **The poll** (`voice.rs` `AutoWatch`): on every session tick (200 ms;
-  `AUTO_POLL`, about 2 ms a poll), so little of a recording's start is
-  lost. Windows reports a recording's start and end at once (measured with
-  the `watch_capture` win-sys example), so the poll and the hysteresis
-  below are all the delay there is. The output is resolved once per mode
-  or output change, not on every poll. A WAV `mic_output` counts as always
-  recorded from (the CLI's test path).
+- **The watcher** (`voice.rs` `Watcher`, the default): a thread of its
+  own looks every 50 ms (`AUTO_WATCH_EVERY`) through
+  `audio_policy::CaptureSessions` (the paired capture endpoints and their
+  session managers looked up once: ~0.5 ms a look instead of ~1.2 ms),
+  applies the hysteresis below and wakes the session at each change. On
+  hardware (XM4, 5 cycles) Auto saw a recording 52-76 ms after it began
+  (150-190 ms on the tick).
+- **The poll** (Developer > Codec settings > Microphone "Auto: look for
+  recording apps only every 200 ms", `DevOverrides::auto_mic_tick_poll`):
+  on every session tick (200 ms; `AUTO_POLL`, a full look-up each time), as before
+  the watcher. Windows reports a recording's start and end at once
+  (measured with the `watch_capture` win-sys example), so the look and
+  the hysteresis below are all the delay there is. The output is resolved
+  once per mode or output change, not on every poll. A WAV `mic_output`
+  counts as always recorded from (the CLI's test path).
 - **Hysteresis**: the first poll that sees a recording turns the voice link
   on; it goes back to A2DP only after the polls have seen nobody for
   500 ms (`AUTO_IDLE`; 2 s, then 1 s, before issue #86 asked for a way
@@ -788,6 +796,30 @@ Two fixes came out of it:
    control transfer on the same device, was probably in flight).
    `select_alt` tries up to 10 times 10 ms apart (`SCO_ALT_TRIES`,
    `SCO_ALT_RETRY`); the next runs did not hit it.
+
+### The first second of the microphone (2026-11-13, issue #86)
+
+"Switching is fast, but right after it the microphone does not come
+through for about a second." Measured with Auto, UB500 + WH-1000XM4, mSBC,
+recording CABLE Output with the `level_capture` win-sys example (level of
+every 50 ms) and the link-down summary's `first sound after ...` (the
+decoder's first sample that is not zero, the packets by HCI status until
+then), 3 cycles, the same each time:
+
+| From the recording's start | What |
+|---|---|
+| ~0.15 s | Auto sees it (session tick; ~0.06 s with the watcher since) |
+| ~0.26 s | eSCO up, microphone rendered to the cable |
+| +0.54 s | ~180 packets with status 2 (no data received): the headphones send nothing |
+| +0.27 s | ~90 good packets of digital silence |
+| ~1.1–1.2 s | the microphone's sound reaches the cable |
+
+About 0.8 s of it is the headphones' microphone starting after the audio
+connection; BlueCaster's part (detection, link, render) is about 0.25 s.
+Neither "call active" (`+CIEV: 2,1` before the audio connection) nor
+voice recognition (`+BVRA: 1`) made them start sooner: the same ~180-210
+packets of status 2 and ~0.27 s of silence, 3 cycles each (tried with a
+temporary result-code call in the shim, not kept).
 
 ## Not verified / hardware checklist
 

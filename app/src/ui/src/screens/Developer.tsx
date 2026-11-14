@@ -78,6 +78,7 @@ const NO_OVERRIDES: DevOverrides = {
   queue_max_wait_ms: 0,
   encode_at_send: false,
   keep_bitrate_on_slow_link: false,
+  auto_mic_tick_poll: false,
 };
 
 /** Developer > Debug: experiments for one adapter's transport (issue #86) */
@@ -414,6 +415,13 @@ function Overrides(props: {
         />
       </Section>
       <PacketSizes />
+      <Section title={t("ui.diag.mic_title")}>
+        <Toggle
+          label={t("ui.dev.auto_mic_tick_poll")}
+          checked={props.value.auto_mic_tick_poll}
+          onChange={(v) => set({ auto_mic_tick_poll: v })}
+        />
+      </Section>
       <Section title="AAC">
         <Toggle
           label={t("ui.dev.aac_latm_v0")}

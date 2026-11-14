@@ -218,6 +218,7 @@ export function sampleSettings(over: Partial<Settings> = {}): Settings {
       queue_max_wait_ms: 0,
       encode_at_send: false,
       keep_bitrate_on_slow_link: false,
+      auto_mic_tick_poll: false,
     },
     dev_vendors: {},
     dev_log: {
