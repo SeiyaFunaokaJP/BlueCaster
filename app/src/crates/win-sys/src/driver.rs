@@ -44,14 +44,17 @@ use std::time::{Duration, Instant};
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Get_Parent, CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW, CM_Query_And_Remove_SubTreeW,
     CM_REENUMERATE_ASYNCHRONOUS, CM_REENUMERATE_FLAGS, CM_REENUMERATE_SYNCHRONOUS, CM_REMOVE_NO_RESTART,
-    CM_REMOVE_UI_NOT_OK, CM_Reenumerate_DevNode, CMP_WaitNoPendingInstallEvents, CR_SUCCESS, DI_ENUMSINGLEINF,
-    DI_FLAGSEX_ALLOWEXCLUDEDDRVS, DI_NEEDREBOOT, DI_NEEDRESTART, DICS_FLAG_GLOBAL, DICS_PROPCHANGE, DIF_PROPERTYCHANGE,
-    DIIDFLAG_NOFINISHINSTALLUI, DIREG_DEV, DiInstallDevice, DiUninstallDevice, PNP_VETO_TYPE, SP_CLASSINSTALL_HEADER,
-    SP_DEVINFO_DATA, SP_DEVINSTALL_PARAMS_W, SP_DRVINFO_DATA_V2_W, SP_DRVINFO_DETAIL_DATA_W, SP_PROPCHANGE_PARAMS,
-    SPDIT_CLASSDRIVER, SPDRP_CLASSGUID, SetupDiBuildDriverInfoList, SetupDiCallClassInstaller, SetupDiCreateDevRegKeyW,
-    SetupDiDestroyDriverInfoList, SetupDiEnumDriverInfoW, SetupDiGetDeviceInstallParamsW, SetupDiGetDriverInfoDetailW,
-    SetupDiOpenDevRegKey, SetupDiSetClassInstallParamsW, SetupDiSetDeviceInstallParamsW,
+    CM_REMOVE_UI_NOT_OK, CM_Reenumerate_DevNode, CM_Set_DevNode_PropertyW, CMP_WaitNoPendingInstallEvents, CR_SUCCESS,
+    DI_ENUMSINGLEINF, DI_FLAGSEX_ALLOWEXCLUDEDDRVS, DI_NEEDREBOOT, DI_NEEDRESTART, DICS_FLAG_GLOBAL, DICS_PROPCHANGE,
+    DIF_PROPERTYCHANGE, DIIDFLAG_NOFINISHINSTALLUI, DIREG_DEV, DiInstallDevice, DiUninstallDevice, PNP_VETO_TYPE,
+    SP_CLASSINSTALL_HEADER, SP_DEVINFO_DATA, SP_DEVINSTALL_PARAMS_W, SP_DRVINFO_DATA_V2_W, SP_DRVINFO_DETAIL_DATA_W,
+    SP_PROPCHANGE_PARAMS, SPDIT_CLASSDRIVER, SPDRP_CLASSGUID, SetupDiBuildDriverInfoList, SetupDiCallClassInstaller,
+    SetupDiCreateDevRegKeyW, SetupDiDestroyDriverInfoList, SetupDiEnumDriverInfoW, SetupDiGetDeviceInstallParamsW,
+    SetupDiGetDriverInfoDetailW, SetupDiOpenDevRegKey, SetupDiSetClassInstallParamsW, SetupDiSetDeviceInstallParamsW,
     SetupDiSetDeviceRegistryPropertyW, SetupDiSetSelectedDriverW,
+};
+use windows::Win32::Devices::Properties::{
+    DEVPKEY_Device_SafeRemovalRequiredOverride, DEVPROP_TYPE_BOOLEAN, DEVPROP_TYPE_EMPTY,
 };
 use windows::Win32::Foundation::{ERROR_INVALID_DEVINST_NAME, ERROR_NO_MORE_ITEMS, ERROR_NO_SUCH_DEVINST, HWND};
 use windows::Win32::System::Registry::{KEY_READ, REG_MULTI_SZ};
@@ -333,6 +336,7 @@ pub fn assign_winusb(instance_id: &str) -> Result<AssignOutcome, DriverError> {
     let previous = DriverRecord::from_info(&before);
     if DriverKind::classify(&before.service, &before.class_name) == DriverKind::WinUsb {
         tracing::info!("driver: {instance_id} is on WinUSB already");
+        hide_from_safe_removal(instance_id, true);
         return Ok(AssignOutcome {
             previous,
             already_winusb: true,
@@ -395,6 +399,7 @@ pub fn assign_winusb(instance_id: &str) -> Result<AssignOutcome, DriverError> {
                 state.problem_code
             );
             let class_changed = !state.driver.class_guid.eq_ignore_ascii_case(&before.class_guid);
+            hide_from_safe_removal(instance_id, true);
             return Ok(AssignOutcome {
                 previous,
                 already_winusb: false,
@@ -416,6 +421,7 @@ pub fn assign_winusb(instance_id: &str) -> Result<AssignOutcome, DriverError> {
     );
     match result {
         Ok(reboot_required) => {
+            hide_from_safe_removal(instance_id, true);
             let state = driver_state(instance_id)?;
             tracing::info!(
                 "driver: {instance_id} is now on {} ({:?}){}",
@@ -464,6 +470,7 @@ pub fn restore(instance_id: &str, previous: Option<&DriverRecord>) -> Result<Res
         });
     }
     tracing::info!("driver: restoring {instance_id} from WinUSB");
+    hide_from_safe_removal(instance_id, false);
     tracing::debug!(
         "driver: now {} {} {} (class {}), record {:?}",
         now.service,
@@ -1115,6 +1122,23 @@ fn wait_for_driver(instance_id: &str) -> Option<DriverState> {
         }
         std::thread::sleep(RESTORE_POLL);
     }
+}
+
+/// Whether Windows lists the device under "Safely Remove Hardware". An
+/// adapter on WinUSB is listed (a removable USB device whose driver does
+/// not say that pulling it out is fine, as Windows' Bluetooth driver does),
+/// with an Eject entry that only takes the adapter away from BlueCaster
+/// (issue #86). `hide` takes it off the list, `!hide` leaves it to Windows
+/// again. Best effort: the list is all that depends on it.
+fn hide_from_safe_removal(instance_id: &str, hide: bool) {
+    let Some(devinst) = locate(instance_id) else { return };
+    // DEVPROP_FALSE: safe removal not required. No value (type empty)
+    // deletes the property.
+    let (ty, value): (_, Option<&[u8]>) =
+        if hide { (DEVPROP_TYPE_BOOLEAN, Some(&[0])) } else { (DEVPROP_TYPE_EMPTY, None) };
+    // SAFETY: valid devinst, a key constant and a buffer of the type's size.
+    let cr = unsafe { CM_Set_DevNode_PropertyW(devinst, &DEVPKEY_Device_SafeRemovalRequiredOverride, ty, value, 0) };
+    tracing::debug!("driver: safe removal override {}: {}", if hide { "set" } else { "removed" }, cr.0);
 }
 
 /// The devinst of a present device
