@@ -459,9 +459,11 @@ impl Profile {
                 name: self.audio_device_name.clone(),
                 auto_switch: self.auto_switch_device,
             },
-            "output" if !self.audio_device_id.is_empty() => {
-                SourceRequest::OutputDevice { id: self.audio_device_id.clone(), name: self.audio_device_name.clone() }
-            }
+            "output" if !self.audio_device_id.is_empty() => SourceRequest::OutputDevice {
+                id: self.audio_device_id.clone(),
+                name: self.audio_device_name.clone(),
+                auto_switch: self.auto_switch_device,
+            },
             "app" => SourceRequest::Application { exe: self.app_exe.clone() },
             // "loopback", "output" without a device (none chosen: the
             // default output), and v1's legacy "apo"
@@ -1180,8 +1182,15 @@ mod tests {
         };
         assert_eq!(
             p.source(),
-            SourceRequest::OutputDevice { id: "{0.0.0.00000000}.{speakers}".into(), name: "Speakers".into() }
+            SourceRequest::OutputDevice {
+                id: "{0.0.0.00000000}.{speakers}".into(),
+                name: "Speakers".into(),
+                auto_switch: true
+            }
         );
+        // The default output switch as saved (issue #86)
+        let kept = Profile { auto_switch_device: false, ..p.clone() };
+        assert_eq!(kept.source().default_switch(), None);
         // None chosen: the default output
         let none = Profile { audio_device_id: String::new(), ..p.clone() };
         assert_eq!(none.source(), SourceRequest::SystemLoopback);

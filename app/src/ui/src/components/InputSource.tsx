@@ -25,7 +25,7 @@
 
 import { createSignal, Show } from "solid-js";
 import { useApp } from "../app/context";
-import { allAudioDevices, defaultDeviceSwitch, devicesSwitchShown } from "../app/settings";
+import { allAudioDevices, defaultDeviceSwitch, devicesSwitchShown, switchableSource } from "../app/settings";
 import { t } from "../i18n";
 import type { AudioDevice, Device, Profile } from "../ipc/types";
 import {
@@ -127,7 +127,8 @@ export function InputSource(props: {
   const playsDefault = () => {
     const d = props.devices.find((x) => x.id === chosen());
     const switches =
-      props.source.capture_mode === "virtual" && defaultDeviceSwitch(snap().settings, props.source.auto_switch_device);
+      switchableSource(props.source.capture_mode) &&
+      defaultDeviceSwitch(snap().settings, props.source.auto_switch_device);
     return !!d && d.id === defaultOutput() && !switches && !usedBySource(d.id);
   };
   /** The Hi-Fi Cable chosen with its two sides at different sample rates:

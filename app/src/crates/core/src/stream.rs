@@ -125,13 +125,13 @@ impl StreamRequest {
 }
 
 /// Where a stream's audio comes from. OutputDevice: loopback of that output
-/// device whichever is the Windows default (issue #193),
-/// never made the default.
+/// device (issue #193). A virtual or output device with auto_switch is made
+/// the Windows default output while the session runs (issue #86).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceRequest {
     SystemLoopback,
     VirtualDevice { id: String, name: String, auto_switch: bool },
-    OutputDevice { id: String, name: String },
+    OutputDevice { id: String, name: String, auto_switch: bool },
     Application { exe: String },
     TestTone,
 }
@@ -139,8 +139,18 @@ pub enum SourceRequest {
 impl SourceRequest {
     /// The output device a session of this source makes Windows' default
     pub fn default_switch(&self) -> Option<&str> {
+        self.default_switch_device().map(|(id, _)| id)
+    }
+
+    /// As [`SourceRequest::default_switch`], with the device's name
+    pub fn default_switch_device(&self) -> Option<(&str, &str)> {
         match self {
-            SourceRequest::VirtualDevice { id, auto_switch: true, .. } if !id.is_empty() => Some(id),
+            SourceRequest::VirtualDevice { id, name, auto_switch: true }
+            | SourceRequest::OutputDevice { id, name, auto_switch: true }
+                if !id.is_empty() =>
+            {
+                Some((id, name))
+            }
             _ => None,
         }
     }
@@ -768,8 +778,8 @@ fn restart_pipeline(
     Ok(())
 }
 
-/// Restores the default output device when the session ends (virtual
-/// device mode switched it)
+/// Restores the default output device when the session ends (virtual or
+/// output device mode switched it)
 pub(crate) struct DefaultDeviceGuard(pub(crate) Option<String>);
 
 impl DefaultDeviceGuard {
@@ -778,13 +788,13 @@ impl DefaultDeviceGuard {
     /// plays through the device from before, restored now. Before the source
     /// opens: System Loopback captures whatever is the default.
     fn follow(&mut self, source: &SourceRequest) {
-        match source {
-            SourceRequest::VirtualDevice { id, name, auto_switch: true } if !id.is_empty() => {
+        match source.default_switch_device() {
+            Some((id, name)) => {
                 let restore = self.0.take();
                 *self = DefaultDeviceGuard::switch_to(id, name);
                 self.0 = restore.or(self.0.take());
             }
-            _ => *self = DefaultDeviceGuard(None),
+            None => *self = DefaultDeviceGuard(None),
         }
     }
 
@@ -2539,7 +2549,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
             pipeline = Some(p);
             inner.stream_info(info.clone());
         }
-        if switch_default_again && let SourceRequest::VirtualDevice { id, name, .. } = &current_source {
+        if switch_default_again && let Some((id, name)) = current_source.default_switch_device() {
             default_guard = DefaultDeviceGuard::switch_to(id, name);
             switch_default_again = false;
         }
@@ -2702,11 +2712,9 @@ mod tests {
 
     #[test]
     fn loopback_stands_in_for_a_missing_output_device() {
-        let out = |id: &str| SourceRequest::OutputDevice { id: id.into(), name: "Speakers".into() };
+        let out = |id: &str| SourceRequest::OutputDevice { id: id.into(), name: "Speakers".into(), auto_switch: true };
         assert!(loopback_may_replace(&out("{speakers}")));
         assert!(!loopback_may_replace(&out("")));
-        // Never made the default output
-        assert_eq!(out("{speakers}").default_switch(), None);
         let info = out("{speakers}").info();
         assert_eq!((info.kind, info.name.as_str()), ("output", "Speakers"));
     }
@@ -2722,12 +2730,18 @@ mod tests {
     }
 
     #[test]
-    fn only_an_auto_switched_virtual_device_is_made_the_default() {
+    fn only_an_auto_switched_virtual_or_output_device_is_made_the_default() {
         let virt =
             |id: &str, auto_switch| SourceRequest::VirtualDevice { id: id.into(), name: "CABLE".into(), auto_switch };
         assert_eq!(virt("{x}", true).default_switch(), Some("{x}"));
         assert_eq!(virt("{x}", false).default_switch(), None);
         assert_eq!(virt("", true).default_switch(), None);
+        // A physical output device too (issue #86)
+        let out =
+            |id: &str, auto_switch| SourceRequest::OutputDevice { id: id.into(), name: "Speakers".into(), auto_switch };
+        assert_eq!(out("{spk}", true).default_switch_device(), Some(("{spk}", "Speakers")));
+        assert_eq!(out("{spk}", false).default_switch(), None);
+        assert_eq!(out("", true).default_switch(), None);
         assert_eq!(SourceRequest::SystemLoopback.default_switch(), None);
     }
 

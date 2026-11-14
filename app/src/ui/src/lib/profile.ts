@@ -382,7 +382,8 @@ export function ownDefaultOutput(
   const id = devices.find((d) => d.is_default)?.id ?? "";
   const running = ["connecting", "streaming", "reconnecting"].includes(snap.stream.state);
   const streaming = running ? snap.profiles.find((p) => p.name === snap.stream.profile) : undefined;
-  return id && streaming?.capture_mode === "virtual" && streaming.audio_device_id === id ? "" : id;
+  const switches = streaming?.capture_mode === "virtual" || streaming?.capture_mode === "output";
+  return id && switches && streaming?.audio_device_id === id ? "" : id;
 }
 
 /** A 16-channel cable ("CABLE In 16ch"): no use as a source or a
