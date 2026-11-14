@@ -244,6 +244,23 @@ pub struct DecoderStats {
     /// the squares, for its peak and RMS in dBFS ([`DecoderStats::level`])
     pub peak: u16,
     pub sum_squares: u64,
+    /// The first sample that is not zero: how much audio came before it
+    /// (ms) and the packets (and bad ones) given until then. A headset whose
+    /// microphone starts late sends silence first.
+    pub first_sound: Option<FirstSound>,
+    /// Packets by HCI packet status flag (0 good, 1 possibly invalid, 2 no
+    /// data, 3 partially lost)
+    pub by_status: [u64; 4],
+}
+
+/// See [`DecoderStats::first_sound`]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FirstSound {
+    pub after_ms: u64,
+    pub packets: u64,
+    pub bad_packets: u64,
+    /// [`DecoderStats::by_status`] until then
+    pub by_status: [u64; 4],
 }
 
 impl DecoderStats {
@@ -314,8 +331,20 @@ impl VoiceDecoder {
         let bad = status != 0;
         self.stats.packets += 1;
         self.stats.bad_packets += u64::from(bad);
+        self.stats.by_status[usize::from(status & 3)] += 1;
         let stats = &mut self.stats;
+        let rate = u64::from(self.codec.rate());
         let mut emit = |pcm: &[i16]| {
+            if stats.first_sound.is_none()
+                && let Some(i) = pcm.iter().position(|&x| x != 0)
+            {
+                stats.first_sound = Some(FirstSound {
+                    after_ms: (stats.samples + i as u64) * 1000 / rate,
+                    packets: stats.packets,
+                    bad_packets: stats.bad_packets,
+                    by_status: stats.by_status,
+                });
+            }
             let n = out.push(pcm);
             stats.samples += pcm.len() as u64;
             stats.overflow += (pcm.len() - n) as u64;
@@ -415,6 +444,24 @@ mod tests {
     use audio_capture::{Format, SampleFormat, Sink};
 
     const ALL: [VoiceCodec; 3] = [VoiceCodec::Cvsd, VoiceCodec::Msbc, VoiceCodec::Lc3Swb];
+
+    #[test]
+    fn the_first_sound_is_timed_and_counted_by_packet_status() {
+        // mSBC in 24-byte packets: nothing received first (status 2, as a
+        // headset whose microphone is not up yet), then 200 ms of silence,
+        // then a tone
+        let rate = VoiceCodec::Msbc.rate() as usize;
+        let mut pcm = vec![0; rate / 5];
+        pcm.extend(sine(rate as u32, 440.0, rate / 2));
+        let stream = encode(VoiceCodec::Msbc, &pcm, 24);
+        let (_, s) = decode(VoiceCodec::Msbc, &stream, 24, |i| if i < 30 { 2 } else { 0 });
+        let first = s.first_sound.expect("sound");
+        // Silence, less what the lost packets held (the codec's delay aside)
+        assert!((100..=260).contains(&first.after_ms), "{first:?}");
+        assert_eq!((first.bad_packets, first.by_status[2], first.by_status[1]), (30, 30, 0));
+        assert_eq!(first.by_status[0], first.packets - 30);
+        assert_eq!(s.by_status.iter().sum::<u64>(), s.packets);
+    }
 
     fn sine(rate: u32, hz: f64, n: usize) -> Vec<i16> {
         (0..n).map(|i| (8000.0 * (2.0 * std::f64::consts::PI * hz * i as f64 / f64::from(rate)).sin()) as i16).collect()
