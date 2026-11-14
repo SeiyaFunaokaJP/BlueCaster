@@ -8,9 +8,10 @@
 // 4 the general settings worth asking (Start with Windows and in the tray are
 // on by default). The scan runs while nothing is connected, as the core
 // refuses one during a stream: a connected device joins the saved ones above
-// the list, and adding another one disconnects it. New devices capture the
-// Hi-Fi Cable, else VB-Cable, where installed; the step suggests the cables
-// that are not. The setup has a window size of its own.
+// the list, and adding another one disconnects it. New devices get the
+// installed cables (setupAudio: the Hi-Fi Cable for the sound and VB-Cable
+// for the microphone, a single one for the microphone); the step suggests
+// the cables that are not. The setup has a window size of its own.
 
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { errorText, onAudioDevicesChanged, useApp, type AppContext } from "../app/context";
@@ -26,7 +27,7 @@ import { t } from "../i18n";
 import { IpcError } from "../ipc/types";
 import type { AdapterInfo, AudioDevice, Device, Snapshot, WindowsPairedDevice } from "../ipc/types";
 import { firmwareUrl, LINKS } from "../lib/links";
-import { audioEntries, deviceKey, hifiCable, vbCable } from "../lib/profile";
+import { audioEntries, deviceKey, setupAudio } from "../lib/profile";
 import {
   adapterIds,
   adapterIdsHint,
@@ -452,12 +453,12 @@ function StepDevice() {
   const snap = () => app.core.state.snap!;
   const stream = () => snap().stream;
   const entries = createMemo(() => classicEntries(snap()));
-  // Windows' outputs, once read: new devices capture the Hi-Fi Cable, else
-  // VB-Cable; the step suggests the cables it lacks (issue #86)
+  // Windows' outputs, once read: what new devices get from the cables
+  // (setupAudio); the step suggests the cables it lacks (issue #86)
   const [devices, setDevices] = createSignal<AudioDevice[] | null>(null);
-  const cable = () => {
+  const audio = () => {
     const list = devices();
-    return list && (hifiCable(list) ?? vbCable(list));
+    return list && setupAudio(list);
   };
   const load = () =>
     app.core
@@ -489,7 +490,7 @@ function StepDevice() {
       // Windows' outputs not read yet (a click as the step opens): read
       // first, or the device would start without its cable (issue #86)
       if (devices() === null) await load();
-      const profile = await saveWithProfile(app, address, name, false, cable());
+      const profile = await saveWithProfile(app, address, name, false, audio());
       const ok =
         profile &&
         (await app.run(async () => {
