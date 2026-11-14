@@ -789,10 +789,11 @@ describe("setup device step", () => {
     expect(core.state.snap!.profiles.find((p) => p.name === "Galaxy Buds2 Pro | Auto")).toMatchObject({
       capture_mode: "loopback",
       audio_device_id: "",
+      mic_device_id: "",
     });
   });
 
-  it("scans until a device is added, then lists it no more; VB-Cable captures it (issue #86)", async () => {
+  it("scans until a device is added, then lists it no more; VB-Cable takes its microphone (issue #86)", async () => {
     const { calls, core } = await toDeviceStep({ scenario: "normal" });
     await waitFor(() => expect(calls.some((c) => c.method === "audio.devices")).toBe(true));
     expect(screen.queryByText(t("cables.recommended"))).toBeNull();
@@ -809,14 +810,15 @@ describe("setup device step", () => {
     const scans = calls.filter((c) => c.method === "device.scan").length;
     await new Promise((r) => setTimeout(r, 50));
     expect(calls.filter((c) => c.method === "device.scan").length).toBe(scans);
+    // One cable: the microphone; the sound System Loopback of the speakers
     expect(core.state.snap!.profiles.find((p) => p.name === "Galaxy Buds2 Pro | Auto")).toMatchObject({
-      capture_mode: "virtual",
-      audio_device_name: "CABLE Input (VB-Audio Virtual Cable)",
-      auto_switch_device: true,
+      capture_mode: "loopback",
+      headset_mic: "auto",
+      mic_device_name: "CABLE Input (VB-Audio Virtual Cable)",
     });
   });
 
-  it("captures the Hi-Fi Cable for a new device where it is installed", async () => {
+  it("captures the Hi-Fi Cable for a new device where it is installed, VB-Cable taking the microphone", async () => {
     const { calls, core, mock: m } = start("#/setup");
     m.hifiCable = true;
     await screen.findByRole("heading", { level: 1, name: "Setup Wizard" });
@@ -831,6 +833,9 @@ describe("setup device step", () => {
     expect(core.state.snap!.profiles.find((p) => p.name === "Galaxy Buds2 Pro | Auto")).toMatchObject({
       capture_mode: "virtual",
       audio_device_name: "Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)",
+      auto_switch_device: true,
+      headset_mic: "auto",
+      mic_device_name: "CABLE Input (VB-Audio Virtual Cable)",
     });
   });
 });

@@ -46,7 +46,7 @@ import {
 import { FlowTracker, stepDetail } from "./flow";
 import { knowAdapters, maskIdentifiers, parseAddress } from "./format";
 import { bugReportUrl, thirdPartyUrl } from "./links";
-import { deviceProfile, followedName, keptFor, ownDefaultOutput, validateProfile, vbCable, withCodec } from "./profile";
+import { deviceProfile, followedName, keptFor, ownDefaultOutput, setupAudio, validateProfile, vbCable, withCodec } from "./profile";
 
 const line = (time_ms: number, message: string, level: LogLine["level"] = "info"): LogLine => ({
   time_ms,
@@ -574,6 +574,33 @@ describe("VB-Cable", () => {
     expect(ownDefaultOutput(list, snap("streaming"))).toBe("");
     expect(ownDefaultOutput(list, snap("idle"))).toBe(list[1].id);
     expect(ownDefaultOutput(list, snap("streaming", { ...earfun, capture_mode: "loopback" }))).toBe(list[1].id);
+  });
+});
+
+describe("the first-run setup's sound and microphone (issue #86)", () => {
+  const device = (name: string, is_virtual = true, is_default = false) => ({ id: name, name, is_virtual, is_default, mix_rate: null, mix_channels: null, mix_bits: null, capture_name: null, capture_rate: null });
+  const speakers = device("Speakers (Realtek(R) Audio)", false, true);
+  const hdmi = device("LG TV (NVIDIA High Definition Audio)", false);
+  const vb = device("CABLE Input (VB-Audio Virtual Cable)");
+  const hifi = device("Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)");
+  const names = (list: ReturnType<typeof device>[]) => {
+    const a = setupAudio(list);
+    return { sound: a.sound?.name ?? null, mic: a.mic?.name ?? null };
+  };
+  it("both cables: the Hi-Fi Cable for the sound, VB-Cable for the microphone", () => {
+    expect(names([speakers, vb, hifi])).toEqual({ sound: hifi.name, mic: vb.name });
+  });
+  it("one cable: the microphone, the sound System Loopback of the sound card or HDMI", () => {
+    expect(names([speakers, vb])).toEqual({ sound: null, mic: vb.name });
+    expect(names([speakers, hifi])).toEqual({ sound: null, mic: hifi.name });
+    expect(names([{ ...hdmi, is_default: true }, vb])).toEqual({ sound: null, mic: vb.name });
+  });
+  it("one cable that is Windows' default output: the sound, no microphone (it would loop)", () => {
+    expect(names([{ ...speakers, is_default: false }, { ...vb, is_default: true }])).toEqual({ sound: vb.name, mic: null });
+  });
+  it("no cable: System Loopback, no microphone (a sound card cannot be recorded)", () => {
+    expect(names([speakers, hdmi])).toEqual({ sound: null, mic: null });
+    expect(names([speakers, device("CABLE In 16ch (VB-Audio Virtual Cable)")])).toEqual({ sound: null, mic: null });
   });
 });
 
