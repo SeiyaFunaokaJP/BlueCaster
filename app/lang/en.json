@@ -373,7 +373,7 @@
   "cables.title": "Virtual audio devices",
   "cables.intro": "BlueCaster works without them, but they are recommended:",
   "cables.reason_separate": "They keep the computer's own speakers and microphone apart from the Bluetooth headphones.",
-  "cables.reason_features": "They add features: the headphones' microphone in apps, low delay and high sample rates.",
+  "cables.reason_features": "They add features: low delay and high sample rates.",
   "cables.install": "Install",
   "cables.download": "Download",
   "cables.installed": "Installed",

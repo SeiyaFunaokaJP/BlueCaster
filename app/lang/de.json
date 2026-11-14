@@ -373,7 +373,7 @@
   "cables.title": "Virtuelle Audiogeräte",
   "cables.intro": "BlueCaster funktioniert auch ohne sie, sie werden aber empfohlen:",
   "cables.reason_separate": "Sie halten die Lautsprecher und das Mikrofon des Computers von den Bluetooth-Kopfhörern getrennt.",
-  "cables.reason_features": "Sie bringen Funktionen: das Mikrofon der Kopfhörer in Apps, geringe Verzögerung und hohe Abtastraten.",
+  "cables.reason_features": "Sie bringen Funktionen: geringe Verzögerung und hohe Abtastraten.",
   "cables.install": "Installieren",
   "cables.download": "Herunterladen",
   "cables.installed": "Installiert",

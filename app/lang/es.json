@@ -373,7 +373,7 @@
   "cables.title": "Dispositivos de audio virtuales",
   "cables.intro": "BlueCaster funciona sin ellos, pero se recomiendan:",
   "cables.reason_separate": "Mantienen los altavoces y el micrófono del ordenador separados de los auriculares Bluetooth.",
-  "cables.reason_features": "Añaden funciones: el micrófono de los auriculares en las aplicaciones, poco retardo y frecuencias de muestreo altas.",
+  "cables.reason_features": "Añaden funciones: poco retardo y frecuencias de muestreo altas.",
   "cables.install": "Instalar",
   "cables.download": "Descargar",
   "cables.installed": "Instalado",

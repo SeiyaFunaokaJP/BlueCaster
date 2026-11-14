@@ -373,7 +373,7 @@
   "cables.title": "虚拟音频设备",
   "cables.intro": "没有它们 BlueCaster 也能运行，但建议安装：",
   "cables.reason_separate": "让电脑自身的扬声器和麦克风与蓝牙耳机互不干扰。",
-  "cables.reason_features": "增加功能：在应用中使用耳机麦克风、低延迟和高采样率。",
+  "cables.reason_features": "增加功能：低延迟和高采样率。",
   "cables.install": "安装",
   "cables.download": "下载",
   "cables.installed": "已安装",

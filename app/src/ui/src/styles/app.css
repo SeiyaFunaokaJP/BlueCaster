@@ -74,6 +74,10 @@
   --good-text: var(--good);
   --warn-text: var(--warn);
   --bad-text: var(--bad);
+  /* Status borders: a soft tint on dark, the text shade on light (#86) */
+  --good-line: color-mix(in srgb, var(--good) 55%, transparent);
+  --warn-line: color-mix(in srgb, var(--warn) 55%, transparent);
+  --bad-line: color-mix(in srgb, var(--bad) 55%, transparent);
   --focus: #eceef3;
   --overlay: rgb(0 0 0 / 0.55);
 }
@@ -98,6 +102,9 @@
   --good-text: #047857;
   --warn-text: #92400e;
   --bad-text: #b91c1c;
+  --good-line: var(--good-text);
+  --warn-line: var(--warn-text);
+  --bad-line: var(--bad-text);
   --focus: #15171c;
   --overlay: rgb(20 22 28 / 0.35);
 }
@@ -242,6 +249,7 @@ p {
 .st-done {
   --st: var(--good);
   --st-text: var(--good-text);
+  --st-line: var(--good-line);
 }
 .st-warn,
 .st-warning,
@@ -251,12 +259,14 @@ p {
 .st-running {
   --st: var(--warn);
   --st-text: var(--warn-text);
+  --st-line: var(--warn-line);
 }
 .st-bad,
 .st-error,
 .st-failed {
   --st: var(--bad);
   --st-text: var(--bad-text);
+  --st-line: var(--bad-line);
 }
 .st-idle,
 .st-stopped,
@@ -359,7 +369,7 @@ p {
 .btn-danger {
   background: transparent;
   color: var(--bad-text);
-  border-color: color-mix(in srgb, var(--bad) 60%, transparent);
+  border-color: var(--bad-line);
 }
 .btn-danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--bad) 12%, transparent);
@@ -374,7 +384,7 @@ p {
   background: var(--surface-2);
 }
 .btn.recording {
-  border-color: var(--bad);
+  border-color: var(--bad-text);
   color: var(--bad-text);
 }
 
@@ -446,7 +456,7 @@ p {
 [aria-invalid="true"],
 .field.invalid .input,
 .field.invalid select {
-  border-color: var(--bad);
+  border-color: var(--bad-text);
 }
 
 .select {
@@ -596,7 +606,7 @@ option {
   padding-right: 0;
 }
 .format-box.st-warn {
-  border-color: var(--warn);
+  border-color: var(--warn-text);
   color: var(--warn-text);
 }
 .capture-about {
@@ -836,7 +846,7 @@ option {
   display: flex;
   gap: var(--s3);
   padding: var(--s3) var(--s4);
-  border: 1px solid color-mix(in srgb, var(--st) 55%, transparent);
+  border: 1px solid var(--st-line, color-mix(in srgb, var(--st) 55%, transparent));
   border-radius: var(--r-card);
   /* Only the border carries the colour; a tinted fill broke the theme (#86) */
   background: var(--surface);
@@ -847,14 +857,17 @@ option {
 .banner-good {
   --st: var(--good);
   --st-text: var(--good-text);
+  --st-line: var(--good-line);
 }
 .banner-warn {
   --st: var(--warn);
   --st-text: var(--warn-text);
+  --st-line: var(--warn-line);
 }
 .banner-error {
   --st: var(--bad);
   --st-text: var(--bad-text);
+  --st-line: var(--bad-line);
 }
 .banner-icon {
   color: var(--st-text, var(--text-2));
@@ -944,7 +957,7 @@ option {
   flex-direction: column;
   gap: var(--s2);
   padding: var(--s3);
-  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  border: 1px solid var(--warn-line);
   border-radius: var(--r);
 }
 /* Every device (issue #86), scrolling when there are many */
@@ -1041,7 +1054,7 @@ option {
 }
 .tag[class*="st-"] {
   color: var(--st-text);
-  border-color: color-mix(in srgb, var(--st) 55%, transparent);
+  border-color: var(--st-line, color-mix(in srgb, var(--st) 55%, transparent));
 }
 .tags {
   display: flex;
@@ -1150,7 +1163,7 @@ option {
   animation: rise var(--t-mid) var(--ease);
 }
 .notice-error {
-  border-color: var(--bad);
+  border-color: var(--bad-text);
 }
 .notice-error .icon {
   color: var(--bad-text);
@@ -1550,11 +1563,11 @@ option {
 }
 .ring-connecting,
 .ring-reconnecting {
-  border-color: var(--warn);
+  border-color: var(--warn-text);
   animation: pulse 1.6s ease-in-out infinite;
 }
 .ring-error {
-  border-color: var(--bad);
+  border-color: var(--bad-text);
 }
 /* Streaming: the accent ring, glowing a little more at higher volume */
 .ring-streaming {
@@ -1569,7 +1582,7 @@ option {
 @keyframes pulse {
   50% {
     box-shadow: 0 0 0 8px color-mix(in srgb, var(--warn) 18%, transparent);
-    border-color: color-mix(in srgb, var(--warn) 50%, transparent);
+    border-color: color-mix(in srgb, var(--warn-text) 50%, transparent);
   }
 }
 
@@ -2112,7 +2125,7 @@ option {
   border-radius: var(--r);
 }
 .selected-device.invalid {
-  border-color: var(--bad);
+  border-color: var(--bad-text);
 }
 
 .device-picker {
@@ -3648,7 +3661,7 @@ html.win-flyout body {
   flex-direction: column;
   gap: var(--s2);
   padding: var(--s2);
-  border: 1px solid color-mix(in srgb, var(--bad) 55%, transparent);
+  border: 1px solid var(--bad-line);
   border-radius: var(--r);
   font-size: var(--fs-12);
 }
