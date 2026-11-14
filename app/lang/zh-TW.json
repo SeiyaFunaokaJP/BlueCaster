@@ -373,7 +373,7 @@
   "cables.title": "虛擬音訊裝置",
   "cables.intro": "沒有它們 BlueCaster 也能運作，但建議安裝：",
   "cables.reason_separate": "讓電腦本身的喇叭和麥克風與藍牙耳機互不干擾。",
-  "cables.reason_features": "增加功能：在應用程式中使用耳機麥克風、低延遲和高取樣率。",
+  "cables.reason_features": "增加功能：低延遲和高取樣率。",
   "cables.install": "安裝",
   "cables.download": "下載",
   "cables.installed": "已安裝",

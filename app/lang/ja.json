@@ -373,7 +373,7 @@
   "cables.title": "仮想オーディオデバイス",
   "cables.intro": "なくても BlueCaster は動きますが、次の理由でおすすめします:",
   "cables.reason_separate": "PC 本体のスピーカーやマイクと、Bluetooth ヘッドホンの音が混ざらないようにします。",
-  "cables.reason_features": "機能が増えます: アプリでヘッドホンのマイクを使える、遅延が少ない、高いサンプルレート。",
+  "cables.reason_features": "機能が増えます: 遅延が少ない、高いサンプルレート。",
   "cables.install": "インストール",
   "cables.download": "ダウンロード",
   "cables.installed": "インストール済み",

@@ -373,7 +373,7 @@
   "cables.title": "Périphériques audio virtuels",
   "cables.intro": "BlueCaster fonctionne sans eux, mais ils sont recommandés :",
   "cables.reason_separate": "Ils séparent les haut-parleurs et le micro de l'ordinateur du casque Bluetooth.",
-  "cables.reason_features": "Ils ajoutent des fonctions : le micro du casque dans les applications, un faible délai et des fréquences d'échantillonnage élevées.",
+  "cables.reason_features": "Ils ajoutent des fonctions : un faible délai et des fréquences d'échantillonnage élevées.",
   "cables.install": "Installer",
   "cables.download": "Télécharger",
   "cables.installed": "Installé",
