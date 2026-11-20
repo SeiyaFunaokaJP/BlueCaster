@@ -1,5 +1,5 @@
-# a2dpwb_decode - offline checker / decoder for the media stream recorded in
-# an A2DPWB debug-mode HCI capture (.pklg). Developer tool: not part of
+# bluecaster_decode - offline checker / decoder for the media stream recorded in
+# an BlueCaster debug-mode HCI capture (.pklg). Developer tool: not part of
 # the release package; tools/emu uses it to check what the app sent.
 #
 # A project of its own (the app is built with Cargo):
@@ -8,15 +8,17 @@
 #
 # Links only codec libraries (Bluedroid SBC decoder, fdk-aac, libopenaptx,
 # libopus, liblc3 for LE Audio), not BTstack. See THIRD_PARTY_LICENSES.md,
-# "Developer tool: a2dpwb_decode".
+# "Developer tool: bluecaster_decode".
 
 cmake_minimum_required(VERSION 3.16)
-project(a2dpwb_decode LANGUAGES C CXX)
+project(bluecaster_decode LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 
-set(EXTERN ${CMAKE_CURRENT_SOURCE_DIR}/../../extern)
+# The submodules (a worktree without them: -DBLUECASTER_EXTERN_DIR=<checkout>/extern)
+set(BLUECASTER_EXTERN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../extern CACHE PATH "Folder of the extern submodules")
+set(EXTERN ${BLUECASTER_EXTERN_DIR})
 set(BTSTACK_ROOT ${EXTERN}/btstack)
 set(SBC_DECODER_DIR ${BTSTACK_ROOT}/3rd-party/bluedroid/decoder)
 set(LC3_SRC_DIR ${BTSTACK_ROOT}/3rd-party/lc3-google)
@@ -85,16 +87,16 @@ set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
 set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
 add_subdirectory(${OPUS_DIR} ${CMAKE_BINARY_DIR}/opus EXCLUDE_FROM_ALL)
 
-add_executable(a2dpwb_decode a2dp_decode.cpp le_audio_decode.cpp)
-target_link_libraries(a2dpwb_decode PRIVATE sbc_decoder fdk-aac openaptx lc3 opus)
-target_include_directories(a2dpwb_decode PRIVATE
-    ${FDK_AAC_DIR}/libAACdec/include
-    ${FDK_AAC_DIR}/libSYS/include
+add_executable(bluecaster_decode a2dp_decode.cpp le_audio_decode.cpp)
+target_link_libraries(bluecaster_decode PRIVATE sbc_decoder fdk-aac openaptx lc3 opus)
+target_include_directories(bluecaster_decode PRIVATE
+    ${FDK_AAC_DIR}/cpp/libAACdec/include
+    ${FDK_AAC_DIR}/cpp/libSYS/include
 )
 
 if(MSVC)
-    target_compile_options(a2dpwb_decode PRIVATE /W3 /utf-8)
-    target_compile_definitions(a2dpwb_decode PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(bluecaster_decode PRIVATE /W3 /utf-8)
+    target_compile_definitions(bluecaster_decode PRIVATE _CRT_SECURE_NO_WARNINGS)
 else()
-    target_compile_options(a2dpwb_decode PRIVATE -Wall -Wextra)
+    target_compile_options(bluecaster_decode PRIVATE -Wall -Wextra)
 endif()

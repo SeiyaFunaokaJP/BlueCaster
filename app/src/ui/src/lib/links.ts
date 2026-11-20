@@ -1,19 +1,33 @@
 // Web pages the UI opens (the same ones v1 opened)
 
-const REPO = "https://github.com/SeiyaFunaokaJP/A2DP-Windows-Bridge";
+const REPO = "https://github.com/SeiyaFunaokaJP/BlueCaster";
 
 export const LINKS = {
   repo: REPO,
   setupGuide: `${REPO}/blob/main/docs/setup.md`,
+  /** The chip script format (docs/chip-support.md, published) */
+  chipScripts: "https://seiyafunaokajp.github.io/BlueCaster/chip-support#chip-scripts",
   /** Realtek firmware: linux-firmware rtl_bt (v1 wx_firmware_dialog.cpp) */
   firmwareRealtek: "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/tree/rtl_bt",
   firmwareIntel: "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/tree/intel",
+  /** MediaTek: read from its Windows driver; linux-firmware has the same files */
+  firmwareMediaTek: "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/tree/mediatek",
+  /** Qualcomm: read from its Windows driver; linux-firmware has the same files */
+  firmwareQualcomm: "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/tree/qca",
   /** linux-firmware has no Broadcom .hcd; this collects them from the Windows drivers */
   firmwareBroadcom: "https://github.com/winterheart/broadcom-bt-firmware",
   releases: `${REPO}/releases`,
   issues: `${REPO}/issues/new/choose`,
   sponsor: "https://github.com/sponsors/SeiyaFunaokaJP",
   vbCable: "https://vb-audio.com/Cable/",
+  /** VB-CABLE's origin, which VB-Audio asks to be named where it is
+   *  installed with another application */
+  vbCableHome: "https://vb-cable.com/",
+  vbAudioHome: "https://vb-audio.com/",
+  /** VB-Audio's terms for its donationware */
+  vbAudioLicensing: "https://vb-audio.com/Services/licensing.htm",
+  /** Its download on VB-CABLE's page (HiFi-Cable & ASIO-Bridge) */
+  hifiCable: "https://vb-audio.com/Cable/#DownloadASIOBridge",
 } as const;
 
 /** The third-party licences of this version (a development build has no
@@ -23,10 +37,138 @@ export function thirdPartyUrl(version: string): string {
   return `${REPO}/blob/v${version}/THIRD_PARTY_LICENSES.md`;
 }
 
+/** What a bug report is prefilled with (the issue form's field ids) */
+export interface BugReport {
+  version: string;
+  /** "copy diagnostic info" text (addresses masked): the Windows build
+   *  comes from it, and as much of it as fits goes into the log field */
+  info: string;
+  /** "RTL8761BU (2357:0604)" */
+  adapter?: string;
+  headphones?: string;
+  /** Profile.codec */
+  codec?: string;
+  /** Profile.capture_mode */
+  captureMode?: string;
+  /** The error the app showed, as the start of "What happened?" */
+  whatHappened?: string;
+  /** The bundle's file name; none when the report comes from an error */
+  bundle?: string;
+}
+
+/** The issue form's dropdown options for a profile's codec */
+const CODEC_OPTIONS: Record<string, string> = {
+  auto: "Auto",
+  ldac: "LDAC",
+  aptxhd: "aptX HD",
+  aptxll: "aptX Low Latency",
+  aptxad: "aptX Adaptive",
+  aptx: "aptX",
+  lhdcv5: "LHDC V5",
+  opus: "Opus",
+  opus05: "Opus 05",
+  aac: "AAC",
+  sbcxq: "SBC XQ",
+  sbc: "SBC",
+  faststream: "FastStream",
+};
+const CAPTURE_OPTIONS: Record<string, string> = {
+  loopback: "System Loopback",
+  virtual: "Virtual Device",
+  app: "Application",
+};
+/** Characters of the (encoded) diagnostic info in the URL: GitHub refuses
+ *  very long URLs */
+const MAX_INFO_CHARS = 6000;
+
+/** A new bug report (.github/ISSUE_TEMPLATE/bug_report.yml) with what the
+ *  app knows filled in; the user still describes the problem and attaches
+ *  the bundle */
+export function bugReportUrl(r: BugReport): string {
+  const q = new URLSearchParams({ template: "bug_report.yml", version: r.version, interface: "Window / tray" });
+  const os = /OS\s*:\s*Windows build (\d+) \(([^)]+)\)/.exec(r.info);
+  if (os) q.set("windows", `Windows build ${os[1]} (${os[2]})`);
+  if (r.adapter) q.set("adapter", r.adapter);
+  if (r.headphones) q.set("headphones", r.headphones);
+  const codec = r.codec && CODEC_OPTIONS[r.codec];
+  if (codec) q.set("codec", codec);
+  const capture = r.captureMode && CAPTURE_OPTIONS[r.captureMode];
+  if (capture) q.set("capture_mode", capture);
+  if (r.whatHappened) q.set("what_happened", r.whatHappened);
+  if (r.bundle) q.set("bundle", `${r.bundle}\n(drag the file here from the Explorer window BlueCaster opened)`);
+  // The field renders as a code block already: without the text's own fence
+  let info = r.info.replace(/^```text\n/, "").replace(/\n?```\s*$/, "\n");
+  if (encodeURIComponent(info).length > MAX_INFO_CHARS) {
+    const cut = "\n... (cut here: the full text is diagnostics.txt in the bundle)";
+    while (info.length > 0 && encodeURIComponent(info).length > MAX_INFO_CHARS) info = info.slice(0, Math.floor(info.length * 0.9));
+    info = info.slice(0, info.lastIndexOf("\n") + 1 || info.length) + cut;
+  }
+  q.set("logs", info);
+  return `${REPO}/issues/new?${q.toString()}`;
+}
+
+/** "a.zip" of "C:\x\a.zip": the file a report asks to attach */
+export function baseName(path: string): string {
+  return path.slice(Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")) + 1);
+}
+
+/** What a chip report is prefilled with (.github/ISSUE_TEMPLATE/chip_report.yml) */
+export interface ChipReport {
+  version: string;
+  /** "MediaTek (0x0E8D:0x0608) [unsupported]": the user adds where it came from */
+  adapter: string;
+  /** The probe's summary line */
+  summary: string;
+  /** "copy diagnostic info" text: only the Windows build is taken from it */
+  info: string;
+  /** The probe report itself, as JSON */
+  report: string;
+}
+
+/** Characters of the whole query of a chip report: GitHub refuses very long
+ *  URLs (a bug report's info is cut at MAX_INFO_CHARS, plus the other fields) */
+const MAX_CHIP_QUERY = 7000;
+
+/** A new chip report with what the probe read. The report itself goes into
+ *  the issue when the URL can carry it (attach: false); otherwise its field
+ *  stays empty, so GitHub refuses the issue until the file is attached
+ *  (attach: true). A file name in the field passed as an answer, and many
+ *  reports came without the file (#518). */
+export function chipReportUrl(r: ChipReport): { url: string; attach: boolean } {
+  const q = new URLSearchParams({
+    template: "chip_report.yml",
+    title: `Chip support: ${r.summary.split(",")[0]}`,
+    version: r.version,
+    adapter: r.adapter,
+    chip: r.summary,
+  });
+  const os = /OS\s*:\s*Windows build (\d+) \(([^)]+)\)/.exec(r.info);
+  if (os) q.set("windows", `Windows build ${os[1]} (${os[2]})`);
+  let attach = true;
+  try {
+    const v: unknown = JSON.parse(r.report);
+    // Readable when it fits, one line when only that fits
+    for (const text of [JSON.stringify(v, null, 1), JSON.stringify(v)]) {
+      const p = new URLSearchParams(q);
+      p.set("probe", `\`\`\`json\n${text}\n\`\`\``);
+      if (p.toString().length <= MAX_CHIP_QUERY) {
+        q.set("probe", p.get("probe")!);
+        attach = false;
+        break;
+      }
+    }
+  } catch {
+    // Not JSON: the file is attached instead
+  }
+  return { url: `${REPO}/issues/new?${q.toString()}`, attach };
+}
+
 /** The firmware download page for an adapter's vendor */
 export function firmwareUrl(vendor: string): string {
   const v = vendor.toLowerCase();
   if (v.includes("intel")) return LINKS.firmwareIntel;
+  if (v.includes("mediatek")) return LINKS.firmwareMediaTek;
+  if (v.includes("qualcomm")) return LINKS.firmwareQualcomm;
   if (v.includes("broadcom")) return LINKS.firmwareBroadcom;
   return LINKS.firmwareRealtek;
 }
@@ -36,6 +178,8 @@ export function firmwareUrl(vendor: string): string {
 export function vendorFirmwareUrl(vendor: string): string | null {
   const v = vendor.toLowerCase();
   if (v.includes("intel")) return LINKS.firmwareIntel;
+  if (v.includes("mediatek")) return LINKS.firmwareMediaTek;
+  if (v.includes("qualcomm")) return LINKS.firmwareQualcomm;
   if (v.includes("broadcom")) return LINKS.firmwareBroadcom;
   return null;
 }

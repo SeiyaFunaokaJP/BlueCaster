@@ -44,7 +44,7 @@ pub const STATE_PLAYING: u8 = 0x01;
 pub const STATE_PAUSED: u8 = 0x02;
 pub const STATE_SEEKING: u8 = 0x03;
 
-// Media Control Point opcodes (MCS 3.18) A2DPWB knows
+// Media Control Point opcodes (MCS 3.18) BlueCaster knows
 pub const OP_PLAY: u8 = 0x01;
 pub const OP_PAUSE: u8 = 0x02;
 pub const OP_FAST_REWIND: u8 = 0x03;
@@ -365,9 +365,17 @@ pub fn control_point_check(info: &MediaInfo, value: &[u8]) -> Result<(u8, i32), 
     let Some(&op) = value.first() else { return Err(RESULT_COMMAND_CANNOT_BE_COMPLETED) };
     if info.opcodes_supported() & opcode_bit(op) == 0 {
         let inactive = op == OP_MOVE_RELATIVE && (!info.session || info.state == STATE_INACTIVE);
+        tracing::debug!(
+            "MCP: {} not supported now (opcodes 0x{:08X}, session {}, state {})",
+            opcode_name(op),
+            info.opcodes_supported(),
+            info.session,
+            state_name(info.state)
+        );
         return Err(if inactive { RESULT_MEDIA_PLAYER_INACTIVE } else { RESULT_OPCODE_NOT_SUPPORTED });
     }
     if value.len() != if op == OP_MOVE_RELATIVE { 5 } else { 1 } {
+        tracing::debug!("MCP: {} with a wrong length: {value:02X?}", opcode_name(op));
         return Err(RESULT_COMMAND_CANNOT_BE_COMPLETED);
     }
     let param = if op == OP_MOVE_RELATIVE { i32::from_le_bytes([value[1], value[2], value[3], value[4]]) } else { 0 };
@@ -379,6 +387,12 @@ pub fn control_point_check(info: &MediaInfo, value: &[u8]) -> Result<(u8, i32), 
 /// counted from the end; None (ignored) without an active seekable player
 pub fn seek_target(info: &MediaInfo, position: i32) -> Option<i32> {
     if !info.session || info.state == STATE_INACTIVE || !info.can_seek {
+        tracing::debug!(
+            "MCP: seek to {position} ignored (session {}, state {}, seekable {})",
+            info.session,
+            state_name(info.state),
+            info.can_seek
+        );
         return None;
     }
     Some(if position >= 0 {
@@ -416,12 +430,12 @@ pub trait MediaBackend: Send {
 }
 
 /// The simulated player's name
-pub const SIM_PLAYER: &str = "A2DPWB test player";
+pub const SIM_PLAYER: &str = "BlueCaster test player";
 /// The simulated tracks' duration: 180 s
 pub const SIM_DURATION: i32 = 18000;
 
 /// The dry-run player (v1 MediaBackend with dry_run): a simulated player
-/// that answers like a real one, for the emulator tests: "A2DPWB test
+/// that answers like a real one, for the emulator tests: "BlueCaster test
 /// player", paused, "Test track N ..." with a long non-ASCII title, 180 s,
 /// seekable. It has no thread: `command` and `seek` act at once and call
 /// `done` / the ChangedFn before they return (the module posts its

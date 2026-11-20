@@ -19,6 +19,7 @@ fn main() {
         "libldac not found at {} (git submodule update --init extern/libldac)",
         ldac.display()
     );
+    extern_version::check(&manifest, "libldac", &ldac);
 
     let mut build = cc::Build::new();
     build

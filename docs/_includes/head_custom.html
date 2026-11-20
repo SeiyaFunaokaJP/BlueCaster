@@ -63,6 +63,10 @@
 .lang-menu select:focus {
   border-color: #2c84fa;
 }
+/* A diagram wider than the page scrolls sideways (see the script below). */
+pre:has(> code.language-mermaid) {
+  overflow-x: auto;
+}
 ul.lang-list {
   display: flex;
   flex-wrap: wrap;
@@ -83,3 +87,17 @@ ul.lang-list > li::before {
   text-decoration: none;
 }
 </style>
+<script>
+/* Mermaid scales a wide diagram down to the page width, which can make its
+   text unreadably small. Shrink to 75 % at most; beyond that, scroll.
+   (Block comments only: the theme joins the page into one line.) */
+new MutationObserver(function (list) {
+  list.forEach(function (m) {
+    m.addedNodes.forEach(function (n) {
+      if (n.nodeName === 'svg' && n.parentNode.classList.contains('language-mermaid') && n.viewBox.baseVal) {
+        n.style.minWidth = Math.round(n.viewBox.baseVal.width * 0.75) + 'px';
+      }
+    });
+  });
+}).observe(document.documentElement, { childList: true, subtree: true });
+</script>

@@ -3,82 +3,6 @@
 version = 4
 
 [[package]]
-name = "a2dpwb-core"
-version = "2.0.1"
-dependencies = [
- "audio-capture",
- "bt-host",
- "codec",
- "hci-transport",
- "if-addrs",
- "le-audio",
- "pipeline",
- "semver",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "time",
- "tracing",
- "ureq",
- "win-sys",
- "windows",
-]
-
-[[package]]
-name = "a2dpwb-core-exe"
-version = "2.0.1"
-dependencies = [
- "a2dpwb-core",
- "audio-capture",
- "bt-host",
- "codec",
- "ctrlc",
- "embed-resource",
- "hci-transport",
- "ipc",
- "qcy-protocol",
- "serde",
- "serde_json",
- "tao",
- "time",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "tray-icon 0.26.1",
- "win-sys",
-]
-
-[[package]]
-name = "a2dpwb-driver"
-version = "2.0.1"
-dependencies = [
- "embed-resource",
- "serde",
- "serde_json",
- "tracing",
- "tracing-subscriber",
- "win-sys",
-]
-
-[[package]]
-name = "a2dpwb-ui"
-version = "2.0.1"
-dependencies = [
- "ipc",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "tauri-plugin-single-instance",
- "tauri-plugin-updater",
- "tokio",
- "win-sys",
- "windows-version",
-]
-
-[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -122,6 +46,22 @@ name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+
+[[package]]
+name = "anymap3"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb5dfbc6d8d2675589ccbe4d0fd61df2419075625f8c1a62325e718e2b0049f9"
+
+[[package]]
+name = "aptx-adaptive"
+version = "0.1.0"
+
+[[package]]
+name = "array-init"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d62b7694a562cdf5a74227903507c56ab2cc8bdd1f781ed5cb4cf9c9f810bfc"
 
 [[package]]
 name = "async-broadcast"
@@ -285,7 +225,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "audio-capture"
-version = "2.0.1"
+version = "3.0.2"
 dependencies = [
  "thiserror 2.0.21",
  "tracing",
@@ -399,6 +339,98 @@ dependencies = [
 ]
 
 [[package]]
+name = "bluecaster-core"
+version = "3.0.2"
+dependencies = [
+ "audio-capture",
+ "bt-host",
+ "codec",
+ "dsp",
+ "hci-transport",
+ "if-addrs",
+ "ipc",
+ "le-audio",
+ "pipeline",
+ "rtrb",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "socket2",
+ "thiserror 2.0.21",
+ "time",
+ "tracing",
+ "ureq",
+ "voice-link",
+ "win-sys",
+ "windows",
+]
+
+[[package]]
+name = "bluecaster-core-exe"
+version = "3.0.2"
+dependencies = [
+ "audio-capture",
+ "base64 0.22.1",
+ "bluecaster-core",
+ "bt-host",
+ "codec",
+ "crc32fast",
+ "ctrlc",
+ "dsp",
+ "embed-resource",
+ "flate2",
+ "hci-transport",
+ "ipc",
+ "qcy-protocol",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tao",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "tray-icon 0.26.1",
+ "ureq",
+ "win-sys",
+]
+
+[[package]]
+name = "bluecaster-driver"
+version = "3.0.2"
+dependencies = [
+ "embed-resource",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+ "win-sys",
+]
+
+[[package]]
+name = "bluecaster-ui"
+version = "3.0.2"
+dependencies = [
+ "ipc",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-updater",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "win-sys",
+ "windows-version",
+]
+
+[[package]]
 name = "borsh"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -454,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "bt-host"
-version = "2.0.1"
+version = "3.0.2"
 dependencies = [
  "btstack-sys",
  "codec",
@@ -462,13 +494,15 @@ dependencies = [
  "le-audio",
  "rtrb",
  "tracing",
+ "win-sys",
 ]
 
 [[package]]
 name = "btstack-sys"
-version = "2.0.1"
+version = "3.0.2"
 dependencies = [
  "cc",
+ "extern-version",
  "tracing",
 ]
 
@@ -641,8 +675,9 @@ dependencies = [
 
 [[package]]
 name = "codec"
-version = "2.0.1"
+version = "3.0.2"
 dependencies = [
+ "aptx-adaptive",
  "btstack-sys",
  "fdkaac-sys",
  "lc3-sys",
@@ -651,6 +686,7 @@ dependencies = [
  "openaptx-sys",
  "opus-sys",
  "proptest",
+ "serde",
  "thiserror 2.0.21",
  "tracing",
 ]
@@ -1040,6 +1076,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dsp"
+version = "3.0.2"
+dependencies = [
+ "nnnoiseless",
+ "serde",
+]
+
+[[package]]
 name = "dtoa"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1065,6 +1109,19 @@ name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
+name = "easyfft"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "767e39eef2ad8a3b6f1d733be3ec70364d21d437d06d4f18ea76ce08df20b75f"
+dependencies = [
+ "array-init",
+ "generic_singleton",
+ "num-complex",
+ "realfft",
+ "rustfft",
+]
 
 [[package]]
 name = "embed-resource"
@@ -1161,6 +1218,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "extern-version"
+version = "3.0.2"
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1177,10 +1238,11 @@ dependencies = [
 
 [[package]]
 name = "fdkaac-sys"
-version = "2.0.1"
+version = "3.0.2"
 dependencies = [
  "cc",
  "codec",
+ "extern-version",
 ]
 
 [[package]]
@@ -1462,6 +1524,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "generic_singleton"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab6e923c8e978e57cf63e2e200ca967d1d20f0ea2662b28f6d4e11c44aa6ab16"
+dependencies = [
+ "anymap3",
+ "parking_lot",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1658,11 +1730,12 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hci-transport"
-version = "2.0.1"
+version = "3.0.2"
 dependencies = [
  "btstack-sys",
  "nusb",
  "tracing",
+ "win-sys",
 ]
 
 [[package]]
@@ -1996,7 +2069,7 @@ dependencies = [
 
 [[package]]
 name = "ipc"
-version = "2.0.1"
+version = "3.0.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2238,30 +2311,32 @@ checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "lc3-sys"
-version = "2.0.1"
+version = "3.0.2"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "ldac-sys"
-version = "2.0.1"
+version = "3.0.2"
 dependencies = [
  "cc",
+ "extern-version",
 ]
 
 [[package]]
 name = "le-audio"
-version = "2.0.1"
+version = "3.0.2"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "lhdcv5-sys"
-version = "2.0.1"
+version = "3.0.2"
 dependencies = [
  "cc",
+ "extern-version",
 ]
 
 [[package]]
@@ -2526,12 +2601,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "nnnoiseless"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "805d5964d1e7a0006a7fdced7dae75084d66d18b35f1dfe81bd76929b1f8da0c"
+dependencies = [
+ "easyfft",
+ "once_cell",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "num-complex"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
+dependencies = [
+ "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -2592,8 +2687,6 @@ dependencies = [
 [[package]]
 name = "nusb"
 version = "0.2.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03fba503685f5c3e9f6a11ff9711c16086ab6beacaa6ad3df9e217a91a8d4c82"
 dependencies = [
  "core-foundation 0.10.1",
  "core-foundation-sys",
@@ -2839,9 +2932,10 @@ dependencies = [
 
 [[package]]
 name = "openaptx-sys"
-version = "2.0.1"
+version = "3.0.2"
 dependencies = [
  "cc",
+ "extern-version",
 ]
 
 [[package]]
@@ -2858,9 +2952,10 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "opus-sys"
-version = "2.0.1"
+version = "3.0.2"
 dependencies = [
  "cc",
+ "extern-version",
 ]
 
 [[package]]
@@ -3008,10 +3103,11 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pipeline"
-version = "2.0.1"
+version = "3.0.2"
 dependencies = [
  "bt-host",
  "codec",
+ "dsp",
  "le-audio",
  "proptest",
  "rtrb",
@@ -3125,6 +3221,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 
 [[package]]
+name = "primal-check"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc0d895b311e3af9902528fbb8f928688abbd95872819320517cc24ca6b2bd08"
+dependencies = [
+ "num-integer",
+]
+
+[[package]]
 name = "proc-macro-crate"
 version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3208,7 +3313,7 @@ dependencies = [
 
 [[package]]
 name = "qcy-protocol"
-version = "2.0.1"
+version = "3.0.2"
 
 [[package]]
 name = "quick-error"
@@ -3276,6 +3381,15 @@ name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
+
+[[package]]
+name = "realfft"
+version = "3.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "538895ccf2006b473aafbe8d72770e21038961ab67aae34f3c577485fc703a7d"
+dependencies = [
+ "rustfft",
+]
 
 [[package]]
 name = "redox_syscall"
@@ -3420,6 +3534,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustfft"
+version = "6.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21db5f9893e91f41798c88680037dba611ca6674703c1a18601b01a72c8adb89"
+dependencies = [
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "primal-check",
+ "strength_reduce",
+ "transpose",
+]
+
+[[package]]
 name = "rustix"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3497,9 +3625,9 @@ checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -3955,6 +4083,12 @@ name = "static_vcruntime"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff7589a1859b09232522bb9edf076ca7fcf14ded96685d3fa629db73023ffbb7"
+
+[[package]]
+name = "strength_reduce"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
 
 [[package]]
 name = "string_cache"
@@ -4595,9 +4729,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokio"
-version = "1.53.2"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",
@@ -4858,6 +4992,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "transpose"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ad61aed86bc3faea4300c7aee358b4c6d0c8d6ccc36524c96e4c92ccf26e77e"
+dependencies = [
+ "num-integer",
+ "strength_reduce",
+]
+
+[[package]]
 name = "tray-icon"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5071,6 +5215,21 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "voice-link"
+version = "3.0.2"
+dependencies = [
+ "audio-capture",
+ "btstack-sys",
+ "dsp",
+ "lc3-sys",
+ "rtrb",
+ "thiserror 2.0.21",
+ "tracing",
+ "wasapi",
+ "win-sys",
+]
 
 [[package]]
 name = "vswhom"
@@ -5304,9 +5463,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -5347,12 +5506,15 @@ dependencies = [
 
 [[package]]
 name = "win-sys"
-version = "2.0.1"
+version = "3.0.2"
 dependencies = [
+ "nusb",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "webview2-com",
  "windows",
+ "windows-core",
 ]
 
 [[package]]

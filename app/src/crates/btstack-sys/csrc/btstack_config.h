@@ -1,5 +1,5 @@
 /*
- * btstack_config.h - BTstack compile-time configuration for A2DPWB v2
+ * btstack_config.h - BTstack compile-time configuration for BlueCaster v2
  *
  * Classic Bluetooth A2DP Source + AVRCP with vendor codecs over a host-side
  * HCI transport (WinUSB via nusb, or H4 over TCP to tools/emu), plus LE
@@ -30,7 +30,7 @@
 /* Security: Simple Secure Pairing (SSP) for headphone pairing */
 #define ENABLE_SOFTWARE_AES128
 
-/* Logging (to the HCI dump: A2DPWB routes it to tracing) */
+/* Logging (to the HCI dump: BlueCaster routes it to tracing) */
 #define ENABLE_LOG_ERROR
 #define ENABLE_LOG_INFO
 
@@ -41,16 +41,29 @@
 #define HCI_ACL_PAYLOAD_SIZE (1691 + 4)
 #define HCI_INCOMING_PRE_BUFFER_SIZE 14
 
+/* HFP audio (headset microphone, developer mode): SCO data over HCI (the H4
+ * transport, or USB isochronous on interface 1), mSBC and LC3-SWB. The codecs
+ * are offered only by the voice AG (Stack::hfp_ag_init(true)), and USB is an
+ * H2 transport only then. NOT inert at HCI init: ENABLE_SCO_OVER_HCI makes
+ * hci.c send Write Synchronous Flow Control Enable and Write Default
+ * Erroneous Data Reporting to every controller listing them; without voice
+ * the transport clears those supported-commands bits (Stack::set_sco_hidden,
+ * crate::transport), so only Broadcom controllers still get the extra
+ * vendor command (BCM Write SCO PCM Int: SCO routed over HCI). */
+#define ENABLE_SCO_OVER_HCI
+#define ENABLE_HFP_WIDE_BAND_SPEECH
+#define ENABLE_HFP_SUPER_WIDE_BAND_SPEECH
+
 /* Link key storage for paired devices */
 #define NVM_NUM_DEVICE_DB_ENTRIES  16
 #define NVM_NUM_LINK_KEYS          16
 
 /* LE (experimental LE Audio). Compiled in always, but inert unless LE Audio
  * is enabled: only then is the controller's LE support visible to BTstack
- * and are SM, the ATT server and the GATT client initialized. A2DPWB acts as
- * LE central and never advertises; ENABLE_LE_PERIPHERAL is only defined
- * because BTstack's extended advertising code (needed for extended scanning)
- * depends on it. */
+ * and are SM, the ATT server and the GATT client initialized. BlueCaster acts as
+ * LE central and advertises only while it broadcasts (Auracast source,
+ * developer mode: extended + periodic advertising and a BIG);
+ * ENABLE_LE_PERIPHERAL is needed by BTstack's extended advertising code. */
 #define ENABLE_BLE
 #define ENABLE_LE_CENTRAL
 #define ENABLE_LE_PERIPHERAL
@@ -58,7 +71,8 @@
 #define ENABLE_MICRO_ECC_P256              /* software P-256 (3rd-party/micro-ecc) */
 #define ENABLE_LE_DATA_LENGTH_EXTENSION
 #define ENABLE_LE_EXTENDED_ADVERTISING     /* extended scanning when the controller has it */
-#define ENABLE_LE_ISOCHRONOUS_STREAMS      /* CIG / CIS as central, HCI ISO data */
+#define ENABLE_LE_ISOCHRONOUS_STREAMS      /* CIG / CIS as central, BIG, HCI ISO data */
+#define ENABLE_LE_PERIODIC_ADVERTISING     /* the BASE of a broadcast (Auracast source) */
 
 /* ATT server: a read / write callback may answer "pending". btstack-sys does
  * so only while the application is busy (an ATT request processed from
@@ -70,6 +84,9 @@
 #define MAX_NR_CIS                 4
 #define HCI_ISO_PAYLOAD_SIZE       400
 
+/* Broadcast (Auracast source): BIS of the one BIG (left and right) */
+#define MAX_NR_BIS                 2
+
 /* CCC values of bonded GATT clients att_server keeps in the bond TLV, for
  * all clients together (default 20; the oldest go first). The PC's GMCS and
  * GTBS have 23 CCCs: room for about 11 bonded clients. At most 256 (one
@@ -80,10 +97,10 @@
  * Required for LDAC/aptX - BTstack's auto-mode only handles SBC. */
 #define ENABLE_A2DP_EXPLICIT_CONFIG
 
-/* A2DP: 10 stream endpoints (LDAC, aptX HD, aptX, aptX LL, SBC (also SBC XQ), AAC, LHDC V5, FastStream, Opus,
- * Opus 05).
+/* A2DP: 11 stream endpoints (LDAC, aptX HD, aptX, aptX LL, SBC (also SBC XQ), AAC, LHDC V5, FastStream, Opus,
+ * Opus 05, aptX Adaptive).
  * The pool is static: an endpoint beyond this count fails to register. */
-#define MAX_NR_AVDTP_STREAM_ENDPOINTS  10
+#define MAX_NR_AVDTP_STREAM_ENDPOINTS  11
 #define MAX_NR_AVDTP_CONNECTIONS       1
 #define MAX_NR_A2DP_SOURCE_CONNECTIONS 1
 

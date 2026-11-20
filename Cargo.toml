@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "app/src/crates/extern-version",
     "app/src/crates/btstack-sys",
     "app/src/crates/ldac-sys",
     "app/src/crates/openaptx-sys",
@@ -18,40 +19,51 @@ members = [
     "app/src/crates/pipeline",
     "app/src/crates/core",
     "app/src/crates/ipc",
+    "app/src/crates/voice-link",
+    "app/src/crates/dsp",
     "app/src/core",
     "app/src/driver",
     "app/src/ui/src-tauri",
 ]
+# Vendored aptX Adaptive encoder: a path dependency of codec, kept out of the
+# workspace (its unit tests read upstream's reference vectors, not vendored).
+# Vendored nusb: patched in below, built as from crates.io.
+exclude = ["app/src/crates/aptx-adaptive", "app/src/crates/nusb"]
 
 [workspace.package]
-version = "2.0.1"
+version = "3.0.2"
 edition = "2024"
 rust-version = "1.90"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/SeiyaFunaokaJP/A2DP-Windows-Bridge"
+repository = "https://github.com/SeiyaFunaokaJP/BlueCaster"
 # Nothing here goes to crates.io (cargo-deny: path dependencies are fine)
 publish = false
 
 [workspace.dependencies]
 btstack-sys = { path = "app/src/crates/btstack-sys" }
+extern-version = { path = "app/src/crates/extern-version" }
 hci-transport = { path = "app/src/crates/hci-transport" }
 # Members opt in to codecs: core takes "default", the others only what they use
 codec = { path = "app/src/crates/codec", default-features = false }
 bt-host = { path = "app/src/crates/bt-host" }
 pipeline = { path = "app/src/crates/pipeline" }
-a2dpwb-core = { path = "app/src/crates/core" }
+bluecaster-core = { path = "app/src/crates/core" }
 win-sys = { path = "app/src/crates/win-sys" }
 audio-capture = { path = "app/src/crates/audio-capture" }
 ipc = { path = "app/src/crates/ipc" }
 le-audio = { path = "app/src/crates/le-audio" }
 qcy-protocol = { path = "app/src/crates/qcy-protocol" }
 lc3-sys = { path = "app/src/crates/lc3-sys" }
+aptx-adaptive = { path = "app/src/crates/aptx-adaptive" }
+voice-link = { path = "app/src/crates/voice-link" }
+dsp = { path = "app/src/crates/dsp" }
 
 cc = "1.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 crossbeam-channel = "0.5"
 rtrb = "0.3"
+socket2 = "0.6"
 arc-swap = "1.7"
 thiserror = "2"
 anyhow = "1"
@@ -63,6 +75,11 @@ unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "deny"
+
+# nusb 0.2.8 with one accessor for the WinUSB interface handle (SCO over
+# isochronous pipes): app/src/crates/nusb/SOURCE.txt
+[patch.crates-io]
+nusb = { path = "app/src/crates/nusb" }
 
 [profile.release]
 debug = "line-tables-only"

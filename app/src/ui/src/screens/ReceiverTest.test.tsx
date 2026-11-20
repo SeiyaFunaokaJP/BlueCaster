@@ -8,13 +8,14 @@ import { createCore } from "../ipc/store";
 let mock: MockCore | null = null;
 
 async function open(opts: MockOptions = {}) {
-  location.hash = "#/diagnostics";
+  location.hash = "#/developer";
   const calls: { method: string; params: unknown }[] = [];
   mock = new MockCore({ speed: 0, ...opts, onCall: (method, params) => calls.push({ method, params }) });
   const core = createCore(mock);
   render(() => <App core={core} />);
-  await screen.findByRole("heading", { level: 1, name: "Diagnostics" });
+  await screen.findByRole("navigation");
   await core.request("settings.set", { settings: { ...core.state.snap!.settings, developer_mode: true } });
+  await screen.findByRole("heading", { level: 1, name: "Developer" });
   fireEvent.click(await screen.findByRole("tab", { name: "Peer Receiver Test" }));
   return { core, calls };
 }
@@ -32,14 +33,14 @@ describe("receiver test", () => {
   it("finds the receiver, measures and compares", async () => {
     const { calls } = await open();
     // Looks for the receiver at once (the saved address is empty: the local network)
-    await screen.findByText("Ready. Start sends to the receiver's Bluetooth adapter.");
+    await screen.findByText("Ready. Click Start to stream to the receiver's Bluetooth adapter.");
     expect(calls.find((c) => c.method === "receiver.connect")?.params).toEqual({ target: "auto" });
     expect(screen.getByText("sink-pi (192.168.1.42), Bluetooth DC:A6:32:01:02:03, L2CAP MTU 895")).toBeInTheDocument();
     await waitFor(() => expect(steps()[1]).toHaveTextContent("OK"));
     expect(steps()[0]).toHaveTextContent("Find receiver");
 
     // Choices: SBC, MTU 679, buffer 300 ms, system audio
-    fireEvent.change(screen.getByLabelText("Codec"), { target: { selectedIndex: 9 } });
+    fireEvent.change(screen.getByLabelText("Codec"), { target: { selectedIndex: 10 } });
     fireEvent.change(screen.getByLabelText("L2CAP MTU"), { target: { selectedIndex: 2 } });
     fireEvent.change(screen.getByLabelText("Playout buffer"), { target: { selectedIndex: 3 } });
     fireEvent.click(screen.getByRole("radio", { name: "System audio" }));
@@ -88,7 +89,7 @@ describe("receiver test", () => {
 
   it("disconnects, searches and connects to a receiver found", async () => {
     const { calls } = await open();
-    await screen.findByText("Ready. Start sends to the receiver's Bluetooth adapter.");
+    await screen.findByText("Ready. Click Start to stream to the receiver's Bluetooth adapter.");
     fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
     await screen.findByText("Not connected to a receiver.");
     expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
@@ -98,7 +99,7 @@ describe("receiver test", () => {
     const found = await screen.findByRole("button", { name: "sink-pi (192.168.1.42), Bluetooth DC:A6:32:01:02:03, L2CAP MTU 895" });
     fireEvent.click(found);
     await waitFor(() => expect(calls.filter((c) => c.method === "receiver.connect").pop()?.params).toEqual({ target: "192.168.1.42" }));
-    await screen.findByText("Ready. Start sends to the receiver's Bluetooth adapter.");
+    await screen.findByText("Ready. Click Start to stream to the receiver's Bluetooth adapter.");
     expect(screen.getByRole("textbox", { name: "Receiver" })).toHaveValue("192.168.1.42");
   });
 

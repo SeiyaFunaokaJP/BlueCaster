@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use a2dpwb_core::Service;
+use bluecaster_core::Service;
 use bt_host::{BtHost, GattChar, GattService, LeAddr, LeScanResult};
 use qcy_protocol::advertisement::{self, Advertisement};
 use qcy_protocol::commands::{self, NoiseMode, NoiseScene};

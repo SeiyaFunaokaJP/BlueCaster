@@ -4,7 +4,7 @@
 //! The source comes from the git submodule extern/libopenaptx of the
 //! repository (override with the OPENAPTX_DIR environment variable). It must
 //! be release 0.2.0: 0.2.1 and later are GPL-3.0-or-later, which the other
-//! libraries linked into A2DPWB are not compatible with (THIRD_PARTY_LICENSES.md),
+//! libraries linked into BlueCaster are not compatible with (THIRD_PARTY_LICENSES.md),
 //! so the build stops on any other version instead of linking it silently.
 
 use std::env;
@@ -24,6 +24,7 @@ fn main() {
         "libopenaptx not found at {} (git submodule update --init extern/libopenaptx)",
         dir.display()
     );
+    extern_version::check(&manifest, "libopenaptx", &dir);
 
     // Releases up to v1.0.4 were mistakenly built with 0.2.1 (GPL-3.0): check
     // the version in the header before compiling anything

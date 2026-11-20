@@ -1,23 +1,25 @@
 [package]
-name = "a2dpwb-core-exe"
-description = "a2dpwb-core.exe: the resident A2DPWB process (tray, IPC) and the command line"
+name = "bluecaster-core-exe"
+description = "bluecaster-core.exe: the resident BlueCaster process (tray, IPC) and the command line"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "a2dpwb-core"
+name = "bluecaster-core"
 path = "src/main.rs"
 
 [dependencies]
-a2dpwb-core.workspace = true
+bluecaster-core.workspace = true
 bt-host.workspace = true
 # qcy_probe.rs: the QCY earbud protocol
 qcy-protocol.workspace = true
 # cli.rs: -u (UsbSelector)
 hci-transport.workspace = true
 codec = { workspace = true, features = ["default"] }
+# cli.rs: --eq's points
+dsp.workspace = true
 ipc.workspace = true
 win-sys.workspace = true
 audio-capture.workspace = true
@@ -29,6 +31,13 @@ ctrlc = "3"
 # logging.rs: daily log files, local timestamps
 tracing-appender = "0.2"
 time = { version = "0.3", features = ["local-offset"] }
+# bundle.rs: the diagnostic bundle's .zip
+flate2 = "1"
+crc32fast = "1"
+# vb_cable.rs: VB-Audio's driver pack, fetched when the user installs it
+ureq = { version = "3.3", default-features = false, features = ["rustls", "win-system-proxy"] }
+sha2 = "0.10"
+base64 = "0.22"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "net", "time", "macros", "io-util"] }
 tray-icon = "0.26"
 tao = "0.37"

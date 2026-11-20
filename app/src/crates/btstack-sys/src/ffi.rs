@@ -7,28 +7,52 @@
 use std::ffi::{c_char, c_int};
 
 unsafe extern "C" {
+    // ---- hci.c ----
+    /// A whole command packet (opcode, length, parameters); BTstack hands
+    /// it to the transport, which copies it
+    pub fn hci_send_cmd_packet(packet: *mut u8, size: c_int) -> u8;
+
     // ---- shim.c: run loop ----
-    pub fn a2dpwb_runloop_init();
-    pub fn a2dpwb_wake();
-    pub fn a2dpwb_timer_start(id: u32, timeout_ms: u32) -> c_int;
-    pub fn a2dpwb_timer_stop(id: u32);
-    pub fn a2dpwb_timers_clear();
+    pub fn bluecaster_runloop_init();
+    pub fn bluecaster_wake();
+    pub fn bluecaster_timer_start(id: u32, timeout_ms: u32) -> c_int;
+    pub fn bluecaster_timer_stop(id: u32);
+    pub fn bluecaster_timers_clear();
 
     // ---- shim.c: transport, dump, link keys, handlers ----
-    pub fn a2dpwb_hci_init(is_async: c_int);
-    pub fn a2dpwb_transport_deliver(packet_type: u8, packet: *const u8, size: u16) -> c_int;
-    pub fn a2dpwb_transport_packet_sent();
-    pub fn a2dpwb_intel_download_firmware(is_async: c_int, firmware_path: *const c_char);
-    pub fn a2dpwb_hci_dump_init();
-    pub fn a2dpwb_set_link_key_db(rust_store: c_int);
-    pub fn a2dpwb_add_hci_event_handler();
-    pub fn a2dpwb_a2dp_source_init();
-    pub fn a2dpwb_avrcp_init();
+    pub fn bluecaster_hci_init(kind: c_int);
+    pub fn bluecaster_transport_deliver(packet_type: u8, packet: *const u8, size: u16) -> c_int;
+    pub fn bluecaster_transport_packet_sent();
+    pub fn bluecaster_hci_command_status_inject(opcode: u16, status: u8);
+    pub fn bluecaster_hci_dump_init();
+    pub fn bluecaster_set_link_key_db(rust_store: c_int);
+    pub fn bluecaster_add_hci_event_handler();
+    pub fn bluecaster_a2dp_source_init();
+    pub fn bluecaster_avrcp_init();
+    pub fn bluecaster_hfp_ag_init(voice: c_int);
+    pub fn bluecaster_hfp_ag_connect(addr: *const u8) -> u8;
+    pub fn bluecaster_hfp_ag_release(acl_handle: u16) -> u8;
+    pub fn bluecaster_hfp_ag_audio_connect(acl_handle: u16) -> u8;
+    pub fn bluecaster_hfp_ag_audio_release(acl_handle: u16) -> u8;
+    pub fn bluecaster_hfp_ag_remote_codecs(acl_handle: u16, out: *mut u8, max: u8) -> u8;
+    pub fn bluecaster_hfp_ag_set_codecs(acl_handle: u16, codecs: *const u8, codecs_nr: u8) -> u8;
+    pub fn bluecaster_hfp_ag_set_speaker_gain(acl_handle: u16, gain: u8) -> u8;
+    pub fn bluecaster_hfp_ag_set_microphone_gain(acl_handle: u16, gain: u8) -> u8;
+    pub fn bluecaster_sco_send(sco_handle: u16, payload: *const u8, len: u16) -> u8;
+    pub fn bluecaster_sco_request_can_send_now(sco_handle: u16);
+    pub fn bluecaster_sco_packet_length(sco_handle: u16) -> u16;
+    pub fn bluecaster_hfp_ag_deinit();
+    pub fn bluecaster_rfcomm_init();
+    pub fn bluecaster_rfcomm_deinit();
+    pub fn bluecaster_rfcomm_create_channel(addr: *const u8, server_channel: u8, out_cid: *mut u16) -> u8;
+    pub fn bluecaster_sdp_query_rfcomm(addr: *const u8, uuid128: *const u8) -> u8;
+    pub fn bluecaster_sdp_query_services(addr: *const u8) -> u8;
+    pub fn bluecaster_sdp_client_deinit();
 
     // ---- shim.c: GAP, SDP, endpoints, configuration ----
-    pub fn a2dpwb_gap_setup(class_of_device: u32, page_timeout: u16);
-    pub fn a2dpwb_sdp_register_records(controller_features: u16, target_features: u16);
-    pub fn a2dpwb_create_stream_endpoint(
+    pub fn bluecaster_gap_setup(class_of_device: u32, page_timeout: u16, name: *const c_char);
+    pub fn bluecaster_sdp_register_records(controller_features: u16, target_features: u16);
+    pub fn bluecaster_create_stream_endpoint(
         slot: c_int,
         media_codec_type: u8,
         caps: *const u8,
@@ -36,7 +60,7 @@ unsafe extern "C" {
         config: *const u8,
         config_len: u16,
     ) -> u8;
-    pub fn a2dpwb_set_config_sbc(
+    pub fn bluecaster_set_config_sbc(
         a2dp_cid: u16,
         local_seid: u8,
         remote_seid: u8,
@@ -48,7 +72,7 @@ unsafe extern "C" {
         min_bitpool: u8,
         max_bitpool: u8,
     ) -> u8;
-    pub fn a2dpwb_set_config_aac(
+    pub fn bluecaster_set_config_aac(
         a2dp_cid: u16,
         local_seid: u8,
         remote_seid: u8,
@@ -58,20 +82,41 @@ unsafe extern "C" {
         bit_rate: u32,
         vbr: u8,
     ) -> u8;
-    pub fn a2dpwb_set_config_other(a2dp_cid: u16, local_seid: u8, remote_seid: u8, info: *const u8, info_len: u8)
-    -> u8;
+    pub fn bluecaster_set_config_other(
+        a2dp_cid: u16,
+        local_seid: u8,
+        remote_seid: u8,
+        info: *const u8,
+        info_len: u8,
+    ) -> u8;
 
     // ---- shim.c: state queries, HCI commands ----
-    pub fn a2dpwb_acl_state(addr: *const u8, con_handle: *mut u16) -> c_int;
-    pub fn a2dpwb_avdtp_state_for_addr(addr: *const u8, avdtp_cid: *mut u16) -> c_int;
-    pub fn a2dpwb_avdtp_state_for_cid(avdtp_cid: u16) -> c_int;
-    pub fn a2dpwb_cmd_set_afh_classification(map: *const u8) -> u8;
-    pub fn a2dpwb_cmd_read_afh_channel_map(con_handle: u16) -> u8;
-    pub fn a2dpwb_cmd_read_rssi(con_handle: u16) -> u8;
-    pub fn a2dpwb_cmd_read_bd_addr() -> u8;
-    pub fn a2dpwb_cmd_read_local_version() -> u8;
-    pub fn a2dpwb_hci_get_state() -> c_int;
-    pub fn a2dpwb_hci_can_send_command_now() -> c_int;
+    pub fn bluecaster_acl_state(addr: *const u8, con_handle: *mut u16) -> c_int;
+    pub fn bluecaster_cmd_create_connection_cancel(addr: *const u8) -> u8;
+    pub fn bluecaster_avdtp_state_for_addr(addr: *const u8, avdtp_cid: *mut u16) -> c_int;
+    pub fn bluecaster_avdtp_state_for_cid(avdtp_cid: u16) -> c_int;
+    pub fn bluecaster_cmd_set_afh_classification(map: *const u8) -> u8;
+    pub fn bluecaster_cmd_read_afh_channel_map(con_handle: u16) -> u8;
+    pub fn bluecaster_cmd_read_rssi(con_handle: u16) -> u8;
+    pub fn bluecaster_cmd_read_failed_contact_counter(con_handle: u16) -> u8;
+    pub fn bluecaster_cmd_read_link_quality(con_handle: u16) -> u8;
+    pub fn bluecaster_cmd_read_remote_version(con_handle: u16) -> u8;
+    pub fn bluecaster_cmd_read_link_supervision_timeout(con_handle: u16) -> u8;
+    pub fn bluecaster_usable_acl_packet_types() -> u16;
+    pub fn bluecaster_cmd_change_connection_packet_type(con_handle: u16, packet_types: u16) -> u8;
+    pub fn bluecaster_cmd_write_link_policy(con_handle: u16, allow_sniff: c_int) -> u8;
+    pub fn bluecaster_acl_packets_in_controller(con_handle: u16) -> c_int;
+    pub fn bluecaster_acl_role(con_handle: u16) -> c_int;
+    pub fn bluecaster_connection_address(con_handle: u16, addr: *mut u8) -> c_int;
+    pub fn bluecaster_acl_encryption_key_size(con_handle: u16) -> c_int;
+    pub fn bluecaster_remote_features_query(con_handle: u16);
+    pub fn bluecaster_max_acl_data_packet_length() -> u16;
+    pub fn bluecaster_cmd_read_bd_addr() -> u8;
+    pub fn bluecaster_cmd_read_local_version() -> u8;
+    pub fn bluecaster_cmd_remote_name_request(addr: *const u8) -> u8;
+    pub fn bluecaster_cmd_remote_name_request_cancel(addr: *const u8) -> u8;
+    pub fn bluecaster_hci_get_state() -> c_int;
+    pub fn bluecaster_hci_can_send_command_now() -> c_int;
 
     // ---- BTstack: memory, run loop ----
     pub fn btstack_memory_init();
@@ -88,11 +133,11 @@ unsafe extern "C" {
     pub fn l2cap_deinit();
     pub fn sdp_init();
     pub fn sdp_deinit();
-    pub fn sdp_client_deinit();
 
     // ---- BTstack: GAP ----
     pub fn gap_inquiry_start(duration_in_1280ms_units: u8) -> c_int;
     pub fn gap_inquiry_stop() -> c_int;
+    pub fn gap_remote_name_request(addr: *const u8, page_scan_repetition_mode: u8, clock_offset: u16) -> c_int;
     pub fn gap_ssp_confirmation_response(addr: *const u8) -> c_int;
     pub fn gap_pin_code_response(addr: *const u8, pin: *const c_char) -> c_int;
     pub fn gap_disconnect(handle: u16) -> u8;
@@ -128,19 +173,32 @@ unsafe extern "C" {
     pub fn avrcp_controller_deinit();
     pub fn avrcp_deinit();
 
+    // ---- BTstack: RFCOMM ----
+    pub fn rfcomm_disconnect(rfcomm_cid: u16) -> u8;
+    pub fn rfcomm_request_can_send_now_event(rfcomm_cid: u16) -> u8;
+    pub fn rfcomm_send(rfcomm_cid: u16, data: *mut u8, len: u16) -> u8;
+
     // ---- BTstack: chipsets ----
     pub fn btstack_chipset_realtek_get_num_usb_controllers() -> u16;
     pub fn btstack_chipset_realtek_get_vendor_product_id(index: u16, vendor_id: *mut u16, product_id: *mut u16);
+    /// csrc/realtek.c
+    pub fn bluecaster_realtek_usb_fw_name(index: u16) -> *const c_char;
     pub fn btstack_chipset_realtek_set_product_id(id: u16);
     pub fn btstack_chipset_realtek_set_firmware_folder_path(path: *const c_char);
     pub fn btstack_chipset_realtek_set_config_folder_path(path: *const c_char);
-    pub fn btstack_chipset_realtek_instance() -> *const core::ffi::c_void;
+    /// csrc/realtek.c: a firmware file instead of the folder's (NULL: none)
+    pub fn bluecaster_realtek_set_firmware_file(path: *const c_char);
+    /// csrc/realtek.c: the patch length BTstack's download builds (tests)
+    #[cfg(test)]
+    pub fn bluecaster_realtek_patch_length(pid: u16, firmware: *const c_char, config: *const c_char, rom: u8) -> u32;
+    /// csrc/realtek.c: the Realtek chipset opening the .bin files
+    pub fn bluecaster_realtek_instance() -> *const core::ffi::c_void;
     pub fn btstack_chipset_bcm_set_hcd_file_path(path: *const c_char);
     pub fn btstack_chipset_bcm_instance() -> *const core::ffi::c_void;
     pub fn hci_set_chipset(chipset: *const core::ffi::c_void);
 }
 
-/// csrc/shim.c a2dpwb_cis_params_t (a plain layout of A2DPWB's own, copied
+/// csrc/shim.c bluecaster_cis_params_t (a plain layout of BlueCaster's own, copied
 /// into BTstack's le_audio_cis_params_t by the shim)
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -157,29 +215,35 @@ pub struct CisParamsC {
 // LE (experimental LE Audio)
 unsafe extern "C" {
     // ---- shim.c: setup ----
-    pub fn a2dpwb_le_init(tlv_path: *const c_char) -> c_int;
-    pub fn a2dpwb_le_deinit(att_server_started: c_int);
+    pub fn bluecaster_le_init() -> c_int;
+    pub fn bluecaster_le_deinit(att_server_started: c_int);
 
     // ---- shim.c: GAP, HCI ----
-    pub fn a2dpwb_gap_connect(addr: *const u8, addr_type: u8) -> u8;
-    pub fn a2dpwb_gap_connection_type(con: u16) -> c_int;
-    pub fn a2dpwb_gap_delete_bonding(addr_type: u8, addr: *const u8);
-    pub fn a2dpwb_cmd_disconnect(handle: u16, reason: u8) -> u8;
+    pub fn bluecaster_gap_connect(addr: *const u8, addr_type: u8) -> u8;
+    pub fn bluecaster_gap_connection_type(con: u16) -> c_int;
+    pub fn bluecaster_gap_delete_bonding(addr_type: u8, addr: *const u8);
+    pub fn bluecaster_cmd_disconnect(handle: u16, reason: u8) -> u8;
 
     // ---- shim.c: TLV ----
-    pub fn a2dpwb_tlv_get(tag: u32, buffer: *mut u8, size: u32) -> c_int;
-    pub fn a2dpwb_tlv_store(tag: u32, data: *const u8, size: u32) -> c_int;
-    pub fn a2dpwb_tlv_delete(tag: u32);
+    pub fn bluecaster_tlv_get(tag: u32, buffer: *mut u8, size: u32) -> c_int;
+    pub fn bluecaster_tlv_store(tag: u32, data: *const u8, size: u32) -> c_int;
+    pub fn bluecaster_tlv_delete(tag: u32);
 
     // ---- shim.c: GATT client ----
-    pub fn a2dpwb_gatt_discover_primary_services(con: u16) -> u8;
-    pub fn a2dpwb_gatt_find_included_services(con: u16, start: u16, end: u16) -> u8;
-    pub fn a2dpwb_gatt_discover_characteristics(con: u16, start: u16, end: u16) -> u8;
-    pub fn a2dpwb_gatt_read_long_value(con: u16, value_handle: u16) -> u8;
-    pub fn a2dpwb_gatt_write_value(con: u16, value_handle: u16, value: *const u8, len: u16, long_write: c_int) -> u8;
-    pub fn a2dpwb_gatt_write_without_response(con: u16, value_handle: u16, value: *const u8, len: u16) -> u8;
+    pub fn bluecaster_gatt_discover_primary_services(con: u16) -> u8;
+    pub fn bluecaster_gatt_find_included_services(con: u16, start: u16, end: u16) -> u8;
+    pub fn bluecaster_gatt_discover_characteristics(con: u16, start: u16, end: u16) -> u8;
+    pub fn bluecaster_gatt_read_long_value(con: u16, value_handle: u16) -> u8;
+    pub fn bluecaster_gatt_write_value(
+        con: u16,
+        value_handle: u16,
+        value: *const u8,
+        len: u16,
+        long_write: c_int,
+    ) -> u8;
+    pub fn bluecaster_gatt_write_without_response(con: u16, value_handle: u16, value: *const u8, len: u16) -> u8;
     #[allow(clippy::too_many_arguments)]
-    pub fn a2dpwb_gatt_write_client_configuration(
+    pub fn bluecaster_gatt_write_client_configuration(
         con: u16,
         start_handle: u16,
         value_handle: u16,
@@ -189,16 +253,16 @@ unsafe extern "C" {
         uuid128: *const u8,
         configuration: u16,
     ) -> u8;
-    pub fn a2dpwb_gatt_listen(con: u16) -> c_int;
-    pub fn a2dpwb_gatt_stop_listening(con: u16);
+    pub fn bluecaster_gatt_listen(con: u16) -> c_int;
+    pub fn bluecaster_gatt_stop_listening(con: u16);
 
     // ---- shim.c: ATT server ----
-    pub fn a2dpwb_att_server_init();
-    pub fn a2dpwb_att_server_request_to_send(con: u16, indication: c_int) -> u8;
+    pub fn bluecaster_att_server_init();
+    pub fn bluecaster_att_server_request_to_send(con: u16, indication: c_int) -> u8;
 
     // ---- shim.c: CIG / ISO ----
     #[allow(clippy::too_many_arguments)]
-    pub fn a2dpwb_cig_create(
+    pub fn bluecaster_cig_create(
         cig_id: u8,
         sdu_interval_c_to_p: u32,
         sdu_interval_p_to_c: u32,
@@ -210,7 +274,36 @@ unsafe extern "C" {
         num_cis: u8,
         cis: *const CisParamsC,
     ) -> u8;
-    pub fn a2dpwb_iso_send(cis_handle: u16, sequence_number: u16, sdu: *const u8, len: u16) -> u8;
+    pub fn bluecaster_iso_send(cis_handle: u16, sequence_number: u16, sdu: *const u8, len: u16) -> u8;
+
+    // ---- shim.c: broadcast ----
+    #[allow(clippy::too_many_arguments)]
+    pub fn bluecaster_broadcast_advertise(
+        sid: u8,
+        adv_interval_min: u16,
+        adv_interval_max: u16,
+        pa_interval_min: u16,
+        pa_interval_max: u16,
+        adv: *const u8,
+        adv_len: u16,
+        pa: *const u8,
+        pa_len: u16,
+        out_handle: *mut u8,
+    ) -> u8;
+    pub fn bluecaster_broadcast_advertise_stop() -> u8;
+    #[allow(clippy::too_many_arguments)]
+    pub fn bluecaster_big_create(
+        big_handle: u8,
+        num_bis: u8,
+        sdu_interval_us: u32,
+        max_sdu: u16,
+        max_transport_latency_ms: u16,
+        rtn: u8,
+        phy: u8,
+        framing: u8,
+        code: *const u8,
+    ) -> u8;
+    pub fn bluecaster_big_terminate(big_handle: u8) -> u8;
 
     // ---- BTstack: GAP (LE) ----
     pub fn gap_set_scan_params(scan_type: u8, scan_interval: u16, scan_window: u16, filter_policy: u8) -> u8;
@@ -233,6 +326,7 @@ unsafe extern "C" {
     // ---- BTstack: HCI ISO ----
     pub fn hci_set_num_iso_packets_to_queue(num_packets: u8);
     pub fn hci_request_cis_can_send_now_events(cis_con_handle: u16) -> u8;
+    pub fn hci_request_bis_can_send_now_events(big_handle: u8) -> u8;
 
     // ---- BTstack: SM ----
     pub fn sm_request_pairing(con: u16);
@@ -244,6 +338,18 @@ unsafe extern "C" {
 
     // ---- BTstack: LE device DB ----
     pub fn le_device_db_max_count() -> c_int;
+    pub fn le_device_db_add(addr_type: c_int, addr: *mut u8, irk: *mut u8) -> c_int;
+    #[allow(clippy::too_many_arguments)]
+    pub fn le_device_db_encryption_set(
+        index: c_int,
+        ediv: u16,
+        rand: *mut u8,
+        ltk: *mut u8,
+        key_size: c_int,
+        authenticated: c_int,
+        authorized: c_int,
+        secure_connection: c_int,
+    );
     pub fn le_device_db_info(index: c_int, addr_type: *mut c_int, addr: *mut u8, irk: *mut u8);
     #[allow(clippy::too_many_arguments)]
     pub fn le_device_db_encryption_get(
@@ -299,7 +405,7 @@ unsafe extern "C" {
 
 #[cfg(feature = "sbc-reference")]
 unsafe extern "C" {
-    pub fn a2dpwb_sbc_ref_new(
+    pub fn bluecaster_sbc_ref_new(
         sample_rate: u16,
         channel_mode: c_int,
         blocks: c_int,
@@ -307,7 +413,11 @@ unsafe extern "C" {
         allocation: c_int,
         bitpool: c_int,
     ) -> *mut core::ffi::c_void;
-    pub fn a2dpwb_sbc_ref_encode(state: *mut core::ffi::c_void, pcm: *const i16, out: *mut u8, out_cap: c_int)
-    -> c_int;
-    pub fn a2dpwb_sbc_ref_free(state: *mut core::ffi::c_void);
+    pub fn bluecaster_sbc_ref_encode(
+        state: *mut core::ffi::c_void,
+        pcm: *const i16,
+        out: *mut u8,
+        out_cap: c_int,
+    ) -> c_int;
+    pub fn bluecaster_sbc_ref_free(state: *mut core::ffi::c_void);
 }

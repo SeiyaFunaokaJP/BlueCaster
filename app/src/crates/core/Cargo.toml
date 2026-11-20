@@ -1,13 +1,13 @@
 [package]
-name = "a2dpwb-core"
-description = "A2DPWB's core: the streaming state machine, Bluetooth stack lifecycle, profiles, settings, devices"
+name = "bluecaster-core"
+description = "BlueCaster's core: the streaming state machine, Bluetooth stack lifecycle, profiles, settings, devices"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [lib]
-name = "a2dpwb_core"
+name = "bluecaster_core"
 
 [dependencies]
 bt-host.workspace = true
@@ -16,13 +16,19 @@ le-audio.workspace = true
 hci-transport.workspace = true
 codec = { workspace = true, features = ["default"] }
 pipeline.workspace = true
+# media_eq.rs: the playback EQ's points as profiles.json keeps them
+dsp.workspace = true
 audio-capture.workspace = true
+# voice.rs: headset mode's voice link (codecs, microphone render, uplink)
+voice-link.workspace = true
 win-sys.workspace = true
+# compat.rs: the 2.0.x pipe and mutex names (defined next to the new ones)
+ipc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
-# update.rs: GitHub Releases API (rustls, the system proxy as v1's WinHTTP),
+# update.rs (and firmware.rs): GitHub Releases API (rustls, the system proxy as v1's WinHTTP),
 # version precedence, and the local date of the daily check
 ureq = { version = "3.3", default-features = false, features = ["rustls", "win-system-proxy"] }
 semver = "1"
@@ -31,6 +37,14 @@ time = { version = "0.3", features = ["local-offset"] }
 if-addrs = "0.15"
 # le_media.rs: LE Audio MCP, the Windows media session (WinRT, safe API)
 windows = { version = "0.62", features = ["Foundation", "ApplicationModel", "Media_Control"] }
+# firmware.rs: checks the Realtek files fetched from linux-firmware
+sha2 = "0.10"
+
+[dev-dependencies]
+# le_stream.rs tests: a microphone ring without a stack
+rtrb.workspace = true
+# receiver.rs tests: a port that refuses, held for the whole test
+socket2.workspace = true
 
 [lints]
 workspace = true

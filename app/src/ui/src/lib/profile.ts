@@ -1,9 +1,86 @@
 // A new profile's defaults and the checks before profile.save. The values
 // are those of v1's profile dialog; the core checks again.
+//
+// Since the Codecs screen (issue #86) the UI keeps one profile per device
+// entry (its address, and whether it is the LE Audio entry): the codec card
+// chosen changes that profile, and the settings of the codecs it is not
+// using wait in its codec_settings. The core folds older extra profiles
+// into it at start (crates/core/src/profiles.rs consolidate).
 
-import type { AudioDevice, Device, ParamsOf, Profile } from "../ipc/types";
-import { PACKET_DEFAULT, PACKET_MAX, PACKET_MIN } from "./codecs";
+import type { CodecValues } from "../ipc/bindings/CodecValues";
+import type { AudioDevice, Device, MicProcessing, ParamsOf, Profile, Snapshot } from "../ipc/types";
+import { cardCodec, cardOf, carryToCodec, fitToCodec, PACKET_DEFAULT, PACKET_MAX, PACKET_MIN, type CodecCaps } from "./codecs";
 import { parseAddress } from "./format";
+
+/** What belongs to the audio device rather than the codec: the capture
+ *  source. Set on the Audio Devices screen and kept the same in all the
+ *  device's profiles (issue #86). The max media packet size is the device's
+ *  too, set on the Developer page; a profile's own Windows Volume Sync is
+ *  no longer used (Settings.volume_sync, for every device). */
+export const DEVICE_FIELDS = [
+  "capture_mode",
+  "audio_device_id",
+  "audio_device_name",
+  "auto_switch_device",
+  "app_exe",
+  "app_name",
+] as const;
+
+export type DeviceFields = Pick<Profile, (typeof DEVICE_FIELDS)[number]>;
+
+export function deviceFields(p: Profile): DeviceFields {
+  return Object.fromEntries(DEVICE_FIELDS.map((k) => [k, p[k]])) as DeviceFields;
+}
+
+/** The device's profiles (address in any case) */
+export function profilesOf(profiles: readonly Profile[], address: string): Profile[] {
+  const a = address.toUpperCase();
+  return profiles.filter((p) => p.device_address.toUpperCase() === a);
+}
+
+/** A device's settings are complete: a virtual or output device or an app chosen when captured from */
+export function deviceFieldsComplete(f: DeviceFields): boolean {
+  if (f.capture_mode === "virtual" || f.capture_mode === "output") return f.audio_device_id !== "";
+  if (f.capture_mode === "app") return f.app_exe !== "";
+  return true;
+}
+
+/** The device's settings as its profiles have them (the first one's), for a new profile of it */
+export function deviceDefaults(profiles: readonly Profile[], address: string): DeviceFields | null {
+  const p = profilesOf(profiles, address)[0];
+  return p ? deviceFields(p) : null;
+}
+
+/** Headset mode (Profile.headset_mic): Auto opens the
+ *  microphone link only while an app records from the cable; the core
+ *  switches it */
+export type HeadsetMode = "off" | "auto" | "on";
+
+/** Every mode a profile may hold */
+export const HEADSET_MODES: readonly HeadsetMode[] = ["off", "auto", "on"];
+
+/** The modes offered: On (the microphone kept open) only in developer mode
+ *  (issue #86) */
+export function headsetModes(developer: boolean): readonly HeadsetMode[] {
+  return developer ? HEADSET_MODES : ["off", "auto"];
+}
+
+/** A profile's headset mode in force; anything unknown reads as Off. On
+ *  outside developer mode works as Auto, as the core takes it, and comes
+ *  back with developer mode (the saved value stays). */
+export function headsetMode(p: Pick<Profile, "headset_mic">, developer: boolean): HeadsetMode {
+  const m = p.headset_mic as string;
+  const mode = (HEADSET_MODES as readonly string[]).includes(m) ? (m as HeadsetMode) : "off";
+  return mode === "on" && !developer ? "auto" : mode;
+}
+
+/** The headset microphone's processing all off: the microphone as it comes */
+export const MIC_PROCESSING_OFF: MicProcessing = {
+  enabled: false,
+  gain_db: 0,
+  suppression: 0,
+  gate_db: -80,
+};
 
 export function newProfile(): Profile {
   return {
@@ -14,8 +91,13 @@ export function newProfile(): Profile {
     quality: "hq",
     abr: false,
     codec_fallback: true,
+    codec_forced: false,
+    unlisted_options: false,
     sample_rate: 0,
     bit_depth: 0,
+    // Every new device captures System Loopback (issue #86: it plays with
+    // nothing installed); a virtual device or one app is chosen on Audio
+    // Devices
     capture_mode: "loopback",
     audio_device_id: "",
     audio_device_name: "",
@@ -28,8 +110,194 @@ export function newProfile(): Profile {
     volume_device_name: "",
     max_media_payload: PACKET_DEFAULT,
     le_audio: false,
-    le_low_latency: true,
+    // LE Audio: LC3 unless LC3 LL is chosen (issue #86)
+    le_low_latency: false,
+    headset_mic: "auto",
+    mic_device_id: "",
+    mic_device_name: "",
+    mic_muted: false,
+    mic_default_input: true,
+    voice_codec: "",
+    mic_rate: 0,
+    mic_processing: { ...MIC_PROCESSING_OFF },
+    sbc_bitpool: 0,
+    sbcxq_bitpool: 0,
+    sbc_min_bitpool: 0,
+    sbcxq_min_bitpool: 0,
+    sbc_blocks: 0,
+    sbc_subbands: 0,
+    sbc_allocation: "",
+    sbc_channel_mode: "",
+    codec_settings: {},
+    codec_order: [],
+    media_eq: { enabled: false, bands: [] },
   };
+}
+
+/** One saved audio device as the Codecs screen, Home and the sidebar list
+ *  it: its entry and its profile (None until a codec is chosen or it is
+ *  connected) */
+export interface AudioEntry {
+  key: string;
+  address: string;
+  name: string;
+  le_audio: boolean;
+  device: Device;
+  profile: Profile | null;
+}
+
+/** The profile of a device entry: the one streaming, else the active one,
+ *  else the first (the core keeps one per entry; more only until it starts
+ *  again) */
+export function deviceProfile(
+  snap: Pick<Snapshot, "profiles" | "active_profile" | "stream">,
+  address: string,
+  leAudio: boolean,
+): Profile | null {
+  const mine = profilesOf(snap.profiles, address).filter((p) => p.le_audio === leAudio);
+  const streaming = snap.stream.state !== "idle" ? snap.stream.profile : null;
+  return (
+    mine.find((p) => p.name === streaming) ?? mine.find((p) => p.name === snap.active_profile) ?? mine[0] ?? null
+  );
+}
+
+/** LE Audio in force: its setting counts only in developer mode (issue
+ *  #86), as the core has it */
+export const leAudioOn = (s: { le_audio_experimental: boolean; developer_mode: boolean }) =>
+  s.le_audio_experimental && s.developer_mode;
+
+/** The saved devices with their profiles, in the saved list's order; LE
+ *  Audio entries only with LE Audio on. */
+export function audioEntries(snap: Pick<Snapshot, "profiles" | "active_profile" | "stream" | "devices" | "settings">): AudioEntry[] {
+  return listedDevices(snap.devices, leAudioOn(snap.settings))
+    .filter((d) => d.saved)
+    .map((d) => ({
+      key: deviceKey(d),
+      address: d.address.toUpperCase(),
+      name: d.name,
+      le_audio: d.le_audio,
+      device: d,
+      profile: deviceProfile(snap, d.address, d.le_audio),
+    }));
+}
+
+/** A list's entry by its key, kept for a moment after it left the list
+ *  (lists of devices are keyed: a device keeps its component across updates) */
+export function entryByKey(list: () => AudioEntry[], key: string): () => AudioEntry {
+  let last: AudioEntry | undefined;
+  return () => (last = list().find((e) => e.key === key) ?? last)!;
+}
+
+/** The profile a device entry starts from before it has its own: Auto,
+ *  and the device settings of its other entry's profile, else the defaults
+ *  (System Loopback) */
+export function entryBase(entry: Pick<AudioEntry, "address" | "name" | "le_audio">, profiles: readonly Profile[]): Profile {
+  return {
+    ...newProfile(),
+    device_address: entry.address.toUpperCase(),
+    device_name: entry.name,
+    le_audio: entry.le_audio,
+    ...(deviceDefaults(profiles, entry.address) ?? {}),
+  };
+}
+
+/** The entry a profile belongs to */
+export function entryOf(entries: readonly AudioEntry[], p: Profile | null): AudioEntry | null {
+  if (!p) return null;
+  const key = deviceKey({ address: p.device_address, le_audio: p.le_audio });
+  return entries.find((e) => e.key === key) ?? null;
+}
+
+/** The settings of the codec a profile uses */
+export function codecValues(p: Profile): CodecValues {
+  return {
+    quality: p.quality,
+    sample_rate: p.sample_rate,
+    bit_depth: p.bit_depth,
+    abr: p.abr,
+    sbc_bitpool: p.sbc_bitpool,
+    sbcxq_bitpool: p.sbcxq_bitpool,
+    sbc_min_bitpool: p.sbc_min_bitpool,
+    sbcxq_min_bitpool: p.sbcxq_min_bitpool,
+    sbc_blocks: p.sbc_blocks,
+    sbc_subbands: p.sbc_subbands,
+    sbc_allocation: p.sbc_allocation,
+    sbc_channel_mode: p.sbc_channel_mode,
+    unlisted_options: p.unlisted_options,
+  };
+}
+
+/** Settings an earlier version kept for aptX Adaptive in Low Latency (the
+ *  core moves them to aptX Adaptive LL's card when it loads the profile) */
+const legacyLl = (v: CodecValues | undefined) => v?.quality === "ll";
+
+/** The settings kept for a codec card (aptX Adaptive LL: those an earlier
+ *  version kept for aptX Adaptive in Low Latency, until it has its own; never
+ *  aptX Adaptive's own, issue #86) */
+export function keptFor(p: Pick<Profile, "codec_settings">, card: string): CodecValues | undefined {
+  const kept = p.codec_settings ?? {};
+  if (card === "aptxadll" && !kept[card] && legacyLl(kept.aptxad)) return kept.aptxad;
+  if (card === "aptxad" && legacyLl(kept.aptxad)) return undefined;
+  return kept[card];
+}
+
+/**
+ * The profile with the codec of card `codec` chosen: the settings of the
+ * card it used go to its codec_settings, and `codec` gets `values` (its
+ * "..." dialog's), else what it was set to before (issue #86: AAC's VBR came
+ * back off), else what carries over from the codec it leaves (carryToCodec).
+ * aptX Adaptive LL's card is saved as aptX Adaptive in Low Latency.
+ */
+export function withCodec(p: Profile, codec: string, values?: CodecValues): Profile {
+  const from = cardOf(p);
+  const kept: Record<string, CodecValues> = { ...(p.codec_settings ?? {}) };
+  const back = values ?? keptFor(p, codec);
+  // An earlier version's aptX Adaptive in Low Latency is LL's (issue #86)
+  if (legacyLl(kept.aptxad)) {
+    kept.aptxadll ??= kept.aptxad;
+    delete kept.aptxad;
+  }
+  if (from !== codec) kept[from] = codecValues(p);
+  delete kept[codec];
+  const base: Profile = { ...p, codec_settings: kept };
+  // Values of its own come back as they were; else what carries over from the codec it leaves
+  return cardCodec(back ? fitToCodec({ ...base, ...back, codec }) : carryToCodec(base, codec));
+}
+
+/**
+ * The output device's name inside "Windows default (...)" (issue #86).
+ * Windows' friendly name already ends in "(adapter)", so not that. A
+ * virtual device goes by its adapter ("VB-Audio Hi-Fi Cable": its own
+ * "Hi-Fi Cable Input" reads as a microphone) unless another output has the
+ * same adapter (CABLE Input and CABLE In 16ch) or it holds parentheses; any
+ * other device by its own name ("Speakers": display audio and Realtek
+ * adapters say nothing of which device).
+ */
+export function defaultOutputName(d: AudioDevice, all: readonly AudioDevice[]): string {
+  const adapter = d.adapter_name?.trim();
+  if (
+    d.is_virtual &&
+    adapter &&
+    !/[()]/.test(adapter) &&
+    !all.some((o) => o.id !== d.id && o.adapter_name?.trim() === adapter)
+  ) {
+    return adapter;
+  }
+  return d.short_name?.trim() || d.name;
+}
+
+/**
+ * A device profile's name: "<device> | <codec>" (v2's own, as the setup
+ * makes it; "<device> LE Audio" for LE Audio) while it has that form, the
+ * user's own otherwise. A name another profile has gets " (2)", " (3)"...
+ */
+export function followedName(p: Profile, codecLabel: string, taken: readonly string[]): string {
+  const base = p.device_name || p.device_address;
+  const own = p.name !== "" && p.name !== base && !p.name.startsWith(`${base} | `) && p.name !== `${base} LE Audio`;
+  if (own) return p.name;
+  const name = defaultProfileName(p.device_name, p.device_address, p.le_audio, codecLabel);
+  if (!taken.includes(name)) return name;
+  for (let n = 2; ; n++) if (!taken.includes(`${name} (${n})`)) return `${name} (${n})`;
 }
 
 /** A problem with a field: translation key and its arguments */
@@ -74,6 +342,21 @@ export function knownCodecs(devices: readonly Device[], address: string): string
   return devices.find((d) => !d.le_audio && d.address.toUpperCase() === a)?.codecs ?? [];
 }
 
+/** The codec keys a device may offer only once chosen (issue #30) */
+export function codecsOnRequest(devices: readonly Device[], address: string): string[] {
+  const a = parseAddress(address);
+  if (!a) return [];
+  return devices.find((d) => !d.le_audio && d.address.toUpperCase() === a)?.codecs_on_request ?? [];
+}
+
+/** What each codec a device offered lists (rates, bit depths, largest bit
+ *  rate: Device.codec_caps; empty while not known, issue #86) */
+export function knownCodecCaps(devices: readonly Device[], address: string): CodecCaps[] {
+  const a = parseAddress(address);
+  if (!a) return [];
+  return devices.find((d) => !d.le_audio && d.address.toUpperCase() === a)?.codec_caps ?? [];
+}
+
 /**
  * A device entry's identity: a dual-mode device has a classic entry and an
  * LE Audio one with the same address
@@ -82,28 +365,153 @@ export function deviceKey(d: Pick<Device, "address" | "le_audio">): string {
   return `${d.address.toUpperCase()}${d.le_audio ? "/le" : ""}`;
 }
 
-/** The entries to offer: LE Audio ones only with LE Audio (experimental) on, as v1 */
+
+/** VB-Cable's playback side ("CABLE Input", "CABLE In 16ch"; as the core's
+ *  is_vb_cable) */
+export function isVbCable(d: Pick<AudioDevice, "name" | "is_virtual">): boolean {
+  return d.is_virtual && /cable/i.test(d.name) && !isHifiCable(d);
+}
+
+/** VB-Cable's playback device among Windows' outputs */
+export function vbCable(devices: readonly AudioDevice[]): AudioDevice | null {
+  const cables = devices.filter(isVbCable);
+  // The standard one before the 16-channel one
+  return cables.find((d) => !multichannelCable(d)) ?? cables[0] ?? null;
+}
+
+/** VB-Audio's Hi-Fi Cable ("Hi-Fi Cable Input"): the cable for the sound,
+ *  with less delay than VB-Cable (as the core's is_hifi_cable) */
+export function isHifiCable(d: Pick<AudioDevice, "name">): boolean {
+  return /hi-?fi[ -]cable/i.test(d.name);
+}
+
+/** The Hi-Fi Cable's playback device among Windows' outputs */
+export function hifiCable(devices: readonly AudioDevice[]): AudioDevice | null {
+  return devices.find(isHifiCable) ?? null;
+}
+
+/** Windows' default output as a device's System Loopback takes it: none
+ *  while the stream made its own Output Source the default (issue #86: one
+ *  device's Output Source took cables from another device's lists; it goes
+ *  back when that stream ends). As the core's default_output_for_cables. */
+export function ownDefaultOutput(
+  devices: readonly AudioDevice[],
+  snap: Pick<Snapshot, "stream" | "profiles">,
+): string {
+  const id = devices.find((d) => d.is_default)?.id ?? "";
+  const running = ["connecting", "streaming", "reconnecting"].includes(snap.stream.state);
+  const streaming = running ? snap.profiles.find((p) => p.name === snap.stream.profile) : undefined;
+  const switches = streaming?.capture_mode === "virtual" || streaming?.capture_mode === "output";
+  return id && switches && streaming?.audio_device_id === id ? "" : id;
+}
+
+/**
+ * The real output the sound is captured from beside the one cable, which
+ * is the microphone's (issue #86): a monitor's or TV's audio (nothing plays
+ * aloud beside the headphones on most; of several, the one that is Windows'
+ * default output), else Windows' default output, else the first, virtual
+ * devices aside. As the core's real_output.
+ */
+export function realOutput(devices: readonly AudioDevice[]): AudioDevice | null {
+  const real = devices.filter((d) => !d.is_virtual);
+  const display = real.filter((d) => d.is_display);
+  return display.find((d) => d.is_default) ?? display[0] ?? real.find((d) => d.is_default) ?? real[0] ?? null;
+}
+
+/** The sound card the microphone plays into where there is no cable: an
+ *  output that is neither a display's nor virtual, Windows' default output
+ *  before the first. As the core's sound_card. */
+export function soundCard(devices: readonly AudioDevice[]): AudioDevice | null {
+  const cards = devices.filter((d) => !d.is_virtual && !d.is_display);
+  return cards.find((d) => d.is_default) ?? cards[0] ?? null;
+}
+
+/**
+ * What a new device gets (issue #86): neither left empty where a cable
+ * allows, and the same whatever Windows' default output is (the source is
+ * made the default while the device is connected). Both cables: the Hi-Fi
+ * Cable for the sound, VB-Cable for the microphone. One: the microphone,
+ * and the sound a real output ([realOutput]), or the cable itself with no
+ * microphone where there is none. None: a monitor's or TV's audio for the
+ * sound and the sound card for the microphone (turned off: Auto cannot tell
+ * who listens to a sound card) where Windows has both. As the core's
+ * Cables::sound_for and Bare.
+ * `sound`: a cable captured as a virtual device, a real output as an
+ * Output Device; `null`: System Loopback / no microphone.
+ */
+export interface SetupAudio {
+  sound: AudioDevice | null;
+  mic: AudioDevice | null;
+}
+
+export function setupAudio(devices: readonly AudioDevice[]): SetupAudio {
+  const hifi = hifiCable(devices);
+  const vb = vbCable(devices.filter((d) => !multichannelCable(d)));
+  if (hifi && vb) return { sound: hifi, mic: vb };
+  const cable = hifi ?? vb;
+  const real = realOutput(devices);
+  if (!cable) {
+    const card = soundCard(devices);
+    return real?.is_display && card ? { sound: real, mic: card } : { sound: null, mic: null };
+  }
+  return real ? { sound: real, mic: cable } : { sound: cable, mic: null };
+}
+
+/** A 16-channel cable ("CABLE In 16ch"): no use as a source or a
+ *  microphone for most people (issue #86), listed in developer mode */
+export function multichannelCable(d: Pick<AudioDevice, "name">): boolean {
+  return /16\s*ch/i.test(d.name);
+}
+
+/**
+ * The entries to offer (issue #86: one device, not an "Audio" and an "LE
+ * Audio" one). LE Audio off: the classic entries. On: a device with both
+ * is its LE Audio entry alone, saved when either is, under the classic
+ * name when it has none; "Use LE Audio when available" decides which of
+ * the two connects.
+ */
 export function listedDevices(devices: readonly Device[], leAudio: boolean): Device[] {
-  return leAudio ? [...devices] : devices.filter((d) => !d.le_audio);
+  if (!leAudio) return devices.filter((d) => !d.le_audio);
+  const out: Device[] = [];
+  for (const d of devices) {
+    const other = twinOf(devices, d);
+    if (!d.le_audio && other) continue;
+    out.push(
+      other ? { ...d, name: d.name || other.name, saved: d.saved || other.saved, audio: true, rssi: d.rssi ?? other.rssi } : d,
+    );
+  }
+  return out;
+}
+
+/** The device's entry of the other kind (classic / LE Audio), same address */
+export function twinOf(
+  devices: readonly Device[],
+  d: Pick<Device, "address" | "le_audio">,
+): Device | undefined {
+  const a = d.address.toUpperCase();
+  return devices.find((x) => x.le_audio !== d.le_audio && x.address.toUpperCase() === a);
 }
 
 /** A profile's name until the user types one: the device, "<device> LE Audio" for LE Audio (v1) */
-export function defaultProfileName(deviceName: string, address: string, leAudio: boolean): string {
+export function defaultProfileName(deviceName: string, address: string, leAudio: boolean, codec = ""): string {
   const base = deviceName || address;
-  return leAudio && base ? `${base} LE Audio` : base;
+  if (leAudio) return base ? `${base} LE Audio` : base;
+  return base && codec ? `${base} | ${codec}` : base;
 }
 
 /**
  * The render device a capture mode records: the default output device
- * (loopback), the chosen virtual device, or none (application capture:
- * Windows converts to the rate asked for)
+ * (loopback), the chosen virtual or output device, or none (application
+ * capture: Windows converts to the rate asked for)
  */
 export function captureDevice(
   p: Pick<Profile, "capture_mode" | "audio_device_id">,
   devices: readonly AudioDevice[],
 ): AudioDevice | null {
   if (p.capture_mode === "loopback") return devices.find((d) => d.is_default) ?? null;
-  if (p.capture_mode === "virtual") return devices.find((d) => d.id === p.audio_device_id) ?? null;
+  if (p.capture_mode === "virtual" || p.capture_mode === "output") {
+    return devices.find((d) => d.id === p.audio_device_id) ?? null;
+  }
   return null;
 }
 
@@ -172,6 +580,7 @@ export function toneParams(p: Profile): ParamsOf<"stream.start_custom"> {
     source: "tone",
     max_media_payload: p.max_media_payload || null,
     abr: p.abr,
-    codec_fallback: p.codec_fallback,
+    // As a profile: a codec the device does not offer falls back (issue #86)
+    codec_fallback: true,
   };
 }

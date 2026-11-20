@@ -4,22 +4,22 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use bt_host::{
-    BtHost, DiscoveredDevice, HciCapture, HostConfig, HostEvent, InitFailure, LeConfig, LeScanResult, LinkStats,
-    TransportConfig,
+    BtHost, DiscoveredDevice, HciCapture, HeadsetMic, HostConfig, HostEvent, InitFailure, LeConfig, LeScanResult,
+    LinkStats, TransportConfig,
 };
 use hci_transport::UsbSelector;
 
 use crate::devices::SavedDevice;
 use crate::messages::Msg;
 use crate::settings::Settings;
-use crate::stream::{self, StreamInfo, StreamRequest, StreamState};
+use crate::stream::{self, SourceRequest, StreamInfo, StreamRequest, StreamState};
 
 /// Wait for the controller to answer when checking a stack before use
 const CONTROLLER_PROBE: Duration = Duration::from_secs(2);
@@ -30,10 +30,35 @@ const RESUME_SETTLE: Duration = Duration::from_secs(3);
 /// sleep ends once on wake, whatever the clock says)
 const RESUME_TICK: Duration = Duration::from_millis(200);
 const RESUME_WAIT_TICKS: u32 = 300;
-/// LE Audio (experimental): the LE scan after the classic one (v1)
+/// LE Audio (experimental): the shortest LE scan of a scan that is not
+/// stopped (v1: 5 s after the classic one)
 const LE_SCAN: Duration = Duration::from_secs(5);
+/// A link younger than this keeps the stack ([`Service::host_for_stream`])
+const FRESH_LINK: Duration = Duration::from_secs(60);
+/// A link given up on is gone by then, or by its supervision timeout
+pub(crate) const LINK_RELEASE_WAIT: Duration = Duration::from_secs(2);
+/// A connection started during a scan waits this long for the scan to end
+/// (a name request being cancelled takes up to ~2 s)
+const SCAN_END_WAIT: Duration = Duration::from_secs(5);
 /// ... once the LE core is ready (HCI works, so at once or a moment later)
 const LE_SCAN_READY_WAIT: Duration = Duration::from_secs(1);
+
+/// MMCSS "Pro Audio" for the calling thread (the priority hooks). Said in
+/// the log either way: a thread that runs without it is one place a
+/// stutter can come from (issue #84).
+fn pro_audio(thread: &str) -> Box<dyn std::any::Any> {
+    let guard = match win_sys::mmcss::MmcssGuard::register(win_sys::mmcss::MmcssTask::ProAudio) {
+        Ok(g) => {
+            tracing::info!("{thread}: MMCSS Pro Audio (task {})", g.task_index());
+            Some(g)
+        }
+        Err(e) => {
+            tracing::warn!("{thread}: MMCSS registration failed, normal priority: {e}");
+            None
+        }
+    };
+    Box::new(guard)
+}
 
 /// LE Audio (experimental) from the command line (`--le-audio` and the
 /// test options): LE is on whatever the setting says
@@ -68,6 +93,40 @@ pub struct ScannedDevice {
     pub le_audio_set: bool,
 }
 
+/// One device, not two (issue #86): a scan that finds the other side
+/// (classic / LE Audio, the same address) of a saved device saves that side
+/// too, under the saved name, so the device stays one entry that "Use LE
+/// Audio when available" connects either way. The sides saved.
+fn save_twins(dir: &std::path::Path, found: &[ScannedDevice]) -> usize {
+    let saved = crate::devices::load_all(dir);
+    let mut n = 0;
+    for d in found {
+        let has = |le: bool| saved.iter().find(|s| s.le_audio == le && s.address.eq_ignore_ascii_case(&d.address));
+        if has(d.le_audio).is_some() {
+            continue;
+        }
+        // The other side saved, and this side found by the scan
+        let Some(other) = has(!d.le_audio) else { continue };
+        let name = if other.name.is_empty() { d.name.as_str() } else { other.name.as_str() };
+        let r = if d.le_audio {
+            crate::devices::save_le(dir, &d.address, name)
+        } else {
+            crate::devices::save(dir, &d.address, name)
+        };
+        match r {
+            Ok(()) => {
+                n += 1;
+                tracing::info!(
+                    "scan: the {} side of a saved device saved with it",
+                    if d.le_audio { "LE Audio" } else { "classic" }
+                );
+            }
+            Err(e) => tracing::warn!("scan: saving the other side of a saved device: {e}"),
+        }
+    }
+    n
+}
+
 impl ScannedDevice {
     fn classic(d: &DiscoveredDevice) -> ScannedDevice {
         ScannedDevice {
@@ -82,18 +141,48 @@ impl ScannedDevice {
     }
 }
 
+/// Appearance categories (the value's upper 10 bits)
+const APPEARANCE_PHONE: u16 = 0x001;
+const APPEARANCE_COMPUTER: u16 = 0x002;
+
+/// The addresses of advertisers listed as LE Audio only for their audio
+/// appearance that are a classic device (`classic`: found or saved): a
+/// classic headset's LE side for its app (a Sennheiser HDR 275 advertises
+/// name, battery and the appearance "headset", no LE Audio service). Not
+/// listed, and a saved LE side of them is removed: else "Use LE Audio when
+/// available" connected it over LE, where nothing answers.
+fn classic_appearance_only(results: &[LeScanResult], classic: &[String]) -> Vec<String> {
+    results
+        .iter()
+        .filter(|r| r.le_audio && r.appearance_only)
+        .map(|r| r.identity.unwrap_or(r.addr).to_string())
+        .filter(|a| classic.iter().any(|c| c.eq_ignore_ascii_case(a)))
+        .collect()
+}
+
 /// The LE Audio entries of an LE scan (v1 A2dpService scan thread): LE
 /// Audio advertisers only; a saved LE Audio device is listed (with its new
 /// name); of a coordinated set nobody saved, one member (connecting it
 /// finds the others). Classic entries of the same address are another
 /// list. Returns the entries and the number of LE Audio advertisers seen.
-fn le_scan_entries(results: &[LeScanResult], saved_le: &[SavedDevice]) -> (Vec<ScannedDevice>, usize) {
+/// A PC or phone is a source, not something to play to: this PC's own
+/// Windows adapters (`own`, advertising LE Audio) are left out with them.
+fn le_scan_entries(results: &[LeScanResult], saved_le: &[SavedDevice], own: &[String]) -> (Vec<ScannedDevice>, usize) {
     let mut out: Vec<ScannedDevice> = Vec::new();
     let mut sets_listed: Vec<u32> = Vec::new();
     let mut found = 0;
     for r in results.iter().filter(|r| r.le_audio) {
+        let category = r.appearance >> 6;
+        if matches!(category, APPEARANCE_PHONE | APPEARANCE_COMPUTER)
+            || own.iter().any(|a| a.eq_ignore_ascii_case(&r.addr.to_string()))
+        {
+            continue;
+        }
         found += 1;
-        let address = r.addr.to_string();
+        // A bonded device advertising under a random address is listed by
+        // its identity: its saved entry and its classic side's name match
+        // it, and its next random address is the same entry (issue #86)
+        let address = r.identity.unwrap_or(r.addr).to_string();
         let set_member = r.rsi.is_some();
         if let Some(e) = out.iter_mut().find(|e| e.address == address) {
             // Seen twice (advertising and scan response)
@@ -121,6 +210,37 @@ fn le_scan_entries(results: &[LeScanResult], saved_le: &[SavedDevice]) -> (Vec<S
         });
     }
     (out, found)
+}
+
+/// LE entries whose advertising carries no name (issue #86: an EarFun's LE
+/// side listed by its address) take the name of a device with the same
+/// address in `known` (address and name: the scan's classic devices and the
+/// saved ones), the classic side of the same earbuds
+fn fill_le_names(entries: &mut [ScannedDevice], known: &[(String, String)]) {
+    for e in entries.iter_mut().filter(|e| e.name.trim().is_empty()) {
+        if let Some((_, name)) = known.iter().find(|(a, n)| a.eq_ignore_ascii_case(&e.address) && !n.trim().is_empty())
+        {
+            e.name = name.clone();
+        }
+    }
+}
+
+/// The advertisers without LE Audio that look like the LE side of a classic
+/// device (`known`: address and name of the scan's and the saved ones): the
+/// same address, or the same name. For the log only: such a device is not
+/// listed (many classic headphones advertise over LE for their app).
+fn classic_le_sides<'a>(results: &'a [LeScanResult], known: &[(String, String)]) -> Vec<&'a LeScanResult> {
+    results
+        .iter()
+        .filter(|r| !r.le_audio)
+        .filter(|r| {
+            let addr = r.addr.to_string();
+            let ids = std::iter::once(addr).chain(r.identity.map(|i| i.to_string()));
+            let same_addr = ids.into_iter().any(|a| known.iter().any(|(k, _)| k.eq_ignore_ascii_case(&a)));
+            let same_name = !r.name.trim().is_empty() && known.iter().any(|(_, n)| n.trim() == r.name.trim());
+            same_addr || same_name
+        })
+        .collect()
 }
 
 /// Sleep and resume as the service sees them (set by the power
@@ -187,6 +307,37 @@ pub enum ServiceEvent {
     StreamInfo(StreamInfo),
     /// The headphones reported their volume (0..127)
     Volume(u8),
+    /// The headphones reported their battery level (percent)
+    Battery(u8),
+    /// The headphones refused to report their battery level (HFP refused,
+    /// another device may hold it)
+    BatteryRefused,
+    /// The voice codecs the headphones listed on their HFP connection
+    /// ("cvsd", "msbc", "lc3_swb"; StreamStatus.voice_codecs)
+    VoiceCodecs(Vec<String>),
+    /// LE Audio: the microphone's sampling rates the headphones allow (Hz),
+    /// Auto's first (StreamStatus.mic_rates); empty without a microphone
+    MicRates(Vec<u32>),
+    /// While the session waited for its headphones that went off, another
+    /// saved device connected to the PC (its address): its session may
+    /// start instead
+    OtherDeviceBack([u8; 6]),
+    /// A firmware loader's step, percent or end while the adapter starts
+    Loader(bt_host::bringup::LoaderProgress),
+    /// Headset mode: the voice link carries audio (Some), or no longer
+    /// (None)
+    Voice(Option<ipc::VoiceStatus>),
+}
+
+/// Headset mode switched for the running classic stream
+/// ([`Service::set_headset_mic`])
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceChange {
+    pub mode: HeadsetMic,
+    /// As [`StreamRequest::mic_output`]
+    pub mic_output: Option<String>,
+    /// As [`StreamRequest::voice_codec`]
+    pub voice_codec: Option<voice_link::VoiceCodec>,
 }
 
 pub struct ServiceOptions {
@@ -210,7 +361,9 @@ fn le_config(le_on: bool, cli: Option<&LeCliOptions>, opts: &ServiceOptions) -> 
     // player answers, nothing in Windows is read or controlled
     let dry_run = cli.is_some_and(|c| c.mcp_dry_run) || opts.hci_tcp.is_some();
     Some(LeConfig {
-        bond_dir: Some(opts.config_dir.clone()),
+        bonds_file: Some(crate::paths::le_bonds_file(&opts.config_dir)),
+        imported_bonds_file: Some(crate::paths::windows_le_keys_file(&opts.config_dir)),
+        bond_dir: Some(crate::paths::pairing_dir(&opts.config_dir)),
         media: if dry_run { None } else { crate::le_media::windows_backend() },
         ccp_sim: cli.and_then(|c| c.ccp_sim.clone()),
         ccp_console: cli.is_some_and(|c| c.ccp_console),
@@ -228,30 +381,151 @@ pub(crate) struct Inner {
     pub power: PowerState,
     tick: (Mutex<()>, Condvar),
     state: Mutex<StreamState>,
-    /// Codec keys each device (address) offered at its last connection
-    codecs: Mutex<BTreeMap<String, Vec<String>>>,
+    /// What each device (address) offered at its last connection, also
+    /// in device_codecs.json
+    codecs: Mutex<BTreeMap<String, stream::KnownCodecs>>,
     /// The chip or firmware setting changed while the stack was in use:
     /// the next use starts a new stack (which loads the firmware again)
     reload: AtomicBool,
     /// LE Audio forced on by the command line
     le_cli: Mutex<Option<LeCliOptions>>,
+    /// The developer CLI's --headset-mic-toggle: stacks offer HFP audio
+    /// from the start, for headset mode switched on later
+    voice_offered: AtomicBool,
+    /// The session asks for headset mode (its request's `headset_mic` is
+    /// On or Auto): stacks offer HFP audio
+    voice_wanted: AtomicBool,
+    /// Headset mode switched for the running session's next tick
+    voice_change: Mutex<Option<VoiceChange>>,
+    /// The HFP audio connection's events, for the session
+    voice_events: Mutex<Vec<bt_host::VoiceEvent>>,
+    /// The microphone test (Diagnostics)
+    pub mic_test: crate::mic_test::MicTest,
+    /// The microphone's processing in force (the request's, changed in
+    /// place by [`Service::set_mic_processing`])
+    pub mic_dsp: voice_link::MicDsp,
     /// The running stack was started with LE Audio
     le_active: AtomicBool,
     /// A device scan runs
     scanning: AtomicBool,
     /// The LE Audio stream being sent (le_stream)
     le_stream: Mutex<Option<crate::le_stream::LeStreamDetails>>,
+    /// An A2DP stream ran on the running stack (issue #84)
+    streamed: AtomicBool,
+    /// The running adapter has LE Audio's isochronous channels: known once
+    /// a stack started on it (issue #86)
+    le_support: Mutex<Option<bool>>,
+    /// The session waits for headphones that were turned off: a scan may
+    /// end it
+    waiting: AtomicBool,
+    /// The headphones of the last session were turned off and did not come
+    /// back while it ran: a Bluetooth restart does not reconnect them
+    /// (issues #86, #117)
+    turned_off: AtomicBool,
+    /// The source the running A2DP session changes to at its next tick
+    source_change: Mutex<Option<SourceRequest>>,
+    /// Other bitpools for the session to take in place
+    /// ([`Service::change_bitpools`])
+    bitpool_change: Mutex<Option<stream::Bitpools>>,
+    /// The running A2DP stream would be set up the same with "Show only
+    /// options it supports" off / on ([`Service::change_unlisted`]); None
+    /// while none is set up
+    unlisted_keeps: Mutex<Option<[bool; 2]>>,
 }
 
 impl Inner {
+    /// The microphone's processing in force from the next samples on
+    pub(crate) fn apply_mic_processing(&self, p: &ipc::MicProcessing) {
+        let s = crate::voice::mic_settings(p);
+        if s != self.mic_dsp.get() {
+            tracing::info!(
+                "microphone processing: {}, gain {} dB, noise suppression {}, gate {}",
+                if p.enabled { "on" } else { "off" },
+                p.gain_db,
+                if s.suppresses() { format!("{} %", p.suppression.min(100)) } else { "off".into() },
+                if p.gate_db > ipc::MicProcessing::GATE_OFF_DB { format!("{} dB", p.gate_db) } else { "off".into() }
+            );
+        }
+        self.mic_dsp.set(s);
+    }
+
+    /// An event for the state machine (the LE stream's headset volume)
+    pub(crate) fn send_event(&self, e: ServiceEvent) {
+        let _ = self.events.lock().unwrap_or_else(|e| e.into_inner()).send(e);
+    }
+
     pub fn stop_requested(&self) -> bool {
         self.stop.load(Ordering::Acquire)
+    }
+
+    pub fn take_source_change(&self) -> Option<SourceRequest> {
+        self.source_change.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    pub fn take_bitpool_change(&self) -> Option<stream::Bitpools> {
+        self.bitpool_change.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    pub fn take_voice_change(&self) -> Option<VoiceChange> {
+        self.voice_change.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    /// The HFP audio connection's events since the last call, oldest first
+    pub fn take_voice_events(&self) -> Vec<bt_host::VoiceEvent> {
+        std::mem::take(&mut *self.voice_events.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Headset mode's voice link carries audio (Some) or no longer
+    pub fn voice_status(&self, status: Option<ipc::VoiceStatus>) {
+        let _ = self.events.lock().unwrap_or_else(|e| e.into_inner()).send(ServiceEvent::Voice(status));
+    }
+
+    /// LE Audio: the microphone rates the headphones allow, Auto's first
+    /// (StreamStatus.mic_rates)
+    pub fn mic_rates(&self, rates: Vec<u32>) {
+        let _ = self.events.lock().unwrap_or_else(|e| e.into_inner()).send(ServiceEvent::MicRates(rates));
+    }
+
+    pub fn set_unlisted_keeps(&self, keeps: [bool; 2]) {
+        *self.unlisted_keeps.lock().unwrap_or_else(|e| e.into_inner()) = Some(keeps);
+    }
+
+    /// The session waits for headphones that were turned off
+    pub fn waiting_for_device(&self) {
+        self.turned_off.store(true, Ordering::Release);
+        self.waiting.store(true, Ordering::Release);
+    }
+
+    /// The wait ended: `back`, the headphones connected again
+    pub fn done_waiting_for_device(&self, back: bool) {
+        if back {
+            self.turned_off.store(false, Ordering::Release);
+        }
+        self.waiting.store(false, Ordering::Release);
     }
 
     pub fn notify(&self, state: StreamState, msg: Msg) {
         tracing::info!("state {state:?}: {}", msg.english());
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = state;
+        // What went over the air before a failure or a lost connection; not
+        // for a refusal by a setting, which sent nothing (a tester's clicks
+        // on a refused device saved 7 and pushed the useful ones out)
+        let refusal = matches!(msg.key, "error.le_audio_disabled" | "error.le_audio_developer");
+        if matches!(state, StreamState::Error | StreamState::Reconnecting) && !refusal {
+            let dir = crate::paths::recorder_dir(&self.opts.config_dir);
+            let what = format!("{state:?}-{}", msg.key.trim_start_matches("error."));
+            self.opts.capture.save_recent(&dir, &crate::paths::local_stamp(), &what, false);
+        }
         let _ = self.events.lock().unwrap_or_else(|e| e.into_inner()).send(ServiceEvent::State(state, msg));
+    }
+
+    /// The settings folder (devices, profiles, pairings)
+    pub fn config_dir(&self) -> &std::path::Path {
+        &self.opts.config_dir
+    }
+
+    pub fn other_device_back(&self, addr: [u8; 6]) {
+        let _ = self.events.lock().unwrap_or_else(|e| e.into_inner()).send(ServiceEvent::OtherDeviceBack(addr));
     }
 
     pub fn stream_info(&self, info: StreamInfo) {
@@ -259,6 +533,11 @@ impl Inner {
     }
 
     /// Sleeps up to `d`, returning early on a stop
+    /// Ends a session's [`Inner::wait_tick`] now
+    pub(crate) fn wake_tick(&self) {
+        self.tick.1.notify_all();
+    }
+
     pub fn wait_tick(&self, d: Duration) {
         let guard = self.tick.0.lock().unwrap_or_else(|e| e.into_inner());
         if !self.stop_requested() {
@@ -276,13 +555,23 @@ impl Inner {
         while at.elapsed() < RESUME_SETTLE && !self.stop_requested() {
             std::thread::sleep(Duration::from_millis(100));
         }
+        tracing::debug!(
+            "resume settle: done {} ms after the resume (stop requested {})",
+            at.elapsed().as_millis(),
+            self.stop_requested()
+        );
     }
 
-    /// LE Audio (experimental) for the next stack: the setting, or the
-    /// command line's --le-audio
+    /// LE Audio for the next stack: the setting in developer mode
+    /// ([`Settings::le_audio`]), or the command line's --le-audio
     pub fn le_wanted(&self) -> bool {
         self.le_cli.lock().unwrap_or_else(|e| e.into_inner()).is_some()
-            || self.settings.lock().unwrap_or_else(|e| e.into_inner()).le_audio_experimental
+            || self.settings.lock().unwrap_or_else(|e| e.into_inner()).le_audio()
+    }
+
+    /// Developer mode is on
+    pub fn developer(&self) -> bool {
+        self.settings.lock().unwrap_or_else(|e| e.into_inner()).debug_mode
     }
 
     /// The running stack has LE Audio
@@ -298,12 +587,47 @@ impl Inner {
             None => TransportConfig::Usb(self.opts.usb.clone()),
         };
         let mut c = HostConfig::new(transport);
-        c.link_key_dir = Some(self.opts.config_dir.clone());
-        c.firmware_dir = Some(self.opts.config_dir.clone());
+        c.link_key_file = Some(crate::paths::link_keys_file(&self.opts.config_dir));
+        c.firmware_dir = Some(crate::paths::firmware_dir(&self.opts.config_dir));
         c.capture = self.opts.capture.clone();
         crate::adapter::configure(&mut c, &s, &self.opts.config_dir);
         let cli = self.le_cli.lock().unwrap_or_else(|e| e.into_inner()).clone();
         c.le_audio = le_config(le_on, cli.as_ref(), &self.opts);
+        // The LE keys of classic devices do not depend on LE Audio (issue
+        // #86: Windows and Linux get them of headphones without it)
+        c.le_keys = Some(bt_host::LeKeysConfig {
+            bonds_file: crate::paths::le_bonds_file(&self.opts.config_dir),
+            imported_bonds_file: Some(crate::paths::windows_le_keys_file(&self.opts.config_dir)),
+        });
+        c.battery = true;
+        // Headset microphone: the session's request, or the developer
+        // CLI's --headset-mic-toggle
+        c.voice = self.voice_wanted.load(Ordering::Acquire)
+            || self.voice_offered.load(Ordering::Acquire)
+            || self.mic_test.needs_voice();
+        // The computer's name, as Windows' own Bluetooth (issue #86)
+        c.local_name = bt_host::local_name(&win_sys::computer::computer_name().unwrap_or_default());
+        // The Adapters screen shows a loader's progress while the adapter
+        // starts (the stack's handle comes only after)
+        let events = self.events.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let events = Mutex::new(events);
+        c.on_loader = Some(Arc::new(move |p| {
+            let _ = events.lock().unwrap_or_else(|e| e.into_inner()).send(ServiceEvent::Loader(p.clone()));
+        }));
+        tracing::debug!(
+            "host config: transport {:?}, firmware dir {:?}, realtek pid {:04x} files {:?}, intel loader {}, mediatek loader {}, qualcomm loader {}, realtek driver chip {:04X?}, broadcom ids {}, LE {} (cli {:?})",
+            c.transport,
+            c.firmware_dir,
+            c.realtek_pid,
+            c.realtek_files,
+            c.intel_loader,
+            c.mediatek_loader,
+            c.qualcomm_loader,
+            c.realtek_driver_chip,
+            c.broadcom_ids.len(),
+            c.le_audio.is_some(),
+            cli
+        );
         c
     }
 
@@ -314,23 +638,33 @@ impl Inner {
         let mut last = InitFailure::Failed;
         let le_on = self.le_wanted();
         if le_on {
-            tracing::info!("LE Audio (experimental) is on: BTstack starts with LE");
+            tracing::info!("LE Audio is on: BTstack starts with LE");
         }
         for attempt in 1..=attempts {
             if attempt > 1 {
                 tracing::warn!("the Bluetooth adapter did not answer, opening it again ({attempt}/{attempts})");
             }
-            match BtHost::start(self.host_config(le_on), self.stats.clone()) {
+            let t = Instant::now();
+            let started = BtHost::start(self.host_config(le_on), self.stats.clone());
+            tracing::debug!(
+                "host start: attempt {attempt}/{attempts} {} after {} ms",
+                if started.is_ok() { "ok" } else { "failed" },
+                t.elapsed().as_millis()
+            );
+            match started {
                 Ok(h) => {
                     let h = Arc::new(h);
                     let s = self.settings.lock().unwrap_or_else(|e| e.into_inner()).clone();
                     h.set_media_keys(s.media_keys);
-                    h.set_afh_policy(self.opts.afh.as_deref().unwrap_or(&s.afh));
+                    h.set_afh_policy(self.opts.afh.as_deref().unwrap_or(afh_policy(&s)));
                     self.le_active.store(le_on, Ordering::Release);
+                    self.streamed.store(false, Ordering::Release);
+                    self.note_le_capable(&h);
                     self.pump_events(&h);
                     return Ok(h);
                 }
                 Err(f) => {
+                    tracing::debug!("host start: {f:?}");
                     last = f;
                     if f != InitFailure::NoAnswer {
                         break;
@@ -339,6 +673,39 @@ impl Inner {
             }
         }
         Err(Msg::new(if last == InitFailure::NoAnswer { "error.btstack_no_answer" } else { "error.btstack_init" }))
+    }
+
+    /// Remembers whether the adapter the stack opened has LE Audio's
+    /// isochronous channels, also for the next start (adapter_caps.json)
+    fn note_le_capable(&self, host: &Arc<BtHost>) {
+        let capable = host.le_audio_capable();
+        tracing::debug!("adapter: LE Audio capable {capable}, opened {:?}", hci_transport::usb::last_opened());
+        *self.le_support.lock().unwrap_or_else(|e| e.into_inner()) = Some(capable);
+        if self.opts.hci_tcp.is_none()
+            && let Some((vid, pid)) = hci_transport::usb::last_opened()
+        {
+            crate::adapter::save_le_audio(&self.opts.config_dir, vid, pid, capable);
+            // The address comes with the controller's answer, a moment after
+            // init; a Realtek adapter's version once its download was read
+            // back (issue #427: the first read is the ROM code's)
+            let dir = self.opts.config_dir.clone();
+            let host = host.clone();
+            let _ = std::thread::Builder::new().name("adapter-address".into()).spawn(move || {
+                let mut address_saved = false;
+                for _ in 0..40 {
+                    if !address_saved && let Some(a) = host.local_address() {
+                        crate::adapter::save_address(&dir, vid, pid, &a);
+                        address_saved = true;
+                    }
+                    if address_saved && let Some(v) = host.hci_version() {
+                        crate::adapter::save_hci_version(&dir, vid, pid, v);
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+                tracing::debug!("adapter: address saved {address_saved}, no HCI version after 10 s, not saved");
+            });
+        }
     }
 
     /// Headphone buttons to Windows media keys, volume reports to the
@@ -350,6 +717,7 @@ impl Inner {
             while let Ok(e) = rx.recv() {
                 match e {
                     HostEvent::MediaKey(k) => {
+                        tracing::debug!("host event: media key {k:?}");
                         let key = match k {
                             bt_host::MediaKey::PlayPause => win_sys::media_keys::MediaKey::PlayPause,
                             bt_host::MediaKey::Stop => win_sys::media_keys::MediaKey::Stop,
@@ -361,14 +729,54 @@ impl Inner {
                         }
                     }
                     HostEvent::Volume(v) => {
+                        tracing::debug!("host event: device volume {v}");
                         if let Some(inner) = weak.upgrade() {
                             let _ =
                                 inner.events.lock().unwrap_or_else(|e| e.into_inner()).send(ServiceEvent::Volume(v));
                         }
                     }
-                    HostEvent::ConnectionLost | HostEvent::TransportFailed => {}
+                    HostEvent::Battery(v) => {
+                        tracing::debug!("host event: battery {v}%");
+                        if let Some(inner) = weak.upgrade() {
+                            let _ =
+                                inner.events.lock().unwrap_or_else(|e| e.into_inner()).send(ServiceEvent::Battery(v));
+                        }
+                    }
+                    HostEvent::BatteryRefused => {
+                        tracing::debug!("host event: battery refused");
+                        if let Some(inner) = weak.upgrade() {
+                            let _ = inner
+                                .events
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .send(ServiceEvent::BatteryRefused);
+                        }
+                    }
+                    HostEvent::VoiceCodecs(codecs) => {
+                        tracing::debug!("host event: voice codecs {codecs:?}");
+                        if let Some(inner) = weak.upgrade() {
+                            let codecs = codecs.into_iter().map(String::from).collect();
+                            let _ = inner
+                                .events
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .send(ServiceEvent::VoiceCodecs(codecs));
+                        }
+                    }
+                    HostEvent::ConnectionLost | HostEvent::TransportFailed => {
+                        tracing::debug!("host event: {e:?}");
+                    }
+                    // The headset microphone: the session acts on it
+                    HostEvent::Voice(v) => {
+                        tracing::debug!("host event: voice {v:?}");
+                        if let Some(inner) = weak.upgrade() {
+                            inner.voice_events.lock().unwrap_or_else(|e| e.into_inner()).push(v);
+                            inner.tick.1.notify_all();
+                        }
+                    }
                 }
             }
+            tracing::debug!("host events: channel closed");
         });
     }
 
@@ -386,18 +794,19 @@ impl Inner {
             } else if self.le_active() != le_wanted {
                 // Turned on or off while streaming or scanning: applied now,
                 // before the next scan or connection (v1)
-                Some(if le_wanted {
-                    "LE Audio (experimental) was turned on"
-                } else {
-                    "LE Audio (experimental) was turned off"
-                })
+                Some(if le_wanted { "LE Audio was turned on" } else { "LE Audio was turned off" })
+            } else if (self.voice_wanted.load(Ordering::Acquire) || self.mic_test.needs_voice()) && !h.voice_enabled() {
+                Some("headset mode needs the stack with voice")
             } else if !h.controller_responds(CONTROLLER_PROBE) {
                 Some("the Bluetooth adapter stopped answering")
             } else {
                 None
             };
             match why {
-                None => return Ok(h.clone()),
+                None => {
+                    tracing::trace!("ensure host: the running stack is fine");
+                    return Ok(h.clone());
+                }
                 Some(why) => {
                     tracing::warn!("restarting BTstack: {why}");
                     h.shutdown();
@@ -405,12 +814,54 @@ impl Inner {
                 }
             }
         }
+        tracing::debug!("ensure host: starting a new stack");
         self.power.clear_stale();
         self.reload.store(false, Ordering::Release);
         self.wait_after_resume();
+        let t = Instant::now();
         let h = self.start_host()?;
+        tracing::debug!("ensure host: stack up in {} ms", t.elapsed().as_millis());
         *slot = Some(h.clone());
         Ok(h)
+    }
+
+    /// The stack for a new A2DP stream. One a stream already ran on is
+    /// replaced: streams after a Disconnect / Connect on the same stack
+    /// stuttered until the app was restarted (issue #84), and a new stack
+    /// (HCI Reset; a running Realtek firmware is kept) is what a restart
+    /// gave. While idle the old stack stays up, for headphones that connect
+    /// by themselves. Kept when the device to stream connected to the PC by
+    /// itself on it: the HCI Reset would drop that link, and headphones that
+    /// just connected then refused the PC's page for 30 s to 2 min (issue
+    /// #86). So is a link that came up moments ago ([`FRESH_LINK`]): a codec
+    /// chosen right after connecting. An older link left from the stream
+    /// that just ended does not count.
+    pub fn host_for_stream(self: &Arc<Self>, device: [u8; 6]) -> Result<Arc<BtHost>, Msg> {
+        let old = self.host.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let streamed = self.streamed.swap(false, Ordering::AcqRel);
+        if let Some(h) = old {
+            // Claimed by this stream either way: the next one replaces the stack
+            let own_link = h.take_link_from_device(device);
+            if streamed && own_link {
+                tracing::info!("keeping BTstack: {} connected to the PC by itself on it", bt_host::addr_str(&device));
+            } else if streamed && link_is_fresh(h.link_age(device)) {
+                tracing::info!("keeping BTstack: the link to {} just came up", bt_host::addr_str(&device));
+            } else if streamed {
+                tracing::info!("restarting BTstack: a stream ran on it before");
+                self.shutdown_host();
+            }
+        }
+        self.ensure_host()
+    }
+
+    /// The running stack carried an A2DP stream to `device`: the next one
+    /// starts on a new stack, also when the device opened its link again
+    /// during the stream (turned off and on)
+    pub fn mark_streamed(&self, device: [u8; 6]) {
+        if let Some(h) = self.host.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            h.take_link_from_device(device);
+        }
+        self.streamed.store(true, Ordering::Release);
     }
 
     /// Shuts the stack down and starts a new one (the session thread, for a
@@ -423,6 +874,7 @@ impl Inner {
         }
         self.shutdown_host();
         let h = self.ensure_host()?;
+        tracing::debug!("restart host: media payload limit {max_media_payload}");
         h.set_media_payload_limit(max_media_payload);
         Ok(h)
     }
@@ -442,6 +894,7 @@ impl Inner {
     /// up after about a minute awake without one (the stack is then
     /// restarted as after a failure). False when the session was stopped.
     pub fn wait_for_resume(&self) -> bool {
+        tracing::debug!("waiting for the resume (up to {RESUME_WAIT_TICKS} ticks awake)");
         let mut ticks = 0;
         while self.power.suspending() && !self.stop_requested() {
             if ticks == RESUME_WAIT_TICKS {
@@ -453,23 +906,73 @@ impl Inner {
             self.wait_tick(RESUME_TICK);
             ticks += 1;
         }
+        tracing::debug!("resume wait over after {ticks} tick(s), stop requested {}", self.stop_requested());
         !self.stop_requested()
     }
 
-    fn shutdown_host(&self) {
+    /// [`Service::probe_adapter`]: holds the stack slot meanwhile, so no
+    /// stack starts on the adapter during the probe
+    fn probe(&self, instance_id: Option<String>) -> Result<bt_host::probe::ProbeReport, Msg> {
+        self.tool(instance_id, "chip probe", BtHost::probe)
+    }
+
+    /// [`Service::run_script`], as [`Inner::probe`]
+    fn script(
+        &self,
+        instance_id: Option<String>,
+        script: bt_host::script::Script,
+    ) -> Result<bt_host::probe::ProbeReport, Msg> {
+        self.tool(instance_id, "chip script", move |c| BtHost::run_script(c, script))
+    }
+
+    /// A tool in place of a stack on the adapter `instance_id` (None: the one
+    /// a stack would open), holding the stack slot meanwhile
+    fn tool(
+        &self,
+        instance_id: Option<String>,
+        what: &str,
+        run: impl FnOnce(HostConfig) -> Result<bt_host::probe::ProbeReport, InitFailure>,
+    ) -> Result<bt_host::probe::ProbeReport, Msg> {
+        let mut slot = self.host.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(h) = slot.take() {
+            h.shutdown();
+        }
+        let mut c = self.host_config(false);
+        if let (TransportConfig::Usb(sel), Some(id)) = (&mut c.transport, instance_id) {
+            sel.instance_id = Some(id);
+            sel.vid_pid = None;
+            sel.preferred = None;
+        }
+        tracing::info!("{what}: transport {:?}", c.transport);
+        run(c).map_err(|f| {
+            tracing::error!("{what}: no stack could run ({f:?})");
+            Msg::new("error.btstack_init")
+        })
+    }
+
+    pub fn shutdown_host(&self) {
         let old = self.host.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(h) = old {
+            let t = Instant::now();
             // Also when the session still holds the Arc: the adapter must be
             // free for the next stack
             h.shutdown();
+            tracing::debug!("host shutdown: took {} ms", t.elapsed().as_millis());
         }
+    }
+
+    /// Whether the headphones' buttons act as media keys (one setting for
+    /// every device, issue #86)
+    pub fn media_keys(&self) -> bool {
+        self.settings.lock().unwrap_or_else(|e| e.into_inner()).media_keys
+    }
+
+    pub fn auto_reconnect(&self) -> bool {
+        self.settings.lock().unwrap_or_else(|e| e.into_inner()).auto_reconnect
     }
 
     pub fn saved_volume(&self, addr: &str) -> Option<u8> {
         let s = self.settings.lock().unwrap_or_else(|e| e.into_inner());
-        if !s.remember_volume {
-            return None;
-        }
         s.saved_volumes.get(&addr.to_uppercase()).and_then(|&v| u8::try_from(v).ok())
     }
 
@@ -478,13 +981,11 @@ impl Inner {
     pub fn remember_volume(&self, addr: &str, volume: Option<u8>) {
         let Some(v) = volume else { return };
         let mut s = self.settings.lock().unwrap_or_else(|e| e.into_inner());
-        if !s.remember_volume {
-            return;
-        }
         let key = addr.to_uppercase();
         if s.saved_volumes.get(&key) == Some(&(v as i32)) {
             return;
         }
+        tracing::debug!("volume: remembering {v} for {key} (was {:?})", s.saved_volumes.get(&key));
         s.saved_volumes.insert(key, v as i32);
         if let Err(e) = s.save(&self.opts.config_dir) {
             tracing::warn!("cannot save the settings: {e}");
@@ -492,8 +993,61 @@ impl Inner {
     }
 
     /// What a device offered (after capability discovery)
-    pub fn record_codecs(&self, addr: &str, codecs: Vec<String>) {
-        self.codecs.lock().unwrap_or_else(|e| e.into_inner()).insert(addr.to_uppercase(), codecs);
+    pub fn record_codecs(&self, addr: &str, mut codecs: stream::KnownCodecs) {
+        tracing::debug!("codecs of {addr}: {:?}, sbc {:?}", codecs.keys, codecs.sbc);
+        let mut known = self.codecs.lock().unwrap_or_else(|e| e.into_inner());
+        // Kept with what it offers until the record is cleared
+        codecs.hi_res_asked |= known.get(&addr.to_uppercase()).is_some_and(|k| k.hi_res_asked);
+        if known.get(&addr.to_uppercase()) == Some(&codecs) {
+            return;
+        }
+        known.insert(addr.to_uppercase(), codecs);
+        self.save_codecs(&known);
+    }
+
+    /// Asks a classic device that just connected for the services it lists
+    /// and keeps them (crate::devices::keep_services): its Services tag
+    /// has them once it disconnects, also when the tag was never opened
+    /// while it was connected (issue #86). On a thread of its own: the
+    /// session does not wait for it. Given up when another services query
+    /// runs (the dialog's, which keeps its answer too) or the link went
+    /// down meanwhile; an answer cut short is never kept.
+    pub fn learn_services(&self, host: Arc<BtHost>, device: [u8; 6]) {
+        let dir = self.opts.config_dir.clone();
+        let spawned =
+            std::thread::Builder::new().name("services".into()).spawn(move || match host.device_services(device) {
+                Ok(records) => {
+                    let services: Vec<ipc::DeviceService> =
+                        records.into_iter().map(|r| ipc::DeviceService { uuids: r.classes, name: r.name }).collect();
+                    let changed = crate::devices::keep_services(&dir, &bt_host::addr_str(&device), &services);
+                    tracing::info!(
+                        "services: {} listed after connecting (kept list changed: {changed})",
+                        services.len()
+                    );
+                }
+                Err(e) => tracing::debug!("services: not asked after connecting ({e:?})"),
+            });
+        if let Err(e) = spawned {
+            tracing::warn!("services: no thread to ask for them ({e})");
+        }
+    }
+
+    fn save_codecs(&self, known: &BTreeMap<String, stream::KnownCodecs>) {
+        if let Err(e) = crate::devices::save_codecs(&self.opts.config_dir, known) {
+            tracing::warn!("cannot save the devices' codecs: {e}");
+        }
+    }
+
+    /// OPPO earbuds took the Hi-Res request already (issue #237)
+    pub fn hi_res_asked(&self, addr: &str) -> bool {
+        let known = self.codecs.lock().unwrap_or_else(|e| e.into_inner());
+        known.get(&addr.to_uppercase()).is_some_and(|k| k.hi_res_asked)
+    }
+
+    pub fn set_hi_res_asked(&self, addr: &str) {
+        let mut known = self.codecs.lock().unwrap_or_else(|e| e.into_inner());
+        known.entry(addr.to_uppercase()).or_default().hi_res_asked = true;
+        self.save_codecs(&known);
     }
 
     pub fn save_device(&self, addr: &str, name: &str) {
@@ -518,14 +1072,83 @@ impl Inner {
 pub struct Service {
     inner: Arc<Inner>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    /// Held while a session is stopped and the next one started: one start
+    /// or stop at a time (issue #86: two codec switches in quick succession
+    /// ran two sessions on one stack, no sound or crackling)
+    control: Mutex<()>,
+    /// The latest start or stop asked for ([`Service::ticket`]); an older
+    /// one still waiting for `control` is dropped
+    latest: AtomicU64,
+    /// What the last session was started with: a Bluetooth restart
+    /// connects it again (issue #86)
+    last_request: Mutex<Option<StreamRequest>>,
     _power: Option<win_sys::power::PowerNotifier>,
+}
+
+/// The saved AFH policy, as a stack runs it: the experimental "blend-*"
+/// only in developer mode (the CLI's --afh is taken as given)
+fn afh_policy(settings: &Settings) -> &str {
+    bt_host::afh::effective_policy(&settings.afh, settings.debug_mode)
+}
+
+/// The developer overrides (and the health log's interval) count only while
+/// developer mode is on. Classic devices are asked for their LE keys always
+/// (issue #86: one pairing for both, as Windows does; it runs only with LE
+/// Audio on, where SM is set up).
+fn apply_dev_overrides(settings: &Settings) {
+    bt_host::set_ctkd(true);
+    codec::dev::set_overrides(if settings.debug_mode { settings.dev_overrides } else { Default::default() });
+    crate::vendor::set_overrides(if settings.debug_mode { settings.dev_vendors.clone() } else { Default::default() });
+    crate::health::set_every_interval(settings.log().health_every_interval);
+    // Developer > Debug, read when the adapter opens next
+    let debug = if settings.debug_mode { settings.dev_debug.clone() } else { Default::default() };
+    hci_transport::iso_intr::set_config(hci_transport::iso_intr::IsoInterfaceConfig {
+        bulk: debug.mtk_iso_bulk,
+        pad_to: debug.mtk_iso_pad.into(),
+    });
+    let command = bt_host::debug_command::parse(&debug.mtk_command).unwrap_or_else(|e| {
+        tracing::warn!("Developer > Debug: command not sent: {e}");
+        None
+    });
+    bt_host::debug_command::set(command);
+    bt_host::debug_command::set_iso_queue(debug.mtk_iso_queue);
+    bt_host::debug_command::set_before_reset(debug.mtk_command_before_reset);
+    let register = bt_host::debug_command::parse_register(&debug.mtk_register).unwrap_or_else(|e| {
+        tracing::warn!("Developer > Debug: register write not sent: {e}");
+        None
+    });
+    bt_host::debug_command::set_register(register);
+    // LE Audio, read when the next stream is set up
+    bt_host::set_cig_overrides(bt_host::CigOverrides {
+        latency_c_to_p_ms: debug.le_latency_c_to_p_ms,
+        latency_p_to_c_ms: debug.le_latency_p_to_c_ms,
+        rtn_c_to_p: debug.le_rtn_c_to_p,
+        rtn_p_to_c: debug.le_rtn_p_to_c,
+        interleaved: debug.le_interleaved,
+    });
+    crate::le_stream::set_debug(crate::le_stream::LeDebug {
+        mic_preset: debug.le_mic_preset.clone(),
+        retry_same_link: debug.le_mic_retry_same_link,
+    });
 }
 
 impl Service {
     pub fn new(opts: ServiceOptions, events: Sender<ServiceEvent>) -> Service {
         // A folder v1 used is backed up and brought to v2's schema first
+        tracing::debug!(
+            "service: config dir {}, hci tcp {:?}, usb {:?}, afh override {:?}",
+            opts.config_dir.display(),
+            opts.hci_tcp,
+            opts.usb,
+            opts.afh
+        );
         crate::migrate::prepare(&opts.config_dir);
         let settings = Settings::load(&opts.config_dir);
+        if settings.debug_mode {
+            tracing::debug!("service: developer overrides {:?}", settings.dev_overrides);
+        }
+        apply_dev_overrides(&settings);
+        let codecs = crate::devices::load_codecs(&opts.config_dir);
         let inner = Arc::new(Inner {
             opts,
             settings: Mutex::new(settings),
@@ -537,12 +1160,25 @@ impl Service {
             power: PowerState::default(),
             tick: (Mutex::new(()), Condvar::new()),
             state: Mutex::new(StreamState::Idle),
-            codecs: Mutex::new(BTreeMap::new()),
+            codecs: Mutex::new(codecs),
             reload: AtomicBool::new(false),
             le_cli: Mutex::new(None),
+            voice_offered: AtomicBool::new(false),
+            voice_wanted: AtomicBool::new(false),
+            voice_change: Mutex::new(None),
+            voice_events: Mutex::new(Vec::new()),
+            mic_test: Default::default(),
+            mic_dsp: voice_link::MicDsp::new(),
             le_active: AtomicBool::new(false),
             scanning: AtomicBool::new(false),
             le_stream: Mutex::new(None),
+            le_support: Mutex::new(None),
+            streamed: AtomicBool::new(false),
+            waiting: AtomicBool::new(false),
+            turned_off: AtomicBool::new(false),
+            source_change: Mutex::new(None),
+            bitpool_change: Mutex::new(None),
+            unlisted_keeps: Mutex::new(None),
         });
         // Without a window, also while only the tray runs
         let weak = Arc::downgrade(&inner);
@@ -554,12 +1190,16 @@ impl Service {
                         tracing::info!("the PC is going to sleep");
                         // The USB transfers get cancelled now: not an error
                         bt_host::expect_transport_loss(true);
+                    } else {
+                        tracing::debug!("power: repeated suspend notification ignored");
                     }
                 }
                 win_sys::power::PowerEvent::Resume => {
                     // Both resume kinds may come for one resume
                     if inner.power.resume() {
                         tracing::info!("the PC resumed from sleep, Bluetooth will be restarted");
+                    } else {
+                        tracing::debug!("power: second resume notification ignored");
                     }
                     bt_host::expect_transport_loss(false);
                 }
@@ -572,13 +1212,17 @@ impl Service {
                 None
             }
         };
-        pipeline::set_thread_priority_hook(|| {
-            Box::new(win_sys::mmcss::MmcssGuard::register(win_sys::mmcss::MmcssTask::ProAudio).ok())
-        });
-        hci_transport::set_acl_out_priority_hook(|| {
-            Box::new(win_sys::mmcss::MmcssGuard::register(win_sys::mmcss::MmcssTask::ProAudio).ok())
-        });
-        Service { inner, worker: Mutex::new(None), _power: power }
+        pipeline::set_thread_priority_hook(|| pro_audio("encode thread"));
+        hci_transport::set_acl_out_priority_hook(|| pro_audio("USB ACL writer"));
+        bt_host::set_runloop_priority_hook(|| pro_audio("BTstack thread"));
+        Service {
+            inner,
+            worker: Mutex::new(None),
+            control: Mutex::new(()),
+            latest: AtomicU64::new(0),
+            last_request: Mutex::new(None),
+            _power: power,
+        }
     }
 
     pub fn stats(&self) -> Arc<LinkStats> {
@@ -603,27 +1247,43 @@ impl Service {
     /// before the next scan or connection ([`Service::le_audio_deferred`]
     /// says so). The low-latency setting applies to the next LE stream.
     pub fn set_settings(&self, settings: Settings) {
+        tracing::debug!(
+            "settings applied: media keys {}, volume sync {}, afh {:?}, LE {}, debug mode {}",
+            settings.media_keys,
+            settings.volume_sync,
+            settings.afh,
+            settings.le_audio(),
+            settings.debug_mode
+        );
+        apply_dev_overrides(&settings);
         let host = self.host();
         if let Some(h) = &host {
             h.set_media_keys(settings.media_keys);
-            h.set_afh_policy(self.inner.opts.afh.as_deref().unwrap_or(&settings.afh));
+            h.set_afh_policy(self.inner.opts.afh.as_deref().unwrap_or(afh_policy(&settings)));
         }
         let old = std::mem::replace(&mut *self.inner.settings.lock().unwrap_or_else(|e| e.into_inner()), settings);
-        let new_le = self.inner.settings.lock().unwrap_or_else(|e| e.into_inner()).le_audio_experimental;
-        if old.le_audio_experimental != new_le && host.is_some() && self.inner.le_active() != self.inner.le_wanted() {
+        let new_le = self.inner.settings.lock().unwrap_or_else(|e| e.into_inner()).le_audio();
+        if old.le_audio() != new_le && host.is_some() && self.inner.le_active() != self.inner.le_wanted() {
             if self.is_running() || self.is_scanning() {
                 tracing::info!(
-                    "LE Audio (experimental) turned {}: BTstack restarts before the next scan or connection",
+                    "LE Audio turned {}: BTstack restarts before the next scan or connection",
                     if new_le { "on" } else { "off" }
                 );
             } else {
                 tracing::info!(
-                    "LE Audio (experimental) turned {}: stopping BTstack, the next scan or connection starts it anew",
+                    "LE Audio turned {}: stopping BTstack, the next scan or connection starts it anew",
                     if new_le { "on" } else { "off" }
                 );
                 self.inner.shutdown_host();
             }
         }
+    }
+
+    /// HFP audio for every stack this service starts, so that headset mode
+    /// can be switched on in place later (the developer CLI's
+    /// --headset-mic-toggle; before the first stack starts)
+    pub fn set_voice_offered(&self, on: bool) {
+        self.inner.voice_offered.store(on, Ordering::Release);
     }
 
     /// LE Audio (experimental) for every stack this service starts, whatever
@@ -663,7 +1323,292 @@ impl Service {
     /// Stops the stack, releasing the adapter (e.g. before its driver is
     /// changed); the next use starts a new one
     pub fn release_adapter(&self) {
+        self.forget_session();
         self.shutdown();
+    }
+
+    /// Disconnect (the window, the tray): the session stops, and a
+    /// Bluetooth restart does not connect it again (issue #86)
+    pub fn disconnect(&self) {
+        let _control = self.control.lock().unwrap_or_else(|e| e.into_inner());
+        self.forget_session();
+        self.stop_session();
+        self.release_link();
+    }
+
+    /// After Disconnect: the headphones are free for another device, with
+    /// the stack still up (issue #270)
+    fn release_link(&self) {
+        if let Some(h) = self.host() {
+            h.drop_acl_link(LINK_RELEASE_WAIT);
+        }
+    }
+
+    /// Changes the source of the running A2DP stream: the link stays up.
+    /// False when none is streaming (it connects or reconnects, a start or
+    /// stop is under way, LE Audio has its own capture path): the caller
+    /// starts it again instead.
+    pub fn change_source(&self, source: SourceRequest) -> bool {
+        let Ok(_control) = self.control.try_lock() else { return false };
+        if !self.is_running() || self.state() != StreamState::Streaming {
+            return false;
+        }
+        match self.last_request.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            Some(req) if req.le.is_none() => req.source = source.clone(),
+            _ => return false,
+        }
+        *self.inner.source_change.lock().unwrap_or_else(|e| e.into_inner()) = Some(source);
+        self.inner.tick.1.notify_all();
+        true
+    }
+
+    /// Headset mode off, on or auto, its output and the best call codec
+    /// (`voice_codec`, None: Auto) for the classic stream running, the
+    /// link kept (the session's next tick). False when none streams, LE
+    /// Audio runs, or the stack was started without voice (on or auto): the
+    /// caller starts the stream again instead.
+    ///
+    /// Unlike the source and bitpool changes it waits for `control`: a
+    /// short holder (another change) must not cost a restart of the
+    /// profile. A start or stop under way holds it until the old session
+    /// has ended (never the session thread itself, which takes no
+    /// `control`), and the stream is then not Streaming; so without a
+    /// stream streaming it answers at once.
+    pub fn set_headset_mic(
+        &self,
+        mode: HeadsetMic,
+        mic_output: Option<String>,
+        voice_codec: Option<voice_link::VoiceCodec>,
+    ) -> bool {
+        let on = mode.is_on();
+        if !self.is_running() || self.state() != StreamState::Streaming {
+            return false;
+        }
+        let _control = self.control.lock().unwrap_or_else(|e| e.into_inner());
+        if !self.is_running() || self.state() != StreamState::Streaming {
+            return false;
+        }
+        if on && !self.host().is_some_and(|h| h.voice_enabled()) {
+            tracing::debug!("headset mode: the stack has no voice, starting the stream again");
+            return false;
+        }
+        match self.last_request.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            Some(req) if req.le.is_none() => {
+                req.headset_mic = mode;
+                req.mic_output = mic_output.clone();
+                req.voice_codec = voice_codec;
+            }
+            _ => return false,
+        }
+        // What the request wants now. Off: the running stack keeps offering
+        // voice (ensure_host restarts only for voice wanted and missing), a
+        // stack started later goes without it.
+        self.inner.voice_wanted.store(on, Ordering::Release);
+        *self.inner.voice_change.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(VoiceChange { mode, mic_output, voice_codec });
+        self.inner.tick.1.notify_all();
+        true
+    }
+
+    /// The microphone test records (Diagnostics): the classic stream's
+    /// session opens the voice link for it. Ok(true): the running stack has
+    /// no voice, the caller starts the stream again. Err: the message key
+    /// (no classic stream streaming).
+    pub fn mic_test_record(&self) -> Result<bool, &'static str> {
+        if !self.is_running() || self.state() != StreamState::Streaming {
+            return Err("mic_test.not_streaming");
+        }
+        match self.last_request.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            Some(req) if req.le.is_none() => {}
+            Some(_) => return Err("mic_test.le_audio"),
+            None => return Err("mic_test.not_streaming"),
+        }
+        let restart = !self.host().is_some_and(|h| h.voice_enabled());
+        self.inner.mic_test.record(restart);
+        self.inner.tick.1.notify_all();
+        Ok(restart)
+    }
+
+    /// The microphone test: stops its recording or playback
+    pub fn mic_test_stop(&self) {
+        self.inner.mic_test.stop();
+        self.inner.tick.1.notify_all();
+    }
+
+    /// The microphone test: plays the recording to the headphones
+    pub fn mic_test_play(&self) {
+        self.inner.mic_test.play();
+    }
+
+    /// The microphone test ends: the voice link closes unless headset mode
+    /// wants it
+    pub fn mic_test_end(&self) {
+        self.inner.mic_test.end();
+        self.inner.tick.1.notify_all();
+    }
+
+    /// The microphone test's state (keeps it alive)
+    pub fn mic_test_status(&self) -> ipc::MicTestState {
+        self.inner.mic_test.status()
+    }
+
+    /// Other processing for the headset microphone: the running microphone
+    /// (classic or LE Audio) takes it with its next samples, and a stream
+    /// started again for the same request keeps it
+    pub fn set_mic_processing(&self, p: ipc::MicProcessing) {
+        if let Some(req) = self.last_request.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            req.mic_processing = p;
+        }
+        self.inner.apply_mic_processing(&p);
+    }
+
+    /// Other bitpools for the A2DP stream running, without touching the link
+    /// (the session's next tick). False when none runs: the caller starts it
+    /// again instead.
+    pub fn change_bitpools(&self, bitpools: stream::Bitpools) -> bool {
+        let Ok(_control) = self.control.try_lock() else { return false };
+        if !self.is_running() || self.state() != StreamState::Streaming {
+            return false;
+        }
+        match self.last_request.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            Some(req) if req.le.is_none() => req.set_bitpools(bitpools),
+            _ => return false,
+        }
+        *self.inner.bitpool_change.lock().unwrap_or_else(|e| e.into_inner()) = Some(bitpools);
+        self.inner.tick.1.notify_all();
+        true
+    }
+
+    /// "Show only options it supports" turned for the A2DP stream running:
+    /// taken without touching the link when the stream would be set up the
+    /// same either way (issue #86). False otherwise or when none runs: the
+    /// caller starts it again instead.
+    pub fn change_unlisted(&self, on: bool) -> bool {
+        let Ok(_control) = self.control.try_lock() else { return false };
+        if !self.is_running() || self.state() != StreamState::Streaming {
+            return false;
+        }
+        let keeps = *self.inner.unlisted_keeps.lock().unwrap_or_else(|e| e.into_inner());
+        if !keeps.is_some_and(|k| k[usize::from(on)]) {
+            return false;
+        }
+        match self.last_request.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            Some(req) if req.le.is_none() => req.unlisted_options = on,
+            _ => return false,
+        }
+        true
+    }
+
+    /// What the service keeps of a device that is forgotten: no Bluetooth
+    /// restart connects it again, and (classic devices) what it offered and
+    /// its link key go, so it cannot connect by itself either
+    pub fn forget_device(&self, address: &str, le_audio: bool) {
+        let Some(addr) = bt_host::parse_addr(address) else { return };
+        {
+            let mut last = self.last_request.lock().unwrap_or_else(|e| e.into_inner());
+            if last.as_ref().is_some_and(|r| r.device == addr && r.le.is_some() == le_audio) {
+                *last = None;
+            }
+        }
+        if le_audio {
+            // A link key from its LE pairing (issue #86) goes with it unless
+            // its classic entry is still saved and connects with that key
+            let dir = &self.inner.opts.config_dir;
+            if !crate::devices::load(dir).iter().any(|d| d.address.eq_ignore_ascii_case(address)) {
+                self.forget_link_key_only(addr);
+            }
+            return;
+        }
+        {
+            let mut known = self.inner.codecs.lock().unwrap_or_else(|e| e.into_inner());
+            if known.remove(&address.to_uppercase()).is_some()
+                && let Err(e) = crate::devices::save_codecs(&self.inner.opts.config_dir, &known)
+            {
+                tracing::warn!("cannot save the devices' codecs: {e}");
+            }
+        }
+        // A running stack holds the keys in memory and writes them in full
+        if !self.host().is_some_and(|h| h.forget_link_key(addr)) {
+            bt_host::link_keys::forget(&crate::paths::link_keys_file(&self.inner.opts.config_dir), &addr);
+        }
+    }
+
+    /// Drops `addr`'s link key alone (its LE keys stay with its LE Audio
+    /// entry's own bond)
+    fn forget_link_key_only(&self, addr: [u8; 6]) {
+        if !self.host().is_some_and(|h| h.forget_link_key_only(addr)) {
+            bt_host::link_keys::forget(&crate::paths::link_keys_file(&self.inner.opts.config_dir), &addr);
+        }
+    }
+
+    /// A ticket for a start or stop run later on its own thread
+    /// ([`Service::start_streaming_for`], [`Service::disconnect_for`]): the
+    /// latest one taken is the one that runs
+    pub fn ticket(&self) -> u64 {
+        self.latest.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    /// Takes `control` for the request with this ticket; None when a newer
+    /// one was asked for meanwhile (it runs instead)
+    fn control_for(&self, ticket: u64, what: &str) -> Option<std::sync::MutexGuard<'_, ()>> {
+        let control = self.control.lock().unwrap_or_else(|e| e.into_inner());
+        if self.latest.load(Ordering::Acquire) != ticket {
+            tracing::debug!("{what}: skipped, a newer start or stop was asked for");
+            return None;
+        }
+        Some(control)
+    }
+
+    /// [`Service::start_streaming`] unless a newer start or stop was asked
+    /// for since the ticket was taken
+    pub fn start_streaming_for(&self, req: StreamRequest, ticket: u64) {
+        if let Some(_control) = self.control_for(ticket, "start streaming") {
+            self.start_session(req);
+        }
+    }
+
+    /// [`Service::disconnect`] unless a newer start or stop was asked for
+    /// since the ticket was taken
+    pub fn disconnect_for(&self, ticket: u64) {
+        if let Some(_control) = self.control_for(ticket, "disconnect") {
+            self.forget_session();
+            // A start skipped for this stop left "connecting" shown
+            if !self.stop_session() {
+                self.inner.notify(StreamState::Idle, Msg::new("status.ready"));
+            }
+            self.release_link();
+        }
+    }
+
+    fn forget_session(&self) {
+        *self.last_request.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// Restarts Bluetooth (the Adapters page): the stack is stopped, and
+    /// the last session's request is returned to be started again on a new
+    /// stack (the same device, profile and codec), as a session reconnects
+    /// after the other stack restarts (sleep, a stopped adapter): while it
+    /// connects or streams, and also after it ended on its own (an error, a
+    /// lost link), which a restart is often meant to fix. Not after
+    /// Disconnect, and not when the headphones were turned off: a session
+    /// that waits for them just ends (issue #86).
+    pub fn restart_adapter(&self) -> Option<StreamRequest> {
+        let last = self.last_request.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let again = reconnect_after_restart(
+            self.is_running() && self.inner.stop_requested(),
+            self.inner.turned_off.load(Ordering::Acquire),
+            last,
+        );
+        tracing::info!(
+            "restarting Bluetooth (Adapters page): session running {}, {}",
+            self.is_running(),
+            match &again {
+                Some(r) => format!("reconnecting {} afterwards", bt_host::addr_str(&r.device)),
+                None => "nothing to reconnect".into(),
+            }
+        );
+        self.shutdown();
+        again
     }
 
     /// The chip or firmware setting changed (v1 reset_btstack): an idle
@@ -671,6 +1616,13 @@ impl Service {
     /// next connection or scan), so the firmware is loaded again. `idle`:
     /// nothing streams or scans. True when it was released now.
     pub fn reload_adapter(&self, idle: bool) -> bool {
+        // Maybe another adapter: its LE Audio support is not known yet
+        *self.inner.le_support.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        tracing::debug!(
+            "reload adapter: idle {idle}, streaming {}, stack running {}",
+            self.is_running(),
+            self.host().is_some()
+        );
         if idle && !self.is_running() {
             self.inner.reload.store(false, Ordering::Release);
             self.inner.shutdown_host();
@@ -681,10 +1633,28 @@ impl Service {
         }
     }
 
-    /// Codec keys each device (upper-case address) offered when it last
+    /// The running adapter has LE Audio's isochronous channels; None until a
+    /// stack started on it since the adapter settings last changed
+    pub fn le_audio_supported(&self) -> Option<bool> {
+        *self.inner.le_support.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// What each device (upper-case address) offered when it last
     /// connected
-    pub fn device_codecs(&self) -> BTreeMap<String, Vec<String>> {
+    pub fn device_codecs(&self) -> BTreeMap<String, stream::KnownCodecs> {
         self.inner.codecs.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Forgets what a device offered, and that it was asked for Hi-Res: its
+    /// next connection reads and asks again (issue #237). False: nothing kept.
+    pub fn forget_device_codecs(&self, address: &str) -> bool {
+        let mut known = self.inner.codecs.lock().unwrap_or_else(|e| e.into_inner());
+        if known.remove(&address.to_uppercase()).is_none() {
+            return false;
+        }
+        tracing::info!("device {address}: what it offered forgotten");
+        self.inner.save_codecs(&known);
+        true
     }
 
     pub fn settings(&self) -> Settings {
@@ -706,7 +1676,36 @@ impl Service {
 
     /// Starts a session; a running one is stopped first
     pub fn start_streaming(&self, req: StreamRequest) {
-        self.stop_streaming();
+        let _control = self.control.lock().unwrap_or_else(|e| e.into_inner());
+        self.start_session(req);
+    }
+
+    fn start_session(&self, req: StreamRequest) {
+        tracing::debug!(
+            "start streaming: {} ({}), stopping any session first",
+            bt_host::addr_str(&req.device),
+            if req.le.is_some() { "LE Audio" } else { "A2DP" }
+        );
+        self.end_scan();
+        // The running session leaves Windows' default output switched when
+        // this one switches it to the same device (issue #203)
+        stream::expect_default_switch(req.source.default_switch());
+        crate::mute_output::expect_session(req.mutes_output(&req.source));
+        self.stop_session();
+        stream::expect_default_switch(None);
+        crate::mute_output::expect_session(false);
+        // Saved in the profile, so in `req` too: left over from a session
+        // that ended before it took it
+        self.inner.take_source_change();
+        self.inner.take_bitpool_change();
+        self.inner.take_voice_change();
+        self.inner.take_voice_events();
+        // Before the stack starts: one that offers HFP audio
+        self.inner.voice_wanted.store(req.headset_mic.is_on() && req.le.is_none(), Ordering::Release);
+        self.inner.unlisted_keeps.lock().unwrap_or_else(|e| e.into_inner()).take();
+        self.inner.apply_mic_processing(&req.mic_processing);
+        *self.last_request.lock().unwrap_or_else(|e| e.into_inner()) = Some(req.clone());
+        self.inner.turned_off.store(false, Ordering::Release);
         self.inner.stop.store(false, Ordering::Release);
         self.inner.running.store(true, Ordering::Release);
         self.inner.notify(StreamState::Connecting, Msg::new("status.initializing"));
@@ -724,6 +1723,8 @@ impl Service {
                     tracing::error!("the streaming session panicked");
                     inner.notify(StreamState::Error, Msg::new("error.btstack_crash_stream"));
                 }
+                stream::restore_unclaimed_default();
+                crate::mute_output::unmute_unclaimed();
                 inner.running.store(false, Ordering::Release);
             })
             .expect("spawning the session thread");
@@ -733,17 +1734,70 @@ impl Service {
     /// Stops the session and waits for it (bounded by the stack's own
     /// timeouts: blocking waits are cancelled)
     pub fn stop_streaming(&self) {
-        let Some(t) = self.worker.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+        let _control = self.control.lock().unwrap_or_else(|e| e.into_inner());
+        self.stop_session();
+    }
+
+    /// False when no session was there to stop
+    fn stop_session(&self) -> bool {
+        let Some(t) = self.worker.lock().unwrap_or_else(|e| e.into_inner()).take() else { return false };
+        tracing::debug!("stop streaming: requested (state {:?})", self.state());
+        let started = Instant::now();
         self.inner.stop.store(true, Ordering::Release);
         self.inner.tick.1.notify_all();
         if let Some(h) = self.host() {
             h.cancel_pending_waits();
         }
         let _ = t.join();
+        tracing::debug!("stop streaming: session ended in {} ms", started.elapsed().as_millis());
+        true
+    }
+
+    /// A session that waits for turned-off headphones holds nothing worth
+    /// keeping: a scan ends it
+    fn end_wait_for_device(&self) {
+        if self.inner.waiting.load(Ordering::Acquire) {
+            tracing::info!("scan: no longer waiting for the headphones");
+            self.stop_streaming();
+        }
+    }
+
+    /// The chip probe (bt_host::probe) on the adapter `instance_id` (None:
+    /// the one a stack would open): read commands only, for adapters
+    /// BlueCaster cannot bring up yet. The stack stops first; the next use
+    /// starts a new one.
+    pub fn probe_adapter(&self, instance_id: Option<String>) -> Result<bt_host::probe::ProbeReport, Msg> {
+        self.end_wait_for_device();
+        if self.is_running() {
+            return Err(Msg::new("status.streaming"));
+        }
+        if self.is_scanning() {
+            return Err(Msg::new("status.scanning_devices"));
+        }
+        self.inner.probe(instance_id)
+    }
+
+    /// A chip script (bt_host::script) on the adapter `instance_id`, as
+    /// [`Service::probe_adapter`]. The caller has checked it: written
+    /// requests allowed, no denied opcode.
+    pub fn run_script(
+        &self,
+        instance_id: Option<String>,
+        script: bt_host::script::Script,
+    ) -> Result<bt_host::probe::ProbeReport, Msg> {
+        self.end_wait_for_device();
+        if self.is_running() {
+            return Err(Msg::new("status.streaming"));
+        }
+        if self.is_scanning() {
+            return Err(Msg::new("status.scanning_devices"));
+        }
+        self.inner.script(instance_id, script)
     }
 
     /// Inquiry for nearby (classic) devices
     pub fn scan(&self, seconds: u32) -> Result<Vec<DiscoveredDevice>, Msg> {
+        self.end_wait_for_device();
         if self.is_running() {
             return Err(Msg::new("status.streaming"));
         }
@@ -752,42 +1806,200 @@ impl Service {
         let host = self.inner.ensure_host()?;
         self.inner.notify(StreamState::Idle, Msg::new("status.scanning_devices"));
         let found = host.scan(seconds);
+        for d in &found {
+            tracing::debug!(
+                "scan: {} \"{}\" rssi {} class {:06x}",
+                bt_host::addr_str(&d.addr),
+                d.name,
+                d.rssi,
+                d.class_of_device
+            );
+        }
         self.inner.notify(StreamState::Idle, Msg::with("status.scan_complete", &[&found.len()]));
         Ok(found)
     }
 
-    /// Inquiry for nearby devices, then, when the stack has LE Audio
-    /// (experimental), a 5 s LE scan for LE Audio devices (v1's scan): the
-    /// classic devices, then the LE Audio ones ([`ScannedDevice`])
-    pub fn scan_devices(&self, seconds: u32) -> Result<Vec<ScannedDevice>, Msg> {
+    /// Inquiry for nearby devices and, when the stack has LE Audio
+    /// (experimental), an LE scan for LE Audio devices beside it: the
+    /// classic devices, then the LE Audio ones ([`ScannedDevice`]).
+    /// `on_found` gets the list each time a device answers (or its name
+    /// comes, or an LE Audio advertiser shows up), long before the scan
+    /// ends. The LE scan runs from the start (issue #86: run after the
+    /// inquiry, it never ran when the scan was stopped once the classic
+    /// entry showed, nor in the first-run setup's long scan), and at least
+    /// [`LE_SCAN`] when nobody stops the scan.
+    pub fn scan_devices(
+        &self,
+        seconds: u32,
+        on_found: &mut dyn FnMut(&[ScannedDevice]),
+    ) -> Result<Vec<ScannedDevice>, Msg> {
+        self.end_wait_for_device();
         if self.is_running() {
             return Err(Msg::new("status.streaming"));
         }
         let _scanning = ScanningGuard::new(&self.inner.scanning);
         self.inner.notify(StreamState::Idle, Msg::new("status.initializing_scan"));
         let host = self.inner.ensure_host()?;
-        self.inner.notify(StreamState::Idle, Msg::new("status.scanning_devices"));
-        let classic = host.scan(seconds);
-        let mut list: Vec<ScannedDevice> = classic.iter().map(ScannedDevice::classic).collect();
-        let mut le_found = 0;
+        let mut le_scan = false;
         if self.inner.le_active() {
             let until = Instant::now() + LE_SCAN_READY_WAIT;
             while !host.le_ready() && Instant::now() < until {
                 std::thread::sleep(Duration::from_millis(100));
             }
-            if host.le_ready() {
-                self.inner.notify(StreamState::Idle, Msg::new("status.le_scanning"));
-                let results = host.le_scan(LE_SCAN);
-                let saved = crate::devices::load_le(&self.inner.opts.config_dir);
-                let (entries, found) = le_scan_entries(&results, &saved);
-                le_found = found;
-                list.extend(entries);
-            } else {
+            le_scan = host.le_scan_start();
+            if !le_scan {
                 tracing::warn!("LE Audio not ready, LE scan skipped");
             }
         }
+        let le_started = Instant::now();
+        let (saved_le, own) = if le_scan {
+            let own: Vec<String> = win_sys::bt_radios::radios().into_iter().filter_map(|r| r.address).collect();
+            (crate::devices::load_le(&self.inner.opts.config_dir), own)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let saved = crate::devices::load(&self.inner.opts.config_dir);
+        self.inner.notify(StreamState::Idle, Msg::new("status.scanning_devices"));
+        let classic = host.scan_with(seconds, &mut |found| {
+            let mut list: Vec<ScannedDevice> = found.iter().map(ScannedDevice::classic).collect();
+            if le_scan {
+                let results = host.le_scan_results();
+                let mut le = le_scan_entries(&results, &saved_le, &own).0;
+                let classic: Vec<String> =
+                    list.iter().map(|d| d.address.clone()).chain(saved.iter().map(|d| d.address.clone())).collect();
+                let drop = classic_appearance_only(&results, &classic);
+                le.retain(|e| !drop.contains(&e.address));
+                let known: Vec<(String, String)> = list
+                    .iter()
+                    .map(|d| (d.address.clone(), d.name.clone()))
+                    .chain(saved.iter().map(|d| (d.address.clone(), d.name.clone())))
+                    .chain(saved_le.iter().map(|d| (d.address.clone(), d.name.clone())))
+                    .collect();
+                fill_le_names(&mut le, &known);
+                list.extend(le);
+            }
+            // A device is listed once its name is known: most follow within
+            // seconds (name request, scan response), and "Unknown" turning
+            // into the name looked like a second device (issue #86). Those
+            // still nameless are in the scan's result.
+            list.retain(|d| !d.name.trim().is_empty());
+            on_found(&list);
+        });
+        let mut list: Vec<ScannedDevice> = classic.iter().map(ScannedDevice::classic).collect();
+        for d in &list {
+            tracing::debug!(
+                "scan: {} \"{}\" rssi {} class {:06x} audio {}",
+                d.address,
+                d.name,
+                d.rssi,
+                d.class_of_device,
+                d.audio
+            );
+        }
+        let mut le_found = 0;
+        if le_scan {
+            let left = LE_SCAN.saturating_sub(le_started.elapsed());
+            if !host.scan_stopped() && !left.is_zero() {
+                self.inner.notify(StreamState::Idle, Msg::new("status.le_scanning"));
+                let until = Instant::now() + left;
+                while Instant::now() < until && !host.scan_stopped() {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+            let results = host.le_scan_stop();
+            for r in results.iter().filter(|r| r.le_audio) {
+                tracing::debug!(
+                    "le scan: advertiser {} {} appearance 0x{:04X}, connectable {}, UUIDs {:04X?}",
+                    r.addr,
+                    crate::diag::quoted(&r.name),
+                    r.appearance,
+                    r.connectable,
+                    r.uuids16
+                );
+            }
+            let (mut entries, found) = le_scan_entries(&results, &saved_le, &own);
+            let classic: Vec<String> =
+                list.iter().map(|d| d.address.clone()).chain(saved.iter().map(|d| d.address.clone())).collect();
+            let drop = classic_appearance_only(&results, &classic);
+            entries.retain(|e| !drop.contains(&e.address));
+            for a in drop.iter().filter(|a| saved_le.iter().any(|d| d.address.eq_ignore_ascii_case(a))) {
+                tracing::info!(
+                    "LE scan: a classic device's LE side without LE Audio removed from the LE Audio devices"
+                );
+                if let Err(e) = crate::devices::remove_le(&self.inner.opts.config_dir, a) {
+                    tracing::warn!("LE scan: removing that LE side: {e}");
+                }
+            }
+            tracing::info!(
+                "LE scan: {} advertiser(s) in {:.1} s, {found} LE Audio, {} listed",
+                results.len(),
+                le_started.elapsed().as_secs_f32(),
+                entries.len()
+            );
+            // A classic device's LE side without an LE Audio service: what
+            // tells "LE Audio is off on the device" from a missed one
+            let known: Vec<(String, String)> = list
+                .iter()
+                .map(|d| (d.address.clone(), d.name.clone()))
+                .chain(saved.iter().map(|d| (d.address.clone(), d.name.clone())))
+                .chain(saved_le.iter().map(|d| (d.address.clone(), d.name.clone())))
+                .collect();
+            fill_le_names(&mut entries, &known);
+            for r in classic_le_sides(&results, &known) {
+                tracing::info!(
+                    "LE scan: {} {} advertises over LE without an LE Audio service (type {}, connectable {}, \
+                     appearance 0x{:04X}, UUIDs {:04X?}, {} + {} bytes)",
+                    r.addr,
+                    crate::diag::quoted(&r.name),
+                    r.addr.addr_type,
+                    r.connectable,
+                    r.appearance,
+                    r.uuids16,
+                    r.adv.len(),
+                    r.scan_rsp.len()
+                );
+            }
+            for e in &entries {
+                tracing::debug!(
+                    "le scan: {} {} rssi {} set {}",
+                    e.address,
+                    crate::diag::quoted(&e.name),
+                    e.rssi,
+                    e.le_audio_set
+                );
+            }
+            le_found = found;
+            list.extend(entries);
+            save_twins(&self.inner.opts.config_dir, &list);
+        }
         self.inner.notify(StreamState::Idle, Msg::with("status.scan_complete", &[&(classic.len() + le_found)]));
         Ok(list)
+    }
+
+    /// Ends a running scan early ([`Service::scan_devices`] returns what it
+    /// found so far)
+    pub fn stop_scan(&self) {
+        if self.is_scanning()
+            && let Some(h) = self.host()
+        {
+            tracing::info!("scan: stopped");
+            h.stop_scan();
+        }
+    }
+
+    /// A connection while the scan inquires and pages on the same radio
+    /// would be slow or fail: the scan ends first (a device it listed was
+    /// picked)
+    fn end_scan(&self) {
+        if !self.is_scanning() {
+            return;
+        }
+        self.stop_scan();
+        let until = Instant::now() + SCAN_END_WAIT;
+        while self.is_scanning() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        tracing::debug!("start streaming: scan ended first (still running: {})", self.is_scanning());
     }
 
     /// Stops streaming and the stack (the adapter is released)
@@ -807,6 +2019,13 @@ impl Drop for Service {
     }
 }
 
+/// The request to start again after a Bluetooth restart: the last
+/// session's (None after Disconnect), unless it is being stopped or its
+/// headphones were turned off
+fn reconnect_after_restart(stopping: bool, turned_off: bool, last: Option<StreamRequest>) -> Option<StreamRequest> {
+    last.filter(|_| !stopping && !turned_off)
+}
+
 /// Marks a scan while it runs (also when it returns early)
 struct ScanningGuard<'a>(&'a AtomicBool);
 
@@ -823,9 +2042,339 @@ impl Drop for ScanningGuard<'_> {
     }
 }
 
+/// The link to the device came up moments ago: headphones that just
+/// connected may refuse the PC's page for a while once it is dropped
+fn link_is_fresh(age: Option<Duration>) -> bool {
+    age.is_some_and(|a| a < FRESH_LINK)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn afh_blend_runs_only_in_developer_mode() {
+        let s = |afh: &str, debug_mode| Settings { afh: afh.into(), debug_mode, ..Default::default() };
+        assert_eq!(afh_policy(&s("blend-medium", true)), "blend-medium");
+        assert_eq!(afh_policy(&s("blend-medium", false)), "auto");
+        assert_eq!(afh_policy(&s("6,11", false)), "6,11");
+        assert_eq!(afh_policy(&s("off", false)), "off");
+    }
+
+    #[test]
+    fn only_a_link_that_just_came_up_keeps_the_stack() {
+        assert!(link_is_fresh(Some(Duration::from_secs(5))));
+        assert!(!link_is_fresh(Some(FRESH_LINK)));
+        assert!(!link_is_fresh(None));
+    }
+
+    #[test]
+    fn a_bluetooth_restart_reconnects_the_running_session() {
+        let req = crate::profiles::Profile {
+            device_address: "00:11:22:33:44:55".into(),
+            codec: "ldac".into(),
+            ..Default::default()
+        }
+        .to_request(1000)
+        .unwrap();
+        let last = || Some(req.clone());
+        // Streaming, connecting, or ended on its own: the same request again
+        assert_eq!(reconnect_after_restart(false, false, last()), last());
+        // Being stopped, the headphones are off, or nothing to reconnect
+        // (none ran, or Disconnect forgot it)
+        assert_eq!(reconnect_after_restart(true, false, last()), None);
+        assert_eq!(reconnect_after_restart(false, true, last()), None);
+        assert_eq!(reconnect_after_restart(false, false, None), None);
+    }
+
+    #[test]
+    fn a_scan_saves_the_other_side_of_a_saved_device() {
+        let dir = std::env::temp_dir().join(format!("bluecaster-twins-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(crate::paths::devices_dir(&dir)).unwrap();
+        crate::devices::save(&dir, "AA:BB:CC:DD:EE:01", "Buds").unwrap();
+        let found = |address: &str, le_audio| ScannedDevice {
+            address: address.into(),
+            name: String::new(),
+            rssi: -50,
+            class_of_device: 0,
+            audio: true,
+            le_audio,
+            le_audio_set: false,
+        };
+        let list =
+            [found("AA:BB:CC:DD:EE:01", false), found("aa:bb:cc:dd:ee:01", true), found("AA:BB:CC:DD:EE:02", true)];
+        // The LE Audio side of the saved one, under its name; not the stranger
+        assert_eq!(save_twins(&dir, &list), 1);
+        let le = crate::devices::load_le(&dir);
+        assert_eq!(le.len(), 1);
+        assert!(le[0].address.eq_ignore_ascii_case("AA:BB:CC:DD:EE:01"));
+        assert_eq!(le[0].name, "Buds");
+        // Once
+        assert_eq!(save_twins(&dir, &list), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn service() -> Service {
+        let dir = std::env::temp_dir().join(format!("bluecaster-service-restart-{}", std::process::id()));
+        let opts = ServiceOptions {
+            config_dir: dir,
+            hci_tcp: None,
+            capture: bt_host::HciCapture::new(),
+            afh: None,
+            usb: Default::default(),
+        };
+        let (tx, _rx) = std::sync::mpsc::channel();
+        Service::new(opts, tx)
+    }
+
+    #[test]
+    fn the_output_mute_takes_developer_mode_and_spares_the_test_tone() {
+        let settings = |debug_mode, volume_mixer, mute_output| crate::settings::Settings {
+            debug_mode,
+            volume_mixer,
+            mute_output,
+            ..Default::default()
+        };
+        assert!(settings(true, true, true).mutes_output());
+        assert!(!settings(true, true, false).mutes_output());
+        assert!(!settings(false, true, true).mutes_output());
+        // The mixer turned off in Developer takes the mute with it
+        assert!(!settings(true, false, true).mutes_output());
+
+        let req = StreamRequest { mute_output: true, ..request() };
+        let virt = SourceRequest::VirtualDevice { id: "{x}".into(), name: "CABLE".into(), auto_switch: false };
+        let app = SourceRequest::Application { exe: "a.exe".into() };
+        assert!(req.mutes_output(&SourceRequest::SystemLoopback));
+        assert!(req.mutes_output(&virt) && req.mutes_output(&app));
+        assert!(!req.mutes_output(&SourceRequest::TestTone));
+
+        let off = StreamRequest { mute_output: false, ..req };
+        assert!(!off.mutes_output(&SourceRequest::SystemLoopback) && !off.mutes_output(&virt));
+    }
+
+    fn request() -> StreamRequest {
+        crate::profiles::Profile {
+            device_address: "00:11:22:33:44:55".into(),
+            codec: "sbc".into(),
+            ..Default::default()
+        }
+        .to_request(1000)
+        .unwrap()
+    }
+
+    #[test]
+    fn the_logged_request_has_no_address_or_broadcast_code() {
+        let mut req = request();
+        req.le = Some(bt_host::LeRequest {
+            extra_devices: vec![[0x66; 6]],
+            broadcast: Some(bt_host::LeBroadcast { code: Some("secret12".into()), ..Default::default() }),
+            ..Default::default()
+        });
+        let logged = format!("{:?}", req.redacted());
+        for leak in ["17, 34, 51, 68, 85", "102, 102", "secret12"] {
+            assert!(!logged.contains(leak), "{leak} in {logged}");
+        }
+        assert_eq!(req.redacted().device_name, req.device_name);
+    }
+
+    #[test]
+    fn mic_processing_applies_now_and_stays_with_the_request() {
+        let s = service();
+        let p = ipc::MicProcessing { enabled: true, gain_db: 9, suppression: 50, gate_db: -50 };
+        // Nothing runs: the next microphone takes it
+        s.set_mic_processing(p);
+        let got = s.inner.mic_dsp.get();
+        assert_eq!((got.gain_db, got.suppression, got.gate_db), (9.0, 0.5, -50.0));
+        *s.last_request.lock().unwrap() = Some(request());
+        s.set_mic_processing(ipc::MicProcessing::default());
+        assert!(!s.inner.mic_dsp.get().is_active());
+        s.set_mic_processing(p);
+        assert_eq!(s.last_request.lock().unwrap().as_ref().unwrap().mic_processing, p);
+    }
+
+    #[test]
+    fn bitpools_change_in_place_only_on_a_running_a2dp_stream() {
+        let s = service();
+        let new = crate::stream::Bitpools { sbc: 30, sbcxq: 0, sbc_min: 20, sbcxq_min: 0 };
+        // Nothing runs
+        assert!(!s.change_bitpools(new));
+        assert_eq!(s.inner.take_bitpool_change(), None);
+        s.inner.running.store(true, Ordering::Release);
+        *s.inner.state.lock().unwrap() = StreamState::Streaming;
+        // No session asked for
+        assert!(!s.change_bitpools(new));
+        *s.last_request.lock().unwrap() = Some(request());
+        assert!(s.change_bitpools(new));
+        assert_eq!(s.inner.take_bitpool_change(), Some(new));
+        // A Bluetooth restart keeps them
+        let last = s.last_request.lock().unwrap().clone().unwrap();
+        assert_eq!((last.sbc_bitpool, last.sbc_min_bitpool), (30, 20));
+        s.inner.running.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn the_unlisted_switch_keeps_a_stream_set_up_the_same_either_way() {
+        let s = service();
+        s.inner.running.store(true, Ordering::Release);
+        *s.inner.state.lock().unwrap() = StreamState::Streaming;
+        *s.last_request.lock().unwrap() = Some(request());
+        // Not known yet (still setting up): started again
+        assert!(!s.change_unlisted(true));
+        // Off gives this stream, on another one
+        s.inner.set_unlisted_keeps([true, false]);
+        assert!(!s.change_unlisted(true));
+        assert!(s.change_unlisted(false));
+        // The same either way (issue #86: no reconnect), kept for a restart
+        s.inner.set_unlisted_keeps([true, true]);
+        assert!(s.change_unlisted(true));
+        assert!(s.last_request.lock().unwrap().as_ref().unwrap().unlisted_options);
+        s.inner.running.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn forgetting_a_device_ends_what_would_connect_it_again() {
+        let s = service();
+        let req = request();
+        let address = bt_host::addr_str(&req.device);
+        let dir = s.inner.opts.config_dir.clone();
+        std::fs::create_dir_all(crate::paths::pairing_dir(&dir)).unwrap();
+        let line = format!("{} {} 4\n", address.replace(':', "-"), "00".repeat(16));
+        std::fs::write(crate::paths::link_keys_file(&dir), &line).unwrap();
+        s.inner.codecs.lock().unwrap().insert(address.clone(), Default::default());
+        *s.last_request.lock().unwrap() = Some(req);
+        crate::devices::save(&dir, &address, "Classic").unwrap();
+        let keys = || bt_host::link_keys::FileLinkKeyStore::open(&crate::paths::link_keys_file(&dir)).entries().len();
+        // Another device, or the same address's other kind while its classic
+        // entry is saved, changes nothing
+        s.forget_device("00:11:22:33:44:66", false);
+        s.forget_device(&address, true);
+        assert!(s.last_request.lock().unwrap().is_some());
+        assert_eq!(keys(), 1);
+
+        s.forget_device(&address, false);
+        assert!(s.last_request.lock().unwrap().is_none());
+        assert!(s.device_codecs().is_empty());
+        assert_eq!(keys(), 0);
+
+        // An LE Audio entry without a saved classic one: the link key from
+        // its LE pairing (issue #86) goes with it
+        crate::devices::remove(&dir, &address).unwrap();
+        std::fs::write(crate::paths::link_keys_file(&dir), line).unwrap();
+        s.forget_device(&address, true);
+        assert_eq!(keys(), 0);
+    }
+
+    #[test]
+    fn headset_mode_waits_for_a_short_control_holder_and_follows_off() {
+        let s = std::sync::Arc::new(service());
+        *s.last_request.lock().unwrap() = Some(StreamRequest { headset_mic: HeadsetMic::On, ..request() });
+        // No session: at once
+        assert!(!s.set_headset_mic(HeadsetMic::Off, None, None));
+        s.inner.running.store(true, Ordering::Release);
+        s.inner.notify(StreamState::Streaming, Msg::new("status.connected"));
+        s.inner.voice_wanted.store(true, Ordering::Release);
+        // Another change holds control for a moment: waited for, not a restart
+        let holder = {
+            let s = s.clone();
+            let (held_tx, held_rx) = std::sync::mpsc::channel();
+            let t = std::thread::spawn(move || {
+                let _control = s.control.lock().unwrap();
+                held_tx.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(100));
+            });
+            held_rx.recv().unwrap();
+            t
+        };
+        assert!(s.set_headset_mic(HeadsetMic::Off, None, Some(voice_link::VoiceCodec::Msbc)));
+        holder.join().unwrap();
+        // Off: no longer wanted (the running stack keeps its voice)
+        assert!(!s.inner.voice_wanted.load(Ordering::Acquire));
+        let codec = Some(voice_link::VoiceCodec::Msbc);
+        let change = VoiceChange { mode: HeadsetMic::Off, mic_output: None, voice_codec: codec };
+        assert_eq!(s.inner.take_voice_change(), Some(change));
+        let last = s.last_request.lock().unwrap().clone().unwrap();
+        assert_eq!((last.headset_mic, last.voice_codec), (HeadsetMic::Off, codec));
+        // On and Auto need a stack with voice: none runs here
+        assert!(!s.set_headset_mic(HeadsetMic::On, Some("{cable}".into()), None));
+        assert!(!s.set_headset_mic(HeadsetMic::Auto, Some("{cable}".into()), None));
+        assert!(!s.inner.voice_wanted.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn a_source_changes_in_place_only_on_a_running_a2dp_stream() {
+        let s = service();
+        let tone = || SourceRequest::TestTone;
+        // No session
+        *s.last_request.lock().unwrap() = Some(request());
+        assert!(!s.change_source(tone()));
+        // A session that connects
+        s.inner.running.store(true, Ordering::Release);
+        s.inner.notify(StreamState::Connecting, Msg::new("status.initializing"));
+        assert!(!s.change_source(tone()));
+        // LE Audio
+        s.inner.notify(StreamState::Streaming, Msg::new("status.connected"));
+        let le = bt_host::LeRequest { low_latency: true, ..bt_host::LeRequest::default() };
+        *s.last_request.lock().unwrap() = Some(StreamRequest { le: Some(le), ..request() });
+        assert!(!s.change_source(tone()));
+        assert_eq!(s.inner.take_source_change(), None);
+        // A start or stop under way
+        *s.last_request.lock().unwrap() = Some(request());
+        let control = s.control.lock().unwrap();
+        assert!(!s.change_source(tone()));
+        drop(control);
+        // Streaming: the session takes it, and a Bluetooth restart keeps it
+        assert!(s.change_source(tone()));
+        assert_eq!(s.inner.take_source_change(), Some(tone()));
+        assert_eq!(s.last_request.lock().unwrap().as_ref().unwrap().source, tone());
+    }
+
+    #[test]
+    fn a_bluetooth_restart_follows_disconnect_and_turned_off_headphones() {
+        let s = service();
+        // Nothing ran yet
+        assert_eq!(s.restart_adapter(), None);
+        // A session that ended on its own (an error): connected again, also
+        // after a second restart that found nothing running
+        *s.last_request.lock().unwrap() = Some(request());
+        assert_eq!(s.restart_adapter(), Some(request()));
+        assert_eq!(s.restart_adapter(), Some(request()));
+        // Its headphones were turned off and did not come back
+        s.inner.waiting_for_device();
+        s.inner.done_waiting_for_device(false);
+        assert_eq!(s.restart_adapter(), None);
+        // ... or did
+        s.inner.waiting_for_device();
+        s.inner.done_waiting_for_device(true);
+        assert_eq!(s.restart_adapter(), Some(request()));
+        // Disconnect
+        s.disconnect();
+        assert_eq!(s.restart_adapter(), None);
+    }
+
+    #[test]
+    fn only_the_latest_start_or_stop_asked_for_runs() {
+        let s = service();
+        // Two codec switches in quick succession, then a Disconnect: each
+        // thread runs late, the first two find a newer one asked for
+        let (first, second) = (s.ticket(), s.ticket());
+        s.start_streaming_for(request(), first);
+        assert!(s.worker.lock().unwrap().is_none());
+        *s.last_request.lock().unwrap() = Some(request());
+        let stop = s.ticket();
+        s.start_streaming_for(request(), second);
+        assert!(s.worker.lock().unwrap().is_none());
+        // The Disconnect older than a later start is skipped too
+        let start = s.ticket();
+        s.disconnect_for(stop);
+        assert_eq!(s.restart_adapter(), Some(request()));
+        let _ = start;
+        // The latest runs
+        let stop = s.ticket();
+        s.disconnect_for(stop);
+        assert_eq!(s.restart_adapter(), None);
+        assert_eq!(s.state(), StreamState::Idle);
+    }
 
     #[test]
     fn sleep_marks_suspending_until_resume() {
@@ -875,6 +2424,27 @@ mod tests {
         assert!(p.resumed_at().unwrap() > first);
     }
 
+    #[test]
+    fn a_classic_devices_le_side_without_le_audio_is_told() {
+        let known = [
+            ("00:A2:D0:00:00:50".to_string(), "EarFun Air Pro 4".to_string()),
+            ("00:A2:D0:00:00:60".to_string(), String::new()),
+        ];
+        let identity = bt_host::LeAddr { addr: bt_host::parse_addr("00:A2:D0:00:00:60").unwrap(), addr_type: 0 };
+        let results = [
+            // Its own address, its name under an RPA, an RPA resolving to it
+            LeScanResult { le_audio: false, ..le("00:A2:D0:00:00:50", "", None) },
+            LeScanResult { le_audio: false, ..le("5A:01:02:03:04:05", "EarFun Air Pro 4", None) },
+            LeScanResult { le_audio: false, identity: Some(identity), ..le("4B:01:02:03:04:05", "", None) },
+            // LE Audio advertisers are listed anyway; others are not its
+            le("00:A2:D0:00:00:50", "EarFun Air Pro 4", None),
+            LeScanResult { le_audio: false, ..le("00:A2:D0:00:00:70", "Mouse", None) },
+            LeScanResult { le_audio: false, ..le("00:A2:D0:00:00:71", "", None) },
+        ];
+        let sides: Vec<String> = classic_le_sides(&results, &known).iter().map(|r| r.addr.to_string()).collect();
+        assert_eq!(sides, ["00:A2:D0:00:00:50", "5A:01:02:03:04:05", "4B:01:02:03:04:05"]);
+    }
+
     fn le(addr: &str, name: &str, set: Option<u32>) -> LeScanResult {
         LeScanResult {
             addr: bt_host::LeAddr { addr: bt_host::parse_addr(addr).unwrap(), addr_type: 0 },
@@ -896,7 +2466,7 @@ mod tests {
             le("00:A2:D0:00:00:20", "Speaker 2", None),
             le("00:A2:D0:00:00:40", "Other L", Some(1)),
         ];
-        let (list, found) = le_scan_entries(&results, &[]);
+        let (list, found) = le_scan_entries(&results, &[], &[]);
         let got: Vec<_> = list.iter().map(|d| (d.address.as_str(), d.name.as_str(), d.le_audio_set)).collect();
         assert_eq!(
             got,
@@ -916,7 +2486,7 @@ mod tests {
         // stands for the set
         let saved = [SavedDevice { address: "00:A2:D0:00:00:13".into(), name: "R".into(), le_audio: true }];
         let results = [le("00:A2:D0:00:00:13", "Buds R", Some(0)), le("00:A2:D0:00:00:12", "Buds L", Some(0))];
-        let (list, _) = le_scan_entries(&results, &saved);
+        let (list, _) = le_scan_entries(&results, &saved, &[]);
         assert_eq!(list.len(), 2);
         // A third member is a duplicate of the listed set
         let results = [
@@ -924,9 +2494,38 @@ mod tests {
             le("00:A2:D0:00:00:14", "Buds C", Some(0)),
             le("00:A2:D0:00:00:13", "Buds R", Some(0)),
         ];
-        let (list, _) = le_scan_entries(&results, &saved);
+        let (list, _) = le_scan_entries(&results, &saved, &[]);
         let got: Vec<_> = list.iter().map(|d| d.address.as_str()).collect();
         assert_eq!(got, ["00:A2:D0:00:00:12", "00:A2:D0:00:00:13"]);
+    }
+
+    #[test]
+    fn le_scan_leaves_out_this_pc_and_other_sources() {
+        let appearing = |addr, name, appearance| LeScanResult { appearance, ..le(addr, name, None) };
+        let results = [
+            le("00:A2:D0:00:00:50", "THIS-PC", None),
+            appearing("00:A2:D0:00:00:51", "Other PC", 0x0080),
+            appearing("00:A2:D0:00:00:52", "Laptop", 0x0083),
+            appearing("00:A2:D0:00:00:53", "Phone", 0x0040),
+            appearing("00:A2:D0:00:00:54", "Earbuds", 0x0941),
+            le("00:A2:D0:00:00:55", "Speaker", None),
+        ];
+        let (list, found) = le_scan_entries(&results, &[], &["00:a2:d0:00:00:50".into()]);
+        let got: Vec<_> = list.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(got, ["Earbuds", "Speaker"]);
+        assert_eq!(found, 2);
+    }
+
+    #[test]
+    fn a_classic_headsets_appearance_only_le_side_is_not_le_audio() {
+        let guess = |addr, name| LeScanResult { appearance: 0x0942, appearance_only: true, ..le(addr, name, None) };
+        let results = [
+            guess("00:A2:D0:00:00:60", "HDR 275"),
+            guess("00:A2:D0:00:00:61", "LE-only buds"),
+            le("00:A2:D0:00:00:62", "Dual-mode buds", None),
+        ];
+        let classic = ["00:a2:d0:00:00:60".to_string(), "00:A2:D0:00:00:62".to_string()];
+        assert_eq!(classic_appearance_only(&results, &classic), ["00:A2:D0:00:00:60"]);
     }
 
     #[test]
@@ -939,9 +2538,38 @@ mod tests {
         };
         let c = ScannedDevice::classic(&classic);
         assert!(!c.le_audio && c.audio);
-        let (le_list, _) = le_scan_entries(&[le("00:A2:D0:00:00:12", "Buds", None)], &[]);
+        let (le_list, _) = le_scan_entries(&[le("00:A2:D0:00:00:12", "Buds", None)], &[], &[]);
         assert_eq!(le_list[0].address, c.address);
         assert!(le_list[0].le_audio);
+    }
+
+    #[test]
+    fn an_unnamed_le_entry_takes_its_classic_name() {
+        let (mut list, _) =
+            le_scan_entries(&[le("00:A2:D0:00:00:12", "", None), le("00:A2:D0:00:00:13", "", None)], &[], &[]);
+        let known = vec![("00:a2:d0:00:00:12".to_string(), "Buds".to_string())];
+        fill_le_names(&mut list, &known);
+        assert_eq!(list[0].name, "Buds");
+        // No device with its address: still unnamed (the UI shows the address)
+        assert_eq!(list[1].name, "");
+    }
+
+    #[test]
+    fn a_bonded_device_under_random_addresses_is_listed_by_its_identity() {
+        let identity = bt_host::LeAddr { addr: bt_host::parse_addr("00:A2:D0:00:00:12").unwrap(), addr_type: 0 };
+        let rpa = |a| LeScanResult { identity: Some(identity), ..le(a, "", None) };
+        // Two random addresses of the same earbuds, one entry
+        let (mut list, found) = le_scan_entries(&[rpa("4B:01:02:03:04:05"), rpa("5C:01:02:03:04:05")], &[], &[]);
+        assert_eq!(found, 2);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].address, "00:A2:D0:00:00:12");
+        // It takes the classic side's name
+        fill_le_names(&mut list, &[("00:a2:d0:00:00:12".to_string(), "Buds".to_string())]);
+        assert_eq!(list[0].name, "Buds");
+        // Saved as LE Audio: it is the saved entry, not a new set member
+        let saved = [SavedDevice { address: "00:A2:D0:00:00:12".into(), name: "Buds".into(), le_audio: true }];
+        let (list, _) = le_scan_entries(&[rpa("4B:01:02:03:04:05")], &saved, &[]);
+        assert_eq!(list[0].address, saved[0].address);
     }
 
     #[test]
@@ -956,7 +2584,8 @@ mod tests {
         assert!(le_config(false, None, &opts).is_none());
         let cli = LeCliOptions { mcp_dry_run: true, ccp_sim: Some("1:incoming x".into()), ccp_console: true };
         let c = le_config(true, Some(&cli), &opts).unwrap();
-        assert_eq!(c.bond_dir.as_deref(), Some(std::path::Path::new("cfg")));
+        assert_eq!(c.bond_dir.as_deref(), Some(std::path::Path::new(r"cfg\pairing")));
+        assert_eq!(c.bonds_file.as_deref(), Some(std::path::Path::new(r"cfg\pairing\le_audio_bonds.tlv")));
         assert!(c.media.is_none());
         assert_eq!(c.ccp_sim.as_deref(), Some("1:incoming x"));
         assert!(c.ccp_console);

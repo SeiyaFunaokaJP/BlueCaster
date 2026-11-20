@@ -12,7 +12,9 @@
 //!   Member Lock (0x2B86) and Set Member Rank (0x2B87). Devices with the
 //!   same SIRK form one set (an index into the module's sets, the
 //!   `LeScanResult::set_id`). The SIRK of a bonded device is kept in
-//!   `<bond_dir>\le_audio_csip.txt` for later sessions.
+//!   `<bond_dir>\le_audio_csip.txt` for later sessions, encrypted for the
+//!   Windows user like the bonds (the SIRK resolves the set's private
+//!   addresses, as an IRK does a device's).
 //! - `on_scan_result`: an advertised RSI (AD 0x2E) is checked against every
 //!   known SIRK (sih, CSIS 4.7); a match sets `set_id` / `note` /
 //!   `le_audio`.
@@ -109,7 +111,7 @@ const SCAN_POLL: Duration = Duration::from_millis(50);
 
 const FILE_NAME: &str = "le_audio_csip.txt";
 const FILE_HEADER: &str =
-    "# A2DPWB LE Audio: SIRK of bonded coordinated set members (identity address, type, SIRK, size, rank)\n";
+    "# BlueCaster LE Audio: SIRK of bonded coordinated set members (identity address, type, SIRK, size, rank)\n";
 
 // ============================================================================
 // Pure helpers
@@ -216,7 +218,7 @@ fn sort_by_rank(members: &mut [Snap]) {
 
 /// The RSI cache keeps the last RSI_CACHE_MAX advertised RSIs: every device
 /// around advertises its own and they rotate (RPA-like, about every 15
-/// min), so an unbounded cache would grow for as long as A2DPWB scans
+/// min), so an unbounded cache would grow for as long as BlueCaster scans
 #[derive(Default)]
 struct RsiCache {
     /// RSI -> set index, None: no known set
@@ -290,7 +292,7 @@ struct Member {
     lock: u8,
     /// Set Member Lock value handle, 0: none
     lock_handle: u16,
-    /// A2DPWB holds this member's lock
+    /// BlueCaster holds this member's lock
     we_locked: bool,
     /// Index into State::sets
     set: Option<usize>,
@@ -377,15 +379,16 @@ impl State {
 
     fn save_stored(&self) {
         let Some(path) = &self.file else { return };
-        if std::fs::write(path, format_stored(&self.stored)).is_err() {
-            tracing::warn!("CSIP: cannot write {}", path.display());
+        if let Err(e) = win_sys::dpapi::write_secret(path, format_stored(&self.stored).as_bytes()) {
+            tracing::warn!("CSIP: cannot write the SIRK file: {e}");
         }
     }
 
     fn load_stored(&mut self, stack: &Stack) {
         self.stored.clear();
         let Some(path) = &self.file else { return };
-        let Ok(text) = std::fs::read_to_string(path) else { return };
+        let Ok(bytes) = win_sys::dpapi::read_secret(path) else { return };
+        let text = String::from_utf8_lossy(&bytes);
         let mut dropped = 0;
         for s in text.lines().filter_map(parse_stored_line) {
             if !bonded(stack, &s.addr) {
@@ -455,6 +458,7 @@ fn on_sirk(stack: &Stack, addr: &str, m: &mut Member, status: u8, v: &[u8]) {
         tracing::warn!("CSIP: {addr}: SIRK value of {} bytes", v.len());
         return;
     }
+    tracing::debug!("CSIP: {addr}: SIRK type 0x{:02X} read", v[0]);
     let value = key_from_air(&v[1..17]);
     match v[0] {
         SIRK_PLAINTEXT => m.sirk = value,
@@ -521,7 +525,7 @@ fn read_done(ctx: &mut LeCtx<'_>, st: &mut State, id: LeDeviceId) {
 
 // ---- Lock (CSIP 4.6 / 4.7), BTstack thread ----
 
-/// Release every lock A2DPWB holds, highest rank first
+/// Release every lock BlueCaster holds, highest rank first
 fn release_locks(ctx: &mut LeCtx<'_>, rc: &Rc<RefCell<State>>, done: Option<LeDone>) {
     let order: Vec<(LeDeviceId, u16)> = {
         let mut st = rc.borrow_mut();
@@ -677,6 +681,7 @@ impl LeModule for CsipModule {
             let Some(set) = st.resolve_rsi(&rsi) else { return };
             (set, st.sets[set].size)
         };
+        tracing::debug!("CSIP: {} RSI {rsi:02X?} resolves to coordinated set {set}", result.addr);
         result.set_id = Some(set as u32);
         result.le_audio = true;
         result.note = if size > 0 {
@@ -710,6 +715,13 @@ impl LeModule for CsipModule {
                 .filter_map(|(uuid, f)| d.find_char(UUID_SERVICE_CSIS, uuid).map(|c| (c.value_handle, f)))
                 .collect();
         let lock = d.find_char(UUID_SERVICE_CSIS, UUID_CHAR_LOCK).cloned();
+        tracing::debug!(
+            "CSIP: {}: CSIS SIRK {:04X?}, reads {:?}, lock {:04X?}",
+            d.addr,
+            sirk,
+            reads.iter().map(|(h, f)| format!("{f:?}@0x{h:04X}")).collect::<Vec<_>>(),
+            lock.as_ref().map(|l| l.value_handle)
+        );
 
         let mut st = self.st.borrow_mut();
         // Workers waiting for an earlier link of this device wait for this one
@@ -733,13 +745,14 @@ impl LeModule for CsipModule {
 
         if let Some(lock) = lock.filter(|l| l.properties & PROPERTY_NOTIFY != 0) {
             // The member tells when its lock changes: e.g. released by its
-            // lock timeout while A2DPWB thought it held it
+            // lock timeout while BlueCaster thought it held it
             let rc = self.st.clone();
             ctx.gatt().listen(
                 con,
                 lock.value_handle,
                 Box::new(move |ctx, v| {
                     let Some(&value) = v.first() else { return };
+                    tracing::debug!("CSIP: device {}: Set Member Lock notified {value}", dev.0);
                     let released = {
                         let mut st = rc.borrow_mut();
                         let Some(x) = st.member(dev, con) else { return };
@@ -751,7 +764,7 @@ impl LeModule for CsipModule {
                         released
                     };
                     if released {
-                        tracing::info!("CSIP: {} released the lock A2DPWB held (lock timeout)", addr_of(ctx, dev));
+                        tracing::info!("CSIP: {} released the lock BlueCaster held (lock timeout)", addr_of(ctx, dev));
                     }
                 }),
             );
@@ -777,6 +790,7 @@ impl LeModule for CsipModule {
                 Box::new(move |ctx, status, v| {
                     let mut st = rc.borrow_mut();
                     let Some(x) = st.member(dev, con) else { return };
+                    tracing::debug!("CSIP: device {}: {field:?} read (0x{status:02X}): {v:02X?}", dev.0);
                     if let (0, Some(&b)) = (status, v.first()) {
                         match field {
                             Field::Size => x.size = b,
@@ -873,6 +887,7 @@ impl LeGroupHooks for CsipHooks {
                 add(&mut out, s.id);
             }
             if have.len() < size {
+                host.le_note_set_members_missing((size - have.len()) as u32);
                 tracing::warn!(
                     "CSIP: only {} of {size} members of coordinated set {} found within {} s: streaming to what is \
                      available",
@@ -1021,6 +1036,7 @@ fn known(host: &BtHost, have: &[Snap], r: &LeScanResult) -> bool {
 fn write_lock(host: &BtHost, id: LeDeviceId, value: u8) -> u8 {
     let status = Arc::new(AtomicU8::new(LOCK_TIMEOUT));
     let s = status.clone();
+    tracing::debug!("CSIP: device {}: writing Set Member Lock {value}", id.0);
     host.le_call(Duration::from_millis(LOCK_WRITE_TIMEOUT_MS), move |ctx, done| {
         let Some(rc) = state(ctx) else {
             s.store(ATT_DISCONNECTED, Ordering::Release);
@@ -1059,7 +1075,9 @@ fn write_lock(host: &BtHost, id: LeDeviceId, value: u8) -> u8 {
             })),
         );
     });
-    status.load(Ordering::Acquire)
+    let status = status.load(Ordering::Acquire);
+    tracing::debug!("CSIP: device {}: Set Member Lock {value} -> 0x{status:02X} ({})", id.0, lock_error(status));
+    status
 }
 
 /// Lock the members of a set (`have`: in rank order). Lock Denied: release,
@@ -1074,6 +1092,7 @@ fn lock_set(host: &BtHost, set: usize, have: &[Snap], cancelled: &dyn Fn() -> bo
             ids.iter().map(|id| st.members.get(id).map_or(0, |m| m.lock_handle)).collect::<Vec<u16>>()
         })
         .unwrap_or_default();
+    tracing::debug!("CSIP: coordinated set {set}: lock handles {handles:04X?}");
     if handles.len() != have.len() || handles.contains(&0) {
         tracing::info!(
             "CSIP: coordinated set {set}: not every member has a Set Member Lock: ordered access without locking"
@@ -1199,7 +1218,7 @@ mod tests {
         let text = format_stored(std::slice::from_ref(&s));
         assert_eq!(
             text,
-            "# A2DPWB LE Audio: SIRK of bonded coordinated set members (identity address, type, SIRK, size, rank)\n\
+            "# BlueCaster LE Audio: SIRK of bonded coordinated set members (identity address, type, SIRK, size, rank)\n\
              C0:01:02:03:04:05 1 457d7d0921a1fd22cecd8c86dd72cccd 2 1\n"
         );
         let back: Vec<Stored> = text.lines().filter_map(parse_stored_line).collect();

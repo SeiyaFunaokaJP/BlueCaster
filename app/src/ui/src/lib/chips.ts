@@ -15,17 +15,14 @@ export interface Chip {
 
 export const REALTEK_CHIPS: Chip[] = [
   { pid: 0x8771, name: "RTL8761BU", stem: "rtl8761bu" },
-  { pid: 0x876c, name: "RTL8761CU", stem: "rtl8761cu" },
   { pid: 0xb82c, name: "RTL8822BU", stem: "rtl8822bu" },
   { pid: 0xc821, name: "RTL8821CU", stem: "rtl8821cu" },
   { pid: 0xc82c, name: "RTL8822CU", stem: "rtl8822cu" },
   { pid: 0xd723, name: "RTL8723DU", stem: "rtl8723du" },
   { pid: 0xc852, name: "RTL8852AU", stem: "rtl8852au" },
   { pid: 0xb85b, name: "RTL8852BU", stem: "rtl8852bu" },
-  { pid: 0xb85d, name: "RTL8852BTU", stem: "rtl8852btu" },
   { pid: 0xc85a, name: "RTL8852CU", stem: "rtl8852cu" },
-  { pid: 0xb083, name: "RTL8851BU", stem: "rtl8851bu" },
-  { pid: 0x922a, name: "RTL8922AU", stem: "rtl8922au" },
+  { pid: 0xb851, name: "RTL8851BU", stem: "rtl8851bu" },
 ];
 
 /** The settings.bt_chip_fw_stem that goes with a chip choice (as v1 stored it) */
@@ -117,7 +114,12 @@ export interface AdapterFirmware {
   firmware_files: string[];
   /** A file that is there but is no Realtek firmware (a saved web page) */
   firmware_invalid?: string | null;
+  /** The core can fetch the files from linux-firmware */
+  firmware_download?: boolean;
+  /** The firmware comes from the vendor's Windows driver (a Realtek chip) */
+  firmware_from_driver?: boolean;
   vendor_note: { key: string; args: string[] } | null;
+  driver?: "winusb" | "bluetooth" | "other" | "none";
 }
 
 /**
@@ -127,6 +129,7 @@ export interface AdapterFirmware {
  *   detected) chip, as the core checked them for the adapters
  * - invalid: one of them is there but is no Realtek firmware, usually a web
  *   page saved instead of the file (v1 firmware.invalid)
+ * - missing and invalid say whether the core can download the files
  * - unchecked: no adapter to check them for; from the folder scan if it
  *   lists the file, unknown for Custom (the scan leaves it out)
  * - vendor: no Realtek chip, and an adapter of a vendor the core has a note
@@ -135,8 +138,8 @@ export interface AdapterFirmware {
  */
 export type ChipStatus =
   | { kind: "present"; files: string[] }
-  | { kind: "missing"; files: string[] }
-  | { kind: "invalid"; files: string[]; file: string }
+  | { kind: "missing"; files: string[]; download: boolean }
+  | { kind: "invalid"; files: string[]; file: string; download: boolean }
   | { kind: "unchecked"; files: string[]; present: boolean | null }
   | { kind: "vendor"; note: { key: string; args: string[] }; vendor: string }
   | { kind: "non_realtek" | "auto_no_adapter" | "auto_unrecognized" | "select_chip" };
@@ -159,10 +162,12 @@ export function chipStatus(
   // The core resolves the setting for each adapter; Auto by its own chip
   const checked = auto ? realtek : adapters.find((a) => a.firmware_present !== null);
   if (checked && checked.firmware_present !== null) {
-    if (!checked.firmware_present && checked.firmware_invalid) {
-      return { kind: "invalid", files: checked.firmware_files, file: checked.firmware_invalid };
+    const download = checked.firmware_download ?? false;
+    if (checked.firmware_present) return { kind: "present", files: checked.firmware_files };
+    if (checked.firmware_invalid) {
+      return { kind: "invalid", files: checked.firmware_files, file: checked.firmware_invalid, download };
     }
-    return { kind: checked.firmware_present ? "present" : "missing", files: checked.firmware_files };
+    return { kind: "missing", files: checked.firmware_files, download };
   }
   const stem = firmwareStem(setting.bt_chip_pid, setting.bt_chip_fw_stem);
   if (stem === null) return { kind: "select_chip" };
@@ -172,16 +177,96 @@ export function chipStatus(
   return { kind: "unchecked", files, present };
 }
 
-/** The adapter card's short firmware state: a language key and its colour */
+/**
+ * Where another vendor's adapter gets its firmware (issue #86: the Realtek
+ * chip choice means nothing to it): its vendor's Windows driver (MediaTek,
+ * Qualcomm), the Wi-Fi driver (Marvell), files in the firmware folder
+ * (Intel; Broadcom's optional), or none needed. Null for Realtek, an
+ * unknown chip and one BlueCaster cannot use.
+ */
+export type VendorFirmware = "driver" | "wifi" | "folder" | "optional" | "none";
+export function vendorFirmware(a: Pick<AdapterFirmware, "vendor_note">): VendorFirmware | null {
+  switch (a.vendor_note?.key) {
+    case "firmware.vendor_mediatek":
+    case "firmware.vendor_qualcomm":
+      return "driver";
+    case "firmware.vendor_marvell":
+      return "wifi";
+    case "firmware.vendor_intel":
+      return "folder";
+    case "firmware.vendor_broadcom":
+      return "optional";
+    case "firmware.vendor_csr":
+    case "firmware.vendor_barrot":
+    case "firmware.vendor_actions":
+      return "none";
+    default:
+      return null;
+  }
+}
+
+/** The running stack's firmware loader on this adapter (on WinUSB, its
+ *  vendor's): how it went, null when none ran on it */
+export function loaderOutcome(
+  a: Pick<AdapterFirmware, "vendor" | "driver">,
+  loader: { vendor: string; ok?: boolean | null } | null | undefined,
+): "ok" | "failed" | "running" | null {
+  if (!loader || a.driver !== "winusb" || loader.vendor.toLowerCase() !== a.vendor.toLowerCase()) return null;
+  return loader.ok === true ? "ok" : loader.ok === false ? "failed" : "running";
+}
+
+const VENDOR_FIRMWARE_TAGS: Record<VendorFirmware, string> = {
+  driver: "ui.adapter.firmware_from_driver",
+  wifi: "ui.adapter.firmware_from_wifi",
+  folder: "ui.adapter.firmware_from_folder",
+  optional: "ui.adapter.firmware_optional",
+  none: "ui.adapter.firmware_not_needed",
+};
+
+/** The adapter card's short firmware state: a language key (its argument,
+ *  if any) and its colour */
 export function adapterFirmwareTag(
   a: AdapterFirmware,
   setting: ChipSetting,
-): { key: string; status: "good" | "warn" | "bad" } {
+  loader?: { vendor: string; ok?: boolean | null } | null,
+): { key: string; args?: string[]; status: "good" | "warn" | "bad" } {
+  // Realtek's Windows driver has it (issue #86): as MediaTek's
+  if (a.firmware_present === true && a.firmware_from_driver) {
+    return { key: "ui.adapter.firmware_from_driver", args: [a.vendor], status: "good" };
+  }
   if (a.firmware_present === true) return { key: "firmware.present", status: "good" };
   if (a.firmware_present === false) {
-    return { key: a.firmware_invalid ? "firmware.invalid_short" : "firmware.missing_short", status: "bad" };
+    // Needed once the adapter is on WinUSB: amber before (issue #86)
+    const status = a.driver === undefined || a.driver === "winusb" ? "bad" : "warn";
+    return { key: a.firmware_invalid ? "firmware.invalid_short" : "firmware.missing_short", status };
   }
-  if (a.vendor_note?.key === "firmware.vendor_unsupported") return { key: "ui.adapter.firmware_unsupported", status: "warn" };
+  // BlueCaster cannot use it: red, as a missing file (issue #86)
+  if (a.vendor_note?.key === "firmware.vendor_unsupported") return { key: "ui.adapter.firmware_unsupported", status: "bad" };
+  const source = vendorFirmware(a);
+  if (source) {
+    const outcome = loaderOutcome(a, loader);
+    if (outcome === "failed") return { key: "ui.adapter.firmware_load_failed", status: "bad" };
+    if (outcome === "ok") return { key: "ui.adapter.firmware_loaded", status: "good" };
+    return { key: VENDOR_FIRMWARE_TAGS[source], args: source === "driver" ? [a.vendor] : undefined, status: "good" };
+  }
   if (a.vendor_note || setting.bt_chip_pid === CHIP_NOT_REALTEK) return { key: "ui.adapter.firmware_not_realtek", status: "good" };
   return { key: "ui.adapter.firmware_choose_chip", status: "warn" };
+}
+
+/**
+ * The adapter the chip choice is shown with on the Adapter screen, -1 for
+ * none: the one chipStatus reports on (the Realtek adapter, else one the core
+ * checked files for, else one with a vendor note), else the first. The
+ * setting is one for all adapters; the other cards keep their short tag.
+ */
+export function chipTargetIndex(adapters: readonly AdapterFirmware[]): number {
+  for (const pick of [
+    (a: AdapterFirmware) => a.realtek_chip !== null,
+    (a: AdapterFirmware) => a.firmware_present !== null,
+    (a: AdapterFirmware) => a.vendor_note !== null,
+  ]) {
+    const i = adapters.findIndex(pick);
+    if (i >= 0) return i;
+  }
+  return adapters.length > 0 ? 0 : -1;
 }

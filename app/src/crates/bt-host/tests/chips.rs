@@ -25,13 +25,63 @@ fn chip_table_lookups() {
 
 #[test]
 fn realtek_pid_resolution() {
-    let btstack = [(0x0BDA, 0x8771), (0x0BDA, 0xB82C)];
+    let btstack = [
+        (0x0BDA, 0x8771, "rtl8761bu_fw"),
+        (0x0BDA, 0xB82C, "rtl8822bu_fw"),
+        (0x0BDA, 0xB85B, "rtl8852bu_fw"),
+        (0x0BDA, 0x4853, "rtl8852bu_fw"),
+        (0x0BDA, 0xB733, "rtl8723fu_fw"),
+        (0x0BDA, 0x1234, "rtl8851bu_fw"),
+    ];
     assert_eq!(resolve_realtek_pid(0x0BDA, 0x8771, &btstack), Some(0x8771));
+    // Another PID of a family in the chip table: the family's PID (issue #81)
+    assert_eq!(resolve_realtek_pid(0x0BDA, 0x4853, &btstack), Some(0xB85B));
+    // A family not in the chip table keeps its own PID, and so does one
+    // whose chip table PID is not in BTstack's table (here 0xB851)
+    assert_eq!(resolve_realtek_pid(0x0BDA, 0xB733, &btstack), Some(0xB733));
+    assert_eq!(resolve_realtek_pid(0x0BDA, 0x1234, &btstack), Some(0x1234));
     // Realtek's VID but not in BTstack's table: a card reader, Wi-Fi
     assert_eq!(resolve_realtek_pid(0x0BDA, 0x0129, &btstack), None);
     // TP-Link UB500
     assert_eq!(resolve_realtek_pid(0x2357, 0x0604, &btstack), Some(0x8771));
+    // TP-Link UB600 (issue #521)
+    assert_eq!(resolve_realtek_pid(0x37AD, 0x0600, &btstack), Some(0x8771));
+    assert_eq!(vendor_for_usb(0x37AD, 0x0600, Some(0x8771)), ChipVendor::Realtek);
+    // A Realtek PID BTstack lacks, from the OEM table (issue #86)
+    assert_eq!(resolve_realtek_pid(0x0BDA, 0xA729, &btstack), Some(0x8771));
     assert_eq!(resolve_realtek_pid(0x8087, 0x0033, &btstack), None);
+}
+
+/// Against BTstack's own table: every PID of a family in the chip table gets
+/// the family's name and firmware files
+#[test]
+fn realtek_pid_resolution_btstack_table() {
+    let table = bt_host::realtek_usb_firmware();
+    assert!(table.iter().any(|&(v, p, fw)| (v, p, fw) == (0x0BDA, 0x4853, "rtl8852bu_fw")), "{table:?}");
+    // Every chip table PID is one BTstack loads the same firmware for
+    for c in REALTEK_CHIPS.iter().filter(|c| c.pid != CUSTOM_CHIP_PID) {
+        assert!(table.iter().any(|&(_, p, fw)| p == c.pid && fw == c.fw_name), "{} 0x{:04X}", c.chip_name, c.pid);
+    }
+    // A family PID BTstack knows, with the same firmware: what it is given
+    let in_btstack = |c: &RealtekChip| table.iter().any(|&(_, p, fw)| p == c.pid && fw == c.fw_name);
+    for &(vid, pid, fw) in table {
+        // A PID listed twice (0xC125): BTstack takes the first entry
+        if table.iter().find(|&&(_, p, _)| p == pid).is_some_and(|&(_, _, f)| f != fw) {
+            continue;
+        }
+        let resolved = resolve_realtek_pid(vid, pid, table).unwrap();
+        match REALTEK_CHIPS.iter().find(|c| c.fw_name == fw).filter(|c| in_btstack(c)) {
+            Some(c) => assert_eq!(resolved, c.pid, "0x{pid:04X} ({fw})"),
+            None => assert_eq!(resolved, pid, "0x{pid:04X} ({fw})"),
+        }
+        assert!(table.iter().any(|&(_, p, f)| p == resolved && f == fw), "0x{pid:04X} -> 0x{resolved:04X}");
+    }
+    let rtl8852be = resolve_realtek_pid(0x0BDA, 0x4853, table).unwrap();
+    assert_eq!(realtek_chip_name(rtl8852be), Some("RTL8852BU"));
+    assert_eq!(
+        firmware_files(rtl8852be, ""),
+        Some(("rtl8852bu_fw.bin".to_string(), "rtl8852bu_config.bin".to_string()))
+    );
 }
 
 #[test]
@@ -52,14 +102,28 @@ fn vendors_and_names() {
     assert_eq!(company_name(0x005D), Some("Realtek"));
     assert_eq!(company_name(0x000A), Some("Qualcomm (CSR)"));
     assert_eq!(company_name(0x0009), Some("Infineon"));
+    // Chip makers found in headphones (Read Remote Version)
+    assert_eq!(company_name(0x0094), Some("Airoha"));
+    assert_eq!(company_name(0x02B0), Some("Bestechnic (BES)"));
+    assert_eq!(company_name(0x0642), Some("Bluetrum"));
     assert_eq!(company_name(0x1234), None);
 }
 
 #[test]
 fn display_names_like_v1() {
     assert_eq!(display_name(0x2357, 0x0604, Some(0x8771), ChipVendor::Realtek), "RTL8761BU (0x2357:0x0604)");
-    assert_eq!(display_name(0x8087, 0x0033, None, ChipVendor::Intel), "Intel (0x8087:0x0033) [experimental]");
-    assert_eq!(display_name(0x0E8D, 0x0608, None, ChipVendor::MediaTek), "MediaTek (0x0E8D:0x0608) [unsupported]");
+    assert_eq!(display_name(0x8087, 0x0032, None, ChipVendor::Intel), "Intel (0x8087:0x0032)");
+    assert_eq!(display_name(0x0E8D, 0x7663, None, ChipVendor::MediaTek), "MediaTek (0x0E8D:0x7663) [unsupported]");
+    assert_eq!(display_name(0x0E8D, 0x6639, None, ChipVendor::MediaTek), "MediaTek (0x0E8D:0x6639)");
+    assert_eq!(display_name(0x0E8D, 0x0608, None, ChipVendor::MediaTek), "MediaTek (0x0E8D:0x0608)");
+    // An MT7921 module under AzureWave's VID
+    assert_eq!(vendor_for_usb(0x13D3, 0x3563, None), ChipVendor::MediaTek);
+    assert_eq!(vendor_for_usb(0x13D3, 0x1234, None), ChipVendor::Unknown);
+    assert_eq!(display_name(0x0E8D, 0x7925, None, ChipVendor::MediaTek), "MediaTek (0x0E8D:0x7925)");
+    // Qualcomm ROME and WCN6855, also under a module maker's VID; not the QCA6290
+    assert_eq!(display_name(0x0CF3, 0xE300, None, ChipVendor::Qualcomm), "Qualcomm (0x0CF3:0xE300)");
+    assert_eq!(vendor_for_usb(0x0489, 0xE0C7, None), ChipVendor::Qualcomm);
+    assert_eq!(display_name(0x0CF3, 0xE400, None, ChipVendor::Qualcomm), "Qualcomm (0x0CF3:0xE400) [unsupported]");
     assert_eq!(display_name(0x0A12, 0x0001, None, ChipVendor::Csr), "CSR (0x0A12:0x0001)");
     assert_eq!(display_name(0x0BDA, 0x1234, None, ChipVendor::Realtek), "0x0BDA:0x1234");
     assert_eq!(display_name(0x1234, 0x5678, None, ChipVendor::Unknown), "0x1234:0x5678");
@@ -133,7 +197,7 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(name: &str) -> TempDir {
-        let dir = std::env::temp_dir().join(format!("a2dpwb_chips_{name}_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("bluecaster_chips_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         TempDir(dir)
@@ -197,4 +261,41 @@ fn firmware_presence_and_scan() {
         ]
     );
     assert!(scan_firmware_files(&dir.join("missing")).is_empty());
+}
+
+#[test]
+fn rom_dongles_and_wifi_loaded_combos() {
+    // Barrot ROM dongles: by the exact ID, not the whole VID
+    for pid in [0x0010, 0x0012] {
+        assert_eq!(vendor_for_usb(0x33FA, pid, None), ChipVendor::Barrot);
+        assert!(is_bluetooth_vendor_vid(0x33FA, pid));
+        assert!(chip_supported(ChipVendor::Barrot, 0x33FA, pid));
+    }
+    assert_eq!(vendor_for_usb(0x33FA, 0x0001, None), ChipVendor::Unknown);
+    assert!(!is_bluetooth_vendor_vid(0x33FA, 0x0001));
+    assert_eq!(display_name(0x33FA, 0x0010, None, ChipVendor::Barrot), "Barrot (0x33FA:0x0010)");
+    // Marvell AVASTAR Bluetooth: the Wi-Fi driver loads the firmware
+    for pid in [0x2044, 0x2046, 0x204B, 0x204C, 0x204E] {
+        assert_eq!(vendor_for_usb(0x1286, pid, None), ChipVendor::Marvell);
+        assert!(chip_supported(ChipVendor::Marvell, 0x1286, pid));
+    }
+    // Marvell's Wi-Fi adapters and boot loader are no Bluetooth adapters
+    for pid in [0x2001, 0x203C, 0x8001] {
+        assert_eq!(vendor_for_usb(0x1286, pid, None), ChipVendor::Unknown);
+        assert!(!is_bluetooth_vendor_vid(0x1286, pid));
+    }
+    assert_eq!(display_name(0x1286, 0x204C, None, ChipVendor::Marvell), "Marvell (0x1286:0x204C)");
+    // Actions ATS2851: runs from ROM, its broken commands hidden from BTstack
+    assert_eq!(vendor_for_usb(0x10D7, 0xB012, None), ChipVendor::Actions);
+    assert_eq!(vendor_for_usb(0x10D7, 0x1234, None), ChipVendor::Unknown);
+    assert!(chip_supported(ChipVendor::Actions, 0x10D7, 0xB012));
+    assert_eq!(display_name(0x10D7, 0xB012, None, ChipVendor::Actions), "Actions (0x10D7:0xB012)");
+    // None of them is taken as Realtek
+    let table = bt_host::realtek_usb_firmware();
+    for (vid, pid) in [(0x33FA, 0x0010), (0x33FA, 0x0012), (0x1286, 0x204C), (0x1286, 0x204E)] {
+        assert_eq!(resolve_realtek_pid(vid, pid, table), None);
+    }
+    assert_eq!(company_name(0x08E7), Some("Barrot"));
+    assert_eq!(company_name(0x0048), Some("Marvell"));
+    assert_eq!(company_name(0x03E0), Some("Actions"));
 }

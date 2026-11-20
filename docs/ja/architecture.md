@@ -16,23 +16,23 @@ nav_order: 4
 
 ---
 
-## 概要
+## 概要 {#overview}
 
-A2DP Windows Bridge (A2DPWB) は Windows で LDAC、aptX HD、aptX Low Latency、aptX、AAC、SBC の Bluetooth オーディオを実現します。Windows 標準の Bluetooth スタックが A2DP で対応するのは SBC、クラシック aptX、AAC（Windows 11 のみ）だけですが、このツールはカーネルドライバーなしで LDAC、aptX HD、aptX Low Latency を追加します。
+BlueCaster は、Windows で LHDC V5、LDAC、aptX Adaptive、aptX HD、aptX Low Latency、aptX、Opus、AAC、SBC XQ、SBC の Bluetooth オーディオを使えるようにします（LE Audio の LC3 にも実験的に対応）。Windows 標準の Bluetooth スタックが A2DP で対応するのは、SBC、クラシック aptX、AAC（Windows 11 のみ）だけです。BlueCaster は、カーネルドライバーを使わずにそれ以外のコーデックを追加します。
 
-**BTstack + WinUSB** を使用 -- 完全にユーザーモードで動作し、ドライバー署名は不要です。
+**BTstack + WinUSB** を使い、すべてユーザーモードで動作するので、ドライバー署名は不要です。
 
-A2DPWB 2.0 は Rust で書かれています。置き換えの効かない C ライブラリ（BTstack と各コーデックのエンコーダー）はソースからビルドし、小さな FFI クレートを通して呼びます。それ以外は SBC エンコーダーも含めてすべて Rust です。
+BlueCaster 2.0 は Rust で書かれています。置き換えられない C ライブラリ（BTstack と各コーデックのエンコーダー）はソースからビルドし、小さな FFI クレートを通して呼び出します。それ以外は、SBC エンコーダーも含めてすべて Rust です。
 
-## プロセス
+## プロセス {#processes}
 
-A2DPWB は最大 3 つのプログラムで動きます。
+BlueCaster は、最大 3 つのプログラムで構成されます。
 
 | プログラム | 動いている間 | 役割 |
-|:-----------|:-------------|:-----|
-| `a2dpwb-core.exe` | A2DPWB の実行中（ウィンドウ、スタートメニュー、**Windows 起動時に開始** から起動） | Bluetooth、音声の取り込みとエンコード、プロファイルと設定、トレイのアイコンとメニュー、IPC サーバー。`--cli` を付けると同じコアをコンソールで動かします |
-| `a2dpwb.exe` | ウィンドウを開いている間だけ（最後のウィンドウを閉じてから 3 分で終了） | メインウィンドウとトレイのフライアウト（Tauri 2、SolidJS + TypeScript）。自分では状態を持ちません |
-| `a2dpwb-driver.exe` | ドライバーを 1 回変更する間だけ、管理者権限（UAC）で | アダプターへの WinUSB の割り当て、または元のドライバーへの復元をして終了します |
+|:--------|:-----|:-----|
+| `bluecaster-core.exe` | BlueCaster の実行中（ウィンドウ、スタートメニュー、**Windows 起動時に開始** から起動） | Bluetooth、音声の取り込みとエンコード、プロファイルと設定、トレイのアイコンとそのメニュー、IPC サーバー。`--cli` を付けると、同じコアをコンソールで動かします |
+| `bluecaster.exe` | ウィンドウを開いている間だけ（最後のウィンドウを閉じてから 3 分で終了） | メインウィンドウとトレイのフライアウト（Tauri 2、SolidJS + TypeScript）。独自の状態は持ちません |
+| `bluecaster-driver.exe` | ドライバーの変更 1 回、またはキーの取り込み 1 回の間だけ、管理者権限（UAC）で | アダプターへの WinUSB の割り当て、元のドライバーへの復元、または Windows の Bluetooth がそのアダプター用に保持しているリンクキーの読み取り（`windows-keys`）を行い、終了します |
 
 ```mermaid
 ---
@@ -42,94 +42,96 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    src["Windows の音声: システムループバック / 仮想デバイス / アプリ単位"]
-    ui["a2dpwb.exe: ウィンドウとトレイのフライアウト（Tauri + SolidJS）"]
-    subgraph core["a2dpwb-core.exe（常駐、ユーザーモード）"]
-        ctl["トレイのメニュー / IPC サーバー / CLI (--cli)"] --> svc["コアサービス: 接続の状態機械、コーデック選択、プロファイル、再接続"]
+    ui["bluecaster.exe:<br>ウィンドウと<br>トレイのフライアウト<br>（Tauri + SolidJS）"]
+    src["Windows の音声:<br>システムループバック /<br>仮想デバイス / アプリ単位"]
+    subgraph core["bluecaster-core.exe"]
+        ctl["トレイのメニュー /<br>IPC サーバー / CLI (--cli)"] --> svc["コアサービス:<br>接続の状態機械、コーデック選択、<br>プロファイル、再接続"]
         svc --> cap["WASAPI キャプチャ"]
-        cap -- PCM --> enc["エンコード経路: LDAC / aptX 系 / LHDC V5 / Opus / AAC / SBC"]
-        enc --> bt["BTstack: HCI / L2CAP / AVDTP / A2DP / AVRCP"]
+        cap -- PCM --> enc["エンコード経路:<br>LDAC / aptX 系 / LHDC V5 /<br>Opus / AAC / SBC"]
+        enc --> bt["BTstack:<br>HCI / L2CAP / AVDTP /<br>A2DP / AVRCP"]
     end
-    ui <-->|"ユーザーごとの名前付きパイプ"| ctl
-    svc -.->|"UAC（ドライバーの変更時のみ）"| drv["a2dpwb-driver.exe（昇格）: WinUSB の割り当て / 復元"]
+    ui <-->|"ユーザーごとの<br>名前付きパイプ"| ctl
     src --> cap
-    bt -->|"WinUSB (nusb)"| usb["USB Bluetooth アダプター（WinUSB ドライバー）"]
-    drv -.->|SetupAPI| usb
+    bt -->|"WinUSB (nusb)"| usb["USB Bluetooth アダプター<br>（WinUSB ドライバー）"]
     usb -. Bluetooth .-> hp["ヘッドホン / スピーカー"]
+    usb -.-|SetupAPI| drv["bluecaster-driver.exe（昇格）:<br>WinUSB の割り当て / 復元、<br>Windows のリンクキーの読み取り"]
 ```
 
-- **コアは Windows サービスではありません。** サインインしたユーザーの普通のプロセスとして動きます。WASAPI ループバックで取り込むのは、そのユーザーのセッションの音だからです。セッションごとの mutex で 1 つだけに保ち、もう一度起動するとウィンドウが開きます。
-- **トレイはコア側にあります。** 右クリックのメニュー（開く、最初の 10 件のプロファイル、切断、終了）は、ウィンドウを起動せずにすぐ開きます。左クリックでウィンドウのフライアウトを起動します。
-- **ウィンドウは表示だけを担当します。** コアの状態のスナップショットを受け取り、その後は変化だけを受け取ります。ウィンドウを閉じても、ウィンドウが落ちても音は止まりません。ウィンドウを閉じると隠れるだけなので、トレイからすぐに開き直せます。
-- **コマンドラインも同じコアを使います。** `a2dpwb-core.exe --cli` はトレイと IPC なしでコアサービスを動かします。エミュレータテストもこの経路です。
+- **コアは Windows サービスではありません。** サインインしたユーザーの通常のプロセスとして動きます。WASAPI ループバックで取り込むのが、そのユーザーのセッションの音声だからです。セッションごとの mutex でインスタンスを 1 つに制限しており、コアをもう一度起動するとウィンドウが開きます。
+- **トレイはコアが管理します。** トレイアイコンの右クリックメニュー（開く、最初の 10 台のデバイス、切断、終了）は、ウィンドウを起動せずにすぐ開きます。左クリックでは、フライアウト（設定によってはメインウィンドウ）が開きます。
+- **ウィンドウは状態を表示するだけです。** コアの状態のスナップショットを受け取り、その後は変化だけを受け取ります。ウィンドウを閉じても、ウィンドウがクラッシュしても、音は止まりません。閉じたウィンドウは非表示になるだけなので、トレイからすぐに開き直せます。
+- **コマンドラインも同じコアを使います。** `bluecaster-core.exe --cli` は、トレイと IPC なしでコアサービスを動かします。エミュレーターテストもこのモードを使います。
 
-## トランスポート: BTstack + WinUSB
+## トランスポート: BTstack + WinUSB {#transport-btstack--winusb}
 
-Windows の Bluetooth スタックを完全にバイパスし、WinUSB（Microsoft 署名済み汎用 USB ドライバー）経由で USB Bluetooth アダプターと直接通信します。ソース公開の Bluetooth スタック（非商用ライセンス）である BTstack が HCI、L2CAP、AVDTP、A2DP をユーザーモードで実装します。
+BlueCaster は Windows の Bluetooth スタックをまったく使わず、WinUSB（Microsoft 署名済みの汎用 USB ドライバー）を通して USB Bluetooth アダプターと直接通信します。ソースが公開された Bluetooth スタック（非商用ライセンス）である BTstack が、HCI、L2CAP、AVDTP、A2DP をユーザーモードで実装します。
 
 **利点**:
-- ドライバー署名コスト不要
-- テスト署名モード不要
-- Secure Boot の無効化不要
+- ドライバー署名のコストが不要
+- テスト署名モードが不要
+- Secure Boot の無効化が不要
 - すべてのコードがユーザーモードで動作（デバッグが容易）
 
 **トレードオフ**:
-- 専用の USB Bluetooth アダプターが必要（Windows 内蔵 Bluetooth とは別）
-- WinUSB モードのアダプターは Windows の通常の Bluetooth として使用不可
-- デバイスアドレスは手動入力、または USB アダプターでの検索（GAP inquiry）で指定
+- 専用の USB Bluetooth アダプターが必要（Windows の内蔵 Bluetooth とは別）
+- WinUSB が割り当てられている間、そのアダプターは通常の Windows の Bluetooth では使えない
+- デバイスは USB アダプターでの検索（GAP inquiry）で見つけるか、アドレスを手入力する
 
 **動作の流れ**:
-1. USB Bluetooth アダプターに WinUSB を割り当てる（アプリの **アダプタ > WinUSB を割り当てる**、[ドライバーの割り当て](#driver-assignment)を参照。Zadig でも可）
-2. `hci-transport` クレートが `nusb` で WinUSB 経由でアダプターを開き、BTstack の HCI トランスポートとしてつなぐ
-3. BTstack が HCI コマンドで Bluetooth コントローラーを初期化
-4. (Realtek、Intel、Broadcom アダプター) 必要に応じてファームウェアをアップロード
-5. BTstack が ACL 接続を確立し、L2CAP チャネル (PSM 0x0019) を開く
-6. AVDTP シグナリングでリモート SEP を検出し、コーデックをネゴシエーション
-7. エンコード済み音声が L2CAP 経由の AVDTP メディアパケットとして送信
+1. ユーザーが USB Bluetooth アダプターに WinUSB を割り当てる。アプリで（**アダプター > WinUSB ドライバーに置き換える**、[ドライバーの割り当て](#driver-assignment)を参照）、または Zadig で
+2. `hci-transport` クレートが `nusb` を使い WinUSB 経由でアダプターを開いて、BTstack の HCI トランスポートとして接続する
+3. BTstack が HCI コマンドを送って Bluetooth コントローラーを初期化する
+4. Realtek、Intel、Broadcom のアダプターでは、必要に応じて BlueCaster がファームウェアをアップロードする
+5. BTstack が ACL 接続を確立し、L2CAP チャネル（PSM 0x0019）を開く
+6. AVDTP シグナリングでリモートの SEP を検出し、コーデックをネゴシエーションする
+7. エンコードした音声を、L2CAP 上の AVDTP メディアパケットとして送る
 
 ```mermaid
 sequenceDiagram
-    participant App as A2DPWB (BTstack)
+    participant App as BlueCaster (BTstack)
     participant Ad as USB アダプター
     participant Sink as ヘッドホン
-    App->>Ad: WinUSB で開く、HCI リセット / 初期化
+    App->>Ad: WinUSB で開く、<br>HCI リセット / 初期化
     opt Realtek、Intel、Broadcom
         App->>Ad: ファームウェアのアップロード
     end
     App->>Sink: ACL 接続
-    Note over App,Sink: 初回は SSP Just Works でペアリング（リンクキーを保存）
-    App->>Sink: L2CAP チャネル、PSM 0x0019（AVDTP シグナリング）
+    Note over App,Sink: 初回の接続は SSP Just Works<br>（リンクキーを保存）
+    App->>Sink: L2CAP チャネル、PSM 0x0019<br>（AVDTP シグナリング）
     App->>Sink: AVDTP DISCOVER / GET_CAPABILITIES
     Sink-->>App: ストリームエンドポイントとコーデック
-    App->>Sink: SET_CONFIGURATION（選んだコーデック）、OPEN、START
+    App->>Sink: SET_CONFIGURATION<br>（選んだコーデック）、OPEN、START
     loop ストリーミング中
-        App->>Sink: L2CAP 経由の AVDTP メディアパケット
+        App->>Sink: L2CAP 上の AVDTP メディアパケット
     end
 ```
 
-USB トランスポートには、v1 で実機のアダプターのために入れた復旧処理がそのまま入っています。アダプターを開くときにイベントと ACL のパイプをリセットし、失敗したイベントの読み取りはやり直し、HCI コマンドにはタイムアウトを設け、閉じるときは HCI Reset を送って、次のセッションがアイドル状態のコントローラーから始められるようにします。
+USB トランスポートには、v1 で実機のアダプターに必要だった復旧処理がそのまま入っています。アダプターを開くときにイベントと ACL のパイプをリセットし、失敗したイベントの読み取りは再試行し、HCI コマンドにはタイムアウトを設けています。アダプターを閉じるときは HCI Reset を送ります（ブートローダーのままのコントローラーを除く）。これにより、次のセッションはアイドル状態のコントローラーから始められます。
 
-## クレート構成
+## クレート構成 {#crate-structure}
 
-ひとつの Cargo workspace（リポジトリ直下の `Cargo.toml`）を 5 つの層に分けています。各層は下の層にだけ依存します。ライブラリは `app/src/crates/`、プログラムは `app/src/core`、`app/src/ui`、`app/src/driver` にあります。`unsafe` を書けるのは `*-sys` クレートと `win-sys` だけで、それ以外のクレートには `#![forbid(unsafe_code)]` が付いています。
+コードは 1 つの Cargo workspace（リポジトリ直下の `Cargo.toml`）で、5 つの層に分かれています。各層は、下の層にだけ依存します。ライブラリは `app/src/crates/` に、プログラムは `app/src/core`、`app/src/ui`、`app/src/driver` にあります。取り込んだ `aptx-adaptive` クレートは `codec` のパス依存で、workspace には含めていません。`unsafe` コードを含められるのは `*-sys` クレートと `win-sys` だけで、それ以外のクレートには `#![forbid(unsafe_code)]` が付いています。
 
 | 層 | クレート | 役割 |
-|:---|:---------|:-----|
+|:------|:------|:-----|
 | 1. FFI | `btstack-sys` | BTstack を `cc`（MSVC）でビルドし、手書きの FFI 宣言と安全なラッパー、`btstack_config.h` を持つ。BTstack を呼べるのはランループのスレッドだけで、`!Send` の `Stack` トークンでこれを強制する |
-| 1. FFI | `ldac-sys`、`openaptx-sys`、`fdkaac-sys`、`lhdcv5-sys`、`opus-sys` | C のエンコーダーをビルドして提供する。ライブラリごとに 1 クレートにして、ライセンスを分けて管理する |
-| 1. FFI | `win-sys` | Rust のライブラリがない Win32 API: MMCSS、既定のオーディオデバイス（IPolicyConfig）、WLAN API（AFH）、電源通知、Run キー、メディアキー、パイプの DACL、昇格、WinUSB ドライバーの割り当て（SetupAPI） |
+| 1. FFI | `ldac-sys`、`openaptx-sys`、`fdkaac-sys`、`lhdcv5-sys`、`opus-sys`、`lc3-sys` | C のエンコーダーをビルドして提供する。ライブラリごとに 1 クレートにして、それぞれのライセンスを分けておく |
+| 1. FFI | `win-sys` | Rust のライブラリがない Win32 API: MMCSS、既定のオーディオデバイス（IPolicyConfig）、WLAN API（AFH）、電源通知、Run キー、メディアキー、パイプの DACL、昇格、WinUSB ドライバーの割り当て（SetupAPI）、Windows 自身の Bluetooth（その無線、ペアリング済みのデバイス、リンクキー） |
 | 2. 部品 | `hci-transport` | `nusb` による HCI over USB（"H2"）と、仮想コントローラー（`tools/emu`）への H4 over TCP |
+| 2. 部品 | `aptx-adaptive` | Rust の aptX Adaptive エンコーダー（AKS-Logic/aptx-adaptive-linux から取り込み、MIT） |
 | 2. 部品 | `codec` | `Encoder` トレイト、SBC エンコーダー（Bluedroid 版の Rust 移植）、C エンコーダーの安全なラッパー、Codec Information の解析とコーデックの選択 |
-| 2. 部品 | `audio-capture` | `wasapi` クレートによる WASAPI キャプチャ: システムループバック、仮想デバイス、アプリ単位（プロセスループバック）。デバイスとアプリの一覧、テストトーン |
-| 3. エンジン | `bt-host` | BTstack を専用スレッドで動かし、コマンドと型付きイベントで操作する: GAP、A2DP Source、AVRCP、SDP、リンクキー、AFH、ファームウェアの読み込み、HCI キャプチャ（`.pklg`） |
+| 2. 部品 | `audio-capture` | `wasapi` クレートによる WASAPI キャプチャ: システムループバック、仮想デバイス、アプリ単位（プロセスループバック）。デバイスとアプリの一覧、テストトーン、アプリごとの音量（音量ミキサー） |
+| 2. 部品 | `voice-link` | ヘッドセットマイクの音声（開発者モード）: 選んだ出力デバイスへのモノラル PCM の再生（WASAPI）、上り方向のためのキャプチャのモノラル化、SCO ペイロード上の音声コーデック CVSD / mSBC / LC3-SWB |
+| 3. エンジン | `bt-host` | BTstack を専用スレッドで動かし、コマンドと型付きイベントで操作する: GAP、A2DP Source、AVRCP、SDP、パススルー用の RFCOMM チャネル（`rfcomm.*`）、リンクキー、デバイスの SDP サービス、AFH、ファームウェアの読み込みとチップのローダー（`bringup`）、チップのプローブとチップスクリプト、HCI キャプチャ（`.pklg`）、LE Audio（`le/`） |
+| 2. 部品 | `le-audio` | LE Audio: BTstack にも Windows にも依存しないロジック（Assigned Numbers、LTV、PACS / ASCS の PDU、プリセット、CSIP / VCP / MCP / CCP のモデル） |
 | 3. エンジン | `pipeline` | PCM のリング、形式変換、ダウンミックス、エンコード、メディアペイロード、送信ペース、ABR |
-| 4. コア | `a2dpwb-core`（ディレクトリ `core`） | 状態機械、再接続、スリープと復帰、プロファイル、設定と v1 からの移行、音量の連動、更新チェック、受信機テストのクライアント、統計 |
+| 4. コア | `bluecaster-core`（ディレクトリ `core`） | 状態機械、再接続、スリープと復帰、プロファイル、設定と v1 からの移行、音量の連動、出力のミュート、更新チェック、Realtek のファームウェアのダウンロード、受信機テストのクライアント、統計、ベンダーのプロトコル（`vendor/`） |
 | 4. コア | `ipc` | コアとウィンドウで共有するプロトコルの型（serde。TypeScript の型は `ts-rs` で生成）とパイプのフレーム |
-| 5. プログラム | `a2dpwb-core-exe`（`app/src/core`） | `a2dpwb-core.exe`: コア、トレイ（`tao` のイベントループ上の `tray-icon`）、IPC サーバー、`--cli` |
-| 5. プログラム | `a2dpwb-ui`（`app/src/ui`） | `a2dpwb.exe`: Tauri 2。Rust 側は IPC クライアントだけで、画面は SolidJS + TypeScript + Vite |
-| 5. プログラム | `a2dpwb-driver`（`app/src/driver`） | `a2dpwb-driver.exe`: 昇格ヘルパー |
+| 5. プログラム | `bluecaster-core-exe`（`app/src/core`） | `bluecaster-core.exe`: コア、トレイ（`tao` のイベントループ上の `tray-icon`）、IPC サーバー、`--cli` |
+| 5. プログラム | `bluecaster-ui`（`app/src/ui`） | `bluecaster.exe`: Tauri 2。Rust 側は IPC クライアントで、ページは SolidJS + TypeScript + Vite |
+| 5. プログラム | `bluecaster-driver`（`app/src/driver`） | `bluecaster-driver.exe`: 昇格ヘルパー |
 
-## 音声の経路とスレッド
+## 音声の経路とスレッド {#audio-path-and-threads}
 
 ```mermaid
 ---
@@ -139,34 +141,36 @@ config:
     rankSpacing: 30
 ---
 flowchart TD
-    out["システムオーディオ出力（ループバック / 仮想デバイス / アプリ単位）"]
-    out --> cap["capture スレッド: WASAPI、イベント駆動（通常 float32、44.1–96 kHz）"]
-    cap -->|"ロックフリーのリング（PCM）"| enc["encode スレッド: 形式変換、ダウンミックス、エンコード、メディアペイロード + RTP ヘッダー、ABR"]
-    enc -->|"ロックフリーのリング（パケット）"| stack["bt-runloop スレッド: BTstack → AVDTP → L2CAP → HCI"]
+    out["システムの音声出力<br>（ループバック / 仮想デバイス / アプリ単位）"]
+    out --> cap["capture スレッド:<br>WASAPI、イベント駆動（通常 float32、44.1–96 kHz）"]
+    cap -->|"ロックフリーのリング<br>（PCM）"| enc["encode スレッド:<br>形式変換、ダウンミックス、エンコーダー、<br>メディアペイロード + RTP ヘッダー、ABR"]
+    enc -->|"ロックフリーのリング<br>（パケット）"| stack["bt-runloop スレッド: BTstack → AVDTP → L2CAP → HCI"]
     stack --> usb["hci-transport → WinUSB → USB Bluetooth アダプター → 無線"]
     usb -.-> hp["ヘッドホン / スピーカー"]
 ```
 
 | スレッド | 優先度 | 仕事 |
-|:---------|:-------|:-----|
+|:-------|:---------|:-----|
 | capture | MMCSS "Audio" | WASAPI を読む。無音の区間は無音で埋める |
 | encode | MMCSS "Pro Audio" | エンコーダーの入力形式に変換し、エンコーダーのブロック単位でエンコードし（残りは次の回へ）、フレームをメディアペイロードに詰める。約 10 ms ずつ処理して、パケットを均等に送り出す |
-| bt-runloop | -- | BTstack のランループ。L2CAP が送れる状態になるたびに、キューのパケットを送る |
-| USB | -- | WinUSB の転送: 各 IN パイプ（イベント、ACL データ）で 3 本の読み取りを並行して待ち、コマンドと ACL データは書き込み側が送る |
-| core | 通常 | 状態機械、IPC（tokio）、設定、統計（4 Hz）、更新チェック |
+| bt-runloop | -- | BTstack のランループ。L2CAP が送れる状態になるたびに、キューのパケットを送る。送信キュー（64 パケット）は、パケットを入れるたびに、350 ms 待ったパケットを古い順に捨てる |
+| USB | -- | WinUSB の転送: 各 IN パイプ（イベント、ACL データ）で 3 本の読み取りを並行して待ち、書き込みはコマンド用と ACL データ用に 1 つずつ（同時に最大 8 本の転送） |
+| core | 通常 | 状態機械、IPC（tokio。RFCOMM パススルーの接続ごとのキュー）、設定、統計（4 Hz）、更新チェック |
 
-配信が始まった後の音声の経路では、メモリの確保もロックもしません。統計はアトミックなカウンターで、コアが 1 秒に 4 回読みます。BTstack はスレッド安全ではないので、ほかのスレッドはコマンドを送り、それを bt-runloop スレッドが実行します。
+配信が始まったあとの音声の経路では、メモリの確保もロックも行いません。統計はアトミックなカウンターで、コアが 1 秒に 4 回読み取ります。BTstack はスレッドセーフではないので、ほかのスレッドはコマンドを送り、bt-runloop スレッドがそれを実行します。
 
-## コアと IPC
+## コアと IPC {#core-and-ipc}
 
-ウィンドウとコアは、ユーザーごとの名前付きパイプ `\\.\pipe\a2dpwb-<ユーザー SID>` で通信します。パイプの DACL はそのユーザーだけに絞っています。メッセージは長さ付きの JSON フレームです。
+ウィンドウとコアは、ユーザーごとの名前付きパイプ `\\.\pipe\bluecaster-<user SID>` で通信します。パイプの DACL はそのユーザーだけを許可します。メッセージは、長さを先頭に付けた JSON フレームです。
 
-1. ウィンドウが `hello { protocol, client }` を送ります。プロトコルのバージョンが違うコアは拒否し、ウィンドウは 2 つのプログラムのバージョンが違うと表示します。
-2. コアが `snapshot`（状態全体: アダプター、デバイス、配信、プロファイル、設定、更新）とリビジョン番号を返します。
-3. 以降、コアは変化を `event` で送ります。リビジョンが飛んだら、ウィンドウはスナップショットを取り直します。
-4. 操作は `request { id, method, params }` で送り、`response { id, result | error }` で結果を受け取ります。メソッドの群は `stream.*`、`device.*`、`profile.*`、`settings.*`、`adapter.*`、`audio.*`、`diag.*`、`app.*` です。
+1. ウィンドウが `hello { protocol, client }` を送ります。プロトコルのバージョンが違う場合、コアは `reject` で応答し、ウィンドウは 2 つのプログラムのバージョンが異なることを表示します。それ以外の場合、コアは `welcome { protocol, server, features }` で応答します。`features` は、プロトコルへの追加（`rfcomm`）を示します。
+2. コアが `snapshot` を送ります。状態全体（アダプター、デバイス、ストリーム、プロファイル、設定、更新）とリビジョン番号です。
+3. 以降、コアは変化を `event` で送ります。リビジョンを取りこぼした場合、ウィンドウはスナップショットを取得し直します。
+4. 操作は `request { id, method, params }` で送り、`response { id, result | error }` が返ります。メソッドのグループは `state.*`、`stream.*`、`device.*`、`profile.*`、`settings.*`、`adapter.*`、`audio.*`、`diag.*`、`receiver.*`、`rfcomm.*`、`app.*` です。
 
-エラーは文言ではなく、コードとパラメータ（例: `adapter.driver_missing`）で返します。翻訳はウィンドウ側で行い、メッセージの横に直し方のボタンを出します。通信品質やログのような高頻度のデータは、画面が購読している間だけ送ります。
+ほかのプログラムも同じパイプを使います。詳しくは[連携（IPC）](integration)を参照してください。3.0.0 より前のバージョンでは、パイプの名前は `\\.\pipe\a2dpwb-<user SID>` でした。コアは 3.0.0 のリリース後も少なくとも 6 か月は、その名前でも待ち受けます。
+
+エラーは文章ではなく、パラメーター付きのコード（例: `adapter.driver_missing`）で返します。ウィンドウがそれを翻訳し、メッセージの横に対処方法を表示します。高頻度のデータ（通信品質、ログ）は、画面が購読している間だけ送ります。
 
 接続の状態機械:
 
@@ -176,7 +180,7 @@ stateDiagram-v2
     Idle --> Connecting: 開始
     Connecting --> Streaming: ストリーム開始
     Connecting --> Idle: 停止
-    Connecting --> Error: 初期化 / 接続 / コーデックの失敗
+    Connecting --> Error: 初期化 / 接続 /<br>コーデックの失敗
     Streaming --> Reconnecting: 接続断
     Reconnecting --> Streaming: 再接続成功
     Reconnecting --> Error: 再接続失敗
@@ -184,135 +188,186 @@ stateDiagram-v2
     Error --> Connecting: 再度開始
 ```
 
-失敗した接続は最大 3 回まで試し、切れた接続は最大 10 回まで再接続します。PC がスリープに入るときは、切れたリンクを失敗として数えずに BTstack を止め、復帰した後に再接続します。
+コアは、失敗した接続を最大 3 回試します。切れたリンクは最大 3 回、スタックの再起動後（スリープ、動かなくなったアダプター）は最大 10 回まで再接続します。PC がスリープに入るときは、切れたリンクを失敗と数えずに BTstack を停止し、PC の復帰後に再接続します。
 
 ## ドライバーの割り当て {#driver-assignment}
 
-Windows 8 以降には、Microsoft 署名済みの WinUSB ドライバー（`winusb.inf`）が標準で入っています。`a2dpwb-driver.exe` は、デバイスマネージャーの「ドライバーの更新 > 一覧から選択 > WinUsb デバイス」と同じことを SetupAPI で行います。
+Windows 8 以降には、Microsoft 署名済みの WinUSB ドライバー（`winusb.inf`）が標準で入っています。`bluecaster-driver.exe` は、デバイス マネージャーの「ドライバーの更新 > 一覧から選択 > WinUsb デバイス」と同じ操作を、SetupAPI で行います。
 
 1. デバイスインスタンス ID でアダプターを開きます。
-2. `Device Parameters` に `DeviceInterfaceGUIDs` を書き込み、WinUSB がデバイスインターフェースを登録するようにします。
-3. `%SystemRoot%\INF\winusb.inf` の "WinUsb Device" を選び、`DiInstallDevice` で割り当てます。標準の署名済みドライバーなので、証明書はインストールしません（Zadig / libwdi は生成した INF を自作の証明書で署名します）。
-4. **復元**: デバイスを削除（`DiUninstallDevice`）して再列挙すると、Windows が一番順位の高いドライバー（通常は `BthUSB` かメーカーのドライバー）を選び直します。割り当て前のドライバーは設定フォルダー（`driver\`）に記録しておき、復元後に一致しているかを確かめます。`restore --records <フォルダー>` は、記録のあるアダプターをまとめて 1 回の昇格で戻します。アンインストーラーは確認のうえでこれを使います。
+2. `Device Parameters` に `DeviceInterfaceGUIDs` の値を書き込み、WinUSB がデバイスインターフェイスを登録できるようにします。
+3. `%SystemRoot%\INF\winusb.inf` の "WinUsb Device" のモデルを選び、`DiInstallDevice` でインストールします。標準の署名済みドライバーなので、証明書はインストールしません（生成した INF を自作の証明書で署名する Zadig / libwdi とは異なります）。
+4. **復元**: デバイスを削除（`DiUninstallDevice`）して再列挙すると、Windows が最も順位の高いドライバー（通常は `BthUSB` かメーカーのドライバー）を選び直します。割り当て前のドライバーは設定フォルダー（`driver\`）に記録しておき、復元後の結果と照合します。`restore --records <folder>` は、記録のあるアダプターを 1 回の昇格でまとめて復元します。アンインストーラーは、ユーザーに確認したうえでこれを使います。
 
-コアは管理者として動きません。割り当てと復元のときだけ、UAC の確認付きでヘルパーを起動し（`ShellExecuteEx` の "runas"）、その JSON の結果を読みます。アダプターとドライバーの一覧には昇格は不要です。
+コアが管理者として動くことはありません。割り当てと復元のときは、UAC の確認付きでヘルパーを起動し（`ShellExecuteEx` の "runas"）、ヘルパーが返す JSON の結果を読みます。アダプターとそのドライバーの一覧表示には、昇格は不要です。
 
-## 主要モジュール
+```mermaid
+sequenceDiagram
+    participant Core as bluecaster-core
+    participant Drv as bluecaster-driver（昇格）
+    participant Win as Windows (SetupAPI)
+    Core->>Drv: UAC のプロンプトで起動
+    alt 割り当て
+        Drv->>Win: Device Parameters に<br>DeviceInterfaceGUIDs
+        Drv->>Win: winusb.inf<br>（WinUsb Device）をインストール
+    else 復元
+        Drv->>Win: デバイスを削除して再列挙
+        Win->>Win: 最適なドライバーを選び直す
+    end
+    Drv-->>Core: 結果（JSON）
+```
 
-### コーデックの選択（`codec::caps`）
+## 主要モジュール {#key-modules}
 
-- リモートの能力を解析: 標準の SBC と AAC の要素、ベンダーコーデック（aptX LL は両方の Vendor ID、aptX Adaptive は検出してログに記録するだけ）
-- コーデックを選択: Auto はリモートが提示する一番良いコーデックを選ぶ。リモートが提示しないコーデックを指定した場合、プロファイルで **このコーデックが使えないときは別のコーデックで接続** がオンなら Auto の選択に置き換え、オフならエラー
-- aptX 系のサンプルレートを選択（リモートが通知するレートから 44.1 / 48 kHz を選び、キャプチャのリサンプリングは WASAPI に任せる）
+### コーデックの選択（`codec::caps`） {#codec-choice-codeccaps}
 
-### Bluetooth ホスト（`bt-host`）
+- リモートの能力を解析する: 標準の SBC と AAC の要素、ベンダーコーデック（両方の Vendor ID の aptX LL と、aptX Adaptive の R1 と R2 のシンクを含む。aptX Adaptive は 48 kHz ステレオでのみ使用可能）
+- コーデックを選ぶ: 自動では、リモートが提示するコーデックのうち最も音質の高いものを選ぶ。リモートが提示しないコーデックを要求した場合は、自動で選ばれるコーデックに置き換える（プロファイルでは issue #86 以降は常に、コマンドラインでは `--fallback` のときだけ）。それ以外の場合はエラーにする。リモートが提示していないのにカードで選んだコーデック（プロファイルの `codec_forced`）は、フォールバックなしでそのまま要求する（`RemoteCaps::forcing`）。リモートの通知より多くの選択肢をカードに表示しているコーデック（`unlisted_options`）は、`RemoteCaps::unlisted` から設定する
+- `auto_codec` の設定がオンの間（**コーデック > 対応するコーデックのうち最も音質の高いものを自動で選ぶ**。schema 5 以降はすべてのデバイスで 1 つの設定）、すべての A2DP プロファイルを、自動の既定の設定を使って自動として配信する。デバイスに選んだコーデックは、設定がオフのときのためにプロファイルに残る
+- ユーザーがカードをドラッグして決めたデバイスのコーデックの順番（プロファイルの `codec_order`。`codec::AutoOrder`。空なら音質の高い順）に従って、自動の選択と、選んだコーデックのフォールバックを決める（自動選択がオンの間も）。FastStream と Opus 05 は、自動の選択にもフォールバックにもならない（2.0.2 のベータでは、すべてのデバイスに共通の順番が settings.json の `auto_order` にあったが、現在は無視する）
+- aptX 系のサンプルレートを選ぶ（リモートが通知するレートから 44.1 / 48 kHz。キャプチャのリサンプリングは WASAPI が行う）。aptX Adaptive は 48 kHz を使う。96 kHz を選び、音質が高音質で、シンクが 96 kHz を通知する R2 のシンクなら 96 kHz を使う。サンプルレートが自動のとき（自動選択がオンのときも）は 48 kHz を要求し、シンクが 48 kHz を通知していなければ、コーデックごとの選択処理が、シンクの通知するレートから最良のものを選ぶ（issue #86: シンクが通知する最高のレートでも、Windows のミックスのレートでもない）
+- プロファイルの音質を、そのコーデックが持つ音質に対応させる（`Quality::for_codec`、issue #86）: LDAC と LHDC V5 は High / Medium（`sq`）/ Low（`mq`）、LHDC V5 には Medium-High（`mhq`）もある。aptX Adaptive は High / Low Latency。ほかのコーデックはすべて High（デバイスが受け付ける最高のビットレート）。そのコーデックにもうない音質（aptX Adaptive の Standard / Mobile、AAC の下位の段階）は High として扱う
+- デバイスが提示した各コーデックが通知した内容（`KnownCodecs.caps`: サンプルレート、ビット深度、最大ビットレート。`RemoteCaps::listed_*`）を記録し、コーデックの設定ではその値だけを選べるようにする。SBC の bitpool の範囲は以前から記録している
+
+### Bluetooth ホスト（`bt-host`） {#bluetooth-host-bt-host}
 
 **責務**:
-- USB（または TCP）の HCI トランスポートで BTstack を専用スレッドで動かす
-- ストリームエンドポイントの登録: ベンダーコーデック（LDAC、aptX HD、aptX、aptX LL、LHDC V5、FastStream、Opus）と SBC（SBC XQ も使う）、AAC
-- SDP レコードの登録（A2DP Source、AVRCP Controller、AVRCP Target）
-- SSP ペアリングの管理（Just Works、General Bonding、リンクキーを永続化）
-- 接続タイムアウト後は半開きの接続を切断し、再試行できるようにする
-- 失敗した接続を再試行し（最大 3 回）、原因（応答なし、無通信のリンク、相手からの切断、認証）を区別する。デバイスが忘れたリンクキーは削除して再ペアリングする
-- デバイス検索用の GAP inquiry
+- USB（または TCP）の HCI トランスポートで、BTstack を専用スレッドで動かす
+- ストリームエンドポイントの登録: ベンダーコーデック（LDAC、aptX HD、aptX、aptX LL、LHDC V5、FastStream、Opus、Opus 05、aptX Adaptive）と SBC（SBC XQ も使う）、AAC。合わせて 11 個（BTstack の `MAX_NR_AVDTP_STREAM_ENDPOINTS`）
+- SDP レコードの登録（A2DP Source、AVRCP Controller、AVRCP Target。その設定がオンの間は、バッテリー残量のためだけに HFP Audio Gateway も）
+- SSP ペアリングの管理（Just Works、General Bonding。リンクキーを永続化）
+- 接続がタイムアウトしたら半開きの接続を切断し、再試行できるようにする
+- 失敗した接続を再試行し（最大 3 回）、原因（応答なし、無通信のリンク、相手からの切断、認証）を区別する。デバイス側にもうないリンクキーは削除して、ペアリングし直す
+- デバイス検索のための GAP inquiry
 - AVRCP の絶対音量とヘッドホンのボタン
-- AFH ホストチャネル分類と、通信品質の表示用の RSSI / AFH の読み取り
-- Realtek、Intel、Broadcom チップセットのファームウェア読み込み
-- HCI キャプチャ（`.pklg`）。接続中に始めた場合も接続時のパケットを含める
+- AFH のホストチャネル分類と、通信品質の表示のための RSSI / AFH の読み取り
+- ファームウェアの読み込み: Realtek と Broadcom は BTstack のチップセットドライバーで、Intel（レガシーと TLV のブートローダー）は共通のチップローダーのインターフェイス（`bringup`）上の Rust のコードで行う。読み込みの進捗は、アダプターの起動中にアダプター画面に表示する
+- 開発者モード: チップのプローブ（アダプターが標準の読み取りコマンドに何を答えるか。`logs\probe\` に JSON のレポート）、チップスクリプト（テキストで書いた要求を WinUSB のアダプターで実行）、接続中のデバイスが公開する SDP サービス
+- HCI キャプチャ（`.pklg`）。接続中にキャプチャを始めた場合も、接続時のやり取りを含める
 
 **使用している主な BTstack API**:
-- `a2dp_source_create_stream_endpoint()` -- コーデックエンドポイントの登録
-- `a2dp_source_establish_stream()` -- A2DP シンクへの接続
-- `a2dp_source_set_config_other()` -- ベンダー固有コーデックの設定
-- `a2dp_source_stream_send_media_payload_rtp()` -- RTP ヘッダー付きでエンコード済み音声を送信（LDAC、aptX HD、AAC、SBC、SBC XQ、LHDC V5、Opus）
-- `a2dp_source_stream_send_media_packet()` -- RTP ヘッダーなしの生メディアパケットを送信（aptX、aptX LL、FastStream）
+- `a2dp_source_create_stream_endpoint()` — コーデックのエンドポイントを登録
+- `a2dp_source_establish_stream()` — A2DP シンクに接続
+- `a2dp_source_set_config_other()` — ベンダー固有のコーデックを設定
+- `a2dp_source_stream_send_media_payload_rtp()` — エンコードした音声を RTP ヘッダー付きで送信（LDAC、aptX HD、AAC、SBC、SBC XQ、LHDC V5、Opus）
+- `a2dp_source_stream_send_media_packet()` — RTP ヘッダーなしの生のメディアパケット（aptX、aptX LL、FastStream）、または BlueCaster 自身の RTP ヘッダー付きのメディアパケット（aptX Adaptive）を送信
 
-### 音声の取り込み（`audio-capture`）
+### 音声の取り込み（`audio-capture`） {#audio-capture-audio-capture}
 
-Windows Audio Session API でオーディオをリアルタイムに取り込みます。
+Windows Audio Session API（WASAPI）で、音声をリアルタイムに取り込みます。
 - 既定の出力デバイスのシステムループバック、選んだ（仮想）デバイスのループバック、またはアプリとその子プロセスのプロセスループバック（Windows 10 build 19041 以降）
-- デバイスの共有モードのミックスフォーマット（通常 float32）で渡し、エンコーダー向けの変換は pipeline が行う
-- アプリ単位のモードでは、アプリの起動を待ち、アプリを再起動しても取り込み直す
+- デバイスの共有モードのミックスフォーマット（通常は float32）で渡す。エンコーダー向けの変換は pipeline が行う
+- アプリのモードでは、アプリの起動を待ち、アプリが再起動しても取り込みを再開する
+- Windows の音量ミキサーと同じように、既定の出力でのアプリの音量とミュートを設定する（`mixer`）。セッションの音量はループバックのキャプチャに反映される。システムループバックでの配信中に、コアがその出力をミュートしている間（`bluecaster-core::mute_output`）も同様
 
-### オーディオエンコーダー
+### ベンダーのプロトコル（`bluecaster-core::vendor`） {#vendor-protocols-bluecaster-corevendor}
 
-| エンコーダー | ライブラリ | ビットレート | 機能 |
-|:-------------|:-----------|:-------------|:-----|
-| LDAC | libldac (AOSP) | 330/660/990 kbps | HQ/SQ/MQ モード、ABR |
-| aptX HD | libopenaptx | 576 kbps | 24-bit 入力、固定レート、RTP ヘッダーあり |
-| aptX LL | libopenaptx | 352 kbps | 約 32 ms レイテンシー、RTP ヘッダーなし、パケットは約 7.5 ms 以下 |
-| aptX | libopenaptx | 352/384 kbps (44.1/48 kHz) | 16-bit ステレオ、RTP ヘッダーなし |
-| AAC | fdk-aac | 最大 256 kbps | AAC-LC、LATM トランスポート |
-| SBC | Bluedroid エンコーダーの Rust 移植 | 最大約 345 kbps | A2DP 必須ベースライン。C 版とビット単位で一致（全設定でテスト） |
-| SBC XQ | 同じ SBC エンコーダー | 約 385/505/552 kbps | デュアルチャネル、bitpool 47 / 43（44.1 / 48 kHz、High）。シンクの SBC がデュアルチャネルと 43 以上の bitpool を許すときだけ。SBC のストリームエンドポイント、メディアペイロードヘッダー、RTP ヘッダーを共用 |
-| FastStream | 同じ SBC エンコーダー | 198/216 kbps (44.1/48 kHz) | CSR のベンダーコーデック、音楽方向のみ（音声の逆方向チャネルなし）: SBC ジョイントステレオ bitpool 29、フレームを 72 バイトに詰め、1 パケット 3 フレーム、メディアペイロードヘッダーも RTP ヘッダーもなし（PipeWire と同じ）。自動では選ばれない |
-| LHDC V5 | lhdcv5-enc（AOSP エンコーダーの C 移植版） | 400/500/900/1000 kbps、ABR 160–400 kbps | 16/24 bit、5 ms フレーム、2 バイトのメディアペイロードヘッダー、RTP ヘッダーあり |
-| Opus | libopus 1.5.2 | 128/192/256 kbps（ステレオ。モノラルは半分） | 試験的。Android の A2DP Opus: 48 kHz、20 ms フレーム（シンクが 10 ms だけならそれ）、メディアペイロードに収まる上限付きの制約付き VBR、1 パケット 1 フレーム、1 バイトのメディアペイロードヘッダー、RTP ヘッダーあり |
+イヤホンによっては、純正アプリがイヤホン独自の RFCOMM サービスでモードを切り替えるまで、特定のコーデックやビットレートを提示しません。ベンダーごとのモジュールが、BlueCaster の既存のリンクを使ってこの切り替えを行います。対象のイヤホンは、イヤホンが名乗る名前で判別します。
 
-すべてのエンコーダーは `codec::Encoder` トレイトを実装しています。入力の PCM 形式と 1 回に使うフレーム数を示し、コーデックのフレームを返します。
+- **Huawei / Honor**: LDAC を通知しないイヤホンに対して、プロファイルが LDAC を要求している場合は、イヤホンを「音質優先」モードにしてから接続し直す。もともとこのモードがオフだったイヤホンは、それでも LDAC にならなければオフに戻す。自動選択のときは行わない
+- **OPPO**: LHDC V5 で配信するとき（手動で選んだときも自動のときも）、イヤホンに 1 回だけ Hi-Res を要求し、その後に通知される内容を読むために 1 回だけ接続し直す。要求した記録は、デバイスのコーデックの情報（`device_codecs.json`）と一緒に保存され、`device.forget_codecs` で消すまで残る
 
-libopenaptx は 4 ステレオサンプル単位のパック済み 24-bit リトルエンディアン PCM を入力として受け取ります。aptX のラッパーが 16-bit または 32-bit のサンプルをこの形式に変換し、モノラル入力は両チャネルに複製します。
+開発者モードの **ベンダー** タブでは、各モジュールを使う条件（名前で自動判別、常に使う、使わない）を変更でき、ベンダーごとのオプションも設定できます。
 
-## ベンダーコーデック情報要素
+### ペアリング（`link_keys`、`win-sys::bt_keys`） {#pairings-link_keys-win-sysbt_keys}
 
-非標準コーデックは AVDTP で Vendor Specific として登録:
+リンクキーは `link_keys.txt` に保存します。デバイスを追加する画面では、BlueCaster が使用中のアダプター用に Windows の Bluetooth が保持していたキーを、コアが引き継げます。`bluecaster-driver.exe windows-keys` がキーを読み取り（UAC の確認は 1 回）、コアは BlueCaster がすでに持っているキーを残したまま、その中のオーディオデバイスを Windows での名前で保存します。開発者モードでは、デバイスのリンクキーと、デバイスが公開する SDP サービスを表示します。
+
+`pairing\` の鍵のファイル（リンクキー、LE のボンディング情報、コーディネートセット、Windows から引き継いだ LE のキー、置き換えた Windows のキー）は、DPAPI で Windows のユーザーごとに暗号化します（`win-sys::dpapi`）。ほかのユーザーや、別の PC にコピーしたファイルからは読み取れません。以前のバージョンの平文のファイルは、読み込んだあと暗号化して書き直します。復号できないファイルは `<名前>.undecryptable` として残し、そのデバイスはペアリングし直す必要があります。BTstack の LE の TLV は BlueCaster 自身が保持します（`btstack-sys` の `TlvStore`。内容は `btstack_tlv_windows` が書いていたものと同じ）。復元のときに管理者権限のヘルパーが読む `keys_for_windows.json` は、平文のままです（ヘルパーが別の管理者アカウントで動くことがあるため）。ヘルパーの終了後に削除します。
+
+### オーディオエンコーダー {#audio-encoders}
+
+| エンコーダー | ライブラリ | ビットレート | 特徴 |
+|---------|---------|---------|----------|
+| LHDC V5 | lhdcv5-enc（AOSP エンコーダーの C 移植） | 400/500/900/1000 kbps（Low/Medium/Medium-High/High）、シンクが通知する最大以下、ABR 160–400 kbps | 16/24 bit、5 ms フレーム、2 バイトのメディアペイロードヘッダー、RTP ヘッダー |
+| LDAC | libldac (AOSP) | 330/660/990 kbps | High/Medium/Low（HQ/SQ/MQ）モード、ABR |
+| aptX Adaptive | aptx-adaptive（AKS-Logic/aptx-adaptive-linux の純 Rust のエンコーダー、MIT） | High 427 kbps、Low Latency 265 kbps（R2 のシンク: 270）。ABR で 364/318 に下がる（R2: 270/204） | 48 kHz ステレオ（選んだときは、96 kHz を通知する R2 のシンクへ High で 96 kHz: 646/340/255 kbps）、24 bit。メディアパケット 1 つにコーデックのパケット 1 つ、BlueCaster 自身の RTP ヘッダー付き。High で ABR。自動では LHDC V5 と LDAC の次に選ぶ |
+| Opus | libopus 1.6.1 | 256 kbps（ステレオ。モノラルは半分） | Android の A2DP Opus: 48 kHz、20 ms フレーム（シンクが 10 ms だけならそれ）、メディアペイロードに収まる上限付きの制約付き VBR、1 パケットに 1 フレーム、1 バイトのメディアペイロードヘッダー、RTP ヘッダー |
+| aptX HD | libopenaptx | 576 kbps | 24 bit 入力、固定レート、RTP ヘッダー |
+| aptX | libopenaptx | 352/384 kbps（44.1/48 kHz） | 16 bit ステレオ、RTP ヘッダーなし |
+| aptX LL | libopenaptx | 352 kbps | 約 32 ms の遅延、RTP ヘッダーなし、パケットは約 7.5 ms 以下 |
+| AAC | fdk-aac | 最大 256 kbps（シンクが通知するビットレート以下） | AAC-LC、LATM トランスポート |
+| SBC XQ | 同じ SBC エンコーダー | 約 385/505/552 kbps | デュアルチャネル、bitpool 47 / 43（44.1 / 48 kHz、High）。シンクの SBC がデュアルチャネルと 29 以上の bitpool を許すときだけ（bitpool は PipeWire と同じくシンクの最大で抑える）。SBC のストリームエンドポイント、メディアペイロードヘッダー、RTP ヘッダーを共用 |
+| SBC | Bluedroid エンコーダーの Rust 移植 | 最大約 345 kbps | A2DP の必須のベースライン。C 版とビット単位で一致（すべての設定でテスト） |
+| FastStream | 同じ SBC エンコーダー | 198/216 kbps（44.1/48 kHz） | CSR のベンダーコーデック、音楽の方向のみ（音声の戻りのチャネルなし）: SBC ジョイントステレオ bitpool 29、フレームを 72 バイトに埋め、1 パケットに 3 フレーム、メディアペイロードヘッダーも RTP ヘッダーもなし（PipeWire と同じ）。自動では選ばない |
+
+すべてのエンコーダーは `codec::Encoder` トレイトを実装しています。エンコーダーは、入力の PCM 形式と 1 回の呼び出しで使うフレーム数を示し、コーデックのフレームを返します。
+
+libopenaptx は、4 ステレオサンプル単位でパックされた 24 bit リトルエンディアン PCM を受け取ります。aptX のラッパーが 16 bit または 32 bit のサンプルをこの形式に変換し、モノラルの入力は両チャネルに複製します。
+
+## ベンダーコーデックの情報要素 {#vendor-codec-information-elements}
+
+標準以外のコーデックは、AVDTP で Vendor Specific として登録します。
 
 | コーデック | Vendor ID | Codec ID |
-|:-----------|:----------|:---------|
-| LDAC | Sony (0x0000012D) | 0x00AA |
-| aptX | APT (0x0000004F) | 0x0001 |
-| aptX HD | Qualcomm (0x000000D7) | 0x0024 |
-| aptX Low Latency | CSR (0x0000000A) または Qualcomm (0x000000D7) | 0x0002 |
-| aptX Adaptive | Qualcomm (0x000000D7) | 0x00AD（検出のみ、選択されない） |
+|-------|-----------|----------|
 | LHDC V5 | Savitech (0x0000053A) | 0x4C35 |
-| FastStream | CSR (0x0000000A) | 0x0001 |
+| LDAC | Sony (0x0000012D) | 0x00AA |
+| aptX Adaptive | Qualcomm (0x000000D7) | 0x00AD |
 | Opus | Google (0x000000E0) | 0x0001 |
+| aptX HD | Qualcomm (0x000000D7) | 0x0024 |
+| aptX | APT (0x0000004F) | 0x0001 |
+| aptX Low Latency | CSR (0x0000000A) または Qualcomm (0x000000D7) | 0x0002 |
+| FastStream | CSR (0x0000000A) | 0x0001 |
 | Opus 05 | The Linux Foundation（0x000005F1、PipeWire） | 0x1005 |
 
-AAC と SBC は A2DP 仕様で定義された標準コーデック ID を使用します。
+AAC と SBC は、A2DP の仕様で定義された標準のコーデック ID を使います。
 
 コーデック情報要素のサイズ（6 バイトの Vendor ID / Codec ID を含む）:
 
 - **aptX**: 7 バイト（バイト 6 = サンプルレート / チャネルモード）
-- **aptX HD**: 11 バイト（バイト 6 は aptX と同じ、加えて予約 4 バイト）。ステレオ必須
-- **aptX LL**: 8 バイト。シンクが拡張（"new caps"）フラグを立てている場合は 17 バイト。A2DPWB は aptX LL エンドポイントを 1 つだけ登録し、シンクが使用した Vendor ID でストリームを設定します
-- **LHDC V5**: 11 バイト（Android `a2dp_vendor_lhdcv5_constants.h`）。バイト 6 がサンプルレート（0x20 44.1k、0x10 48k、0x04 96k、0x01 192k）、バイト 7 がビット深度（0x04 16 bit、0x02 24 bit）とシンクの最小/最大ビットレート制限、バイト 8 がコーデックサブバージョン（0x01 = V5 ver.1）と 0x10 = 5 ms フレーム、バイト 9-10 がオプション機能（低遅延、ロスレス、JAS、AR、META。A2DPWB はいずれも提示しません）。ステレオのみ。シンクのビットレート制限は Android と同様に設定へそのまま返し、エンコーダーにも適用します。メディアパケットには 2 バイトのペイロードヘッダー（フレーム数 << 2、遅延ビットは 0、続いてシーケンス番号）が付きます
-- **FastStream**: 8 バイト（PipeWire `a2dp_faststream_t`）。バイト 6 が方向（0x01 シンク = 音楽、0x02 ソース = 音声）、バイト 7 の下位 4 ビットがシンク側のサンプルレート（0x2 44.1k、0x1 48k）、上位 4 ビットがソース側のサンプルレート（0x2 16k）。A2DPWB は音楽方向だけを提示し、設定します
-- **Opus**: 7 バイト（Android `a2dp_vendor_opus_constants.h`）。バイト 6 のビット 2..0 がチャネルモード（0x01 モノラル、0x02 ステレオ、0x04 デュアルモノラル）、ビット 4..3 がフレーム長（0x08 10 ms、0x10 20 ms）、ビット 7 が 48 kHz。A2DPWB はモノラルとステレオ、10 ms と 20 ms を提示し、20 ms ステレオで設定します（モノラルはモノラル入力で、シンクが対応しているときだけ）。メディアパケットには 1 バイトのペイロードヘッダー（下位 4 ビットがフレーム数 1）に続けて Opus パケットを 1 つ入れます
+- **aptX HD**: 11 バイト（バイト 6 は aptX と同じ、加えて予約の 4 バイト）。ステレオが必須
+- **aptX LL**: 8 バイト。シンクが拡張（"new caps"）フラグを立てていれば 17 バイト。BlueCaster は aptX LL のエンドポイントを 1 つだけ登録し、シンクが使った Vendor ID でストリームを設定します
+- **LHDC V5**: 11 バイト（Android `a2dp_vendor_lhdcv5_constants.h`）。バイト 6 がサンプルレート（0x20 44.1k、0x10 48k、0x04 96k、0x01 192k）、バイト 7 がビット深度（0x04 16 bit、0x02 24 bit）とシンクの最小 / 最大ビットレートの制限、バイト 8 がコーデックのサブバージョン（0x01 = V5 ver.1）と 0x10 = 5 ms フレーム、バイト 9-10 がオプションの機能（低遅延、ロスレス、JAS、AR、META。BlueCaster はどれも提示しません）。ステレオのみ。シンクのビットレートの制限は、Android と同じく設定にそのまま返し、エンコーダーにも適用します。メディアパケットには 2 バイトのペイロードヘッダー（フレーム数 << 2（遅延のビットは 0）とシーケンス番号）が付きます
+- **FastStream**: 8 バイト（PipeWire `a2dp_faststream_t`）。バイト 6 が方向（0x01 シンク = 音楽、0x02 ソース = 音声）、バイト 7 の下位 4 ビットがシンクのレート（0x2 44.1k、0x1 48k）、上位 4 ビットがソースのレート（0x2 16k）。BlueCaster は音楽の方向だけを提示し、設定します
+- **Opus**: 7 バイト（Android `a2dp_vendor_opus_constants.h`）。バイト 6 のビット 2..0 がチャネルモード（0x01 モノラル、0x02 ステレオ、0x04 デュアルモノラル）、ビット 4..3 がフレーム長（0x08 10 ms、0x10 20 ms）、ビット 7 が 48 kHz。BlueCaster はモノラルとステレオ、10 ms と 20 ms を提示し、20 ms ステレオで設定します（モノラルは、モノラルの入力をそれに対応するシンクへ送るときだけ）。メディアパケットには、1 バイトのペイロードヘッダー（下位 4 ビットがフレーム数 1）に続けて Opus のパケットを 1 つ入れます
+- **aptX Adaptive**: 40 バイト。BTstack の能力のイベントではシンクのコーデック情報が 30 バイトに切られますが、BlueCaster が使う値はすべてその中にあります。SET_CONFIGURATION: 48 kHz でソースタイプ 2（ホストのエンコーダー: 再生のタイミングはシンク自身が決める）、ステレオ。R1 のシンクにはシンク自身の目標遅延のバイトを返し、LL0 は少なくとも 80 ms に上げ、HQ の遅延が 0 なら 200 ms にします。R2 のシンクにはソース自身の R2 ブロックを送ります
 
-**RTP ヘッダーの有無**: LDAC・aptX HD・AAC・SBC・SBC XQ・LHDC V5・Opus のメディアパケットには 12 バイトの RTP ヘッダーが付きます。aptX、aptX LL、FastStream は（Android や PipeWire と同様に）RTP ヘッダー**なし**で送信するため、L2CAP MTU 全体を aptX フレームに使えます。
+**RTP ヘッダーの有無**: LDAC、aptX HD、AAC、SBC、SBC XQ、LHDC V5、Opus のメディアパケットには、12 バイトの RTP ヘッダーが付きます。aptX、aptX LL、FastStream は（Android や PipeWire と同じく）RTP ヘッダー **なし** で送るので、L2CAP MTU 全体を aptX のフレームに使えます。
 
-**aptX Adaptive** にはオープンソースのエンコーダーがない（libopenaptx も未実装）ため、A2DPWB は登録も選択もしません。シンクが通知した場合はログに記録するだけで、シンクがクラシック aptX を別途通知していればそちらを使用します。
+**aptX Adaptive** は、メディアパケット 1 つにコーデックのパケットを 1 つ入れ、BlueCaster 自身の 12 バイトの RTP ヘッダーを付けて送ります（BTstack は付けません）。ペイロードタイプ 96、シーケンス番号はパケットごとに +1、タイムスタンプはパケットのチャネルあたりのサンプル数（時刻ではありません）、SSRC はシンクの遅延モード（HQ 0x000000A3、LL 0x000000A1）です。ペイロードは 16 ビット単位でバイトを入れ替えます。HQ のパケットは 656 バイト（12 ms）、LL のパケットは 348 バイト（10 ms）です。自動選択では、クラシック aptX、Opus、AAC よりも優先し（issue #86 の順番）、LHDC V5 と LDAC の次に選びます。
 
-## 設定とファイル
+## 設定とファイル {#settings-and-files}
 
-すべて設定フォルダー `%APPDATA%\A2DPWB`（環境変数 `A2DPWB_CONFIG_DIR` で別のフォルダーも指定可）に、v1 と同じ形式で保存します。
+すべてのファイルは、設定フォルダー `%APPDATA%\BlueCaster`（または環境変数 `BLUECASTER_CONFIG_DIR` で指定したフォルダー）に保存します。v1 と 2.0.x からあるファイルは、形式を変えていません（2.0.x は `%APPDATA%\A2DPWB` を使っていました。3.0.0 は初回起動時にそのフォルダーの名前を変え、ファイルを下の表のフォルダーに振り分けます）。
 
-| ファイル | 内容 |
-|:---------|:-----|
-| `settings.json` | アプリの設定。`schema_version` 付き。知らないキーも消さずに残す |
+| パス | 内容 |
+|:-----|:---------|
+| `settings.json` | アプリの設定。`schema_version` 付き。不明なキーも削除せずに残す |
 | `profiles.json` | プロファイル |
-| `devices.txt`、`link_keys.txt` | 既知のデバイスとリンクキー。v1 でペアリングしたヘッドホンは再ペアリングなしでつながる |
-| `le_audio_devices.txt`、`le_audio_bonds.tlv`、`le_audio_csip.txt` | LE Audio（実験的）: デバイス一覧の LE Audio の項目、LE のボンディング情報（GATT サーバーが保持する CCC の値を含む）、コーディネートセット |
-| `*.bin`、`*.hcd`、`ibt-*` | ファームウェアのファイル |
-| `hci_<日付>_<時刻>.pklg` | HCI キャプチャ |
-| `logs\a2dpwb-core.<日付>.log` | コアのログ。1 日 1 ファイル（UTC）、最新の 7 つを残す |
-| `driver\` | WinUSB を割り当てた各アダプターの、元のドライバー |
-| `backup-v1\` | v2 の初回起動時に一度だけ作る、v1 の設定のコピー |
+| `devices\devices.txt` | 既知のデバイス |
+| `devices\le_audio_devices.txt` | LE Audio: デバイス一覧の LE Audio の項目 |
+| `devices\device_codecs.json` | クラシックの各デバイスが前回の接続で提示した内容（と、OPPO のイヤホンに Hi-Res を求めたかどうか） |
+| `pairing\link_keys.txt` | リンクキー。v1 や 2.0.x でペアリングしたヘッドホンは、ペアリングし直さずに再接続する |
+| `pairing\le_audio_bonds.tlv`、`pairing\le_audio_csip.txt` | LE Audio: LE のボンディング情報（GATT サーバーが保持する CCC の値を含む）とコーディネートセット |
+| `pairing\windows_le_keys.txt`、`pairing\replaced_windows_keys.json` | Windows から引き継いだ LE のキー（スタックが取り込むまで）と、**元のドライバーに戻す** で置き換えた Windows のキー |
+| `adapters\adapter_caps.json` | スタックが各アダプターについて知ったこと（LE Audio への対応、アドレス、HCI のバージョン、Windows でのアダプターの名前） |
+| `adapters\driver\<instance id>.json` | WinUSB を割り当てた各アダプターの、元のドライバー |
+| `firmware\` | ファームウェアのファイル（`*.bin`、`*.hcd`、`ibt-*`。Intel のものは linux-firmware と同じ配置で `firmware\intel\` にも）。以前のバージョンが設定フォルダーに直接置いていたファイルはここに移す |
+| `logs\<YYYY-MM-DD>\core.log`、`ui.log`、`driver.log` | コア、ウィンドウ、ドライバーのヘルパーのログ。1 日 1 フォルダー（UTC）。マスクはしない |
+| `logs\hci\*.pklg` | HCI キャプチャ: ストリームが失敗したときや接続が切れたときに書き出すフライトレコーダーのもの（最新の 10 個）と、自分で開始したもの（`hci_<date>_<time>.pklg`） |
+| `logs\probe\` | チップのプローブとチップスクリプトのレポート（最新の 10 個） |
+| `logs\crash\` | クラッシュレポート: クラッシュごとにミニダンプ（`*.dmp`）とテキストファイル（プログラムごとに最新の 5 個） |
+| `logs\bundles\*.zip` | 診断パッケージ（最新の 3 個） |
+| `backup\v1\` | v2 の初回起動時に一度だけ作る、v1 の設定のコピー |
+| `backup\v2\` | 3.0.0 の初回起動時に一度だけ作る、2.0.x の設定とペアリングのコピー |
+| `backup\profiles-before-codecs.json` | コーデック画面が 1 台のデバイスの複数のプロファイルを 1 つにまとめる前の `profiles.json`（一度だけ書き出す） |
 
-## ビルドシステム
+プログラムのフォルダーは `%LOCALAPPDATA%\BlueCaster\` で、3 つのプログラム、アンインストーラー、`licenses\`（`licenses\README.txt`、`licenses\bluecaster\LICENSE...`、`licenses\third-party\...`）が入っています。ダウンロードしたファームウェアのキャッシュは `%TEMP%\bluecaster-cache` にあります。
 
-- **Cargo** ですべてをビルドします。CMake は使いません。各 `-sys` クレートが `build.rs` で `extern/` の git サブモジュールの C ライブラリを MSVC でコンパイルします
-- ウィンドウの画面は **Vite** でビルドし（`app/src/ui` で `pnpm build`）、Tauri が `a2dpwb.exe` に埋め込みます
-- IPC プロトコルの TypeScript の型は Rust の型から生成します（`cargo test -p ipc export_bindings`）
-- 言語ファイル（`app/lang/*.json`）はウィンドウとコアのトレイメニューが使います
-- `installer/build-release.ps1` が NSIS インストーラー（Tauri のバンドラー）、ポータブル zip、更新用のマニフェストを作ります。[ビルド](building)を参照
+## ビルドシステム {#build-system}
 
-## 重要な注意事項
+- プログラムは **Cargo** でビルドし、CMake は不要です。各 `-sys` クレートが、`build.rs` で `extern/` の git サブモジュールにある C ライブラリを MSVC でコンパイルします。CMake でビルドするのは、開発者向けツールの `tools/a2dp_decode` だけです
+- ウィンドウのページは **Vite** でビルドし（`app/src/ui` で `pnpm build`）、Tauri が `bluecaster.exe` に埋め込みます
+- IPC プロトコルの TypeScript の型は、Rust の型から生成します（`cargo test -p ipc export_bindings`）
+- 言語ファイル（`app/lang/*.json`）は、ウィンドウとコアのトレイメニューの両方で使います
+- `installer/build-release.ps1` が、インストーラー（Inno Setup、`installer/BlueCaster.iss`）、ポータブル zip、更新用のマニフェストを作成します。[ビルド](building)を参照してください
 
-- **アダプター互換性**: Realtek（最も検証済み）と CSR の USB アダプター。Intel と Broadcom は試験的。Realtek アダプターは起動時にファームウェアアップロードが必要（Intel もブートローダーモードでは必要）
-- **ペアリング**: SSP Just Works（General Bonding）を使用。リンクキーはローカルファイルに永続化
-- **セカンドアダプター推奨**: Windows には内蔵 Bluetooth、A2DPWB には専用 USB アダプターを使用
-- 一部の Bluetooth アダプターのファームウェアは達成可能なビットレートを制限する場合がある
-- USB Bluetooth 5.0 以上のアダプターは LDAC に適している
-- 自動コーデック選択の優先順位: LDAC > aptX HD > aptX LL > aptX > LHDC V5 > Opus（試験的） > AAC > SBC XQ > SBC（FastStream と Opus 05 は明示的に選んだときだけ）
+## 重要な注意事項 {#important-considerations}
+
+- **アダプターの互換性**: Realtek（最も検証済み）、CSR、Intel、Broadcom、MediaTek など（[検証済みの機器](hardware)）。Realtek のアダプターは起動時にファームウェアのアップロードが必要。ブートローダーモードの Intel のアダプターも同様
+- **ペアリング**: SSP Just Works と General Bonding を使う。リンクキーはローカルのファイルに永続化するか、そのアダプターについて Windows の Bluetooth から引き継ぐ
+- **2 つ目のアダプターを推奨**: Windows には内蔵の Bluetooth を残し、BlueCaster には専用の USB アダプターを使う
+- 一部の Bluetooth アダプターは、ファームウェアによって出せるビットレートが制限される
+- Bluetooth 5.0 以上の USB アダプターは、一般に LDAC で安定して動作する
+- 自動のコーデック選択の優先順位（音質順、issue #86）: LHDC V5 > LDAC > aptX Adaptive > Opus > aptX HD > aptX > aptX LL > AAC > SBC XQ > SBC（FastStream と Opus 05 は選んだときだけ）。選んだコーデックをデバイスがもう提示しない場合は、デバイスごとの順番で、デバイスが提示する最初のコーデックにフォールバックする。デバイスが提示していないのにカードで選んだコーデックは、そのまま要求する（`codec_forced`、フォールバックなし）

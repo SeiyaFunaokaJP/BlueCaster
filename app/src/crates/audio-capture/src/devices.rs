@@ -32,11 +32,25 @@ pub struct DeviceInfo {
     pub id: String,
     /// Friendly name, e.g. "Speakers (Realtek(R) Audio)"
     pub name: String,
+    /// The endpoint's own name without the adapter's, e.g. "Speakers"
+    /// (PKEY_Device_DeviceDesc); None when Windows has none
+    pub short_name: Option<String>,
+    /// The adapter's name, e.g. "VB-Audio Hi-Fi Cable"
+    /// (PKEY_DeviceInterface_FriendlyName); None when Windows has none
+    pub adapter_name: Option<String>,
     /// The default output device (Console role)
     pub is_default: bool,
     /// Looks like a virtual device (VB-Cable, VoiceMeeter, ...): v1's
     /// heuristic, used to suggest devices for virtual device mode
     pub is_virtual: bool,
+    /// A monitor's or TV's audio (HDMI, DisplayPort)
+    pub is_display: bool,
+    /// The capture endpoint paired with a virtual device ("CABLE Output"
+    /// for a cable's "CABLE Input"), by name: where apps record what is
+    /// rendered to it. None for other devices
+    pub capture_name: Option<String>,
+    /// The sample rate Windows runs that recording side at
+    pub capture_rate: Option<u32>,
 }
 
 /// Active render endpoints, in Windows' order
@@ -52,13 +66,51 @@ pub fn render_devices() -> Result<Vec<DeviceInfo>, CaptureError> {
         let Ok(device) = device else { continue };
         let Ok(id) = device.get_id() else { continue };
         let name = device.get_friendlyname().unwrap_or_default();
+        let short_name = device.get_description().ok().filter(|s| !s.trim().is_empty());
+        let adapter_name = device.get_interface_friendlyname().ok().filter(|s| !s.trim().is_empty());
         let hints = audio_policy::endpoint_hints(&id).unwrap_or_default();
         out.push(DeviceInfo {
             is_default: default_id.as_deref() == Some(id.as_str()),
             is_virtual: is_virtual_device(&name, &hints),
+            is_display: hints.form_factor == Some(DISPLAY_FORM_FACTOR),
             id,
             name,
+            short_name,
+            adapter_name,
+            capture_name: None,
+            capture_rate: None,
         });
+    }
+    let ids: Vec<String> = out.iter().map(|d| d.id.clone()).collect();
+    match audio_policy::paired_capture_sides(&ids) {
+        // Only a virtual device's recording side is what is rendered to it:
+        // a headset's or a sound card's is its own microphone, line in or
+        // stereo mix (issue #86: a headset listed as "Microphone (...)")
+        Ok(sides) => out.iter_mut().zip(sides).filter(|(d, _)| d.is_virtual).for_each(|(d, side)| {
+            let side = side.unwrap_or_default();
+            d.capture_name = side.name;
+            d.capture_rate = side.rate;
+        }),
+        Err(e) => tracing::debug!("audio devices: capture sides not read: HRESULT 0x{:08x}", e.code().0 as u32),
+    }
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        tracing::debug!("audio devices: {} active render endpoints, default {default_id:?}", out.len());
+        for d in &out {
+            tracing::debug!(
+                "audio devices: \"{}\" id {}{}{}{}",
+                d.name,
+                d.id,
+                if d.is_default { " (default)" } else { "" },
+                if d.is_virtual {
+                    " (virtual)"
+                } else if d.is_display {
+                    " (display)"
+                } else {
+                    ""
+                },
+                d.capture_name.as_deref().map(|c| format!(" (records as \"{c}\")")).unwrap_or_default()
+            );
+        }
     }
     Ok(out)
 }
@@ -77,13 +129,86 @@ pub fn set_default_render_device(id: &str) -> Result<(), CaptureError> {
         return Err(CaptureError::DeviceNotFound(String::new()));
     }
     let _com = com()?;
+    tracing::debug!("audio devices: setting default render endpoint to {id}");
     audio_policy::set_default_endpoint(id).map_err(|e| {
+        tracing::debug!("audio devices: SetDefaultEndpoint({id}) failed: HRESULT 0x{:08x}", e.code().0 as u32);
         if not_found(e.code().0) {
             CaptureError::DeviceNotFound(id.to_owned())
         } else {
             CaptureError::windows("SetDefaultEndpoint", e.code().0, e.message())
         }
     })
+}
+
+/// ID of the default capture device for `role`, if there is one
+pub fn default_capture_device(role: audio_policy::EndpointRole) -> Option<String> {
+    let _com = com().ok()?;
+    audio_policy::default_capture_endpoint(role).ok().flatten()
+}
+
+/// The capture endpoint paired with the render endpoint `id` ("CABLE
+/// Output" for "CABLE Input"), if there is one
+pub fn paired_capture_device(id: &str) -> Option<String> {
+    let _com = com().ok()?;
+    audio_policy::paired_capture_endpoint(id)
+        .inspect_err(|e| {
+            tracing::debug!("audio devices: capture side of {id} not read: HRESULT 0x{:08x}", e.code().0 as u32)
+        })
+        .ok()
+        .flatten()
+}
+
+/// Make the capture endpoint `id` the default input device for `role`.
+/// Changes the user's system setting: the caller restores the previous
+/// default.
+pub fn set_default_capture_device(id: &str, role: audio_policy::EndpointRole) -> Result<(), CaptureError> {
+    if id.is_empty() {
+        return Err(CaptureError::DeviceNotFound(String::new()));
+    }
+    let _com = com()?;
+    audio_policy::set_default_capture_endpoint(id, role).map_err(|e| {
+        if not_found(e.code().0) {
+            CaptureError::DeviceNotFound(id.to_owned())
+        } else {
+            CaptureError::windows("SetDefaultEndpoint", e.code().0, e.message())
+        }
+    })
+}
+
+/// Whether an application records from the capture side paired with the
+/// render endpoint `id` (a virtual cable's "CABLE Output" for "CABLE
+/// Input"; [`audio_policy::capture_sessions_active`]): an audio session on
+/// it is active. `Ok(None)`: no capture endpoint pairs with it (same
+/// container, else same adapter name).
+pub fn mic_capture_active(id: &str) -> Result<Option<bool>, CaptureError> {
+    let _com = com()?;
+    audio_policy::capture_sessions_active(id).map_err(|e| {
+        if not_found(e.code().0) {
+            CaptureError::DeviceNotFound(id.to_owned())
+        } else {
+            CaptureError::windows("capture sessions", e.code().0, e.message())
+        }
+    })
+}
+
+/// Who records from the capture side paired with the render endpoint `id`
+/// ([`mic_capture_active`]), for the log: "app.exe from “CABLE Output”"
+/// (the executable's file name, not its path); empty when nobody does or
+/// it cannot be read
+pub fn mic_recorders(id: &str) -> Vec<String> {
+    let Ok(_com) = com() else { return Vec::new() };
+    let mut out: Vec<String> = audio_policy::capture_session_recorders(id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(pid, endpoint)| {
+            let exe = win_sys::process::image_path(pid)
+                .map(|p| p.rsplit(['\\', '/']).next().unwrap_or_default().to_owned())
+                .unwrap_or_else(|| format!("process {pid}"));
+            format!("{exe} from “{endpoint}”")
+        })
+        .collect();
+    out.dedup();
+    out
 }
 
 /// Shared-mode mix rate of a render device (None = the default one), for
@@ -98,6 +223,7 @@ pub fn mix_rate(device_id: Option<&str>) -> Option<u32> {
     };
     let client = device.get_iaudioclient().ok()?;
     let mix = client.get_mixformat().ok()?;
+    tracing::debug!("audio devices: mix rate of {device_id:?}: {} Hz", mix.get_samplespersec());
     Some(mix.get_samplespersec())
 }
 
@@ -128,11 +254,17 @@ pub fn mix_format(device_id: Option<&str>) -> Option<MixFormat> {
     let mix = client.get_mixformat().ok()?;
     let bits =
         device.get_device_format().ok().map_or(0, |f| valid_bits(f.get_validbitspersample(), f.get_bitspersample()));
-    Some(MixFormat {
+    let format = MixFormat {
         rate: mix.get_samplespersec(),
         channels: mix.get_nchannels(),
         bits: if bits > 0 { bits } else { valid_bits(mix.get_validbitspersample(), mix.get_bitspersample()) },
-    })
+    };
+    tracing::debug!(
+        "audio devices: format of {device_id:?}: {format:?} (device format {} bit, mix {} bit)",
+        bits,
+        mix.get_bitspersample()
+    );
+    Some(format)
 }
 
 /// wValidBitsPerSample, which a plain WAVEFORMATEX leaves at 0 (its
@@ -140,6 +272,9 @@ pub fn mix_format(device_id: Option<&str>) -> Option<MixFormat> {
 fn valid_bits(valid: u16, container: u16) -> u16 {
     if valid > 0 && valid <= container { valid } else { container }
 }
+
+/// EndpointFormFactor::DigitalAudioDisplayDevice
+const DISPLAY_FORM_FACTOR: u32 = 9;
 
 /// v1 AudioDeviceEnumerator::is_virtual_device: name patterns first, then
 /// the endpoint's form factor and container ID
@@ -231,6 +366,11 @@ mod tests {
         form_factor: Some(1), // Speakers
         container_id: Some(0x1234_5678_9abc_def0_1234_5678_9abc_def0),
     };
+
+    #[test]
+    fn an_unknown_output_has_no_capture_side() {
+        assert!(matches!(mic_capture_active("{0.0.0.00000000}.{not-a-device}"), Err(CaptureError::DeviceNotFound(_))));
+    }
 
     #[test]
     fn virtual_by_name() {

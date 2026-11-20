@@ -75,9 +75,57 @@ pub fn append_i32(raw: &[u8], t: SampleType, in_ch: usize, out_ch: usize, out: &
     }
 }
 
+/// `raw` (interleaved, `in_ch` channels of `t`) as float with `out_ch`
+/// channels, the channels picked as [`append_i16`] does, into `out` (one
+/// value per sample sent; frames beyond its length are left out). For the
+/// playback EQ, which works on float.
+pub fn to_f32(raw: &[u8], t: SampleType, in_ch: usize, out_ch: usize, out: &mut [f32]) {
+    let frames = (raw.len() / (in_ch * t.bytes())).min(out.len() / out_ch);
+    let use_ch = out_ch.min(in_ch);
+    for f in 0..frames {
+        for c in 0..out_ch {
+            let i = f * in_ch + c.min(use_ch - 1);
+            let s = sample(raw, i, t);
+            out[f * out_ch + c] = match t {
+                SampleType::F32 => f32::from_le_bytes(s),
+                SampleType::I16 => f32::from(i16::from_le_bytes([s[0], s[1]])) / 32768.0,
+                SampleType::I32 => (f64::from(i32::from_le_bytes(s)) / 2_147_483_648.0) as f32,
+            };
+        }
+    }
+}
+
+/// Float samples appended as 16-bit, as float input is (clamped, truncated)
+pub fn append_f32_as_i16(src: &[f32], out: &mut Vec<i16>) {
+    out.extend(src.iter().map(|&s| f32_to_i16(s)));
+}
+
+/// Float samples appended as 32-bit MSB-aligned, as float input is
+pub fn append_f32_as_i32(src: &[f32], out: &mut Vec<i32>) {
+    out.extend(src.iter().map(|&s| f32_to_i32(s)));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn float_path_matches_the_direct_one_for_float_input() {
+        let v = [0.5f32, -0.25, 1.5, -0.001, 0.75, 0.1];
+        let raw = f32_bytes(&v);
+        let mut direct = Vec::with_capacity(6);
+        append_i16(&raw, SampleType::F32, 2, 2, &mut direct);
+        let mut f = [0.0f32; 6];
+        to_f32(&raw, SampleType::F32, 2, 2, &mut f);
+        let mut via = Vec::with_capacity(6);
+        append_f32_as_i16(&f, &mut via);
+        assert_eq!(direct, via);
+        // Mono doubled, and integers scaled to [-1, 1)
+        let mono: Vec<u8> = [16384i16, -32768].iter().flat_map(|s| s.to_le_bytes()).collect();
+        let mut f = [0.0f32; 4];
+        to_f32(&mono, SampleType::I16, 1, 2, &mut f);
+        assert_eq!(f, [0.5, 0.5, -1.0, -1.0]);
+    }
 
     fn f32_bytes(v: &[f32]) -> Vec<u8> {
         v.iter().flat_map(|s| s.to_le_bytes()).collect()

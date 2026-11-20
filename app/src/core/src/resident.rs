@@ -8,9 +8,11 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use a2dpwb_core::{Service, ServiceOptions};
+use bluecaster_core::{Service, ServiceOptions};
 use bt_host::HciCapture;
-use ipc::{AclPacket, Event, IsoCounters, LinkCounters, LinkSample, LinkTotals};
+use ipc::{AclPacket, EncodeLoad, Event, IsoCounters, LinkCounters, LinkSample, LinkTotals, VoiceRxCounters};
+
+use crate::state::{link_details, remote_chip};
 use tao::event::{Event as TaoEvent, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
@@ -26,39 +28,40 @@ enum UserEvent {
     Tray(TrayView),
     Menu(String),
     Click,
+    QuickSettingsOpened,
     Balloon(BalloonRequest),
     Quit,
 }
 
-/// Starts the UI (a2dpwb.exe next to us), optionally its flyout
-fn launch_ui(flyout: bool) {
+/// Starts the UI (bluecaster.exe next to us), `arg` saying what it opens; a
+/// running UI gets it instead
+fn launch_ui(arg: Option<&str>) {
     let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) else { return };
-    let ui = dir.join("a2dpwb.exe");
+    let ui = dir.join("bluecaster.exe");
     if !ui.exists() {
         tracing::warn!("UI not found: {}", ui.display());
         return;
     }
     let mut cmd = std::process::Command::new(ui);
-    if flyout {
-        cmd.arg("--flyout");
-    }
+    cmd.args(arg);
     if let Err(e) = cmd.spawn() {
         tracing::warn!("cannot start the UI: {e}");
     }
 }
 
 fn tr(lang: &str, key: &str, default: &str) -> String {
-    a2dpwb_core::messages::translate(lang, key, default)
+    bluecaster_core::messages::translate(lang, key, default)
 }
 
 fn build_menu(view: &TrayView) -> Menu {
     let lang = view.language.as_str();
     let menu = Menu::new();
-    let _ = menu.append(&MenuItem::with_id("open", tr(lang, "tray.open", "Open A2DPWB"), true, None));
+    let _ = menu.append(&MenuItem::with_id("open", tr(lang, "tray.open", "Open BlueCaster"), true, None));
     let _ = menu.append(&PredefinedMenuItem::separator());
-    for (i, name) in view.profiles.iter().take(TRAY_PROFILES).enumerate() {
+    // Each by its device (issue #86: profile names are not shown)
+    for (i, (name, label)) in view.profiles.iter().zip(&view.labels).take(TRAY_PROFILES).enumerate() {
         let active = view.streaming && view.active_profile.as_deref() == Some(name.as_str());
-        let _ = menu.append(&CheckMenuItem::with_id(format!("profile:{i}"), name, true, active, None));
+        let _ = menu.append(&CheckMenuItem::with_id(format!("profile:{i}"), label, true, active, None));
     }
     if !view.profiles.is_empty() {
         let _ = menu.append(&PredefinedMenuItem::separator());
@@ -89,50 +92,146 @@ fn iso_counters(cis: u32, s: &bt_host::LeStreamStats) -> IsoCounters {
     }
 }
 
-/// A link sample from the counters now and those of the last sample; `iso`:
-/// an LE Audio stream's counters (the A2DP media figures are then 0 / None)
+/// The counters a link sample works with (those of the last one)
+#[derive(Debug, Clone, Copy)]
+struct SampleCounters {
+    at: Instant,
+    totals: LinkTotals,
+    /// LinkStats::acl_packets_sent
+    acl_packets: u64,
+    encode: bt_host::EncodeTotals,
+    /// An LE Audio stream's bytes and SDUs sent
+    le_sent: Option<(u64, u64)>,
+}
+
+/// An LE Audio stream on `cis` CIS and its sender's counters
+type LeSending = (u32, bt_host::LeStreamStats);
+
+/// The encoder's time between two samples; None when nothing was encoded
+fn encode_load(prev: &bt_host::EncodeTotals, now: &bt_host::EncodeTotals, peak_ns: u64) -> Option<Box<EncodeLoad>> {
+    let calls = now.calls.saturating_sub(prev.calls);
+    let busy = now.busy_ns.saturating_sub(prev.busy_ns) as f64;
+    let audio = now.audio_ns.saturating_sub(prev.audio_ns);
+    (calls > 0 && audio > 0).then(|| {
+        Box::new(EncodeLoad {
+            load: busy / audio as f64,
+            avg_us: busy / calls as f64 / 1000.0,
+            max_us: peak_ns as f64 / 1000.0,
+        })
+    })
+}
+
+impl SampleCounters {
+    fn now(stats: &bt_host::LinkStats, le: Option<&LeSending>, at: Instant) -> SampleCounters {
+        SampleCounters {
+            at,
+            totals: crate::state::link_totals(stats).0,
+            acl_packets: stats.acl_packets_sent.load(Ordering::Relaxed),
+            encode: stats.encode.totals(),
+            le_sent: le.map(|(_, s)| (s.bytes_sent, s.sdus_sent)),
+        }
+    }
+}
+
+/// A link sample from the counters now and those of the last sample; `le`:
+/// an LE Audio stream's counters (the rates are its SDUs', drops its sets
+/// dropped and send errors, the A2DP media figures 0 / None);
+/// `voice`: A2DP suspended for a classic device's call link: the media
+/// figures are its SCO payloads, and what only an ACL stream has (airtime,
+/// the send queue, the adapter's backlog, the A2DP encoder, the device's
+/// delay) is None
 fn link_sample(
     time_ms: u64,
     stats: &bt_host::LinkStats,
-    last: Option<(Instant, LinkTotals)>,
+    last: Option<SampleCounters>,
     now: Instant,
     source_rate: u32,
-    iso: Option<IsoCounters>,
-) -> (LinkSample, LinkTotals) {
+    le: Option<LeSending>,
+    voice: bool,
+) -> (LinkSample, SampleCounters) {
+    let iso = le.as_ref().map(|(cis, s)| iso_counters(*cis, s));
+    let le_sent = le.as_ref().map(|(_, s)| (s.bytes_sent, s.sdus_sent));
     let (total, start, starts) = crate::state::link_totals(stats);
-    let (bps, pps) = match last {
-        Some((t, prev)) => {
-            let dt = now.duration_since(t).as_secs_f64().max(0.001);
-            let d = total.since(&prev);
-            (d.bytes as f64 / dt, d.packets as f64 / dt)
+    let acl_packets = stats.acl_packets_sent.load(Ordering::Relaxed);
+    let encode_totals = stats.encode.totals();
+    let encode_peak = stats.encode.peak_ns.take();
+    let encode = last.and_then(|prev| encode_load(&prev.encode, &encode_totals, encode_peak)).filter(|_| !voice);
+    let (bps, pps, acl_ps) = match last {
+        Some(prev) => {
+            let dt = now.duration_since(prev.at).as_secs_f64().max(0.001);
+            let d = total.since(&prev.totals);
+            let acl = acl_packets.saturating_sub(prev.acl_packets);
+            (d.bytes as f64 / dt, d.packets as f64 / dt, acl as f64 / dt)
         }
-        None => (0.0, 0.0),
+        None => (0.0, 0.0, 0.0),
     };
-    let (bps, pps) = if iso.is_some() { (0.0, 0.0) } else { (bps, pps) };
-    let air = a2dpwb_core::link::airtime(pps, bps);
-    let since = total.since(&start);
+    let link = stats.link();
+    // The ACL airtime only for ACL packets
+    let air =
+        bluecaster_core::link::airtime_on(pps, bps, link.remote_features.as_ref()).filter(|_| !voice && iso.is_none());
+    // LE Audio: what its sender handed the adapter (issue #86: Link
+    // Quality showed nothing while LE Audio streamed)
+    let (bps, pps) = match (le_sent, last.and_then(|p| p.le_sent.map(|s| (p.at, s)))) {
+        (Some((bytes, sdus)), Some((at, (prev_bytes, prev_sdus)))) => {
+            let dt = now.duration_since(at).as_secs_f64().max(0.001);
+            (bytes.saturating_sub(prev_bytes) as f64 / dt, sdus.saturating_sub(prev_sdus) as f64 / dt)
+        }
+        (Some(_), None) => (0.0, 0.0),
+        (None, _) => (bps, pps),
+    };
+    let mut since = total.since(&start);
+    if let Some((_, s)) = &le {
+        since.dropped = s.overflows + s.send_errors;
+    }
     let radio = stats.radio();
+    // The most the controller held since the last sample: while an A2DP
+    // stream sends
+    let backlog = stats.controller_backlog_peak.take();
+    let a2dp = iso.is_none() && source_rate > 0 && !voice;
     let sample = LinkSample {
         time_ms,
         rssi: radio.rssi,
         afh_in_use: radio.afh_in_use,
         afh_usable: radio.afh_usable,
         afh_avoided: radio.afh_avoided,
+        afh_map: radio.afh_map.map(|m| m.to_vec()),
         bytes_per_second: bps,
         packets_per_second: pps,
-        queue_depth: if iso.is_some() { 0 } else { stats.queue_depth.load(Ordering::Relaxed) },
+        queue_depth: if iso.is_some() || voice { 0 } else { stats.queue_depth.load(Ordering::Relaxed) },
         dropped: since.dropped,
         capture_dropped: since.capture_dropped,
         airtime: air.map_or(0.0, |a| a.airtime),
         avg_packet_bytes: air.map(|a| a.avg_packet_bytes),
-        acl_packet: air.map(|a| AclPacket { name: a.packet.into(), slots: a.slots }),
+        acl_packet: air.map(|a| AclPacket {
+            name: a.packet.into(),
+            slots: a.slots,
+            from_features: Some(a.from_features),
+        }),
         bandwidth_share: air.map(|a| a.bandwidth_share),
-        queue_capacity: iso.is_none().then_some(bt_host::stats::MEDIA_QUEUE_PACKETS as u32),
+        queue_capacity: (iso.is_none() && !voice).then_some(bt_host::stats::MEDIA_QUEUE_PACKETS as u32),
+        // With the audio held back unencoded (developer mode), which waits
+        // for the radio as well
+        queue_ms: (iso.is_none() && !voice)
+            .then(|| stats.queue_wait_ms.load(Ordering::Relaxed) + stats.held_ms.load(Ordering::Relaxed)),
+        encode,
+        sink_delay_ms: if iso.is_some() || voice { None } else { stats.sink_delay().map(|d| d.as_secs_f64() * 1000.0) },
         source_rate: Some(source_rate),
         counters: Some(LinkCounters { total, stream_start: start, stream_starts: starts }),
         iso,
+        controller_backlog: a2dp.then_some(backlog as u32),
+        controller_backlog_ms: a2dp.then(|| bluecaster_core::link::backlog_ms(backlog, acl_ps)).flatten(),
+        remote_chip: remote_chip(&link).map(Box::new),
+        link_details: link_details(&link).map(Box::new),
+        capture_discontinuities: Some(since.capture_discontinuities),
+        capture_lost: Some(since.capture_lost),
+        voice: voice.then_some(true),
+        voice_rx: voice.then(|| VoiceRxCounters {
+            packets: stats.voice_rx_packets.load(Ordering::Relaxed),
+            bad: stats.voice_rx_bad.load(Ordering::Relaxed),
+            concealed: stats.voice_rx_concealed.load(Ordering::Relaxed),
+        }),
     };
-    (sample, total)
+    (sample, SampleCounters { at: now, totals: total, acl_packets, encode: encode_totals, le_sent })
 }
 
 /// Link samples while a UI subscribes; every second the stream's rates (the
@@ -141,7 +240,7 @@ fn link_sample(
 async fn sampler(state: Arc<CoreState>) {
     let stats = state.service.stats();
     let mut tick = tokio::time::interval(SAMPLE);
-    let mut last_link: Option<(Instant, LinkTotals)> = None;
+    let mut last_link: Option<SampleCounters> = None;
     let mut last_rates: Option<(Instant, LinkTotals)> = None;
     let mut n: u64 = 0;
     loop {
@@ -149,34 +248,63 @@ async fn sampler(state: Arc<CoreState>) {
         n += 1;
         let now = Instant::now();
         if n.is_multiple_of(RATE_TICKS) {
-            let (total, _, _) = crate::state::link_totals(&stats);
+            let (mut total, _, _) = crate::state::link_totals(&stats);
+            // LE Audio: its sender's SDUs, not the A2DP counters (they stood
+            // still, and the flow's Audio step warned "no packets sent")
+            let le = state.with_snapshot(|s| s.stream.info.as_ref().is_some_and(|i| i.le.is_some()));
+            if let Some(h) = state.service.host().filter(|_| le) {
+                let s = h.le_stream_stats();
+                total.packets = s.sdus_sent;
+                total.bytes = s.bytes_sent;
+            }
             if let Some((t, prev)) = last_rates {
                 let d = total.since(&prev);
                 let secs = now.duration_since(t).as_secs_f64();
-                state.set_rates(Some(a2dpwb_core::link::audio_rates(d.packets, d.bytes, d.capture_frames, secs)));
+                state.set_rates(Some(bluecaster_core::link::audio_rates(d.packets, d.bytes, d.capture_frames, secs)));
             }
             last_rates = Some((now, total));
             state.publish_receiver();
         }
         if n.is_multiple_of(CAPTURE_TICKS) {
             state.refresh_capture();
+            state.expire_verbose();
         }
+        // ABR: the bit rate and SBC bitpool as they move
+        state.apply_live_codec(stats.live_codec());
+        // The bit rate lowered while the link is slow after a voice link
+        let slow = stats.slow_link.load(std::sync::atomic::Ordering::Acquire);
+        state.apply_slow_link(stats.live_codec().filter(|_| slow).map(|l| l.bitrate_kbps));
         if !state.link_subscribed() {
             last_link = None;
             continue;
         }
-        let (source_rate, le_cis) = state.with_snapshot(|s| match (&s.stream.state, &s.stream.info) {
-            (ipc::StreamState::Streaming, Some(i)) => (i.source_sample_rate, i.le.as_ref().map(|l| l.cis)),
-            _ => (0, None),
+        let (source_rate, le_cis, voice) = state.with_snapshot(|s| match (&s.stream.state, &s.stream.info) {
+            (ipc::StreamState::Streaming, Some(i)) => {
+                let call = s.stream.voice.as_ref().filter(|v| v.link == "hfp");
+                // The uplink captures at the call link's rate
+                (call.map_or(i.source_sample_rate, |v| v.rate), i.le.as_ref().map(|l| l.cis), call.is_some())
+            }
+            _ => (0, None, false),
         });
         // LE Audio (experimental): the sender's counters
-        let iso = le_cis.and_then(|cis| state.service.host().map(|h| iso_counters(cis, &h.le_stream_stats())));
+        let le = le_cis.and_then(|cis| state.service.host().map(|h| (cis, h.le_stream_stats())));
+        // A new subscription: no rate without the last counters, and a 0 would
+        // show as a dip in the charts
+        if last_link.is_none() {
+            last_link = Some(SampleCounters::now(&stats, le.as_ref(), now));
+            // The backlog peak from before the subscription
+            stats.controller_backlog_peak.take();
+            continue;
+        }
         let time_ms = state.started.elapsed().as_millis() as u64;
-        let (sample, total) = link_sample(time_ms, &stats, last_link, now, source_rate, iso);
-        last_link = Some((now, total));
+        let (sample, counters) = link_sample(time_ms, &stats, last_link, now, source_rate, le, voice);
+        last_link = Some(counters);
         state.publish(Event::Link(sample));
     }
 }
+
+/// Quiet time after a change to Windows' audio devices before they are read
+const AUDIO_ENDPOINTS_SETTLE: Duration = Duration::from_millis(500);
 
 /// How often the core looks whether v1 runs
 const V1_CHECK: Duration = Duration::from_secs(3);
@@ -211,6 +339,44 @@ fn replace_v1() -> Option<win_sys::single_instance::SingleInstance> {
     }
 }
 
+/// How long the start waits for a 2.0.x core to exit when asked (it stops
+/// its stream and releases the adapter first)
+const OLD_CORE_EXIT_WAIT: Duration = Duration::from_secs(8);
+
+/// How often the core tries to take the 2.0.x core's mutex while it could
+/// not (the old core did not exit when asked)
+const OLD_CORE_CHECK: Duration = Duration::from_secs(5);
+
+/// A 2.0.x core (A2DPWB) that runs is asked to exit, like `--quit` does,
+/// and waited for; then its mutex is held too, so that a 2.0.x core started
+/// later (an old shortcut) quits at once and its UI talks to this core over
+/// the old pipe name. None if it still runs: [`hold_old_core_mutex`] takes
+/// the mutex once it has exited.
+fn replace_old_core() -> Option<win_sys::single_instance::SingleInstance> {
+    crate::quit::stop_old_core(OLD_CORE_EXIT_WAIT);
+    match win_sys::single_instance::SingleInstance::acquire(&ipc::old_core_mutex_name()) {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::warn!("2.0.x core mutex: {e}");
+            None
+        }
+    }
+}
+
+/// Takes the 2.0.x core's mutex once it is free and holds it from then on
+async fn hold_old_core_mutex() {
+    let name = ipc::old_core_mutex_name();
+    let mut tick = tokio::time::interval(OLD_CORE_CHECK);
+    loop {
+        tick.tick().await;
+        if let Ok(Some(guard)) = win_sys::single_instance::SingleInstance::acquire(&name) {
+            tracing::info!("the 2.0.x core has exited: {name} is held now");
+            std::future::pending::<()>().await;
+            drop(guard);
+        }
+    }
+}
+
 /// While v1 still runs (it did not exit when asked): the UI asks the user to
 /// exit it. Once it has exited, v1's mutex is taken and held from then on.
 async fn watch_v1(state: Arc<CoreState>) {
@@ -225,6 +391,37 @@ async fn watch_v1(state: Arc<CoreState>) {
             drop(guard);
         }
         state.set_v1_running(true);
+    }
+}
+
+/// Windows' audio devices: the cables there at start, then every change
+/// (a cable installed by its own setup, outside BlueCaster), a burst of
+/// them (one install adds several devices) taken as one
+fn watch_audio_endpoints(state: &Arc<CoreState>) {
+    if let Ok(devices) = audio_capture::render_devices() {
+        state.watch_cables(&devices);
+    }
+    let _com = match win_sys::audio_policy::ComApartment::init_mta() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("audio endpoints: COM: HRESULT 0x{:08x}", e.code().0 as u32);
+            return;
+        }
+    };
+    let (tx, rx) = mpsc::channel::<()>();
+    let _watch = match win_sys::audio_notify::EndpointWatch::new(move || {
+        let _ = tx.send(());
+    }) {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::warn!("audio endpoints: not watched: HRESULT 0x{:08x}", e.code().0 as u32);
+            return;
+        }
+    };
+    while rx.recv().is_ok() {
+        while rx.recv_timeout(AUDIO_ENDPOINTS_SETTLE).is_ok() {}
+        tracing::debug!("audio endpoints changed");
+        state.audio_endpoints_changed();
     }
 }
 
@@ -245,7 +442,7 @@ pub fn run(args: &[String]) -> i32 {
             // Already running: a start from the shortcut opens the UI
             tracing::info!("the core runs already");
             if !background {
-                launch_ui(false);
+                launch_ui(None);
             }
             return 0;
         }
@@ -254,8 +451,12 @@ pub fn run(args: &[String]) -> i32 {
             return 1;
         }
     };
+    // Before the service starts, so that a 2.0.x core has released the
+    // adapter
+    let old_core_guard = replace_old_core();
+    let holds_old_core_mutex = old_core_guard.is_some();
     // Before the service starts, so that v1 has released the adapter. A
-    // development instance (A2DPWB_INSTANCE) leaves v1 alone.
+    // development instance (BLUECASTER_INSTANCE) leaves v1 alone.
     let replaces_v1 = ipc::instance_suffix().is_empty();
     let v1_guard = if replaces_v1 { replace_v1() } else { None };
     let watches_v1 = replaces_v1 && v1_guard.is_none();
@@ -264,14 +465,20 @@ pub fn run(args: &[String]) -> i32 {
 
     let (tx, rx) = mpsc::channel();
     let capture = HciCapture::new();
+    // Now that the 2.0.x core and v1 have been stopped: moves their folder
+    // if the first call (main, before the log) had to leave it. This
+    // process holds their mutexes itself now, which the check would take
+    // for the old program; while one of them still runs the folder waits
+    // for the next start.
+    if holds_old_core_mutex && !watches_v1 {
+        bluecaster_core::paths::old_apps_stopped();
+    }
+    let config_dir = bluecaster_core::paths::config_dir();
+    if let Some(note) = bluecaster_core::paths::take_folder_note() {
+        tracing::info!("{note}");
+    }
     let service = Arc::new(Service::new(
-        ServiceOptions {
-            config_dir: a2dpwb_core::paths::config_dir(),
-            hci_tcp: None,
-            capture,
-            afh: None,
-            usb: Default::default(),
-        },
+        ServiceOptions { config_dir, hci_tcp: None, capture, afh: None, usb: Default::default() },
         tx,
     ));
     let state = {
@@ -291,6 +498,13 @@ pub fn run(args: &[String]) -> i32 {
     };
     // A missing Run value, v1's, or one naming a copy of the core that is gone
     state.refresh_autostart(replaces_v1);
+    {
+        let state = state.clone();
+        std::thread::Builder::new()
+            .name("audio-endpoints".into())
+            .spawn(move || watch_audio_endpoints(&state))
+            .expect("spawning the audio endpoint thread");
+    }
     {
         let state = state.clone();
         std::thread::Builder::new()
@@ -320,14 +534,17 @@ pub fn run(args: &[String]) -> i32 {
                     if watches_v1 {
                         tokio::spawn(watch_v1(state.clone()));
                     }
-                    let name = match win_sys::pipe::current_user_sid() {
-                        Ok(sid) => ipc::pipe_name(&sid),
+                    if !holds_old_core_mutex {
+                        tokio::spawn(hold_old_core_mutex());
+                    }
+                    let (name, old_name) = match win_sys::pipe::current_user_sid() {
+                        Ok(sid) => (ipc::pipe_name(&sid), ipc::old_pipe_name(&sid)),
                         Err(e) => {
                             tracing::error!("cannot read the user SID: {e}");
                             return;
                         }
                     };
-                    if let Err(e) = crate::server::serve(state, name).await {
+                    if let Err(e) = crate::server::serve(state, name, old_name).await {
                         tracing::error!("IPC server: {e}");
                         let _ = quit.send_event(UserEvent::Quit);
                     }
@@ -349,7 +566,7 @@ pub fn run(args: &[String]) -> i32 {
     }
     state.check_update_if_due();
     if !background {
-        launch_ui(false);
+        launch_ui(None);
     }
 
     let mut tray: Option<TrayIcon> = None;
@@ -362,12 +579,17 @@ pub fn run(args: &[String]) -> i32 {
             TaoEvent::NewEvents(StartCause::Init) => {
                 let v = view.clone().unwrap_or(TrayView {
                     streaming: false,
-                    tooltip: "A2DPWB".into(),
+                    tooltip: "BlueCaster".into(),
                     profiles: Vec::new(),
+                    labels: Vec::new(),
                     active_profile: None,
                     language: "en".into(),
                 });
-                let icon = tray_icon::Icon::from_resource(101, None).ok();
+                // At the tray's own size: its image from the .ico, not the
+                // large one shrunk (issue #86)
+                let size = win_sys::app_icon::tray_icon_size();
+                let icon = tray_icon::Icon::from_resource(101, Some((size, size))).ok();
+                tracing::info!("tray icon: {size} px");
                 let mut b = TrayIconBuilder::new()
                     .with_menu(Box::new(build_menu(&v)))
                     .with_menu_on_left_click(false)
@@ -382,6 +604,10 @@ pub fn run(args: &[String]) -> i32 {
                     }
                     Err(e) => tracing::error!("tray icon: {e}"),
                 }
+                let p = proxy.clone();
+                win_sys::quick_settings::watch_opened(move || {
+                    let _ = p.send_event(UserEvent::QuickSettingsOpened);
+                });
             }
             TaoEvent::UserEvent(UserEvent::Tray(v)) => {
                 if let Some(t) = &tray {
@@ -390,13 +616,21 @@ pub fn run(args: &[String]) -> i32 {
                 }
                 view = Some(v);
             }
-            TaoEvent::UserEvent(UserEvent::Click) => launch_ui(true),
+            TaoEvent::UserEvent(UserEvent::Click) => {
+                win_sys::notify::allow_foreground_for_click();
+                launch_ui(state.tray_click_opens_flyout().then_some("--flyout"));
+            }
+            TaoEvent::UserEvent(UserEvent::QuickSettingsOpened) => {
+                if state.flyout_with_quick_settings() {
+                    launch_ui(Some("--quick-settings"));
+                }
+            }
             TaoEvent::UserEvent(UserEvent::Balloon(b)) => match &notifier {
                 Some(n) => show_balloon(n, b),
                 None => tracing::info!("no tray icon for the balloon \"{}\"", b.title),
             },
             TaoEvent::UserEvent(UserEvent::Menu(id)) => match id.as_str() {
-                "open" => launch_ui(false),
+                "open" => launch_ui(None),
                 "disconnect" => state.stop(),
                 "exit" => state.quit(),
                 other => {
@@ -432,27 +666,49 @@ mod tests {
         let stats = bt_host::LinkStats::default();
         let r = Ordering::Relaxed;
         let t0 = Instant::now();
-        let (first, total) = link_sample(0, &stats, None, t0, 48000, None);
+        let (first, total) = link_sample(0, &stats, None, t0, 48000, None, false);
         assert_eq!(first.packets_per_second, 0.0);
         assert!(first.acl_packet.is_none());
         assert_eq!(first.queue_capacity, Some(64));
+        assert_eq!((first.controller_backlog, first.controller_backlog_ms), (Some(0), None));
+        assert!(first.remote_chip.is_none() && first.link_details.is_none());
+        assert_eq!(first.sink_delay_ms, None);
+        assert_eq!(first.encode, None);
         // One second later: 120 packets of 1005 bytes, 2 dropped, after a
-        // stream that started at 10 packets
+        // stream that started at 10 packets; the device reported its delay
+        stats.set_sink_delay(Some(1875));
         stats.start_packets.store(10, r);
         stats.stream_starts.store(1, r);
         stats.packets_sent.store(120, r);
         stats.bytes_sent.store(120 * 1005, r);
         stats.queue_drops.store(2, r);
-        let (s, _) = link_sample(1000, &stats, Some((t0, total)), t0 + Duration::from_secs(1), 48000, None);
+        // 240 ACL packets (two per media packet), the controller held 12 at most
+        stats.acl_packets_sent.store(240, r);
+        stats.controller_backlog_peak.record(12);
+        // Two Windows capture gaps, one of them 10 ms long, before the
+        // stream started and three more since
+        stats.start_capture_discontinuities.store(2, r);
+        stats.start_capture_lost.store(480, r);
+        stats.capture_discontinuities.store(5, r);
+        stats.capture_lost_frames.store(480 + 960, r);
+        // 375 SBC frames (1 s at 48 kHz) took 15 ms, the longest 120 us
+        stats.encode.add(375, 15_000_000, 1_000_000_000, 120_000);
+        let (s, _) = link_sample(1000, &stats, Some(total), t0 + Duration::from_secs(1), 48000, None, false);
         assert!((s.packets_per_second - 120.0).abs() < 1e-6);
-        assert_eq!(s.acl_packet, Some(AclPacket { name: "3-DH5".into(), slots: 6 }));
+        assert_eq!(s.acl_packet, Some(AclPacket { name: "3-DH5".into(), slots: 6, from_features: Some(false) }));
+        assert_eq!(s.controller_backlog, Some(12));
+        assert!((s.controller_backlog_ms.unwrap() - 50.0).abs() < 1e-6);
         assert!((s.avg_packet_bytes.unwrap() - 1005.0).abs() < 1e-6);
         assert!((s.airtime - 120.0 * 6.0 * 625e-6).abs() < 1e-9);
         assert_eq!(s.dropped, 2);
         let c = s.counters.unwrap();
         assert_eq!((c.total.packets, c.stream_start.packets, c.stream_starts), (120, 10, 1));
         assert_eq!(s.source_rate, Some(48000));
+        assert_eq!(s.sink_delay_ms, Some(187.5));
+        assert_eq!(s.encode.as_deref(), Some(&EncodeLoad { load: 0.015, avg_us: 40.0, max_us: 120.0 }));
         assert!(s.iso.is_none());
+        assert_eq!((s.capture_discontinuities, s.capture_lost), (Some(3), Some(960)));
+        assert_eq!((c.total.capture_discontinuities, c.total.capture_lost), (5, 1440));
     }
 
     #[test]
@@ -460,29 +716,34 @@ mod tests {
         let stats = bt_host::LinkStats::default();
         let r = Ordering::Relaxed;
         let t0 = Instant::now();
-        let (_, total) = link_sample(0, &stats, None, t0, 48000, None);
-        stats.packets_sent.store(120, r);
-        stats.bytes_sent.store(120 * 1005, r);
-        stats.queue_depth.store(5, r);
         let le = bt_host::LeStreamStats {
             sets_encoded: 990,
             sets_sent: 1000,
             sdus_sent: 2000,
+            bytes_sent: 310000,
             silence_sets: 12,
             underruns: 1,
             overflows: 3,
-            send_errors: 0,
+            send_errors: 1,
             prefill: 6,
         };
-        let iso = Some(iso_counters(2, &le));
-        let (s, _) = link_sample(1000, &stats, Some((t0, total)), t0 + Duration::from_secs(1), 48000, iso);
+        let earlier = bt_host::LeStreamStats { sdus_sent: 1800, bytes_sent: 279000, ..le };
+        let (_, total) = link_sample(0, &stats, None, t0, 48000, Some((2, earlier)), false);
+        stats.packets_sent.store(120, r);
+        stats.bytes_sent.store(120 * 1005, r);
+        stats.queue_depth.store(5, r);
+        let (s, _) = link_sample(1000, &stats, Some(total), t0 + Duration::from_secs(1), 48000, Some((2, le)), false);
         assert_eq!(
             s.iso,
             Some(IsoCounters { cis: 2, sdu_sets: 1000, silence: 12, underruns: 1, dropped: 3, prefill: 6 })
         );
+        // The rates are the SDUs' (not the A2DP counters'), drops its own
+        assert_eq!((s.bytes_per_second, s.packets_per_second), (31000.0, 200.0));
+        assert_eq!(s.dropped, 4);
         // No A2DP media figures while LE Audio streams
-        assert_eq!((s.bytes_per_second, s.packets_per_second, s.airtime, s.queue_depth), (0.0, 0.0, 0.0, 0));
+        assert_eq!((s.airtime, s.queue_depth), (0.0, 0));
         assert!(s.acl_packet.is_none() && s.queue_capacity.is_none());
+        assert!(s.controller_backlog.is_none());
         assert_eq!(s.source_rate, Some(48000));
     }
 }

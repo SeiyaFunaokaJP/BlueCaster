@@ -142,7 +142,7 @@ impl App for ServerApp {
     fn on_timer(&mut self, _s: &Stack, _id: u32) {}
     fn on_att_read(&mut self, _s: &Stack, con: u16, handle: u16, _offset: u16) -> Result<Vec<u8>, u8> {
         let _ = self.tx.send(Ev::Read(con, handle));
-        if handle == self.name_handle { Ok(b"A2DPWB".to_vec()) } else { Err(ATT_ERROR_READ_NOT_PERMITTED) }
+        if handle == self.name_handle { Ok(b"BlueCaster".to_vec()) } else { Err(ATT_ERROR_READ_NOT_PERMITTED) }
     }
     fn on_att_write(&mut self, _s: &Stack, w: &AttWriteRequest) -> u8 {
         let _ = self.tx.send(Ev::Write(w.con, w.handle, w.value.to_vec()));
@@ -208,9 +208,6 @@ fn att_server_reads_and_writes() {
     let (tx, rx) = mpsc::channel();
     let (rtx, rrx) = mpsc::channel::<(Remote, u16, u16)>();
     let (c2, s2) = (controller.clone(), script.clone());
-    let tlv = std::env::temp_dir().join(format!("a2dpwb_att_test_{}.tlv", std::process::id()));
-    let _ = std::fs::remove_file(&tlv);
-    let tlv2 = tlv.clone();
     let thread = std::thread::spawn(move || {
         btstack_sys::run(move |s, remote| {
             assert!(s.set_le_hidden(false));
@@ -218,7 +215,7 @@ fn att_server_reads_and_writes() {
             s.set_link_key_store(None);
             s.l2cap_init();
             s.add_hci_event_handler();
-            s.le_init(tlv2.to_str().unwrap());
+            s.le_init(Box::new(btstack_sys::MemoryTlv::default()));
             s.att_db_init();
             s.att_db_add_service_uuid16(0x1800, true);
             let name = s.att_db_add_characteristic_uuid16(
@@ -272,7 +269,7 @@ fn att_server_reads_and_writes() {
 
     // 1. Read Request: the app's value, asked once
     att_request(&controller, &[0x0A, lo, hi]);
-    assert_eq!(att_pdu(&controller, 0), b"\x0bA2DPWB");
+    assert_eq!(att_pdu(&controller, 0), b"\x0bBlueCaster");
     completed(&controller, &rx);
 
     // 2. Write Requests: accepted, then refused with the app's error 0x80
@@ -300,7 +297,7 @@ fn att_server_reads_and_writes() {
     remote.wake();
     let seen = wait(&rx, &Ev::Read(CON, name));
     assert!(seen.contains(&Ev::NestedDone), "read before the app's call returned: {seen:?}");
-    assert_eq!(att_pdu(&controller, 5), b"\x0bA2DPWB");
+    assert_eq!(att_pdu(&controller, 5), b"\x0bBlueCaster");
     completed(&controller, &rx);
 
     // 5. A write request handled while the app is busy: delivered once,
@@ -328,5 +325,4 @@ fn att_server_reads_and_writes() {
     remote.request_exit();
     thread.join().unwrap();
     assert!(!btstack_sys::poisoned());
-    let _ = std::fs::remove_file(&tlv);
 }

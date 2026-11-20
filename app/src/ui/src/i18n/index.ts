@@ -23,6 +23,8 @@ export const LANGUAGES: { code: string; name: string }[] = [
   { code: "ko", name: "한국어" },
   { code: "zh-CN", name: "简体中文" },
   { code: "zh-TW", name: "繁體中文" },
+  { code: "uk", name: "Українська" },
+  { code: "ru", name: "Русский" },
   { code: "pt-BR", name: "Português (Brasil)" },
 ];
 

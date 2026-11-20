@@ -15,22 +15,43 @@ use std::time::{Duration, Instant};
 use btstack_sys::consts::*;
 use btstack_sys::{AclState, App, AvdtpState, HciBackend, HciState, Source, Stack};
 use codec::CodecKind;
-use codec::caps::{ConfigRequest, Configuration, SbcCapabilities, VendorCapability};
-use codec::sbc::ChannelMode;
+use codec::caps::{AacCapabilities, AacObjectType, ConfigRequest, Configuration, SbcCapabilities, VendorCapability};
+use codec::sbc::{Allocation, ChannelMode};
 
+use crate::bringup::{self, ChipLoader};
+use crate::esco_watch::{EscoWatch, Verdict};
 use crate::events::{addr_at, addr_str, event_type, hci_error_string, le16, le24, subevent, u8_at};
 use crate::le::core::LeCore;
 use crate::le::iso_send::TIMER_ISO;
+use crate::link_details::{self, LinkTracker};
 use crate::link_keys::FileLinkKeyStore;
 use crate::media::{MediaPacket, RTP_HEADER_SIZE};
+use crate::probe::ProbeReport;
+use crate::rfcomm::{Rfcomm, TIMER_RFCOMM};
+use crate::sdp_services::SdpServices;
 use crate::shared::Shared;
 use crate::stats::LinkStats;
 use crate::{AfhClassification, ConnectFailure, Controls, DiscoveredDevice, HostEvent, InitFailure, MediaKey};
+use crate::{intel, mediatek, qualcomm, realtek_btnic};
 
 pub(crate) type Job = Box<dyn FnOnce(&mut HostApp, &Stack) + Send>;
 
 pub(crate) const TIMER_AFH: u32 = 1;
 pub(crate) const TIMER_PLAYBACK: u32 = 2;
+/// Read the version again after a Realtek download (HCI was busy)
+const TIMER_RTK_VERIFY: u32 = 5;
+/// The chip loader's answer timeout (crate::bringup)
+const TIMER_LOADER: u32 = 7;
+/// One of our link detail commands still unanswered (link_details.rs)
+const TIMER_LINK_COMMAND: u32 = 8;
+/// The stream's rate after a voice link (crate::esco_watch)
+const TIMER_ESCO_WATCH: u32 = 9;
+/// Packets waiting on a stream that takes none (crate::stall_watch)
+const TIMER_STALL_WATCH: u32 = 10;
+const RTK_VERIFY_RETRY_MS: u32 = 100;
+const RTK_VERIFY_TRIES: u8 = 20;
+/// Each L2CAP packet starts with a 4-byte header
+const L2CAP_HEADER_SIZE: usize = 4;
 
 /// One radio reading per tick (RSSI and the AFH map in turn)
 const AFH_TICK_MS: u32 = 2500;
@@ -47,12 +68,27 @@ const VOLUME_RESPONSE_TIMEOUT: Duration = Duration::from_millis(1000);
 /// What the BTstack thread needs to set up HCI
 pub(crate) struct Setup {
     pub tcp: bool,
-    pub link_key_dir: Option<PathBuf>,
+    pub link_key_file: Option<PathBuf>,
     pub firmware_dir: PathBuf,
     pub realtek_pid: u16,
     /// Realtek firmware / config file stems (no extension) of the chip
     pub realtek_files: Option<(String, String)>,
+    /// HostConfig::realtek_firmware_file
+    pub realtek_firmware_file: Option<PathBuf>,
     pub broadcom_ids: Vec<(u16, u16)>,
+    /// HFP audio gateway for the headphones' battery level
+    pub battery: bool,
+    /// The HFP audio gateway also offers the audio connection
+    /// (HostConfig::voice)
+    pub voice: bool,
+    /// Told where a loader is (HostConfig::on_loader)
+    pub on_loader: Option<crate::bringup::LoaderHook>,
+    /// Run the chip probe instead of HCI init (BtHost::probe): its report
+    pub probe: Option<mpsc::Sender<ProbeReport>>,
+    /// HostConfig::local_name
+    pub local_name: String,
+    /// HostConfig::le_keys
+    pub le_keys: Option<crate::LeKeysConfig>,
 }
 
 /// LMP subversions Realtek chips report while running their ROM code,
@@ -63,6 +99,21 @@ const AVDTP_SI_START: u8 = 0x07;
 
 fn is_realtek_rom_lmp(lmp_subver: u16) -> bool {
     matches!(lmp_subver, 0x1200 | 0x8723 | 0x8821 | 0x8761 | 0x8822 | 0x8852 | 0x8851)
+}
+
+/// The warning for a controller of a vendor whose chips need a firmware
+/// download (MediaTek, Qualcomm, Atheros) when no loader of ours ran
+/// without error in this run: a chip none of them covers, or a loader that
+/// failed. None after a loader's success (its firmware loaded or running
+/// already) and for the emulator's virtual controller.
+fn missing_loader_warning(company: u16, loader_ok: bool, tcp: bool) -> Option<String> {
+    if loader_ok || tcp || !matches!(company, 0x0046 | 0x001D | 0x0045) {
+        return None;
+    }
+    let name = crate::chips::company_name(company).unwrap_or("unknown");
+    Some(format!(
+        "no firmware loader ran for this {name} controller; it runs the firmware it has (ROM only, unless Windows loaded one)"
+    ))
 }
 
 pub(crate) struct HostApp {
@@ -78,6 +129,10 @@ pub(crate) struct HostApp {
     pub afh: Option<Box<dyn crate::AfhSource>>,
     /// LE Audio (experimental): None while off
     pub le: Option<LeCore>,
+    /// RFCOMM client channels of IPC clients
+    pub rfcomm: Rfcomm,
+    /// A device's services asked for (developer mode)
+    pub sdp_services: SdpServices,
 
     // ---- connection (BTstack thread only) ----
     pub a2dp_cid: u16,
@@ -85,11 +140,21 @@ pub(crate) struct HostApp {
     pub local_seid: u8,
     pub remote_seid: u8,
     pub remote_addr: Option<[u8; 6]>,
+    /// ACL handle of the HFP service level connection, once up
+    pub hfp_acl: Option<u16>,
+    /// The HFP audio connection (headset microphone)
+    pub voice: crate::voice::Voice,
     pub streaming: bool,
     /// Codec of the configured stream (RTP or not)
     pub stream_codec: Option<CodecKind>,
     pub endpoints: HashMap<CodecKind, u8>,
     pub can_send_requested: bool,
+    /// Stream timing (stats.timing): when the pending can-send request was
+    /// made, the last media packet sent, the last Number Of Completed
+    /// Packets event
+    can_send_asked: Option<Instant>,
+    last_media_sent: Option<Instant>,
+    last_completed: Option<Instant>,
     /// SEP discovery in progress
     sep_sinks: u8,
     sep_sinks_in_use: u8,
@@ -98,10 +163,30 @@ pub(crate) struct HostApp {
 
     // ---- init / chipset ----
     init_started: Instant,
+    /// Manufacturer the controller reported in this init (Read Local Version)
+    controller_company: Option<u16>,
+    /// Developer > Debug's command (crate::debug_command): waiting to be
+    /// sent, then its opcode until the answer comes
+    debug_command: Option<Vec<u8>>,
+    debug_command_sent: Option<u16>,
+    /// Packets the controller reported completed (Number Of Completed
+    /// Packets), by connection handle; logged when the handle disconnects,
+    /// so a CIS that never had one shows 0 (issue #86: MediaTek ISO)
+    completed_by_handle: std::collections::BTreeMap<u16, u64>,
     rtk_version_seen: bool,
     rtk_lmp_first: u16,
     rtk_verify_pending: bool,
+    /// Version reads left before the download stays "not verified"
+    rtk_verify_tries: u8,
     bcm_checked: bool,
+    /// The chip bring-up before HCI init (raw transport): Intel's firmware
+    /// download
+    loader: Option<Box<dyn ChipLoader>>,
+    /// The step and percent last told to setup.on_loader
+    loader_shown: Option<(&'static str, Option<u8>)>,
+    /// A chip loader finished without error in this run (its firmware
+    /// loaded, or running already): no "no loader" warning then
+    loader_ok: bool,
 
     // ---- AVRCP ----
     volume_in_flight: Option<Instant>,
@@ -114,9 +199,41 @@ pub(crate) struct HostApp {
     afh_sent_map: Option<[u8; 10]>,
     afh_policy_version_seen: Option<u32>,
     afh_ticks: u32,
+    /// The controller's recent AFH maps ("blend") and the link they are of
+    afh_history: crate::afh::ControllerHistory,
+    afh_history_handle: Option<u16>,
     /// The next radio reading is RSSI (else the AFH map). Its own toggle: a
     /// classification sent on a tick must not always skip the same reading
     read_rssi_next: bool,
+
+    // ---- link details ----
+    link: LinkTracker,
+    /// ACL handle of the started stream (its controller backlog)
+    media_acl: Option<u16>,
+    /// The stream's rate after a voice link (#86)
+    esco: EscoWatch,
+    /// A stream whose link takes no packets any more (#86)
+    stall: crate::stall_watch::StallWatch,
+}
+
+/// Why the signaling connection failed. Page timeout, or a device that never
+/// took the connection: no answer. Connection / L2CAP RTX timeout, a
+/// connection BTstack gave up on, or an SDP query cut off: the link came up
+/// and then carried nothing.
+fn signaling_failure(status: u8) -> ConnectFailure {
+    match status {
+        ERROR_CODE_PAGE_TIMEOUT | ERROR_CODE_CONNECTION_ACCEPT_TIMEOUT_EXCEEDED => ConnectFailure::NoAnswer,
+        L2CAP_CONNECTION_RESPONSE_RESULT_REFUSED_SECURITY
+        | L2CAP_CONNECTION_PIN_OR_LINK_KEY_MISSING
+        | ERROR_CODE_AUTHENTICATION_FAILURE
+        | ERROR_CODE_PIN_OR_KEY_MISSING => ConnectFailure::AuthFailed,
+        ERROR_CODE_CONNECTION_TIMEOUT
+        | L2CAP_CONNECTION_RESPONSE_RESULT_RTX_TIMEOUT
+        | L2CAP_CONNECTION_BASEBAND_DISCONNECT
+        | SDP_QUERY_INCOMPLETE
+        | ERROR_CODE_UNSPECIFIED_ERROR => ConnectFailure::LinkLost,
+        _ => ConnectFailure::Other,
+    }
 }
 
 impl HostApp {
@@ -144,23 +261,38 @@ impl HostApp {
             setup,
             afh,
             le,
+            rfcomm: Rfcomm::default(),
+            sdp_services: SdpServices::default(),
             a2dp_cid: 0,
             avrcp_cid: 0,
             local_seid: 0,
             remote_seid: 0,
             remote_addr: None,
+            hfp_acl: None,
+            voice: Default::default(),
             streaming: false,
             stream_codec: None,
             endpoints: HashMap::new(),
             can_send_requested: false,
+            can_send_asked: None,
+            last_media_sent: None,
+            last_completed: None,
             sep_sinks: 0,
             sep_sinks_in_use: 0,
             caps: Default::default(),
             init_started: Instant::now(),
+            controller_company: None,
+            debug_command: None,
+            debug_command_sent: None,
+            completed_by_handle: Default::default(),
             rtk_version_seen: false,
             rtk_lmp_first: 0,
             rtk_verify_pending: false,
+            rtk_verify_tries: 0,
             bcm_checked: false,
+            loader: None,
+            loader_shown: None,
+            loader_ok: false,
             volume_in_flight: None,
             playback_status: AVRCP_PLAYBACK_STATUS_STOPPED,
             playback_prev_frames: 0,
@@ -169,7 +301,26 @@ impl HostApp {
             afh_sent_map: None,
             afh_policy_version_seen: None,
             afh_ticks: 0,
+            afh_history: Default::default(),
+            afh_history_handle: None,
             read_rssi_next: true,
+            link: LinkTracker::default(),
+            media_acl: None,
+            esco: EscoWatch::default(),
+            stall: Default::default(),
+        }
+    }
+
+    /// The A2DP link's details into the stats (cleared without one)
+    fn publish_link(&self) {
+        let handle = self.shared.lock().a2dp_con_handle;
+        self.link.publish(&self.stats, handle);
+    }
+
+    /// What the controller holds of the stream's link now
+    fn sample_controller_backlog(&self, stack: &Stack) {
+        if let Some(n) = self.media_acl.and_then(|h| stack.acl_packets_in_controller(h)) {
+            self.stats.record_controller_backlog(n);
         }
     }
 
@@ -185,8 +336,208 @@ impl HostApp {
     // Setup
     // ======================================================================
 
+    /// The Intel firmware download (crate::intel), then HCI init. Intel
+    /// controllers start in a bootloader after a cold boot; with the
+    /// firmware running the loader is done after one command.
+    pub fn start_intel_loader(&mut self, stack: &Stack) {
+        let dir = self.setup.firmware_dir.clone();
+        tracing::info!("Intel adapter: checking bootloader firmware, folder {}", dir.display());
+        let loader = intel::Loader::new(Box::new(move |name| read_firmware_file(&dir, "intel", name)));
+        self.start_loader(stack, Box::new(loader));
+    }
+
+    /// The MediaTek MT79xx firmware download (crate::mediatek), then HCI
+    /// init: the firmware folder first, then MediaTek's Windows driver
+    pub fn start_mediatek_loader(&mut self, stack: &Stack) {
+        let dir = self.setup.firmware_dir.clone();
+        tracing::info!("MediaTek adapter: checking its firmware, folder {}", dir.display());
+        let loader = mediatek::Loader::new(Box::new(move |name| {
+            read_firmware_file(&dir, "mediatek", name).or_else(|| mediatek::from_windows_driver(name))
+        }));
+        // Developer > Debug: a register write and the command before reset
+        let command = crate::debug_command::get().filter(|_| crate::debug_command::before_reset());
+        let loader =
+            crate::mtk_debug_steps::DebugSteps::wrap(Box::new(loader), crate::debug_command::register(), command);
+        self.start_loader(stack, loader);
+    }
+
+    /// The Qualcomm rampatch and NVM download (crate::qualcomm), then HCI
+    /// init: the firmware folder first, then Qualcomm's Windows driver
+    pub fn start_qualcomm_loader(&mut self, stack: &Stack) {
+        let dir = self.setup.firmware_dir.clone();
+        tracing::info!("Qualcomm adapter: checking its firmware, folder {}", dir.display());
+        let loader = qualcomm::Loader::new(Box::new(move |name| {
+            read_firmware_file(&dir, "qca", name).or_else(|| qualcomm::from_windows_driver(name))
+        }));
+        self.start_loader(stack, Box::new(loader));
+    }
+
+    /// The download of a Realtek chip whose firmware only Realtek's Windows
+    /// driver has (crate::realtek_btnic), then HCI init: the firmware folder
+    /// first, then the driver
+    pub fn start_realtek_driver_loader(&mut self, stack: &Stack, chip: &'static str, file: &'static str) {
+        let dir = self.setup.firmware_dir.clone();
+        tracing::info!("Realtek {chip}: checking its firmware, folder {}", dir.display());
+        let loader = realtek_btnic::Loader::new(
+            Box::new(move |name| {
+                read_firmware_file(&dir, "realtek", name).or_else(|| realtek_btnic::from_windows_driver(name))
+            }),
+            chip,
+            file,
+        );
+        self.start_loader(stack, Box::new(loader));
+    }
+
+    /// A tool (the chip probe, a chip script) on the transport installed
+    /// already, in place of HCI init: its report goes to `setup.probe`
+    pub fn start_tool(&mut self, stack: &Stack, make: crate::ToolLoader) {
+        let loader = make(&self.setup.firmware_dir);
+        self.start_loader(stack, loader);
+    }
+
+    /// A chip bring-up (crate::bringup) on the transport installed already,
+    /// then HCI init
+    fn start_loader(&mut self, stack: &Stack, mut loader: Box<dyn ChipLoader>) {
+        if !stack.raw_begin() {
+            tracing::error!("could not open the Bluetooth adapter");
+            if let Some(tx) = self.setup.probe.take() {
+                let error = Some("could not open the Bluetooth adapter".to_owned());
+                let _ = tx.send(ProbeReport { error, ..ProbeReport::default() });
+            }
+            self.init_failed(InitFailure::Failed);
+            return;
+        }
+        let actions = loader.start();
+        self.loader = Some(loader);
+        self.run_loader(stack, actions);
+    }
+
+    fn run_loader(&mut self, stack: &Stack, actions: Vec<bringup::Action>) {
+        let mut actions: std::collections::VecDeque<_> = actions.into();
+        while let Some(action) = actions.pop_front() {
+            let failed = match action {
+                // Done at once; what the loader answers runs before the
+                // actions after it
+                bringup::Action::UsbControl(request) => {
+                    let result = stack.raw_control(&request);
+                    if let Some(loader) = self.loader.as_mut() {
+                        for a in loader.on_control(result).into_iter().rev() {
+                            actions.push_front(a);
+                        }
+                    }
+                    None
+                }
+                bringup::Action::Command(c) => {
+                    (!stack.raw_send(HCI_COMMAND_DATA_PACKET, &c)).then_some("the adapter does not take commands")
+                }
+                bringup::Action::BulkCommand(c) => {
+                    (!stack.raw_send_bulk_command(&c)).then_some("the adapter does not take commands")
+                }
+                bringup::Action::Bootloader(on) => {
+                    stack.set_bootloader(on);
+                    None
+                }
+                bringup::Action::Timer(ms) => {
+                    (!stack.timer_start(TIMER_LOADER, ms)).then_some("the loader's timer could not be started")
+                }
+                bringup::Action::Done(result) => {
+                    self.loader_done(stack, result);
+                    return;
+                }
+            };
+            if let Some(why) = failed {
+                self.loader_done(stack, Err(bringup::LoadError::Host(why)));
+                return;
+            }
+        }
+        self.show_loader();
+    }
+
+    /// Tells HostConfig::on_loader where the loader is, when its step or
+    /// percent changed (not for the tools, whose reports say it)
+    fn show_loader(&mut self) {
+        let (Some(loader), Some(hook)) = (self.loader.as_ref(), self.setup.on_loader.as_ref()) else { return };
+        if self.setup.probe.is_some() || loader.step().is_empty() {
+            return;
+        }
+        let percent = loader.progress().filter(|(_, all)| *all > 0).map(|(n, all)| (n * 100 / all).min(100) as u8);
+        let now = (loader.step(), percent);
+        if self.loader_shown == Some(now) {
+            return;
+        }
+        self.loader_shown = Some(now);
+        hook(&bringup::LoaderProgress { vendor: loader.vendor(), step: now.0.to_owned(), percent, done: None });
+    }
+
+    /// The loader's end, for HostConfig::on_loader
+    fn show_loader_done(&mut self, vendor: &'static str, step: String, ok: bool) {
+        self.loader_shown = None;
+        if let (Some(hook), None) = (self.setup.on_loader.as_ref(), self.setup.probe.as_ref()) {
+            hook(&bringup::LoaderProgress { vendor, step, percent: None, done: Some(ok) });
+        }
+    }
+
+    fn loader_done(&mut self, stack: &Stack, result: Result<bringup::Outcome, bringup::LoadError>) {
+        stack.timer_stop(TIMER_LOADER);
+        let Some(mut loader) = self.loader.take() else { return };
+        // The probe: no HCI init after it. Raw mode stays until the stack is
+        // shut down, so BTstack gets no packet
+        if let Some(tx) = self.setup.probe.take() {
+            let mut report = loader.take_report().unwrap_or_default();
+            if let Err(e) = &result {
+                report.error = Some(e.to_string());
+            }
+            report.usb = stack.usb_descriptors();
+            let _ = tx.send(report);
+            return;
+        }
+        let vendor = loader.vendor();
+        match result {
+            Ok(outcome) => {
+                stack.raw_end();
+                let said = match outcome {
+                    bringup::Outcome::AlreadyRunning => "firmware running already".to_owned(),
+                    bringup::Outcome::Loaded { firmware, detail: Some(detail) } => {
+                        format!("firmware {firmware} loaded ({detail})")
+                    }
+                    bringup::Outcome::Loaded { firmware, detail: None } => format!("firmware {firmware} loaded"),
+                    bringup::Outcome::Rom => "ROM firmware, nothing to load".to_owned(),
+                    // Only from the probe, which returned above
+                    bringup::Outcome::Probed => String::new(),
+                };
+                tracing::info!("{vendor} controller: {said}");
+                self.loader_ok = true;
+                self.show_loader_done(vendor, said, true);
+                self.setup_hci_and_power_on(stack, None);
+            }
+            // Raw mode stays to the end of the run: hci_init has not run, so
+            // BTstack must get no packet (late answers go to the app, which
+            // drops them), and the transport keeps its bootloader mode (the
+            // controller is still in its bootloader)
+            Err(e) => {
+                let dir = self.setup.firmware_dir.display();
+                match &e {
+                    bringup::LoadError::MissingFile(file) => {
+                        let files = loader.missing_file_hint(file);
+                        tracing::error!(
+                            "{vendor} firmware download failed: {file} is not in {dir}. Put {files} there and \
+                             connect again."
+                        );
+                    }
+                    e => tracing::error!("{vendor} firmware download failed: {e} (firmware folder {dir})"),
+                }
+                let said = match &e {
+                    bringup::LoadError::MissingFile(file) => format!("{} missing", loader.missing_file_hint(file)),
+                    e => e.to_string(),
+                };
+                self.show_loader_done(vendor, said, false);
+                self.init_failed(InitFailure::Failed);
+            }
+        }
+    }
+
     /// hci_init() through hci_power_control(ON). Directly from the init
-    /// closure, or once the Intel bootloader download has finished (then the
+    /// closure, or once the Intel firmware download has finished (then the
     /// transport is installed already: `backend` is None).
     pub fn setup_hci_and_power_on(&mut self, stack: &Stack, backend: Option<Box<dyn HciBackend>>) {
         match backend {
@@ -202,26 +553,40 @@ impl HostApp {
         let pid = self.setup.realtek_pid;
         if pid != 0 {
             tracing::info!("Realtek adapter PID 0x{pid:04X}, firmware folder {}", self.setup.firmware_dir.display());
-            // BTstack's Realtek driver builds "${folder}/${name}" without the
-            // .bin extension the files have (linux-firmware, our download):
-            // make extension-less aliases (hard link, else copy)
+            // The driver opens the .bin files (csrc/realtek.c); the
+            // extension-less copies earlier versions made are not needed
             if let Some((fw, cfg)) = self.setup.realtek_files.clone() {
-                ensure_alias(&self.setup.firmware_dir, &fw);
-                ensure_alias(&self.setup.firmware_dir, &cfg);
+                remove_alias(&self.setup.firmware_dir, &fw);
+                remove_alias(&self.setup.firmware_dir, &cfg);
             }
-            stack.realtek_setup(pid, &self.setup.firmware_dir.to_string_lossy());
+            let driver_fw = self.setup.realtek_firmware_file.as_ref().map(|p| p.to_string_lossy().into_owned());
+            if let Some(p) = &self.setup.realtek_firmware_file {
+                tracing::info!(
+                    "Realtek firmware from Realtek's Windows driver ({}, {} bytes)",
+                    p.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
+                    std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+                );
+            }
+            stack.realtek_setup(pid, &self.setup.firmware_dir.to_string_lossy(), driver_fw.as_deref());
             stack.set_chipset_realtek();
         } else {
             tracing::info!("no Realtek PID configured, skipping the Realtek chipset init");
         }
 
-        match &self.setup.link_key_dir {
-            Some(dir) => stack.set_link_key_store(Some(Box::new(FileLinkKeyStore::open(dir)))),
+        tracing::debug!(
+            "hci setup: link key file {:?}, battery (HFP) {}, LE Audio {}, tcp {}",
+            self.setup.link_key_file,
+            self.setup.battery,
+            self.le.is_some(),
+            self.setup.tcp
+        );
+        match &self.setup.link_key_file {
+            Some(file) => stack.set_link_key_store(Some(Box::new(FileLinkKeyStore::open(file)))),
             None => stack.set_link_key_store(None),
         }
         // Audio (major 0x04), Hi-Fi audio device (minor 0x28), A2DP source;
         // page timeout ~20 s (0x8000 * 0.625 ms)
-        stack.gap_setup(0x200428, 0x8000);
+        stack.gap_setup(0x200428, 0x8000, &self.setup.local_name);
         // L2CAP before any profile: it registers with HCI for Connection
         // Complete events
         stack.l2cap_init();
@@ -236,10 +601,23 @@ impl HostApp {
             AVRCP_FEATURE_MASK_CATEGORY_PLAYER_OR_RECORDER,
         );
         self.register_endpoints(stack);
-        // LE Audio (experimental, off by default): SM, GATT client / server,
-        // ISO. Nothing of it runs while the setting is off.
+        // Battery level: HFP's service level connection; with voice
+        // (headset microphone, developer mode) also the audio connection
+        if self.setup.battery || self.setup.voice {
+            stack.hfp_ag_init(self.setup.voice);
+            self.voice.on_ag_init();
+        }
+        // LE Audio (developer mode): SM, GATT client / server, ISO. Without
+        // it only SM and the bonds file, for the LE keys of classic devices
+        // (issue #86); nothing of LE Audio runs then.
         if let Some(le) = self.le.as_mut() {
             le.stack_init(stack);
+        } else if let Some(keys) = self.setup.le_keys.as_ref().filter(|_| !stack.le_initialized()) {
+            tracing::info!("LE keys: initializing (SM, bonds)");
+            stack.le_init(Box::new(crate::le_bond_file::TlvFile::open(&keys.bonds_file)));
+            if let Some(imported) = keys.imported_bonds_file.as_deref() {
+                crate::le_import::apply(stack, imported);
+            }
         }
         // The Realtek driver sends vendor commands before HCI Reset (reading
         // the LMP subversion); without custom pre-init that step runs in the
@@ -247,15 +625,69 @@ impl HostApp {
         if pid != 0 {
             stack.enable_custom_pre_init();
         }
+        self.controller_company = None;
         self.rtk_version_seen = false;
         self.rtk_lmp_first = 0;
         self.rtk_verify_pending = false;
+        self.rtk_verify_tries = 0;
         self.init_started = Instant::now();
-        self.shared.update(|s| s.power_on_at = Some(Instant::now()));
+        self.shared.update(|s| {
+            s.power_on_at = Some(Instant::now());
+            s.realtek_rom = false;
+            s.hci_version_settled = false;
+        });
         tracing::info!("hci_init done, powering on");
         if stack.power_on().is_err() {
             tracing::error!("could not open the Bluetooth adapter");
+            // Issue #81: an RTL8852BU whose firmware was missing failed here
+            // with "failed to initialize WinUSB (error 50)", which reads as
+            // a driver problem; the firmware was all it lacked
+            let missing = self.missing_realtek_files(true);
+            if !missing.is_empty() {
+                tracing::warn!(
+                    "the Realtek firmware is missing too ({} in {}): add it, then start again",
+                    missing.join(", "),
+                    self.setup.firmware_dir.display()
+                );
+            }
             self.init_failed(InitFailure::Failed);
+        }
+    }
+
+    /// The chip's Realtek files not in the firmware folder ("rtl8852bu_fw.bin"),
+    /// the config file too if `with_config`
+    fn missing_realtek_files(&self, with_config: bool) -> Vec<String> {
+        let Some((fw, cfg)) = self.setup.realtek_files.as_ref().filter(|_| self.setup.realtek_pid != 0) else {
+            return Vec::new();
+        };
+        let dir = &self.setup.firmware_dir;
+        // Realtek's Windows driver's file stands in for the firmware
+        let fw = self.setup.realtek_firmware_file.is_none().then_some(fw);
+        [fw, with_config.then_some(cfg)]
+            .into_iter()
+            .flatten()
+            // The driver also takes the extension-less file alone
+            .filter(|s| !dir.join(format!("{s}.bin")).is_file() && !dir.join(s.as_str()).is_file())
+            .map(|s| format!("{s}.bin"))
+            .collect()
+    }
+
+    /// Read the version after the Realtek download; the result decides
+    /// between "loaded" and the ROM code (on_local_version)
+    fn verify_realtek_download(&mut self, stack: &Stack) {
+        if stack.cmd_read_local_version() == ERROR_CODE_SUCCESS {
+            self.rtk_verify_pending = true;
+        } else if self.rtk_verify_tries > 0 {
+            // HCI is busy right after start-up: again a moment later
+            tracing::debug!("realtek verify: HCI busy, retrying ({} tries left)", self.rtk_verify_tries);
+            self.rtk_verify_tries -= 1;
+            stack.timer_start(TIMER_RTK_VERIFY, RTK_VERIFY_RETRY_MS);
+        } else {
+            tracing::info!(
+                "Realtek firmware download ran (ROM LMP subversion 0x{:04X}); not verified",
+                self.rtk_lmp_first
+            );
+            self.shared.update(|s| s.hci_version_settled = true);
         }
     }
 
@@ -285,12 +717,17 @@ impl HostApp {
         // Packets of a previous stream must not go out on this one
         while self.media.pop().is_ok() {}
         self.can_send_requested = false;
+        tracing::debug!("establish: {} (acl {:?})", addr_str(&addr), stack.acl_state(&addr));
         match stack.a2dp_establish_stream(&addr) {
             Ok(cid) => {
+                tracing::debug!("establish: a2dp cid 0x{cid:04X}");
                 self.a2dp_cid = cid;
                 Ok(())
             }
-            Err(status) => Err(status),
+            Err(status) => {
+                tracing::debug!("establish: refused 0x{status:02X} ({})", hci_error_string(status));
+                Err(status)
+            }
         }
     }
 
@@ -300,6 +737,7 @@ impl HostApp {
     /// whether a release event follows.
     pub fn release_leftover(&mut self, stack: &Stack, addr: [u8; 6]) -> Option<bool> {
         let (state, cid) = stack.avdtp_state_for_addr(&addr);
+        tracing::debug!("leftover AVDTP for {}: {state:?} (cid 0x{cid:04X})", addr_str(&addr));
         if state == AvdtpState::None {
             return None;
         }
@@ -308,13 +746,42 @@ impl HostApp {
         Some(state == AvdtpState::Open)
     }
 
+    /// `addr` has the current A2DP connection open. Called between attempts,
+    /// when none of ours is left: it is one the device opened.
+    pub fn has_a2dp_from_device(&self, stack: &Stack, addr: [u8; 6]) -> bool {
+        let (state, cid) = stack.avdtp_state_for_addr(&addr);
+        tracing::debug!("A2DP of {}: {state:?} (cid 0x{cid:04X}, ours 0x{:04X})", addr_str(&addr), self.a2dp_cid);
+        state == AvdtpState::Open && cid == self.a2dp_cid
+    }
+
+    /// Takes the stream the device configured and opened itself for
+    /// `config`: our endpoint for its codec, the same codec information
+    pub fn adopt_device_stream(&mut self, config: &Configuration, configured: &(u8, Option<Vec<u8>>)) -> bool {
+        let ours = self.endpoints.get(&codec::caps::endpoint_kind(config.kind)).copied();
+        let same = match &config.request {
+            ConfigRequest::Vendor(info) => configured.1.as_ref() == Some(info),
+            // The event has no codec information to compare
+            _ => false,
+        };
+        if ours != Some(configured.0) || !same {
+            return false;
+        }
+        self.stream_codec = Some(config.kind);
+        // Packets of a previous stream must not go out on this one
+        while self.media.pop().is_ok() {}
+        self.can_send_requested = false;
+        true
+    }
+
     /// Tears down a half-open or open AVDTP connection after a failed or
     /// cancelled connect, or for a disconnect. Returns whether a release
     /// event follows.
     pub fn abort(&mut self, stack: &Stack) -> bool {
         if self.a2dp_cid == 0 {
+            tracing::debug!("abort: no a2dp cid");
             return false;
         }
+        tracing::debug!("abort: cid 0x{:04X} {:?}", self.a2dp_cid, stack.avdtp_state_for_cid(self.a2dp_cid));
         match stack.avdtp_state_for_cid(self.a2dp_cid) {
             // Already finalized by BTstack (e.g. signaling connect failed)
             AvdtpState::None => false,
@@ -326,22 +793,36 @@ impl HostApp {
             // Not open yet (SDP query / waiting for L2CAP): the disconnect
             // emits a failed CONNECTION_ESTABLISHED and frees the connection
             // at once, but a pending outgoing L2CAP channel would be
-            // orphaned: drop the ACL too if it is up (never one still
-            // paging: no valid handle yet)
+            // orphaned: drop the ACL too if it is up. A page still running
+            // has no valid handle: it is cancelled, or the next connection
+            // waits behind its SDP query until the page times out
             AvdtpState::Pending => {
                 stack.a2dp_disconnect(self.a2dp_cid);
-                if let Some(addr) = self.remote_addr
-                    && let AclState::Open(handle) = stack.acl_state(&addr)
-                {
-                    stack.disconnect(handle);
+                if let Some(addr) = self.remote_addr {
+                    match stack.acl_state(&addr) {
+                        AclState::Open(handle) => {
+                            tracing::debug!("abort: dropping ACL handle 0x{handle:04X} of the pending connection");
+                            stack.disconnect(handle);
+                        }
+                        AclState::Paging => {
+                            tracing::info!("cancelling the page of {}", addr_str(&addr));
+                            stack.cmd_create_connection_cancel(&addr);
+                        }
+                        _ => {}
+                    }
                 }
                 false
             }
         }
     }
 
-    /// After an abort: this was never a live stream
-    pub fn forget_connection(&mut self) {
+    /// After an abort: this was never a live stream. RFCOMM channels to the
+    /// device go too, in case no signaling release came to close them.
+    pub fn forget_connection(&mut self, stack: &Stack) {
+        tracing::debug!("forget connection (cid 0x{:04X}, streaming {})", self.a2dp_cid, self.streaming);
+        if let Some(addr) = self.remote_addr {
+            self.rfcomm.close_device(stack, addr);
+        }
         self.a2dp_cid = 0;
         self.set_streaming(false);
         self.can_send_requested = false;
@@ -350,63 +831,117 @@ impl HostApp {
     /// HCI Disconnect of the ACL link to the remote. True if one is going down.
     pub fn drop_acl(&mut self, stack: &Stack) -> bool {
         let Some(addr) = self.remote_addr else { return false };
-        match stack.acl_state(&addr) {
-            AclState::Open(handle) => stack.disconnect(handle) == ERROR_CODE_SUCCESS,
+        let state = stack.acl_state(&addr);
+        tracing::debug!("drop ACL: {} {state:?}", addr_str(&addr));
+        match state {
+            AclState::Open(handle) => {
+                // Logged here, before HCI Disconnect: its Disconnection
+                // Complete can be logged before the caller's thread goes on
+                tracing::info!("dropping the ACL link");
+                stack.disconnect(handle) == ERROR_CODE_SUCCESS
+            }
             _ => false,
         }
     }
 
     pub fn set_config(&mut self, stack: &Stack, config: &Configuration) -> u8 {
         let Some(&local) = self.endpoints.get(&codec::caps::endpoint_kind(config.kind)) else {
+            tracing::debug!("set configuration: no local endpoint for {}", config.kind);
             return ERROR_CODE_COMMAND_DISALLOWED;
         };
         self.local_seid = local;
         self.remote_seid = config.remote_seid;
         self.stream_codec = Some(config.kind);
+        self.esco.reconfigured();
+        // Another stream setting (chosen by hand): the bit rate asked for
+        // again, lowered only after the next voice link
+        if self.esco.is_lowered() {
+            tracing::info!("stream after the voice link: new configuration, the full bit rate again");
+            self.stop_esco_watch(stack);
+        }
         let cid = self.a2dp_cid;
-        match &config.request {
-            ConfigRequest::Sbc { sampling_frequency, channel_mode, min_bitpool, max_bitpool } => stack
-                .a2dp_set_config_sbc(
-                    cid,
-                    local,
-                    config.remote_seid,
-                    *sampling_frequency,
-                    match channel_mode {
-                        ChannelMode::Mono => AVDTP_CHANNEL_MODE_MONO,
-                        ChannelMode::DualChannel => AVDTP_CHANNEL_MODE_DUAL_CHANNEL,
-                        ChannelMode::Stereo => AVDTP_CHANNEL_MODE_STEREO,
-                        ChannelMode::JointStereo => AVDTP_CHANNEL_MODE_JOINT_STEREO,
-                    },
-                    AVDTP_SBC_BLOCK_LENGTH_16,
-                    AVDTP_SBC_SUBBANDS_8,
-                    AVDTP_SBC_ALLOCATION_METHOD_LOUDNESS,
-                    *min_bitpool,
-                    *max_bitpool,
-                ),
-            ConfigRequest::Aac { sampling_frequency, channels, bit_rate } => stack.a2dp_set_config_aac(
+        tracing::debug!(
+            "set configuration: cid 0x{cid:04X}, local SEID {local}, remote SEID {}, {} {:?}",
+            config.remote_seid,
+            config.kind,
+            config.request
+        );
+        let status = match &config.request {
+            ConfigRequest::Sbc {
+                sampling_frequency,
+                channel_mode,
+                blocks,
+                subbands,
+                allocation,
+                min_bitpool,
+                max_bitpool,
+            } => stack.a2dp_set_config_sbc(
                 cid,
                 local,
                 config.remote_seid,
-                AVDTP_AAC_MPEG2_LC,
                 *sampling_frequency,
-                *channels,
-                *bit_rate,
-                false,
+                match channel_mode {
+                    ChannelMode::Mono => AVDTP_CHANNEL_MODE_MONO,
+                    ChannelMode::DualChannel => AVDTP_CHANNEL_MODE_DUAL_CHANNEL,
+                    ChannelMode::Stereo => AVDTP_CHANNEL_MODE_STEREO,
+                    ChannelMode::JointStereo => AVDTP_CHANNEL_MODE_JOINT_STEREO,
+                },
+                match blocks {
+                    4 => AVDTP_SBC_BLOCK_LENGTH_4,
+                    8 => AVDTP_SBC_BLOCK_LENGTH_8,
+                    12 => AVDTP_SBC_BLOCK_LENGTH_12,
+                    _ => AVDTP_SBC_BLOCK_LENGTH_16,
+                },
+                if *subbands == 4 { AVDTP_SBC_SUBBANDS_4 } else { AVDTP_SBC_SUBBANDS_8 },
+                match allocation {
+                    Allocation::Loudness => AVDTP_SBC_ALLOCATION_METHOD_LOUDNESS,
+                    Allocation::Snr => AVDTP_SBC_ALLOCATION_METHOD_SNR,
+                },
+                *min_bitpool,
+                *max_bitpool,
             ),
+            ConfigRequest::Aac { object_type, sampling_frequency, channels, bit_rate, vbr } => stack
+                .a2dp_set_config_aac(
+                    cid,
+                    local,
+                    config.remote_seid,
+                    match object_type {
+                        AacObjectType::Mpeg2Lc => AVDTP_AAC_MPEG2_LC,
+                        AacObjectType::Mpeg4Lc => AVDTP_AAC_MPEG4_LC,
+                    },
+                    *sampling_frequency,
+                    *channels,
+                    *bit_rate,
+                    *vbr,
+                ),
             ConfigRequest::Vendor(info) => stack.a2dp_set_config_other(cid, local, config.remote_seid, info),
-        }
+        };
+        tracing::debug!("set configuration: request status 0x{status:02X}");
+        status
     }
 
     pub fn start_stream(&mut self, stack: &Stack) -> u8 {
         if self.a2dp_cid == 0 || self.local_seid == 0 {
+            tracing::debug!("start: no stream (cid 0x{:04X}, local SEID {})", self.a2dp_cid, self.local_seid);
             return ERROR_CODE_COMMAND_DISALLOWED;
         }
-        stack.a2dp_start_stream(self.a2dp_cid, self.local_seid)
+        let status = stack.a2dp_start_stream(self.a2dp_cid, self.local_seid);
+        tracing::debug!(
+            "start: AVDTP start (cid 0x{:04X}, local SEID {}) status 0x{status:02X}",
+            self.a2dp_cid,
+            self.local_seid
+        );
+        status
     }
 
     pub fn pause_stream(&mut self, stack: &Stack) {
         if self.a2dp_cid != 0 && self.local_seid != 0 {
-            stack.a2dp_pause_stream(self.a2dp_cid, self.local_seid);
+            let status = stack.a2dp_pause_stream(self.a2dp_cid, self.local_seid);
+            tracing::debug!(
+                "suspend: AVDTP suspend (cid 0x{:04X}, local SEID {}) status 0x{status:02X}",
+                self.a2dp_cid,
+                self.local_seid
+            );
         }
         self.set_streaming(false);
     }
@@ -421,9 +956,58 @@ impl HostApp {
     /// a command now (one still waits for its answer).
     pub fn probe(&mut self, stack: &Stack) -> bool {
         if !stack.can_send_command_now() {
+            tracing::trace!("probe: HCI busy");
             return false;
         }
-        stack.cmd_read_bd_addr() == ERROR_CODE_SUCCESS
+        let status = stack.cmd_read_bd_addr();
+        tracing::debug!("probe: Read BD_ADDR sent (0x{status:02X})");
+        status == ERROR_CODE_SUCCESS
+    }
+
+    /// While a voice link is open, gives the headphones the volume as their
+    /// HFP speaker gain (+VGS): the voice link plays at that gain, and the
+    /// AVRCP volume does not reach it. `volume` None: the current one.
+    pub fn sync_speaker_gain(&mut self, stack: &Stack, volume: Option<u8>) {
+        let Some(acl) = self.voice.audio_acl() else { return };
+        let c = &self.controls;
+        let volume = volume.or_else(|| {
+            [
+                c.volume_request.load(Ordering::Acquire),
+                c.volume.load(Ordering::Acquire),
+                c.restore_volume.load(Ordering::Acquire),
+            ]
+            .into_iter()
+            .find_map(|v| u8::try_from(v).ok())
+        });
+        let Some(volume) = volume else {
+            tracing::debug!("HFP: volume unknown, the headphones keep their speaker gain");
+            return;
+        };
+        let gain = crate::voice::speaker_gain(volume);
+        let status = stack.hfp_ag_set_speaker_gain(acl, gain);
+        tracing::debug!("HFP: speaker gain {gain} for volume {volume} (0x{status:02x})");
+    }
+
+    /// AT+VGS: the headphones changed their speaker gain on the voice link
+    /// (their buttons): it becomes the volume, so Windows follows and A2DP
+    /// comes back at the same level
+    fn on_speaker_gain(&mut self, stack: &Stack, gain: u8) {
+        if self.voice.audio_acl().is_none() {
+            tracing::debug!("HFP: headphones' speaker gain {gain} (no voice link, AVRCP keeps the volume)");
+            return;
+        }
+        let current = self.controls.volume.load(Ordering::Acquire);
+        if u8::try_from(current).is_ok_and(|v| crate::voice::speaker_gain(v) == gain) {
+            return;
+        }
+        let volume = crate::voice::gain_volume(gain);
+        tracing::info!("HFP: headphones' speaker gain {gain} = volume {volume}");
+        self.controls.volume.store(i32::from(volume), Ordering::Release);
+        let _ = self.events.send(HostEvent::Volume(volume));
+        if self.avrcp_cid != 0 {
+            self.controls.volume_request.store(i32::from(volume), Ordering::Release);
+            self.send_pending_volume(stack);
+        }
     }
 
     /// Sends the queued volume request, if AVRCP is free
@@ -432,17 +1016,24 @@ impl HostApp {
             return;
         }
         if self.volume_in_flight.is_some_and(|t| t.elapsed() < VOLUME_RESPONSE_TIMEOUT) {
+            tracing::debug!("volume: a request is in flight, queued");
             return;
+        }
+        if let Some(t) = self.volume_in_flight {
+            tracing::debug!("volume: no response for {} ms, sending the next", t.elapsed().as_millis());
         }
         let v = self.controls.volume_request.swap(-1, Ordering::AcqRel);
         if v < 0 {
             return;
         }
-        if stack.avrcp_set_absolute_volume(self.avrcp_cid, v as u8) != ERROR_CODE_SUCCESS {
+        let status = stack.avrcp_set_absolute_volume(self.avrcp_cid, v as u8);
+        if status != ERROR_CODE_SUCCESS {
+            tracing::debug!("volume: set absolute volume {v} busy (0x{status:02X}), kept queued");
             // Busy with another AVRCP command: keep it unless a newer one came
             let _ = self.controls.volume_request.compare_exchange(-1, v, Ordering::AcqRel, Ordering::Acquire);
             return;
         }
+        tracing::debug!("volume: set absolute volume {v} sent (avrcp cid 0x{:04X})", self.avrcp_cid);
         self.volume_in_flight = Some(Instant::now());
         self.controls.volume.store(v, Ordering::Release);
     }
@@ -455,6 +1046,15 @@ impl HostApp {
     /// a lost link are stale: dropped before the encode thread may queue
     /// again (v1 flushed after a reconnect).
     fn set_streaming(&mut self, on: bool) {
+        if on != self.streaming {
+            self.stall.reset();
+            let completed = self.media_completed();
+            if on {
+                self.esco.stream_started(Instant::now(), completed);
+            } else {
+                self.esco.stream_stopped(Instant::now(), completed);
+            }
+        }
         if on && !self.streaming {
             let stale = self.media.slots();
             if stale > 0 {
@@ -464,20 +1064,125 @@ impl HostApp {
                 tracing::info!("dropped {stale} media packet(s) queued before the stream started");
             }
             self.stats.queue_depth.store(0, Ordering::Relaxed);
+            self.stats.queue_wait_ms.store(0, Ordering::Relaxed);
+        }
+        if on != self.streaming {
+            tracing::debug!(
+                "media: streaming {on} (codec {:?}, cid 0x{:04X}, local SEID {})",
+                self.stream_codec,
+                self.a2dp_cid,
+                self.local_seid
+            );
         }
         self.streaming = on;
         self.media_streaming.store(on, Ordering::Release);
+        // Gaps are measured within one started stream
+        self.can_send_asked = None;
+        self.last_media_sent = None;
+        self.last_completed = None;
+    }
+
+    /// Packets the controller completed on the stream's link so far
+    fn media_completed(&self) -> u64 {
+        self.media_acl.and_then(|h| self.completed_by_handle.get(&h).copied()).unwrap_or(0)
+    }
+
+    /// A second of [`EscoWatch`]: the bit rate lowered when the stream came
+    /// out of a voice link slow
+    fn esco_tick(&mut self, stack: &Stack) {
+        let Some(acl) = self.esco.watching() else { return };
+        let keep = codec::dev::overrides().keep_bitrate_on_slow_link;
+        if keep && self.esco.is_lowered() {
+            tracing::info!("stream after the voice link: the full bit rate again (developer mode keeps it)");
+            self.stop_esco_watch(stack);
+            return;
+        }
+        let completed = (self.streaming && self.media_acl == Some(acl)).then(|| self.media_completed());
+        match self.esco.tick(Instant::now(), completed) {
+            Verdict::Wait => {}
+            Verdict::Good { rate } => {
+                tracing::info!("stream after the voice link: {rate} packets/s, as before");
+            }
+            Verdict::Lower { rate, before } => {
+                if keep {
+                    tracing::warn!(
+                        "stream after the voice link: {rate} packets/s of {before} before; the full bit rate kept (developer mode)"
+                    );
+                    self.esco.stop();
+                } else {
+                    tracing::warn!(
+                        "stream after the voice link: {rate} packets/s of {before} before; lowering the bit rate until \
+                         the next voice link or another stream setting"
+                    );
+                    self.stats.slow_link.store(true, Ordering::Release);
+                }
+            }
+        }
+        if self.esco.watching().is_some() {
+            stack.timer_start(TIMER_ESCO_WATCH, crate::esco_watch::TICK.as_millis() as u32);
+        }
+    }
+
+    /// A second of [`crate::stall_watch::StallWatch`] while streaming: a link
+    /// that takes no packets any more is dropped, and the session connects
+    /// again (its disconnection is a lost connection)
+    fn stall_tick(&mut self, stack: &Stack) {
+        let Some(acl) = self.media_acl.filter(|_| self.streaming) else { return };
+        let waiting = stack.acl_packets_in_controller(acl).unwrap_or(0);
+        if let Some(took) = self.stall.tick(Instant::now(), self.media_completed(), waiting) {
+            tracing::warn!(
+                "stream: no packet completed for {} s with {waiting} waiting in the controller; dropping the link to connect again",
+                took.as_secs()
+            );
+            // Not a slow link: no lowered bit rate, no voice link to put it right
+            self.stop_esco_watch(stack);
+            if self.drop_acl(stack) {
+                return;
+            }
+            tracing::warn!("stream: the stalled link could not be dropped");
+        }
+        stack.timer_start(TIMER_STALL_WATCH, crate::stall_watch::TICK.as_millis() as u32);
+    }
+
+    /// The watch ends: the full bit rate again
+    fn stop_esco_watch(&mut self, stack: &Stack) {
+        self.esco.stop();
+        stack.timer_stop(TIMER_ESCO_WATCH);
+        self.stats.slow_link.store(false, Ordering::Release);
+    }
+
+    fn drop_stale_media(&mut self, now: Instant) {
+        if !self.streaming {
+            return;
+        }
+        let dropped = crate::media::drop_stale(&mut self.media, &self.stats, now);
+        if dropped > 0 {
+            let n = self.stats.queue_drops.load(Ordering::Relaxed);
+            if n <= 10 || n.is_power_of_two() {
+                tracing::debug!(
+                    "media: dropped {dropped} old packet(s), {} queued, {n} queue drop(s) so far",
+                    self.media.slots()
+                );
+            }
+        }
     }
 
     fn kick_media(&mut self, stack: &Stack) {
         if self.streaming && !self.can_send_requested && self.a2dp_cid != 0 && !self.media.is_empty() {
             self.can_send_requested = true;
+            self.can_send_asked = Some(Instant::now());
+            tracing::trace!("media: request can send now (queued {})", self.media.slots());
             stack.a2dp_request_can_send_now(self.a2dp_cid, self.local_seid);
         }
     }
 
     fn can_send_now(&mut self, stack: &Stack) {
         self.can_send_requested = false;
+        let now = Instant::now();
+        if let Some(asked) = self.can_send_asked.take() {
+            self.stats.timing.can_send_wait_us.record_duration(now - asked);
+        }
+        self.drop_stale_media(now);
         if let Ok(packet) = self.media.pop() {
             let depth = self.media.slots() as u32;
             self.stats.queue_depth.store(depth, Ordering::Relaxed);
@@ -487,22 +1192,70 @@ impl HostApp {
                 .a2dp_max_media_payload_size(self.a2dp_cid, self.local_seid)
                 .map(|m| if packet.rtp { m as usize } else { m as usize + RTP_HEADER_SIZE });
             let payload = packet.payload();
+            if codec::dev::overrides().packet_dump && packet.rtp {
+                static DUMPED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                if DUMPED.fetch_add(1, Ordering::Relaxed) < 6 {
+                    let head: Vec<String> = payload.iter().take(24).map(|b| format!("{b:02X}")).collect();
+                    tracing::info!(
+                        "media packet: {} bytes, ts {}: {}",
+                        payload.len(),
+                        packet.timestamp,
+                        head.join(" ")
+                    );
+                }
+            }
             if max.is_some_and(|m| payload.len() <= m) {
                 let status = if packet.rtp {
-                    stack.a2dp_send_media_payload_rtp(self.a2dp_cid, self.local_seid, 0, packet.timestamp, payload)
+                    stack.a2dp_send_media_payload_rtp(
+                        self.a2dp_cid,
+                        self.local_seid,
+                        u8::from(packet.marker),
+                        packet.timestamp,
+                        payload,
+                    )
                 } else {
                     stack.a2dp_send_media_packet(self.a2dp_cid, self.local_seid, payload)
                 };
                 if status == ERROR_CODE_SUCCESS {
+                    if let Some(last) = self.last_media_sent.replace(now) {
+                        self.stats.timing.send_gap_us.record_duration(now - last);
+                    }
                     self.stats.packets_sent.fetch_add(1, Ordering::Relaxed);
                     let bytes = payload.len() + if packet.rtp { RTP_HEADER_SIZE } else { 0 };
                     self.stats.bytes_sent.fetch_add(bytes as u64, Ordering::Relaxed);
+                    // The L2CAP packet in ACL packets of the controller's size
+                    let acl_len = usize::from(stack.max_acl_data_packet_length()).max(1);
+                    let acl = (bytes + L2CAP_HEADER_SIZE).div_ceil(acl_len);
+                    self.stats.acl_packets_sent.fetch_add(acl as u64, Ordering::Relaxed);
+                    self.sample_controller_backlog(stack);
+                    tracing::trace!(
+                        "media: sent {} bytes, ts {}, marker {}, rtp {}, queued {depth}",
+                        payload.len(),
+                        packet.timestamp,
+                        packet.marker,
+                        packet.rtp
+                    );
                 } else {
-                    self.stats.send_errors.fetch_add(1, Ordering::Relaxed);
+                    let n = self.stats.send_errors.fetch_add(1, Ordering::Relaxed) + 1;
+                    if n <= 10 || n.is_power_of_two() {
+                        tracing::debug!(
+                            "media: send failed 0x{status:02X} ({} bytes, ts {}), {n} send error(s) so far",
+                            payload.len(),
+                            packet.timestamp
+                        );
+                    }
                 }
             } else {
-                self.stats.send_errors.fetch_add(1, Ordering::Relaxed);
+                let n = self.stats.send_errors.fetch_add(1, Ordering::Relaxed) + 1;
+                if n <= 10 || n.is_power_of_two() {
+                    tracing::debug!(
+                        "media: packet of {} bytes over the max payload {max:?}, dropped, {n} send error(s) so far",
+                        payload.len()
+                    );
+                }
             }
+        } else {
+            tracing::trace!("media: can send now, queue empty");
         }
         // Chain the next one; when empty, the next queued packet wakes us
         self.kick_media(stack);
@@ -518,14 +1271,44 @@ impl HostApp {
         if ev < 0x60 || ev == HCI_EVENT_VENDOR_SPECIFIC {
             self.shared.update(|s| s.controller_events += 1);
         }
+        if ev == HCI_EVENT_NUMBER_OF_COMPLETED_PACKETS && self.streaming {
+            let now = Instant::now();
+            if let Some(last) = self.last_completed.replace(now) {
+                self.stats.timing.completed_gap_us.record_duration(now - last);
+            }
+            self.stats.timing.completed_events.fetch_add(1, Ordering::Relaxed);
+            // BTstack counted the completed packets before passing it on
+            self.sample_controller_backlog(stack);
+        }
+        if self.link.on_hci(ev, p, self.streaming) {
+            self.publish_link();
+        }
+        if ev == HCI_EVENT_NUMBER_OF_COMPLETED_PACKETS {
+            tracing::trace!("HCI completed packets: {:02X?}", p.get(2..));
+            for (handle, n) in completed_counts(p) {
+                *self.completed_by_handle.entry(handle).or_default() += u64::from(n);
+            }
+        }
+        // The controller's SCO buffer length, which BTstack's H2 path
+        // asserts on (crate::voice)
+        if let Some(b) = btstack_sys::events::read_buffer_size(p) {
+            self.voice.on_buffer_size(&b);
+        }
         match ev {
             BTSTACK_EVENT_STATE => match u8_at(p, 2) {
+                Some(state @ (1 | 3..)) => tracing::debug!("HCI state {state} ({:?})", stack.hci_state()),
                 Some(2) => self.on_working(stack),
                 Some(0) => {
                     tracing::info!("HCI state OFF");
                     stack.timer_stop(TIMER_AFH);
                     stack.timer_stop(TIMER_PLAYBACK);
+                    stack.timer_stop(TIMER_RTK_VERIFY);
+                    stack.timer_stop(TIMER_LINK_COMMAND);
                     self.stats.with_radio(|r| *r = Default::default());
+                    self.link.reset();
+                    self.media_acl = None;
+                    self.stop_esco_watch(stack);
+                    self.publish_link();
                     self.shared.update(|s| {
                         s.hci_ready = false;
                         s.hci_off = true;
@@ -533,12 +1316,60 @@ impl HostApp {
                 }
                 _ => {}
             },
+            HCI_EVENT_COMMAND_STATUS => {
+                if let (Some(status), Some(opcode)) = (u8_at(p, 2), le16(p, 4))
+                    && self.debug_command_sent == Some(opcode)
+                {
+                    self.debug_command_sent = None;
+                    tracing::info!(
+                        "debug command 0x{opcode:04X}: Command Status 0x{status:02X} ({})",
+                        hci_error_string(status)
+                    );
+                }
+                if let (Some(status), Some(opcode)) = (u8_at(p, 2), le16(p, 4))
+                    && status != ERROR_CODE_SUCCESS
+                {
+                    tracing::debug!("HCI command 0x{opcode:04X} status 0x{status:02X} ({})", hci_error_string(status));
+                    // An inquiry the controller refused: BTstack goes idle
+                    // without an Inquiry Complete, the scan would wait for it
+                    if opcode == HCI_OPCODE_INQUIRY {
+                        self.shared.update(|s| s.inquiry_done = true);
+                    }
+                }
+                self.send_link_reads(stack);
+            }
             HCI_EVENT_COMMAND_COMPLETE => {
                 let opcode = le16(p, 3).unwrap_or(0);
+                if self.debug_command_sent == Some(opcode) {
+                    self.debug_command_sent = None;
+                    let status = u8_at(p, 5).unwrap_or(0xFF);
+                    let local = self.shared.lock().local_address.clone();
+                    tracing::info!(
+                        "debug command 0x{opcode:04X}: Command Complete 0x{status:02X} ({}), return {}",
+                        hci_error_string(status),
+                        return_bytes(p.get(6..).unwrap_or_default(), local.as_deref())
+                    );
+                }
+                tracing::trace!("HCI command complete 0x{opcode:04X} status {:?}", u8_at(p, 5));
+                if let Some(status) = u8_at(p, 5)
+                    && status != ERROR_CODE_SUCCESS
+                {
+                    tracing::debug!(
+                        "HCI command 0x{opcode:04X} complete with 0x{status:02X} ({})",
+                        hci_error_string(status)
+                    );
+                }
                 if opcode == HCI_OPCODE_READ_LOCAL_VERSION_INFORMATION && p.len() >= 14 {
                     self.on_local_version(stack, p);
                 }
                 if opcode == HCI_OPCODE_READ_BD_ADDR {
+                    // Status, then the address little-endian
+                    if p.len() >= 12 && p[5] == 0 {
+                        let a: Vec<String> = p[6..12].iter().rev().map(|b| format!("{b:02X}")).collect();
+                        let addr = a.join(":");
+                        tracing::debug!("controller address {addr}");
+                        self.shared.update(|s| s.local_address = Some(addr));
+                    }
                     self.shared.update(|s| {
                         if s.probe_pending {
                             s.probe_pending = false;
@@ -547,6 +1378,7 @@ impl HostApp {
                     });
                 }
                 self.on_radio_command_complete(opcode, p);
+                self.send_link_reads(stack);
             }
             HCI_EVENT_USER_CONFIRMATION_REQUEST => {
                 // Just Works
@@ -558,14 +1390,106 @@ impl HostApp {
             HCI_EVENT_PIN_CODE_REQUEST => {
                 // Legacy pairing: the default PIN
                 if let Some(addr) = addr_at(p, 2) {
+                    tracing::info!("PIN code requested by {} (legacy pairing), answering 0000", addr_str(&addr));
                     stack.pin_code_response(&addr, "0000");
                 }
+            }
+            // Security steps, logged so that an authentication failure
+            // shows which side refused (BTstack answers these itself)
+            HCI_EVENT_LINK_KEY_REQUEST => {
+                if let Some(addr) = addr_at(p, 2) {
+                    tracing::info!("link key requested for {}", addr_str(&addr));
+                }
+            }
+            HCI_EVENT_LINK_KEY_NOTIFICATION => {
+                // The key itself (bytes 8..24) is never logged
+                if let (Some(addr), Some(kind)) = (addr_at(p, 2), u8_at(p, 24)) {
+                    tracing::info!("new link key from pairing with {} (type {kind})", addr_str(&addr));
+                }
+            }
+            HCI_EVENT_IO_CAPABILITY_RESPONSE => {
+                if let (Some(addr), Some(io), Some(oob), Some(auth)) =
+                    (addr_at(p, 2), u8_at(p, 8), u8_at(p, 9), u8_at(p, 10))
+                {
+                    tracing::info!(
+                        "pairing: {} answers IO capability {io}, OOB {oob}, authentication requirements 0x{auth:02X}",
+                        addr_str(&addr)
+                    );
+                }
+            }
+            HCI_EVENT_SIMPLE_PAIRING_COMPLETE => {
+                if let (Some(status), Some(addr)) = (u8_at(p, 2), addr_at(p, 3)) {
+                    if status == 0 {
+                        tracing::info!("pairing with {} complete", addr_str(&addr));
+                    } else {
+                        tracing::warn!(
+                            "pairing with {} failed: 0x{status:02X} ({})",
+                            addr_str(&addr),
+                            hci_error_string(status)
+                        );
+                    }
+                }
+            }
+            HCI_EVENT_AUTHENTICATION_COMPLETE => {
+                if let (Some(status), Some(handle)) = (u8_at(p, 2), le16(p, 3)) {
+                    let handle = handle & 0x0FFF;
+                    // What connect_retrying decides on: a key the device
+                    // refused vs. a collision with its own authentication
+                    self.shared.update(|s| {
+                        if s.target_acl_handle == Some(handle) {
+                            s.target_auth_status = Some(status);
+                        }
+                    });
+                    if status == 0 {
+                        tracing::info!("authentication complete (handle 0x{handle:04x})");
+                    } else {
+                        tracing::warn!(
+                            "authentication failed (handle 0x{handle:04x}): 0x{status:02X} ({})",
+                            hci_error_string(status)
+                        );
+                    }
+                }
+            }
+            // LE links log theirs in le::core
+            HCI_EVENT_ENCRYPTION_CHANGE => {
+                if let (Some(status), Some(handle), Some(on)) = (u8_at(p, 2), le16(p, 3), u8_at(p, 5)) {
+                    let handle = handle & 0x0FFF;
+                    if self.shared.lock().target_acl_handle == Some(handle) {
+                        if status == 0 {
+                            tracing::info!("encryption {} (handle 0x{handle:04x})", if on != 0 { "on" } else { "off" });
+                        } else {
+                            tracing::warn!(
+                                "encryption failed (handle 0x{handle:04x}): 0x{status:02X} ({})",
+                                hci_error_string(status)
+                            );
+                        }
+                    }
+                }
+            }
+            HCI_EVENT_CONNECTION_REQUEST => {
+                // BTstack accepts it; the link that comes up is the device's own
+                let Some(addr) = addr_at(p, 2) else { return };
+                tracing::debug!("HCI connection request from {}", addr_str(&addr));
+                self.shared.update(|s| {
+                    if !s.acl_requests.contains(&addr) {
+                        s.acl_requests.push(addr);
+                    }
+                });
             }
             HCI_EVENT_CONNECTION_COMPLETE => {
                 let (Some(status), Some(handle), Some(addr)) = (u8_at(p, 2), le16(p, 3), addr_at(p, 5)) else {
                     return;
                 };
+                tracing::debug!(
+                    "HCI connection complete: {} status 0x{status:02X}, handle 0x{:04X}, link type {:?}, encryption {:?}, target {}",
+                    addr_str(&addr),
+                    handle & 0x0FFF,
+                    u8_at(p, 11),
+                    u8_at(p, 12),
+                    self.remote_addr == Some(addr)
+                );
                 if status != 0 {
+                    self.shared.update(|s| s.acl_requests.retain(|&a| a != addr));
                     tracing::warn!(
                         "HCI connection to {} failed: 0x{status:02X} ({})",
                         addr_str(&addr),
@@ -573,41 +1497,125 @@ impl HostApp {
                     );
                 } else {
                     tracing::info!("HCI ACL connection established to {}", addr_str(&addr));
-                    if self.remote_addr == Some(addr) {
-                        self.shared.update(|s| {
+                    self.link.connected(stack, handle & 0x0FFF, addr);
+                    let target = self.remote_addr == Some(addr);
+                    self.shared.update(|s| {
+                        s.acl_up_from = Some(addr);
+                        let by_device = s.acl_requests.contains(&addr);
+                        s.acl_requests.retain(|&a| a != addr);
+                        s.acl_links.retain(|&(_, a, _)| a != addr);
+                        s.acl_links.push((handle & 0x0FFF, addr, by_device));
+                        s.last_link_up = Some((addr, Instant::now()));
+                        if target {
                             s.target_acl_down_reason = 0;
                             s.target_acl_handle = Some(handle & 0x0FFF);
-                        });
-                    }
+                        }
+                    });
                 }
             }
             GAP_EVENT_INQUIRY_RESULT => {
-                let (Some(addr), Some(cod), Some(rssi)) = (addr_at(p, 2), le24(p, 9), u8_at(p, 15)) else { return };
+                let (Some(addr), Some(psrm), Some(cod), Some(clock), Some(rssi)) =
+                    (addr_at(p, 2), u8_at(p, 8), le24(p, 9), le16(p, 12), u8_at(p, 15))
+                else {
+                    return;
+                };
                 let name = if u8_at(p, 25) == Some(1) {
                     let len = u8_at(p, 26).unwrap_or(0) as usize;
                     p.get(27..27 + len).map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_default()
                 } else {
                     String::new()
                 };
-                tracing::info!("inquiry result: {} CoD=0x{cod:06X} RSSI={} name={name}", addr_str(&addr), rssi as i8);
+                let line =
+                    format!("inquiry result: {} CoD=0x{cod:06X} RSSI={} name=“{name}”", addr_str(&addr), rssi as i8);
+                let d = DiscoveredDevice { addr, name, class_of_device: cod, rssi: rssi as i8 };
+                // A device answers again and again (inquiry with RSSI / EIR):
+                // the repeats at trace
+                if self.shared.update(|s| !s.inquiry_done && s.add_found(d, psrm, clock)) {
+                    tracing::info!("{line}");
+                } else {
+                    tracing::trace!("{line}");
+                }
+            }
+            HCI_EVENT_REMOTE_NAME_REQUEST_COMPLETE => {
+                let (Some(status), Some(addr)) = (u8_at(p, 2), addr_at(p, 3)) else { return };
+                // Up to 248 bytes, NUL-terminated when shorter
+                let raw = p.get(9..).unwrap_or_default();
+                let raw = &raw[..raw.iter().position(|&b| b == 0).unwrap_or(raw.len())];
+                let name = String::from_utf8_lossy(raw).trim().to_string();
+                tracing::info!(
+                    "remote name of {}: status 0x{status:02X} name={}",
+                    addr_str(&addr),
+                    format_args!("“{name}”")
+                );
                 self.shared.update(|s| {
-                    if !s.inquiry_done {
-                        s.discovered.push(DiscoveredDevice { addr, name, class_of_device: cod, rssi: rssi as i8 });
+                    if status == 0 && !name.is_empty() {
+                        s.set_found_name(&addr, &name);
+                        s.remote_name = Some((addr, name));
                     }
+                    s.name_done = true;
                 });
             }
             GAP_EVENT_INQUIRY_COMPLETE => {
+                tracing::debug!("inquiry complete (status {:?})", u8_at(p, 2));
                 self.shared.update(|s| s.inquiry_done = true);
+            }
+            // What the voice link runs with on the air (#86: to tell a
+            // link that sounds bad from one that does not)
+            HCI_EVENT_SYNCHRONOUS_CONNECTION_COMPLETE => {
+                let (Some(status), Some(link_type), Some(interval), Some(window), Some(air)) =
+                    (u8_at(p, 2), u8_at(p, 11), u8_at(p, 12), u8_at(p, 13), u8_at(p, 18))
+                else {
+                    return;
+                };
+                if status == 0 {
+                    tracing::info!(
+                        "SCO link: {}, interval {interval} slots, retransmission window {window} slots, rx {} / tx {} bytes, air mode {air}",
+                        if link_type == 2 { "eSCO" } else { "SCO" },
+                        le16(p, 14).unwrap_or(0),
+                        le16(p, 16).unwrap_or(0)
+                    );
+                    if let Some(addr) = addr_at(p, 5) {
+                        self.link.voice_link_started(addr);
+                        self.send_link_reads(stack);
+                    }
+                }
             }
             HCI_EVENT_DISCONNECTION_COMPLETE => {
                 let (Some(handle), Some(reason)) = (le16(p, 3), u8_at(p, 5)) else { return };
                 let handle = handle & 0x0FFF;
                 tracing::info!(
-                    "HCI disconnection (handle 0x{handle:04x}, reason 0x{reason:02x}: {})",
-                    hci_error_string(reason)
+                    "HCI disconnection (handle 0x{handle:04x}, reason 0x{reason:02x}: {}), {} packet(s) completed by the controller",
+                    hci_error_string(reason),
+                    self.completed_by_handle.remove(&handle).unwrap_or(0)
                 );
+                // The audio connection's SCO link: released even if HFP
+                // never says so
+                if u8_at(p, 2) == Some(0) {
+                    // Its ACL link gets its packet types set again, and the
+                    // stream's rate is watched: the controller can stay
+                    // slow after eSCO (#86)
+                    if let Some(acl) = self.voice.acl_of_sco(handle) {
+                        self.link.voice_link_ended(acl, self.media_acl == Some(acl));
+                        self.send_link_reads(stack);
+                        if self.media_acl == Some(acl) {
+                            // The full bit rate again: the voice link may
+                            // have put the link right
+                            self.stats.slow_link.store(false, Ordering::Release);
+                            if self.esco.voice_link_ended(Instant::now(), acl) {
+                                stack.timer_start(TIMER_ESCO_WATCH, crate::esco_watch::TICK.as_millis() as u32);
+                            }
+                        }
+                    }
+                    if self.esco.watching() == Some(handle) {
+                        self.stop_esco_watch(stack);
+                    }
+                    if let Some(e) = self.voice.on_disconnected(handle) {
+                        let _ = self.events.send(e);
+                    }
+                }
                 let lost = self.shared.update(|s| {
                     s.acl_down = true;
+                    s.acl_links.retain(|&(h, _, _)| h != handle);
                     if s.target_acl_handle == Some(handle) {
                         s.target_acl_down_reason = reason;
                         s.target_acl_handle = None;
@@ -620,7 +1628,11 @@ impl HostApp {
                         tracing::info!("not the A2DP link (handle 0x{a2dp:04x}), stream unaffected");
                         return false;
                     }
-                    s.a2dp_con_handle = None;
+                    // Also when A2DP was released just before (headphones
+                    // switched off release it first, then the link)
+                    if s.a2dp_con_handle.take().is_some() || s.connected || s.streaming {
+                        s.link_lost_reason = reason;
+                    }
                     if s.connected || s.streaming {
                         s.connected = false;
                         s.streaming = false;
@@ -629,10 +1641,22 @@ impl HostApp {
                     }
                     false
                 });
+                self.link.disconnected(handle);
+                self.publish_link();
+                if self.media_acl == Some(handle) {
+                    self.media_acl = None;
+                    self.stats.controller_backlog.store(0, Ordering::Relaxed);
+                }
+                tracing::debug!(
+                    "disconnection of handle 0x{handle:04X}: a2dp link lost {lost}, hfp acl {:?}, streaming {}",
+                    self.hfp_acl,
+                    self.streaming
+                );
                 if lost {
                     self.set_streaming(false);
                     self.can_send_requested = false;
                     self.stats.queue_depth.store(0, Ordering::Relaxed);
+                    self.stats.queue_wait_ms.store(0, Ordering::Relaxed);
                     tracing::warn!("connection lost");
                     let _ = self.events.send(HostEvent::ConnectionLost);
                 }
@@ -646,6 +1670,15 @@ impl HostApp {
     fn on_working(&mut self, stack: &Stack) {
         let elapsed = self.init_started.elapsed().as_millis();
         tracing::info!("HCI ready (took {elapsed} ms)");
+        // A Realtek download read back below settles the HCI version later
+        let mut verifying = false;
+        tracing::debug!(
+            "realtek check: pid 0x{:04X}, version seen {}, first LMP subversion 0x{:04X} (ROM {})",
+            self.setup.realtek_pid,
+            self.rtk_version_seen,
+            self.rtk_lmp_first,
+            is_realtek_rom_lmp(self.rtk_lmp_first)
+        );
         if self.setup.realtek_pid != 0 {
             if self.rtk_version_seen {
                 // Judged by the LMP subversion, as BTstack's Realtek driver
@@ -656,27 +1689,62 @@ impl HostApp {
                         "Realtek firmware already running from an earlier session (LMP subversion 0x{:04X}), download skipped",
                         self.rtk_lmp_first
                     );
-                } else if stack.cmd_read_local_version() == ERROR_CODE_SUCCESS {
-                    // HCI init read the version only before the download
-                    self.rtk_verify_pending = true;
-                } else {
-                    tracing::info!(
-                        "Realtek firmware download ran (ROM LMP subversion 0x{:04X}); not verified",
-                        self.rtk_lmp_first
+                } else if let [fw, ..] = self.missing_realtek_files(false).as_slice() {
+                    // Issue #81: without the firmware file there was nothing
+                    // to download, the controller stays on its ROM code
+                    tracing::warn!(
+                        "Realtek firmware NOT loaded (LMP subversion 0x{:04X} is the ROM code; {fw} missing in {})",
+                        self.rtk_lmp_first,
+                        self.setup.firmware_dir.display()
                     );
+                    self.shared.update(|s| s.realtek_rom = true);
+                } else {
+                    // HCI init read the version only before the download
+                    self.rtk_verify_tries = RTK_VERIFY_TRIES;
+                    verifying = true;
+                    self.verify_realtek_download(stack);
                 }
+            } else if let Some(company) = self.controller_company.filter(|&c| c != COMPANY_ID_REALTEK) {
+                // Another adapter on WinUSB opened instead of the Realtek
+                // one: its quick init says nothing about Realtek firmware
+                tracing::warn!(
+                    "the opened controller is {} (company 0x{company:04X}), not the Realtek chip 0x{:04X} the setup is for: no Realtek firmware check",
+                    crate::chips::company_name(company).unwrap_or("unknown"),
+                    self.setup.realtek_pid
+                );
             } else if elapsed < 500 {
                 tracing::warn!("HCI init took < 500 ms: Realtek firmware likely NOT loaded");
+                self.shared.update(|s| s.realtek_rom = true);
             }
         }
+        self.completed_by_handle.clear();
+        // Developer > Debug: MediaTek controllers only
+        self.debug_command_sent = None;
+        // (set to go before reset, the MediaTek loader sent it already)
+        self.debug_command = crate::debug_command::get()
+            .filter(|_| self.controller_company == Some(0x0046) && !crate::debug_command::before_reset());
+        crate::le::iso_send::depth_for_controller(self.controller_company == Some(0x0046));
+        self.send_debug_command(stack);
+        let le_audio_capable = stack.controller_iso() == Some(true);
+        tracing::info!(
+            "controller: LE Audio isochronous channels {}",
+            if le_audio_capable { "supported" } else { "not supported" }
+        );
         self.shared.update(|s| {
             s.hci_ready = true;
             s.hci_off = false;
+            s.le_audio_capable = le_audio_capable;
             s.init_done = Some(Ok(()));
+            if !verifying {
+                s.hci_version_settled = true;
+            }
         });
         self.afh_ticks = 0;
         self.afh_policy_version_seen = None;
         self.afh_sent_map = None;
+        self.link.reset();
+        self.afh_history.clear();
+        self.afh_history_handle = None;
         stack.timer_start(TIMER_AFH, 200);
     }
 
@@ -684,15 +1752,27 @@ impl HostApp {
         // Command Complete: [5] status [6] HCI version [9] LMP version
         // [10..11] manufacturer [12..13] LMP subversion
         if u8_at(p, 5) != Some(0) {
+            tracing::debug!("Read Local Version failed (status {:?})", u8_at(p, 5));
             return;
         }
         let hci_ver = u8_at(p, 6).unwrap_or(0);
+        if let Some(v) = u8_at(p, 6) {
+            self.shared.update(|s| s.hci_version = Some(v));
+        }
         let manufacturer = le16(p, 10).unwrap_or(0);
         let lmp_subver = le16(p, 12).unwrap_or(0);
+        tracing::debug!(
+            "local version: HCI revision 0x{:04X}, LMP version {}, state {:?}, verify pending {}",
+            le16(p, 7).unwrap_or(0),
+            u8_at(p, 9).unwrap_or(0),
+            stack.hci_state(),
+            self.rtk_verify_pending
+        );
         tracing::info!(
             "controller: company 0x{manufacturer:04X} ({}), HCI version {hci_ver}, LMP subversion 0x{lmp_subver:04X}",
             crate::chips::company_name(manufacturer).unwrap_or("unknown")
         );
+        self.controller_company = Some(manufacturer);
         if manufacturer == COMPANY_ID_REALTEK && self.setup.realtek_pid != 0 {
             // The first read of an init comes before the firmware download
             if !self.rtk_version_seen {
@@ -701,10 +1781,12 @@ impl HostApp {
             self.rtk_version_seen = true;
             if self.rtk_verify_pending {
                 self.rtk_verify_pending = false;
+                self.shared.update(|s| s.hci_version_settled = true);
                 if is_realtek_rom_lmp(lmp_subver) {
                     tracing::warn!(
                         "Realtek firmware NOT loaded (LMP subversion 0x{lmp_subver:04X} is the ROM code); check the firmware files"
                     );
+                    self.shared.update(|s| s.realtek_rom = true);
                 } else {
                     tracing::info!(
                         "Realtek firmware loaded (LMP subversion 0x{:04X} -> 0x{lmp_subver:04X})",
@@ -713,10 +1795,8 @@ impl HostApp {
                 }
             }
         }
-        if matches!(manufacturer, 0x0046 | 0x001D | 0x0045) {
-            tracing::warn!(
-                "this vendor needs a firmware download that is not implemented; the controller runs its ROM firmware only"
-            );
+        if let Some(why) = missing_loader_warning(manufacturer, self.loader_ok, self.setup.tcp) {
+            tracing::warn!("{why}");
         }
         // Broadcom (Cypress / Infineon map to it inside BTstack): the
         // PatchRAM goes in during custom init, which follows this command;
@@ -728,9 +1808,14 @@ impl HostApp {
             return;
         }
         self.bcm_checked = true;
+        tracing::debug!(
+            "broadcom: looking for PatchRAM in {} for adapters {:04X?}",
+            self.setup.firmware_dir.display(),
+            self.setup.broadcom_ids
+        );
         match find_bcm_hcd(&self.setup.firmware_dir, &self.setup.broadcom_ids) {
             Some(path) => {
-                tracing::info!("Broadcom PatchRAM {} (experimental)", path.display());
+                tracing::info!("Broadcom PatchRAM {}", path.display());
                 stack.set_chipset_bcm(&path.to_string_lossy());
             }
             None => tracing::info!(
@@ -771,6 +1856,11 @@ impl HostApp {
             }
             Some(AVDTP_SUBEVENT_SIGNALING_SEP_DICOVERY_DONE) => {
                 // Counted per discovery: a later one replaces the result
+                tracing::debug!(
+                    "SEP discovery done: {} audio sink(s), {} in use",
+                    self.sep_sinks,
+                    self.sep_sinks_in_use
+                );
                 self.caps.audio_sinks = self.sep_sinks;
                 self.caps.audio_sinks_in_use = self.sep_sinks_in_use;
                 self.sep_sinks = 0;
@@ -804,35 +1894,39 @@ impl HostApp {
                 self.a2dp_cid = cid;
                 if status != ERROR_CODE_SUCCESS {
                     tracing::warn!("signaling connection failed (0x{status:02x})");
-                    // Page timeout: no answer. Connection / L2CAP RTX timeout
-                    // or a connection BTstack gave up on: the link came up and
-                    // then carried nothing.
-                    let failure = match status {
-                        ERROR_CODE_PAGE_TIMEOUT => ConnectFailure::NoAnswer,
-                        L2CAP_CONNECTION_RESPONSE_RESULT_REFUSED_SECURITY
-                        | L2CAP_CONNECTION_PIN_OR_LINK_KEY_MISSING
-                        | ERROR_CODE_AUTHENTICATION_FAILURE
-                        | ERROR_CODE_PIN_OR_KEY_MISSING => ConnectFailure::AuthFailed,
-                        ERROR_CODE_CONNECTION_TIMEOUT
-                        | L2CAP_CONNECTION_RESPONSE_RESULT_RTX_TIMEOUT
-                        | L2CAP_CONNECTION_BASEBAND_DISCONNECT
-                        | ERROR_CODE_UNSPECIFIED_ERROR => ConnectFailure::LinkLost,
-                        _ => ConnectFailure::Other,
-                    };
+                    let failure = signaling_failure(status);
+                    tracing::debug!(
+                        "signaling connection failed: cid 0x{cid:04X}, status 0x{status:02X} ({}) -> {failure:?}",
+                        hci_error_string(status)
+                    );
                     self.shared.update(|s| {
                         s.last_connect_failure = Some(failure);
                         s.connect_done = Some(false);
                     });
                 } else {
                     tracing::info!("signaling connection established (cid 0x{cid:04x}, handle 0x{handle:04x})");
-                    // Not done yet: the capability discovery follows
-                    self.shared.update(|s| s.a2dp_con_handle = Some(handle & 0x0FFF));
+                    // Not done yet: the capability discovery follows, also
+                    // on a connection the device opened
+                    self.caps = Default::default();
+                    self.shared.update(|s| {
+                        s.a2dp_con_handle = Some(handle & 0x0FFF);
+                        // A device may configure and open the stream itself
+                        s.stream_config = None;
+                        s.stream_done = None;
+                    });
+                    self.link.a2dp_opened(stack, handle & 0x0FFF);
+                    self.publish_link();
+                    self.send_link_reads(stack);
                 }
             }
             Some(A2DP_SUBEVENT_SIGNALING_MEDIA_CODEC_OTHER_CAPABILITY) => {
                 let seid = u8_at(p, 5).unwrap_or(0);
                 let len = le16(p, 9).unwrap_or(0) as usize;
-                let Some(info) = p.get(11..11 + len) else { return };
+                // The length is the remote's; BTstack copies at most 30
+                // bytes (AVDTP_MAX_MEDIA_CODEC_INFORMATION_LENGTH): aptX
+                // Adaptive's 40 arrive cut to 30, which still hold all it uses
+                let Some(info) = p.get(11..).map(|rest| &rest[..len.min(rest.len())]) else { return };
+                tracing::debug!("SEID {seid} codec capability (header {:02X?}): {info:02X?}", p.get(3..11));
                 match self.caps.add_vendor(seid, info) {
                     VendorCapability::Taken(kind) => {
                         tracing::info!("remote supports {kind} (SEID {seid}, {info:02X?})")
@@ -841,8 +1935,8 @@ impl HostApp {
                         tracing::info!("remote supports {kind} (SEID {seid}) - {why}, ignored")
                     }
                     VendorCapability::AptxAdaptive => tracing::info!(
-                        "remote supports aptX Adaptive (SEID {seid}) - never selected (no open encoder); \
-                         classic aptX is used only if the remote lists it"
+                        "remote supports aptX Adaptive (SEID {seid}) - not built in; classic aptX is used only \
+                         if the remote lists it"
                     ),
                     VendorCapability::Unknown { vendor_id, codec_id } => tracing::info!(
                         "remote vendor codec 0x{vendor_id:08X}/0x{codec_id:04X} (SEID {seid}) - unsupported"
@@ -855,6 +1949,7 @@ impl HostApp {
                 // 12111111111: subevent, cid, SEID, media type, then the
                 // bitmaps and the bitpool range
                 let at = |i: usize| u8_at(p, i).unwrap_or(0);
+                tracing::debug!("SEID {seid} SBC capability event: {:02X?}", p.get(3..));
                 let sbc = SbcCapabilities {
                     sampling_frequency: at(7),
                     channel_mode: at(8),
@@ -875,24 +1970,48 @@ impl HostApp {
                     sbc.allocation_method,
                     sbc.min_bitpool,
                     sbc.max_bitpool,
-                    if sbc.allows_xq() { " - SBC XQ possible" } else { "" }
+                    match sbc.xq_refusal() {
+                        None => " - SBC XQ possible".to_string(),
+                        Some(why) => format!(" - no SBC XQ: {why}"),
+                    }
                 );
             }
             Some(A2DP_SUBEVENT_SIGNALING_MEDIA_CODEC_MPEG_AAC_CAPABILITY) => {
                 let seid = u8_at(p, 5).unwrap_or(0);
-                self.caps.add_aac(seid);
-                tracing::info!("remote supports AAC (SEID {seid})");
+                // 1211121311: subevent, cid, SEID, media type, object types,
+                // frequencies, channels, bit rate, VBR, DRC
+                let at = |i: usize| u8_at(p, i).unwrap_or(0);
+                tracing::debug!("SEID {seid} AAC capability event: {:02X?}", p.get(3..));
+                let aac = AacCapabilities {
+                    object_types: at(7),
+                    sampling_frequency: le16(p, 8).unwrap_or(0),
+                    channels: at(10),
+                    bit_rate: le24(p, 11).unwrap_or(0),
+                    vbr: at(14) != 0,
+                };
+                self.caps.add_aac_caps(seid, aac);
+                tracing::info!(
+                    "remote supports AAC (SEID {seid}, object types 0x{:X}, frequencies 0x{:X}, channels 0x{:X}, \
+                     bit rate {}, VBR {}){}",
+                    aac.object_types,
+                    aac.sampling_frequency,
+                    aac.channels,
+                    aac.bit_rate,
+                    aac.vbr,
+                    if aac.usable() { "" } else { " - not usable" }
+                );
             }
             Some(A2DP_SUBEVENT_SIGNALING_CAPABILITIES_COMPLETE) => {
                 let c = &self.caps;
                 tracing::info!(
-                    "capability discovery complete (LDAC={} aptX HD={} aptX LL={} aptX={} aptX Adaptive={} [not encodable] \
+                    "capability discovery complete (LDAC={} aptX HD={} aptX LL={} aptX={} aptX Adaptive={}{} \
                      SBC={} SBC XQ={} AAC={} LHDC V5={} Opus={} Opus 05={} FastStream={}{})",
                     c.ldac.is_some(),
                     c.aptx_hd.is_some(),
                     c.aptx_ll.is_some(),
                     c.aptx.is_some(),
                     c.aptx_adaptive,
+                    if c.aptx_adaptive && c.aptxad.is_none() { " [not usable]" } else { "" },
                     c.sbc.is_some(),
                     c.has(CodecKind::SbcXq),
                     c.aac.is_some(),
@@ -907,6 +2026,7 @@ impl HostApp {
                     }
                 );
                 let caps = self.caps.clone();
+                tracing::debug!("remote caps: {caps:?}");
                 self.shared.update(|s| {
                     s.remote_caps = caps;
                     s.connected = true;
@@ -917,19 +2037,44 @@ impl HostApp {
                     && let Err(status) = stack.avrcp_connect(&addr)
                 {
                     tracing::warn!("AVRCP connect request failed (0x{status:02x})");
+                } else {
+                    tracing::debug!("AVRCP connect requested");
                 }
+            }
+            Some(A2DP_SUBEVENT_SIGNALING_CAPABILITIES_DONE) => {
+                tracing::debug!("capabilities of SEID {:?} done", u8_at(p, 5));
+            }
+            Some(A2DP_SUBEVENT_COMMAND_ACCEPTED) => {
+                tracing::debug!(
+                    "A2DP command accepted (cid 0x{:04X}, local SEID {:?}, initiator {:?}, signal {:02X?})",
+                    le16(p, 3).unwrap_or(0),
+                    u8_at(p, 5),
+                    u8_at(p, 6),
+                    u8_at(p, 7)
+                );
+            }
+            Some(A2DP_SUBEVENT_STREAM_STOPPED) => {
+                tracing::debug!("stream stopped (local SEID {:?})", u8_at(p, 5));
             }
             Some(A2DP_SUBEVENT_SIGNALING_MEDIA_CODEC_SBC_CONFIGURATION)
             | Some(A2DP_SUBEVENT_SIGNALING_MEDIA_CODEC_MPEG_AAC_CONFIGURATION)
             | Some(A2DP_SUBEVENT_SIGNALING_MEDIA_CODEC_OTHER_CONFIGURATION) => {
-                tracing::info!(
-                    "codec configured (local {}, remote {})",
-                    u8_at(p, 5).unwrap_or(0),
-                    u8_at(p, 6).unwrap_or(0)
-                );
+                tracing::debug!("codec configuration event: {:02X?}", p.get(2..));
+                let local = u8_at(p, 5).unwrap_or(0);
+                tracing::info!("codec configured (local {local}, remote {})", u8_at(p, 6).unwrap_or(0));
+                let info = (subevent(p) == Some(A2DP_SUBEVENT_SIGNALING_MEDIA_CODEC_OTHER_CONFIGURATION))
+                    .then(|| le16(p, 11).and_then(|n| p.get(13..13 + n as usize)).map(<[u8]>::to_vec))
+                    .flatten();
+                self.shared.update(|s| s.stream_config = Some((local, info)));
             }
             Some(A2DP_SUBEVENT_STREAM_ESTABLISHED) => {
                 let status = u8_at(p, 13).unwrap_or(0xFF);
+                tracing::debug!(
+                    "stream established event: cid 0x{:04X}, local SEID {:?}, remote SEID {:?}, status 0x{status:02X}",
+                    le16(p, 3).unwrap_or(0),
+                    u8_at(p, 11),
+                    u8_at(p, 12)
+                );
                 if status != ERROR_CODE_SUCCESS {
                     tracing::warn!("stream establishment failed (0x{status:02x})");
                     self.shared.update(|s| s.stream_done = Some(false));
@@ -947,15 +2092,35 @@ impl HostApp {
                     self.local_seid,
                     self.remote_seid
                 );
+                // A sink's delay report, if any, follows the configuration
+                self.stats.set_sink_delay(None);
                 self.shared.update(|s| {
                     s.media_mtu = mtu;
                     s.stream_done = Some(true);
                 });
+                self.connect_hfp(stack);
+            }
+            Some(A2DP_SUBEVENT_SIGNALING_DELAY_REPORTING_CAPABILITY) => {
+                tracing::debug!("remote SEID {} supports delay reporting", u8_at(p, 5).unwrap_or(0));
+            }
+            Some(A2DP_SUBEVENT_SIGNALING_DELAY_REPORT) => {
+                // The sink's playout delay, from when a packet arrives until
+                // it is heard, in 100 us units (AVDTP 8.19); sent after the
+                // configuration and again when it changes
+                let delay = le16(p, 6).unwrap_or(0);
+                tracing::info!("device delay report: {:.1} ms", f64::from(delay) / 10.0);
+                self.stats.set_sink_delay(Some(delay));
             }
             Some(A2DP_SUBEVENT_STREAM_STARTED) => {
                 tracing::info!("streaming started");
+                self.media_acl = self.shared.lock().a2dp_con_handle;
+                self.sample_controller_backlog(stack);
                 self.stats.mark_stream_start();
+                self.link.stream_started(self.media_acl);
+                self.send_link_reads(stack);
+                self.publish_link();
                 self.set_streaming(true);
+                stack.timer_start(TIMER_STALL_WATCH, crate::stall_watch::TICK.as_millis() as u32);
                 self.can_send_requested = false;
                 self.shared.update(|s| {
                     s.streaming = true;
@@ -988,6 +2153,16 @@ impl HostApp {
                     stack.avrcp_disconnect(self.avrcp_cid);
                     self.avrcp_cid = 0;
                 }
+                if let Some(acl) = self.hfp_acl.take() {
+                    if let Some(e) = self.voice.stop(stack) {
+                        let _ = self.events.send(e);
+                    }
+                    stack.hfp_ag_release(acl);
+                }
+                if let Some(addr) = self.remote_addr {
+                    self.rfcomm.close_device(stack, addr);
+                }
+                self.shared.update(|s| s.battery = None);
                 if self.a2dp_cid == 0 {
                     // No current connection: wake a pending disconnect wait,
                     // but report no loss
@@ -997,13 +2172,16 @@ impl HostApp {
                 }
                 tracing::info!("signaling connection released (cid 0x{cid:04x})");
                 self.a2dp_cid = 0;
+                self.stop_esco_watch(stack);
                 self.set_streaming(false);
                 self.can_send_requested = false;
                 self.stats.queue_depth.store(0, Ordering::Relaxed);
+                self.stats.set_sink_delay(None);
                 self.shared.update(|s| {
                     s.connected = false;
                     s.streaming = false;
                     s.disconnect_occurred = true;
+                    s.link_lost_reason = 0;
                     s.released = true;
                 });
                 let _ = self.events.send(HostEvent::ConnectionLost);
@@ -1015,6 +2193,15 @@ impl HostApp {
                 // a failed STREAM_ESTABLISHED / STREAM_STARTED).
                 let initiator = u8_at(p, 6).unwrap_or(0) != 0;
                 let signal = u8_at(p, 7).unwrap_or(0);
+                tracing::debug!(
+                    "A2DP command rejected: cid 0x{:04X}, local SEID {:?}, waits (stream, start): {:?}",
+                    le16(p, 3).unwrap_or(0),
+                    u8_at(p, 5),
+                    {
+                        let s = self.shared.lock();
+                        (s.stream_done, s.start_done)
+                    }
+                );
                 tracing::warn!(
                     "A2DP command rejected (signal 0x{signal:02x}{})",
                     if initiator { "" } else { ", remote's" }
@@ -1039,10 +2226,125 @@ impl HostApp {
     // AVRCP
     // ======================================================================
 
+    /// Opens the HFP service level connection to the headphones, where they
+    /// report their battery (the headphones may also open it themselves)
+    fn connect_hfp(&mut self, stack: &Stack) {
+        if !(self.setup.battery || self.setup.voice) || self.hfp_acl.is_some() {
+            tracing::debug!(
+                "HFP: not connecting (battery {}, voice {}, acl {:?})",
+                self.setup.battery,
+                self.setup.voice,
+                self.hfp_acl
+            );
+            return;
+        }
+        let Some(addr) = self.remote_addr else { return };
+        let status = stack.hfp_ag_connect(&addr);
+        tracing::info!("HFP: opening the service level connection to {} (0x{status:02x})", addr_str(&addr));
+    }
+
+    fn handle_hfp(&mut self, stack: &Stack, p: &[u8]) {
+        self.voice.on_hf_activity();
+        match subevent(p) {
+            Some(HFP_SUBEVENT_SERVICE_LEVEL_CONNECTION_ESTABLISHED) => {
+                let status = u8_at(p, 5).unwrap_or(0xFF);
+                if status == 0 {
+                    self.hfp_acl = le16(p, 3);
+                    self.voice.on_slc_established();
+                    tracing::debug!("HFP: service level connection on ACL {:04X?}", self.hfp_acl);
+                    tracing::info!("HFP: service level connection established");
+                    // The voice codecs the headphones listed (AT+BAC): the
+                    // Codecs screen shows them (issue #86)
+                    if let Some(acl) = self.hfp_acl {
+                        let codecs: Vec<&'static str> =
+                            stack.hfp_ag_remote_codecs(acl).into_iter().filter_map(crate::voice::codec_key).collect();
+                        tracing::info!("HFP: the headphones' voice codecs: {}", codecs.join(", "));
+                        let _ = self.events.send(HostEvent::VoiceCodecs(codecs));
+                    }
+                } else {
+                    tracing::info!("HFP: service level connection failed (0x{status:02x})");
+                    // RFCOMM DM: the headphones have HFP but refuse it to us,
+                    // seen while a phone held it (multipoint)
+                    if status == ERROR_CODE_CONNECTION_REJECTED_DUE_TO_LIMITED_RESOURCES {
+                        tracing::info!("HFP: refused by the headphones (another device may hold HFP): battery unknown");
+                        self.shared.update(|s| s.battery = None);
+                        let _ = self.events.send(HostEvent::BatteryRefused);
+                    }
+                }
+            }
+            Some(HFP_SUBEVENT_SERVICE_LEVEL_CONNECTION_RELEASED) => {
+                tracing::info!("HFP: service level connection released");
+                self.hfp_acl = None;
+                if let Some(e) = self.voice.on_released() {
+                    let _ = self.events.send(e);
+                }
+            }
+            Some(HFP_SUBEVENT_AUDIO_CONNECTION_ESTABLISHED) => {
+                if let Some(e) = self.voice.on_established(stack, p) {
+                    let _ = self.events.send(e);
+                }
+                self.sync_speaker_gain(stack, None);
+                // The microphone at full gain: the headphones otherwise keep
+                // their own default, often low (issue #86); Windows' own
+                // Bluetooth sets it too
+                if let Some(acl) = self.voice.audio_acl() {
+                    let status = stack.hfp_ag_set_microphone_gain(acl, crate::voice::MIC_GAIN);
+                    tracing::debug!("HFP: microphone gain {} (0x{status:02x})", crate::voice::MIC_GAIN);
+                }
+            }
+            Some(HFP_SUBEVENT_MICROPHONE_VOLUME) => {
+                if let Some(gain) = u8_at(p, 5) {
+                    tracing::info!("HFP: headphones' microphone gain {gain}");
+                }
+            }
+            Some(HFP_SUBEVENT_SPEAKER_VOLUME) => {
+                if let Some(gain) = u8_at(p, 5) {
+                    self.on_speaker_gain(stack, gain);
+                }
+            }
+            Some(HFP_SUBEVENT_AUDIO_CONNECTION_RELEASED) => {
+                if let Some(e) = self.voice.on_released() {
+                    let _ = self.events.send(e);
+                }
+            }
+            // AT+BIEV: HF indicator 2, 0..100 percent
+            Some(HFP_SUBEVENT_HF_INDICATOR) => {
+                tracing::debug!("HFP: HF indicator {:04X?} = {:?}", le16(p, 5), u8_at(p, 7));
+                if le16(p, 5) == Some(HFP_HF_INDICATOR_UUID_BATTERY_LEVEL)
+                    && let Some(v) = u8_at(p, 7)
+                {
+                    tracing::info!("HFP: battery level {v}% (HF indicator)");
+                    self.report_battery(v.min(100));
+                }
+            }
+            // AT+IPHONEACCEV (Apple accessories): 0..9
+            Some(HFP_SUBEVENT_APPLE_BATTERY_LEVEL) => {
+                if let Some(v) = u8_at(p, 3) {
+                    // 0 is 0-10%, 9 is 90-100% (as Android shows it)
+                    let pct = (v.min(9) + 1) * 10;
+                    tracing::info!("HFP: battery level {v} of 0-9 = {pct}% (Apple accessory)");
+                    self.report_battery(pct);
+                }
+            }
+            Some(sub) => tracing::debug!("HFP: subevent 0x{sub:02X}"),
+            None => {}
+        }
+    }
+
+    fn report_battery(&mut self, percent: u8) {
+        self.shared.update(|s| s.battery = Some(percent));
+        let _ = self.events.send(HostEvent::Battery(percent));
+    }
+
     fn handle_avrcp(&mut self, stack: &Stack, p: &[u8]) {
         match subevent(p) {
             Some(AVRCP_SUBEVENT_CONNECTION_ESTABLISHED) => {
                 let (Some(status), Some(cid)) = (u8_at(p, 3), le16(p, 4)) else { return };
+                tracing::debug!(
+                    "AVRCP connection event: cid 0x{cid:04X}, status 0x{status:02X} ({}), a2dp cid 0x{:04X}",
+                    hci_error_string(status),
+                    self.a2dp_cid
+                );
                 if status != ERROR_CODE_SUCCESS {
                     tracing::warn!("AVRCP connection failed (0x{status:02x})");
                     return;
@@ -1066,10 +2368,13 @@ impl HostApp {
                     self.controls.volume_request.store(restore, Ordering::Release);
                     self.send_pending_volume(stack);
                 }
-                stack.avrcp_enable_notification(cid, AVRCP_NOTIFICATION_EVENT_VOLUME_CHANGED);
+                let notify = stack.avrcp_enable_notification(cid, AVRCP_NOTIFICATION_EVENT_VOLUME_CHANGED);
                 // Target side: buttons arrive as pass-through commands; the
                 // playback status lets the headphones pick play or pause
-                stack.avrcp_target_support_event(cid, AVRCP_NOTIFICATION_EVENT_PLAYBACK_STATUS_CHANGED);
+                let support = stack.avrcp_target_support_event(cid, AVRCP_NOTIFICATION_EVENT_PLAYBACK_STATUS_CHANGED);
+                tracing::debug!(
+                    "AVRCP: volume notification 0x{notify:02X}, playback status event 0x{support:02X}, restore {restore}"
+                );
                 self.playback_status = AVRCP_PLAYBACK_STATUS_STOPPED;
                 self.playback_prev_frames = self.stats.capture_frames.load(Ordering::Relaxed);
                 self.playback_idle_ticks = 0;
@@ -1084,6 +2389,7 @@ impl HostApp {
                 let c = &self.controls;
                 let v = c.volume.load(Ordering::Acquire);
                 if c.restore_volume.load(Ordering::Acquire) >= 0 && v >= 0 {
+                    tracing::debug!("AVRCP: restore volume follows the last one, {v}");
                     c.restore_volume.store(v, Ordering::Release);
                 }
                 c.volume.store(-1, Ordering::Release);
@@ -1093,6 +2399,7 @@ impl HostApp {
                 let vol = u8_at(p, 6).unwrap_or(0);
                 tracing::info!("AVRCP volume changed to {vol} ({}%)", vol as u32 * 100 / 127);
                 self.controls.volume.store(vol as i32, Ordering::Release);
+                self.sync_speaker_gain(stack, Some(vol));
                 let _ = self.events.send(HostEvent::Volume(vol));
                 // AVRCP needs a new registration after each notification
                 stack.avrcp_enable_notification(self.avrcp_cid, AVRCP_NOTIFICATION_EVENT_VOLUME_CHANGED);
@@ -1103,18 +2410,27 @@ impl HostApp {
                 tracing::info!("AVRCP absolute volume confirmed: {vol} ({}%)", vol as u32 * 100 / 127);
                 self.volume_in_flight = None;
                 self.controls.volume.store(vol as i32, Ordering::Release);
+                // The UI follows what the headphones took, not only their own changes
+                let _ = self.events.send(HostEvent::Volume(vol));
                 self.send_pending_volume(stack);
             }
             Some(AVRCP_SUBEVENT_OPERATION) => {
                 if le16(p, 3) != Some(self.avrcp_cid) {
+                    tracing::debug!(
+                        "AVRCP operation on cid {:04X?} ignored (current 0x{:04X})",
+                        le16(p, 3),
+                        self.avrcp_cid
+                    );
                     return;
                 }
                 let (Some(op), Some(pressed)) = (u8_at(p, 5), u8_at(p, 6)) else { return };
+                tracing::debug!("AVRCP operation 0x{op:02X} {}", if pressed != 0 { "pressed" } else { "released" });
                 self.on_button(stack, op, pressed != 0);
             }
             Some(AVRCP_SUBEVENT_PLAY_STATUS_QUERY) => {
                 // GetPlayStatus: no track length or position to report
                 if let Some(cid) = le16(p, 3) {
+                    tracing::debug!("AVRCP play status query (cid 0x{cid:04X}), status {}", self.playback_status);
                     stack.avrcp_target_play_status(cid, 0xFFFF_FFFF, 0xFFFF_FFFF, self.playback_status);
                 }
             }
@@ -1201,10 +2517,56 @@ impl HostApp {
     // AFH classification and radio readings
     // ======================================================================
 
+    /// The next link detail reading, with a deadline for its answer
+    fn send_link_reads(&mut self, stack: &Stack) {
+        if self.link.send_next(stack) {
+            stack.timer_start(TIMER_LINK_COMMAND, link_details::COMMAND_TIMEOUT.as_millis() as u32);
+        }
+    }
+
+    /// A link detail command went unanswered. BTstack's slot stays taken
+    /// until a Command Complete / Status comes, which would stop every later
+    /// command (RSSI, AFH, the liveness probe, connects). Releasing it with a
+    /// Command Status of our own is the safest way on: BTstack keeps nothing
+    /// else for these commands, and a late answer only sets the slot free
+    /// again. Not sending them at all would lose the remote chip for every
+    /// controller that answers; a stall check would take the whole stack down
+    /// for one diagnostics reading.
+    fn link_command_timeout(&mut self, stack: &Stack) {
+        let now = Instant::now();
+        let Some(opcode) = self.link.overdue(now) else {
+            // Fired early by the run loop's clock: wait for the rest, or the
+            // unanswered command would hold the slot until the link ends
+            if let Some(rest) = self.link.due_in(now) {
+                stack.timer_start(TIMER_LINK_COMMAND, rest.as_millis() as u32 + 1);
+            }
+            return;
+        };
+        // Still held, and only by ours: no answer of any kind came since
+        if stack.hci_state() == HciState::Working && !stack.can_send_command_now() {
+            stack.release_command_slot(opcode, ERROR_CODE_UNKNOWN_HCI_COMMAND);
+        }
+    }
+    /// Developer > Debug's command once BTstack can send one (HCI ready,
+    /// then each AFH tick until it went)
+    fn send_debug_command(&mut self, stack: &Stack) {
+        if self.debug_command.is_none() || !stack.can_send_command_now() {
+            return;
+        }
+        let Some(packet) = self.debug_command.take() else { return };
+        let opcode = u16::from_le_bytes([packet[0], packet[1]]);
+        let status = stack.cmd_raw(&packet);
+        tracing::info!("debug command {packet:02X?} sent (MediaTek controller): 0x{status:02X}");
+        if status == ERROR_CODE_SUCCESS {
+            self.debug_command_sent = Some(opcode);
+        }
+    }
+
     fn afh_tick(&mut self, stack: &Stack) {
         if !self.shared.lock().hci_ready {
             return;
         }
+        self.send_debug_command(stack);
         let version = self.controls.afh_version.load(Ordering::Acquire);
         let classify =
             self.afh_policy_version_seen != Some(version) || self.afh_ticks.is_multiple_of(AFH_CLASSIFY_EVERY_TICKS);
@@ -1213,7 +2575,7 @@ impl HostApp {
         // 1. The classification, when it changes (one command per tick)
         if classify {
             let policy = self.controls.afh_policy();
-            let c: Option<AfhClassification> = self.afh.as_mut().and_then(|a| a.classify(&policy));
+            let c: Option<AfhClassification> = self.afh.as_mut().and_then(|a| a.classify(&policy, &self.afh_history));
             self.stats.with_radio(|r| {
                 r.afh_usable = c.as_ref().map(|c| c.usable);
                 r.afh_avoided = c.as_ref().map(|c| c.avoided.clone()).unwrap_or_default();
@@ -1224,6 +2586,13 @@ impl HostApp {
                 (Some(_), None) => true,
                 (None, sent) => sent.is_some(),
             };
+            tracing::debug!(
+                "AFH classify: policy {policy:?} (version {version}), result {:?}, changed {changed}",
+                c.as_ref().map(|c| (&c.avoided, c.usable, c.map))
+            );
+            if changed && !stack.can_send_command_now() {
+                tracing::debug!("AFH: HCI busy, classification sent on a later tick");
+            }
             if changed && stack.can_send_command_now() {
                 // All channels "unknown" clears the host classification
                 let map =
@@ -1237,6 +2606,7 @@ impl HostApp {
                     }
                 );
                 self.afh_sent_map = c.map(|c| c.map);
+                self.afh_history.host_changed();
                 self.afh_policy_version_seen = Some(version);
                 return;
             }
@@ -1248,10 +2618,22 @@ impl HostApp {
         // 2. Readings of the current link: RSSI and AFH map in turn
         let handle = self.shared.lock().a2dp_con_handle;
         let Some(handle) = handle else {
+            // An LE Audio stream: the RSSI of its LE link (issue #86: Link
+            // Quality showed nothing); the AFH map is BR/EDR only
+            let le = self.le.as_ref().and_then(|le| le.streaming_acl());
             self.stats.with_radio(|r| {
-                r.rssi = None;
+                if le.is_none() {
+                    r.rssi = None;
+                }
                 r.afh_in_use = None;
+                r.afh_map = None;
             });
+            if let Some(acl) = le
+                && stack.can_send_command_now()
+            {
+                stack.cmd_read_rssi(acl);
+            }
+            self.publish_link();
             return;
         };
         if !stack.can_send_command_now() {
@@ -1260,6 +2642,9 @@ impl HostApp {
         self.read_rssi_next = !self.read_rssi_next;
         if !self.read_rssi_next {
             stack.cmd_read_rssi(handle);
+            // Failed contacts and link quality follow, one command at a time
+            self.link.poll(stack, handle);
+            self.publish_link();
         } else {
             stack.cmd_read_afh_channel_map(handle);
         }
@@ -1275,18 +2660,42 @@ impl HostApp {
             }
             HCI_OPCODE_READ_RSSI if rp.len() >= 4 => {
                 let ok = rp[0] == ERROR_CODE_SUCCESS;
+                tracing::trace!("radio: RSSI {} (status 0x{:02X})", rp[3] as i8, rp[0]);
                 self.stats.with_radio(|r| r.rssi = ok.then_some(rp[3] as i8));
             }
             HCI_OPCODE_READ_AFH_CHANNEL_MAP if rp.len() >= 14 => {
                 // status, handle, mode, map[10]
-                let in_use = if rp[0] != ERROR_CODE_SUCCESS {
+                let map = if rp[0] != ERROR_CODE_SUCCESS {
                     None
                 } else if rp[3] == 1 {
-                    Some(rp[4..14].iter().map(|b| b.count_ones()).sum::<u32>().min(79))
+                    let mut m = [0u8; 10];
+                    m.copy_from_slice(&rp[4..14]);
+                    m[9] &= 0x7F; // bit 79 is reserved
+                    Some(m)
                 } else {
-                    Some(79)
+                    Some(crate::afh::Classification::all_usable().map)
                 };
-                self.stats.with_radio(|r| r.afh_in_use = in_use);
+                let in_use = map.as_ref().map(|m| crate::afh::count(m) as u32);
+                // "blend" learns from the maps of the current link; AFH off
+                // (mode 0) says nothing about the channels
+                let handle = u16::from_le_bytes([rp[1], rp[2]]) & 0x0FFF;
+                if self.afh_history_handle != Some(handle) {
+                    self.afh_history.clear();
+                    self.afh_history_handle = Some(handle);
+                }
+                if let (Some(m), 1) = (&map, rp[3]) {
+                    self.afh_history.record(m, self.afh_sent_map.as_ref());
+                }
+                tracing::debug!(
+                    "radio: AFH mode {}, {in_use:?} channels in use, map {:02X?} (status 0x{:02X})",
+                    rp[3],
+                    &rp[4..14],
+                    rp[0]
+                );
+                self.stats.with_radio(|r| {
+                    r.afh_in_use = in_use;
+                    r.afh_map = map;
+                });
             }
             _ => {}
         }
@@ -1294,7 +2703,26 @@ impl HostApp {
 }
 
 impl App for HostApp {
-    fn on_packet(&mut self, stack: &Stack, source: Source, packet_type: u8, _channel: u16, packet: &[u8]) {
+    fn on_packet(&mut self, stack: &Stack, source: Source, packet_type: u8, channel: u16, packet: &[u8]) {
+        // RFCOMM's data packets as well as its events
+        if source == Source::Rfcomm {
+            self.rfcomm.on_packet(stack, packet_type, channel, packet);
+            return;
+        }
+        // SCO data as well as HCI_EVENT_SCO_CAN_SEND_NOW
+        if source == Source::Sco {
+            if let Some(e) = self.voice.on_sco(stack, packet_type, packet) {
+                let _ = self.events.send(e);
+            }
+            return;
+        }
+        // LE Audio's ISO data (a headset microphone) as well as its events
+        if source == Source::Iso {
+            if let Some(le) = self.le.as_mut() {
+                le.on_iso(stack, packet_type, packet);
+            }
+            return;
+        }
         if packet_type != HCI_EVENT_PACKET {
             return;
         }
@@ -1302,11 +2730,25 @@ impl App for HostApp {
             Source::Hci => {
                 self.handle_hci(stack, packet);
                 if let Some(le) = self.le.as_mut() {
+                    let found = le.scan_found();
                     le.on_hci(stack, packet);
+                    // An LE Audio advertiser listed: a classic scan running
+                    // beside the LE one shows it at once (BtHost::scan_with)
+                    if le.scan_found() != found {
+                        self.shared.update(|s| s.found_rev += 1);
+                    }
                 }
             }
             Source::A2dp => self.handle_a2dp(stack, packet),
             Source::AvdtpSink => self.handle_sep(packet),
+            Source::Hfp => {
+                if event_type(packet) == Some(HCI_EVENT_HFP_META) {
+                    self.handle_hfp(stack, packet)
+                }
+            }
+            Source::SdpClient => self.rfcomm.on_sdp(stack, packet),
+            Source::SdpServices => self.sdp_services.on_event(packet),
+            Source::Rfcomm | Source::Sco => {}
             Source::Avrcp | Source::AvrcpController | Source::AvrcpTarget => {
                 if event_type(packet) == Some(HCI_EVENT_AVRCP_META) {
                     self.handle_avrcp(stack, packet)
@@ -1328,11 +2770,7 @@ impl App for HostApp {
                     le.on_att_event(packet);
                 }
             }
-            Source::Iso => {
-                if let Some(le) = self.le.as_mut() {
-                    le.on_iso(stack, packet);
-                }
-            }
+            Source::Iso => {}
         }
     }
 
@@ -1343,9 +2781,11 @@ impl App for HostApp {
         if stack.transport_failed() {
             let first = self.shared.update(|s| !std::mem::replace(&mut s.stalled, true));
             if first {
+                tracing::debug!("transport failed: stack marked stalled (hci {:?})", stack.hci_state());
                 let _ = self.events.send(HostEvent::TransportFailed);
             }
         }
+        self.drop_stale_media(Instant::now());
         self.kick_media(stack);
     }
 
@@ -1359,6 +2799,17 @@ impl App for HostApp {
                 self.playback_tick(stack);
                 stack.timer_start(TIMER_PLAYBACK, PLAYBACK_TICK_MS);
             }
+            TIMER_RTK_VERIFY => self.verify_realtek_download(stack),
+            TIMER_LINK_COMMAND => self.link_command_timeout(stack),
+            TIMER_ESCO_WATCH => self.esco_tick(stack),
+            TIMER_STALL_WATCH => self.stall_tick(stack),
+            TIMER_LOADER => {
+                if let Some(loader) = self.loader.as_mut() {
+                    let actions = loader.on_timeout();
+                    self.run_loader(stack, actions);
+                }
+            }
+            TIMER_RFCOMM => self.rfcomm.on_timer(stack),
             TIMER_LE => {
                 if let Some(le) = self.le.as_mut() {
                     le.on_timer(stack);
@@ -1373,22 +2824,20 @@ impl App for HostApp {
         }
     }
 
-    fn on_intel_firmware(&mut self, stack: &Stack, result: i32) {
-        if result != 0 {
-            tracing::error!(
-                "Intel firmware download failed ({result}). Place the matching ibt-*.sfi and ibt-*.ddc \
-                 (linux-firmware intel/) in {}. Newer TLV-mode controllers (AX210 and later) are not supported by BTstack yet.",
-                self.setup.firmware_dir.display()
-            );
-            self.init_failed(InitFailure::Failed);
+    fn on_raw_packet(&mut self, stack: &Stack, packet_type: u8, packet: &[u8]) {
+        if packet_type != HCI_EVENT_PACKET {
             return;
         }
-        tracing::info!("Intel controller operational");
-        self.setup_hci_and_power_on(stack, None);
+        if let Some(loader) = self.loader.as_mut() {
+            let actions = loader.on_event(packet);
+            self.run_loader(stack, actions);
+        }
     }
 
     fn on_exit(&mut self, stack: &Stack) {
+        tracing::debug!("run loop exit (a2dp cid 0x{:04X}, avrcp cid 0x{:04X})", self.a2dp_cid, self.avrcp_cid);
         self.set_streaming(false);
+        self.rfcomm.stop();
         if let Some(le) = self.le.as_mut() {
             le.stack_deinit(stack);
         }
@@ -1409,12 +2858,12 @@ impl App for HostApp {
     }
 }
 
-/// BTstack's Realtek driver opens "${folder}/${stem}" (no extension):
-/// create it from "${stem}.bin", and replace one that differs from it (a
-/// copy of an older file, or a hard link to a .bin replaced since: BTstack
-/// would upload the old one). The sizes go to the log, for telling why the
+/// Earlier versions copied (hard linked) "${stem}.bin" to "${stem}" for
+/// BTstack's Realtek driver, which now opens the .bin itself: delete such a
+/// copy. One that differs from the .bin, or has no .bin beside it, is the
+/// user's own and stays. The sizes go to the log, for telling why the
 /// firmware was not loaded.
-fn ensure_alias(dir: &Path, stem: &str) {
+fn remove_alias(dir: &Path, stem: &str) {
     if stem.is_empty() {
         return;
     }
@@ -1429,21 +2878,24 @@ fn ensure_alias(dir: &Path, stem: &str) {
         return;
     };
     tracing::info!("{stem}.bin: {} bytes", source_data.len());
-    if let Some(a) = alias_data {
-        if a == source_data {
-            return;
-        }
-        tracing::info!("{stem} ({} bytes) differs from {stem}.bin, replacing it", a.len());
-        if let Err(e) = std::fs::remove_file(&alias) {
-            tracing::error!("could not delete {}: {e}", alias.display());
-            return;
+    if alias_data.is_some_and(|a| a == source_data) {
+        match std::fs::remove_file(&alias) {
+            Ok(()) => tracing::info!("deleted {}, a copy of {stem}.bin", alias.display()),
+            Err(e) => tracing::warn!("could not delete {}: {e}", alias.display()),
         }
     }
-    if std::fs::hard_link(&source, &alias).is_ok() {
-        tracing::info!("linked {stem} -> {}", source.display());
-    } else if let Err(e) = std::fs::copy(&source, &alias) {
-        tracing::error!("could not create {}: {e}", alias.display());
-    }
+}
+
+/// A firmware file of a chip loader from the firmware folder, or from the
+/// vendor's folder in it as linux-firmware has them ("intel")
+fn read_firmware_file(dir: &Path, vendor_dir: &str, name: &str) -> Option<Vec<u8>> {
+    [dir.join(name), dir.join(vendor_dir).join(name)].iter().find_map(|path| match std::fs::read(path) {
+        Ok(data) => {
+            tracing::debug!("firmware file {}: {} bytes", path.display(), data.len());
+            Some(data)
+        }
+        Err(_) => None,
+    })
 }
 
 /// A Broadcom .hcd from the firmware folder: linux-firmware brcm/ names them
@@ -1455,6 +2907,7 @@ fn find_bcm_hcd(dir: &Path, adapters: &[(u16, u16)]) -> Option<PathBuf> {
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("hcd")))
         .collect();
+    tracing::debug!("broadcom: .hcd files {files:?}");
     for (vid, pid) in adapters {
         let tag = format!("-{vid:04x}-{pid:04x}.");
         if let Some(f) =
@@ -1472,33 +2925,106 @@ fn find_bcm_hcd(dir: &Path, adapters: &[(u16, u16)]) -> Option<PathBuf> {
     None
 }
 
+/// (handle, count) pairs of a Number Of Completed Packets event
+fn completed_counts(p: &[u8]) -> Vec<(u16, u16)> {
+    let n = p.get(2).copied().unwrap_or(0) as usize;
+    (0..n)
+        .filter_map(|i| {
+            let at = 3 + 4 * i;
+            Some((le16(p, at)? & 0x0FFF, le16(p, at + 2)?))
+        })
+        .collect()
+}
+
+/// A debug command's return parameters as hex bytes for the log, the
+/// controller's own address (little-endian, as HCI carries it) replaced:
+/// the diagnostics mask only addresses written as addresses
+fn return_bytes(bytes: &[u8], local_address: Option<&str>) -> String {
+    let le: Option<Vec<u8>> = local_address.and_then(crate::parse_addr).map(|a| a.iter().rev().copied().collect());
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if le.as_deref().is_some_and(|le| bytes[i..].starts_with(le)) {
+            out.push("<adapter>".to_string());
+            i += 6;
+        } else {
+            out.push(format!("{:02X}", bytes[i]));
+            i += 1;
+        }
+    }
+    format!("[{}]", out.join(" "))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ensure_alias;
+    use super::{
+        ConnectFailure, completed_counts, missing_loader_warning, remove_alias, return_bytes, signaling_failure,
+    };
 
     #[test]
-    fn firmware_alias_follows_the_bin() {
-        let dir = std::env::temp_dir().join(format!("a2dpwb_alias_{}", std::process::id()));
+    fn counts_completed_packets_by_handle() {
+        let p = [0x13, 9, 2, 0x00, 0x04, 1, 0, 0x00, 0x22, 3, 0];
+        assert_eq!(completed_counts(&p), vec![(0x0400, 1), (0x0200, 3)]);
+    }
+
+    #[test]
+    fn hides_the_adapter_address_in_debug_command_returns() {
+        let addr = "00:11:22:33:44:55";
+        let bytes = [0x01, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00, 0x7F];
+        assert_eq!(return_bytes(&bytes, Some(addr)), "[01 <adapter> 7F]");
+        assert_eq!(return_bytes(&[0x08, 0x01], Some(addr)), "[08 01]");
+        assert_eq!(return_bytes(&[], None), "[]");
+    }
+
+    #[test]
+    fn no_loader_warning_after_a_loader_ran() {
+        // MediaTek with our loader done (#86): no warning
+        assert_eq!(missing_loader_warning(0x0046, true, false), None);
+        // No loader for the chip, or it failed: the warning stays
+        let w = missing_loader_warning(0x0046, false, false).unwrap();
+        assert!(w.starts_with("no firmware loader ran for this MediaTek controller"), "{w}");
+        assert!(missing_loader_warning(0x001D, false, false).is_some());
+        assert!(missing_loader_warning(0x0045, false, false).is_some());
+        // Vendors without a download, and the emulator
+        assert_eq!(missing_loader_warning(0x005D, false, false), None);
+        assert_eq!(missing_loader_warning(0x0046, false, true), None);
+    }
+
+    #[test]
+    fn a_device_that_never_answered_is_not_told_to_pair() {
+        // The ACL page ran out, and an SDP query cut off by a lost link
+        assert_eq!(signaling_failure(0x04), ConnectFailure::NoAnswer);
+        assert_eq!(signaling_failure(0x10), ConnectFailure::NoAnswer);
+        assert_eq!(signaling_failure(0x81), ConnectFailure::LinkLost);
+        assert_eq!(signaling_failure(0x05), ConnectFailure::AuthFailed);
+        assert_eq!(signaling_failure(0x66), ConnectFailure::AuthFailed);
+    }
+
+    #[test]
+    fn firmware_alias_is_removed() {
+        let dir = std::env::temp_dir().join(format!("bluecaster_alias_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let (alias, bin) = (dir.join("rtl8761bu_fw"), dir.join("rtl8761bu_fw.bin"));
 
-        ensure_alias(&dir, "rtl8761bu_fw"); // neither there: nothing to do
+        remove_alias(&dir, "rtl8761bu_fw"); // neither there: nothing to do
+        std::fs::write(&bin, b"firmware").unwrap();
+        remove_alias(&dir, "rtl8761bu_fw");
+        assert!(!alias.exists(), "no alias is made");
+
+        // A copy the earlier versions made goes
+        std::fs::hard_link(&bin, &alias).unwrap();
+        remove_alias(&dir, "rtl8761bu_fw");
         assert!(!alias.exists());
-        std::fs::write(&bin, b"new firmware").unwrap();
-        ensure_alias(&dir, "rtl8761bu_fw");
-        assert_eq!(std::fs::read(&alias).unwrap(), b"new firmware");
+        assert_eq!(std::fs::read(&bin).unwrap(), b"firmware");
 
-        // An alias left from an older file is replaced
-        std::fs::remove_file(&alias).unwrap();
-        std::fs::write(&alias, b"old").unwrap();
-        ensure_alias(&dir, "rtl8761bu_fw");
-        assert_eq!(std::fs::read(&alias).unwrap(), b"new firmware");
-
-        // Without the .bin the alias stays
+        // A different file, or one without a .bin, stays
+        std::fs::write(&alias, b"other").unwrap();
+        remove_alias(&dir, "rtl8761bu_fw");
+        assert!(alias.exists());
         std::fs::remove_file(&bin).unwrap();
-        ensure_alias(&dir, "rtl8761bu_fw");
-        assert_eq!(std::fs::read(&alias).unwrap(), b"new firmware");
+        remove_alias(&dir, "rtl8761bu_fw");
+        assert!(alias.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

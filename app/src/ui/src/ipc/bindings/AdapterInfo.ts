@@ -37,7 +37,53 @@ firmware_files: Array<string>,
  */
 firmware_invalid: string | null, 
 /**
+ * BlueCaster can fetch those files from linux-firmware
+ * (adapter.download_firmware)
+ */
+firmware_download: boolean, 
+/**
+ * The firmware comes from the vendor's Windows driver on this PC
+ * instead of the firmware folder (a Realtek chip, issue #86):
+ * firmware_files names the driver's file, nothing is to be done
+ */
+firmware_from_driver: boolean, 
+/**
+ * The vendor's Windows driver on this PC has this chip's firmware, also
+ * while Settings::realtek_custom_firmware loads the folder's instead
+ */
+firmware_driver: boolean, 
+/**
  * What to tell about other vendors' firmware (firmware.vendor_intel,
  * _broadcom, _csr, _unsupported); None for Realtek and unknown chips
  */
-vendor_note: Msg | null, };
+vendor_note: Msg | null, 
+/**
+ * Windows has not loaded the driver yet: it needs the adapter
+ * replugged or Windows restarted (Device Manager's problem code 14, or
+ * the WinUSB assignment just asked for it)
+ */
+restart_needed: boolean, 
+/**
+ * The adapter has LE Audio's isochronous channels, as a stack running
+ * on it found out (remembered); None if none ran on it yet
+ */
+le_audio: boolean | null, 
+/**
+ * The adapter's own Bluetooth address, as a stack running on it or
+ * Windows' Bluetooth read it (remembered); None if neither ran on it yet
+ */
+address: string | null, 
+/**
+ * Bluetooth core version the controller reports (HCI version: "5.3"),
+ * remembered; None if neither a stack nor Windows' Bluetooth ran on it
+ * yet
+ */
+bt_version: string | null, 
+/**
+ * Device Manager's name for the radio while Windows' Bluetooth runs it
+ * ("Realtek Bluetooth 5.3 Adapter"), remembered for when BlueCaster has it
+ * on WinUSB; else the product name the device itself reports ("TP-Link
+ * UB500 Adapter"), not the driver's generic "WinUSB Device"; None if
+ * neither is known
+ */
+windows_name: string | null, };

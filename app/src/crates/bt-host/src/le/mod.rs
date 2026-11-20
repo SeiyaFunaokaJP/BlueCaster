@@ -23,15 +23,22 @@
 //! - [`gatt_server`]: the PC's GATT server (GAP, GATT with Service Changed
 //!   and Database Hash, the modules' services)
 //! - [`bap`]: PACS / ASCS client and the BAP unicast state machine
-//! - [`iso_send`]: ISO SDU sending on HCI_EVENT_CIS_CAN_SEND_NOW
+//! - [`broadcast`]: the broadcast source (Auracast, developer mode):
+//!   advertising and the BIG
+//! - [`iso_send`]: ISO SDU sending on HCI_EVENT_CIS/BIS_CAN_SEND_NOW
+//! - [`iso_recv`]: ISO data of source ASEs (the headset microphone) into
+//!   a lock-free ring for the decode thread
 //! - [`modules`]: CSIP, VCP, MCP, CCP, TMAP / GMAP (registered in that
 //!   order)
 
 pub mod api;
 pub mod bap;
+pub mod broadcast;
 pub mod core;
+pub mod gatt_cache;
 pub mod gatt_client;
 pub mod gatt_server;
+pub mod iso_recv;
 pub mod iso_send;
 pub mod module;
 pub mod modules;
@@ -89,8 +96,13 @@ impl fmt::Display for LeDeviceId {
 /// advertised.
 #[derive(Default)]
 pub struct LeConfig {
-    /// Folder of le_audio_bonds.tlv (LE bonds, GATT server CCC values) and
-    /// le_audio_csip.txt (CSIP sets); None: in memory only
+    /// The LE bonds and GATT server CCC values, le_audio_bonds.tlv (None: a
+    /// file in the temp folder)
+    pub bonds_file: Option<PathBuf>,
+    /// LE keys taken from Windows that wait for LE ([`crate::le_import`]),
+    /// added once the bonds file is open
+    pub imported_bonds_file: Option<PathBuf>,
+    /// Folder of le_audio_csip.txt (CSIP sets); None: in memory only
     pub bond_dir: Option<PathBuf>,
     /// MCP: the Windows side of the media control server (core, win-sys).
     /// None: dry run (`--mcp-dry-run`, implied by `--hci-tcp`): a simulated
@@ -115,6 +127,35 @@ pub struct LeRequest {
     /// GMAP low-latency presets for a gaming headset (setting
     /// le_audio_low_latency, `--le-low-latency`)
     pub low_latency: bool,
+    /// Broadcast instead (Auracast source, developer mode): no device;
+    /// `preset` is a broadcast preset (`le_audio::broadcast::presets`)
+    pub broadcast: Option<LeBroadcast>,
+    /// Headset microphone: the conversational configuration (a source ASE
+    /// sends the microphone; `--headset-mic`). [`HeadsetMic::Auto`] is
+    /// [`HeadsetMic::On`] here: the conversational stream keeps the media
+    /// preset, so there is no quality to win back while nobody records.
+    ///
+    /// [`HeadsetMic::Auto`]: crate::HeadsetMic::Auto
+    /// [`HeadsetMic::On`]: crate::HeadsetMic::On
+    pub headset_mic: crate::HeadsetMic,
+    /// Where the microphone goes (the profile's `mic_device_id`,
+    /// `--mic-output`): a path ending in ".wav" (a WAV file), else a render
+    /// device's id or part of its name; None: the default output
+    pub mic_output: Option<String>,
+    /// The microphone's sampling rate chosen (Hz, `--mic-rate`); None:
+    /// Auto. One the headphones do not allow falls back to Auto's.
+    pub mic_rate: Option<u32>,
+}
+
+/// What a broadcast was asked for (`stream.start_broadcast`, `--auracast`)
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LeBroadcast {
+    /// Broadcast Name
+    pub name: String,
+    /// Broadcast Code as typed; None or empty: open
+    pub code: Option<String>,
+    /// One mono BIS instead of left and right
+    pub mono: bool,
 }
 
 /// One advertiser seen by [`crate::BtHost::le_scan`] /
@@ -131,6 +172,9 @@ pub struct LeScanResult {
     pub appearance: u16,
     /// ASCS / PACS / CAS advertised (or a module said so)
     pub le_audio: bool,
+    /// `le_audio` only for an audio appearance: no LE Audio service or set
+    /// advertised (a classic headset's LE side for its app often looks so)
+    pub appearance_only: bool,
     pub connectable: bool,
     /// Service UUIDs and service data UUIDs
     pub uuids16: Vec<u16>,
@@ -148,6 +192,10 @@ pub struct LeScanResult {
     pub adv: Vec<u8>,
     /// Last raw scan response data
     pub scan_rsp: Vec<u8>,
+    /// The last extended report of `adv` / `scan_rsp` said more data
+    /// follows (the next one is appended)
+    pub adv_more: bool,
+    pub rsp_more: bool,
 }
 
 /// What a stream tries (v1 le_audio::StreamRequest); modules may change it
@@ -172,6 +220,8 @@ pub struct LeStreamStats {
     /// SDU sets sent (audio + silence)
     pub sets_sent: u64,
     pub sdus_sent: u64,
+    /// Bytes of the SDUs sent (Link Quality's bit rate)
+    pub bytes_sent: u64,
     /// Sets sent while the buffer was empty
     pub silence_sets: u64,
     /// Times the buffer ran empty
@@ -193,10 +243,17 @@ pub struct LeDeviceInfo {
     pub name: String,
     pub connected: bool,
     pub ready: bool,
+    /// HCI reason the link last went down (0 since a connect)
+    pub last_error: u8,
     pub sink_locations: u32,
     pub sink_ases: usize,
     /// Short summary of the sink PAC records
     pub pacs: String,
+    pub source_locations: u32,
+    /// Source ASEs (a microphone)
+    pub source_ases: usize,
+    /// Short summary of the source PAC records (empty without any)
+    pub source_pacs: String,
     /// TMAP / GMAP roles as read ("TMAP: UMR, GMAP: UGT (...)"); empty
     /// while unknown or without TMAS / GMAS
     pub roles: String,
@@ -216,7 +273,9 @@ impl LeSduSink {
 
     /// One SDU per CIS for the next frame interval, in plan order
     pub fn push(&self, set: SduSet) {
-        self.queue.lock().unwrap_or_else(|e| e.into_inner()).push(set);
+        let mut q = self.queue.lock().unwrap_or_else(|e| e.into_inner());
+        q.push(set);
+        tracing::trace!("LE Audio: SDU set queued, {} buffered", q.len());
     }
 
     /// A set to encode the next frame into (one the sender has sent and
@@ -231,4 +290,7 @@ pub struct LeStreamStarted {
     pub status: LeStreamStatus,
     /// Push the encoded SDU sets here (pipeline's LE encode thread)
     pub sink: LeSduSink,
+    /// The microphone's SDUs (a conversational stream with a source
+    /// direction; pipeline's le_rx decodes them)
+    pub rx: Option<iso_recv::LeRxHandle>,
 }

@@ -1,4 +1,4 @@
-//! a2dpwb-core.exe: the resident A2DPWB process (core service, tray, IPC
+//! bluecaster-core.exe: the resident BlueCaster process (core service, tray, IPC
 //! for the UI). `--cli` runs the command line instead (same core, no tray
 //! and no IPC). A GUI-subsystem program: the resident process opens no
 //! console window; `--cli` attaches to the console it was started from.
@@ -7,16 +7,22 @@
 #![forbid(unsafe_code)]
 #![windows_subsystem = "windows"]
 
+mod bundle;
 mod cli;
+mod crashes;
 mod driver;
 mod logging;
+mod pairing;
 mod qcy_cache;
 mod qcy_live;
 mod qcy_probe;
 mod quit;
 mod resident;
+mod rfcomm;
 mod server;
 mod state;
+mod vb_cable;
+mod zip;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -30,18 +36,38 @@ fn main() {
         win_sys::console::attach_parent();
     }
     // The command line logs to the console only; the resident process to
-    // daily files in the settings folder
+    // daily files in the settings folder. The folder of 2.0.x is moved only
+    // once no 2.0.x core or v1 writes to it any more (resident::run stops
+    // them, then calls config_dir again)
+    bluecaster_core::paths::set_old_app_check(old_app_runs);
+    let config = bluecaster_core::paths::config_dir();
+    // Developer mode's logging from the first line (the settings are read
+    // again, with their log lines, when the service starts)
+    let dev = if cli_mode { Default::default() } else { bluecaster_core::settings::Settings::load(&config).log() };
     let log = logging::init(&logging::LogOptions {
-        dir: (!cli_mode).then(|| a2dpwb_core::paths::config_dir().join("logs")),
+        dir: (!cli_mode).then(|| bluecaster_core::paths::log_dir(&config)),
         console: cli_mode,
+        crash_dir: Some(bluecaster_core::paths::crash_dir(&config)),
+        dev,
     });
+    if let Some(note) = bluecaster_core::paths::take_folder_note() {
+        tracing::info!("{note}");
+    }
     let code = if cli_mode { cli::run(&args) } else { resident::run(&args) };
     // process::exit skips destructors: flush the log first
     drop(log);
     std::process::exit(code);
 }
-fn core_state(s: ipc::StreamState) -> a2dpwb_core::StreamState {
-    use a2dpwb_core::StreamState as S;
+/// A 2.0.x core or v1 runs (paths::set_old_app_check). Not when a core of
+/// this version runs already: it holds their mutexes itself, and has dealt
+/// with their folder.
+fn old_app_runs() -> bool {
+    use win_sys::single_instance::{V1_MUTEX_NAME, is_held};
+    !is_held(&ipc::core_mutex_name()) && (is_held(&ipc::old_core_mutex_name()) || is_held(V1_MUTEX_NAME))
+}
+
+fn core_state(s: ipc::StreamState) -> bluecaster_core::StreamState {
+    use bluecaster_core::StreamState as S;
     match s {
         ipc::StreamState::Idle => S::Idle,
         ipc::StreamState::Connecting => S::Connecting,
@@ -59,9 +85,9 @@ pub(crate) fn flow_view(state: &state::CoreState) -> ipc::FlowView {
 }
 
 fn flow_view_of(
-    flow: &a2dpwb_core::diag::ConnectionFlow,
-    now: a2dpwb_core::StreamState,
-    rates: Option<a2dpwb_core::diag::AudioRates>,
+    flow: &bluecaster_core::diag::ConnectionFlow,
+    now: bluecaster_core::StreamState,
+    rates: Option<bluecaster_core::diag::AudioRates>,
 ) -> ipc::FlowView {
     let sess = flow.session();
     let steps = flow
@@ -105,26 +131,74 @@ fn firmware_text(adapters: &[ipc::AdapterInfo]) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("; "))
 }
 
+/// The codec details back in the core's types (the same fields)
+fn core_codec_details(d: ipc::CodecDetails) -> bluecaster_core::CodecDetails {
+    bluecaster_core::CodecDetails {
+        mtu: d.mtu,
+        rtp: d.rtp,
+        media_header: d.media_header,
+        frame_samples: d.frame_samples,
+        frame_bytes: d.frame_bytes,
+        frames_per_packet: d.frames_per_packet,
+        sbc: d.sbc.map(|s| bluecaster_core::SbcDetails {
+            channel_mode: s.channel_mode,
+            blocks: s.blocks,
+            subbands: s.subbands,
+            allocation: s.allocation,
+            bitpool: s.bitpool,
+            config_bitpool: s.config_bitpool,
+            abr_bitpool: s.abr_bitpool,
+            device: s.device.map(|c| bluecaster_core::SbcDeviceCaps {
+                sample_rates: c.sample_rates,
+                channel_modes: c.channel_modes,
+                blocks: c.blocks,
+                subbands: c.subbands,
+                allocations: c.allocations,
+                min_bitpool: c.min_bitpool,
+                max_bitpool: c.max_bitpool,
+            }),
+        }),
+        aac: d.aac.map(|a| bluecaster_core::AacDetails {
+            object_type: a.object_type,
+            bit_rate: a.bit_rate,
+            device: a.device.map(|c| bluecaster_core::AacDeviceCaps {
+                object_types: c.object_types,
+                sample_rates: c.sample_rates,
+                channels: c.channels,
+                max_bitrate: c.max_bitrate,
+                vbr: c.vbr,
+            }),
+        }),
+        device: d.device.map(|c| bluecaster_core::CodecDeviceCaps {
+            codec: c.codec,
+            sample_rates: c.sample_rates,
+            bit_depths: c.bit_depths,
+            max_bitrate: c.max_bitrate,
+        }),
+    }
+}
+
 /// The text of "copy diagnostic info"
 pub(crate) fn diag_text(state: &state::CoreState, mask: bool) -> String {
-    use a2dpwb_core::diag;
+    use bluecaster_core::diag;
     let (_, s) = state.snapshot();
     let hub = logging::hub();
     let flow = hub.flow();
     let lines = hub.recent();
     let log: Vec<_> = lines.iter().map(logging::entry).collect();
-    let adapters: Vec<String> = a2dpwb_core::adapter::adapters(false).iter().map(diag::adapter_line).collect();
+    let adapters: Vec<String> = bluecaster_core::adapter::adapters(false).iter().map(diag::adapter_line).collect();
     let settings = state.service.settings();
     let profile = s
         .active_profile
         .as_ref()
-        .and_then(|n| a2dpwb_core::profiles::load(&state.config_dir()).into_iter().find(|p| &p.name == n));
+        .and_then(|n| bluecaster_core::profiles::load(&state.config_dir()).into_iter().find(|p| &p.name == n));
     let stream_state = core_state(s.stream.state);
-    let info = s.stream.info.as_ref().map(|i| a2dpwb_core::StreamInfo {
+    let info = s.stream.info.as_ref().map(|i| bluecaster_core::StreamInfo {
         codec: i.codec.clone(),
         bitrate_kbps: i.bitrate_kbps,
         sample_rate: i.sample_rate,
         channels: i.channels,
+        bits: i.bits,
         source_sample_rate: i.source_sample_rate,
         source_channels: i.source_channels,
         source_bits: i.source_bits,
@@ -132,7 +206,9 @@ pub(crate) fn diag_text(state: &state::CoreState, mask: bool) -> String {
         requested_in_use: i.requested_in_use,
         abr: i.abr,
         bitrate_capped: i.bitrate_capped,
+        hi_res_set: i.hi_res_set,
         source: core_source(i.source.as_ref()),
+        details: i.details.clone().map(|d| Box::new(core_codec_details(*d))),
     });
     let firmware = firmware_text(&s.adapter.adapters);
     // LE Audio (experimental) of the running stack: stream, ISO counters,
@@ -144,6 +220,7 @@ pub(crate) fn diag_text(state: &state::CoreState, mask: bool) -> String {
     let stats = state.service.stats();
     let capture = state.service.capture();
     let capture_path = capture.path();
+    let adapter_addresses = adapter_addresses(&s.adapter.adapters);
     diag::diag_text(&diag::DiagInput {
         env: diag::Environment::current(),
         settings: &settings,
@@ -159,19 +236,54 @@ pub(crate) fn diag_text(state: &state::CoreState, mask: bool) -> String {
         log: &log,
         clock: hub.clock(),
         mask,
+        adapter_addresses: &adapter_addresses,
         le_audio: le_audio.as_ref(),
+        logging: Some(&logging_line(&state.config_dir())),
+        clients: &server::clients(),
     })
 }
 
+/// The adapters' own addresses, as remembered (`<adapter>` in masked text)
+pub(crate) fn adapter_addresses(adapters: &[ipc::AdapterInfo]) -> Vec<String> {
+    adapters.iter().filter_map(|a| a.address.clone()).collect()
+}
+
+/// "Logging" of the diagnostic info: verbose logging, and the crash
+/// reports and flight recorder files a diagnostic bundle would include
+fn logging_line(config: &std::path::Path) -> String {
+    use bluecaster_core::paths;
+    let count = |dir: std::path::PathBuf, ext: &str| {
+        std::fs::read_dir(dir)
+            .map_or(0, |d| d.flatten().filter(|e| e.path().extension().is_some_and(|x| x == ext)).count())
+    };
+    let verbose = match logging::verbose() {
+        Some(v) => {
+            format!("verbose ({:?}, {} min left)", v.level, v.until_ms.saturating_sub(logging::unix_ms()) / 60_000)
+        }
+        None => "normal".into(),
+    };
+    let always = match logging::always_verbose() {
+        Some(l) => format!(", always {l:?} (developer mode)"),
+        None => String::new(),
+    };
+    let capped = if logging::file_capped() { " (today's file is full: debug lines stopped)" } else { "" };
+    format!(
+        "{verbose}{always}{capped}; {} crash report(s); {} HCI flight recording(s)",
+        count(paths::crash_dir(config), "txt"),
+        count(paths::recorder_dir(config), "pklg")
+    )
+}
+
 /// The protocol's source back to the core's (for diag_text)
-fn core_source(s: Option<&ipc::SourceInfo>) -> a2dpwb_core::SourceInfo {
+fn core_source(s: Option<&ipc::SourceInfo>) -> bluecaster_core::SourceInfo {
     let kind = match s.map(|s| s.kind.as_str()) {
         Some("virtual") => "virtual",
+        Some("output") => "output",
         Some("app") => "app",
         Some("tone") => "tone",
         _ => "loopback",
     };
-    a2dpwb_core::SourceInfo {
+    bluecaster_core::SourceInfo {
         kind,
         name: s.map(|s| s.name.clone()).unwrap_or_default(),
         waiting: s.is_some_and(|s| s.waiting),
@@ -181,16 +293,16 @@ fn core_source(s: Option<&ipc::SourceInfo>) -> a2dpwb_core::SourceInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use a2dpwb_core::diag::{AudioRates, ConnectionFlow};
+    use bluecaster_core::diag::{AudioRates, ConnectionFlow};
     use tracing::Level;
 
     fn streaming_flow() -> ConnectionFlow {
         let mut f = ConnectionFlow::new();
         let lines = [
-            (100, "a2dpwb_core::stream", "stream: device AA:BB:CC:DD:EE:FF codec None"),
+            (100, "bluecaster_core::stream", "stream: device AA:BB:CC:DD:EE:FF codec None"),
             (200, "bt_host", "connecting to AA:BB:CC:DD:EE:FF"),
             (300, "bt_host::app", "signaling connection established (cid 0x0041)"),
-            (400, "a2dpwb_core::service", "state Streaming: Streaming"),
+            (400, "bluecaster_core::service", "state Streaming: Streaming"),
         ];
         for (t, target, m) in lines {
             f.feed(t, target, Level::INFO, m);
@@ -200,13 +312,13 @@ mod tests {
 
     #[test]
     fn flow_steps_name_their_lines() {
-        let v = flow_view_of(&streaming_flow(), a2dpwb_core::StreamState::Streaming, None);
+        let v = flow_view_of(&streaming_flow(), bluecaster_core::StreamState::Streaming, None);
         assert_eq!((v.session, v.first_seq), (1, Some(1)));
         let connect = v.steps.iter().find(|s| s.step == "connect").unwrap();
         assert_eq!((connect.seq, connect.time_ms, connect.elapsed_ms), (Some(3), Some(300), Some(200)));
         let pending = v.steps.iter().find(|s| s.step == "encoder").unwrap();
         assert_eq!((pending.seq, pending.time_ms), (None, None));
-        let empty = flow_view_of(&ConnectionFlow::new(), a2dpwb_core::StreamState::Idle, None);
+        let empty = flow_view_of(&ConnectionFlow::new(), bluecaster_core::StreamState::Idle, None);
         assert_eq!(empty.first_seq, None);
     }
 
@@ -220,12 +332,12 @@ mod tests {
         let stalled = AudioRates { packets_per_second: 0.0, kbps: 0.0, capture_frames_per_second: 48000.0 };
         let live = AudioRates { packets_per_second: 120.0, kbps: 990.0, capture_frames_per_second: 48000.0 };
         for (rates, key) in [(idle, "dbgc.audio_idle"), (stalled, "dbgc.audio_stalled"), (live, "dbgc.audio_live")] {
-            let v = flow_view_of(&f, a2dpwb_core::StreamState::Streaming, Some(rates));
+            let v = flow_view_of(&f, bluecaster_core::StreamState::Streaming, Some(rates));
             let audio = v.steps.iter().find(|s| s.step == "audio").unwrap();
             assert_eq!(audio.detail_msg.as_ref().map(|m| m.key.as_str()), Some(key));
         }
         // Without rates the log's detail stays
-        let v = flow_view_of(&f, a2dpwb_core::StreamState::Streaming, None);
+        let v = flow_view_of(&f, bluecaster_core::StreamState::Streaming, None);
         let audio = v.steps.iter().find(|s| s.step == "audio").unwrap();
         assert!(audio.detail_msg.is_none());
     }
@@ -245,7 +357,15 @@ mod tests {
             firmware_present: Some(false),
             firmware_files: vec!["rtl8761bu_fw.bin".into(), "rtl8761bu_config.bin".into()],
             firmware_invalid: None,
+            firmware_download: true,
+            firmware_from_driver: false,
+            firmware_driver: false,
             vendor_note: None,
+            restart_needed: false,
+            le_audio: None,
+            address: None,
+            bt_version: None,
+            windows_name: None,
         };
         let csr = ipc::AdapterInfo { display_name: "CSR8510".into(), firmware_present: None, ..a.clone() };
         let page = ipc::AdapterInfo { firmware_invalid: Some("rtl8761bu_fw.bin".into()), ..a.clone() };

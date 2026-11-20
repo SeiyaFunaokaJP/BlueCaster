@@ -11,15 +11,45 @@ use std::sync::OnceLock;
 pub struct Msg {
     pub key: &'static str,
     pub args: Vec<String>,
+    /// An error that stopped the stream over its codec: which codec, and
+    /// why ([`Msg::codec_stop`])
+    #[serde(skip)]
+    pub codec_stop: Option<CodecStop>,
+}
+
+/// A stream stopped over its codec (issue #86): the tray and the
+/// connection cards name the cause in a few words, and choosing another
+/// codec for that device connects it again
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodecStop {
+    pub codec: codec::CodecKind,
+    pub kind: CodecStopKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodecStopKind {
+    /// The device does not offer the codec, or refused it when asked anyway
+    Unsupported,
+    /// The device refused settings of the codec it does not list
+    SettingsUnsupported,
+    /// Another source holds the device's endpoint of the codec
+    InUse,
+    /// The device refused the configuration of a codec it lists
+    Refused,
 }
 
 impl Msg {
     pub fn new(key: &'static str) -> Msg {
-        Msg { key, args: Vec::new() }
+        Msg { key, args: Vec::new(), codec_stop: None }
     }
 
     pub fn with(key: &'static str, args: &[&dyn fmt::Display]) -> Msg {
-        Msg { key, args: args.iter().map(|a| a.to_string()).collect() }
+        Msg { key, args: args.iter().map(|a| a.to_string()).collect(), codec_stop: None }
+    }
+
+    /// `key` naming `codec`, for a stop that `codec` caused
+    pub fn codec_stop(key: &'static str, codec: codec::CodecKind, kind: CodecStopKind) -> Msg {
+        Msg { codec_stop: Some(CodecStop { codec, kind }), ..Msg::with(key, &[&codec.name()]) }
     }
 
     /// The English text
@@ -35,13 +65,13 @@ impl fmt::Display for Msg {
     }
 }
 
-/// Text of `key` in `lang` (en, ja, de, fr, es, ko, zh-CN, zh-TW, pt-BR), English
+/// Text of `key` in `lang` (en, ja, de, fr, es, ko, zh-CN, zh-TW, uk, ru, pt-BR), English
 /// when it has no translation, `default` when not even English has it. For
 /// the few texts the core shows itself (tray menu, notifications).
 pub fn translate(lang: &str, key: &str, default: &str) -> String {
     static LANGS: OnceLock<HashMap<&'static str, HashMap<String, String>>> = OnceLock::new();
     let langs = LANGS.get_or_init(|| {
-        let files: [(&str, &str); 8] = [
+        let files: [(&str, &str); 10] = [
             ("ja", include_str!("../../../../../app/lang/ja.json")),
             ("de", include_str!("../../../../../app/lang/de.json")),
             ("fr", include_str!("../../../../../app/lang/fr.json")),
@@ -49,6 +79,8 @@ pub fn translate(lang: &str, key: &str, default: &str) -> String {
             ("ko", include_str!("../../../../../app/lang/ko.json")),
             ("zh-CN", include_str!("../../../../../app/lang/zh-CN.json")),
             ("zh-TW", include_str!("../../../../../app/lang/zh-TW.json")),
+            ("uk", include_str!("../../../../../app/lang/uk.json")),
+            ("ru", include_str!("../../../../../app/lang/ru.json")),
             ("pt-BR", include_str!("../../../../../app/lang/pt-BR.json")),
         ];
         files.iter().map(|(l, text)| (*l, serde_json::from_str(text).unwrap_or_default())).collect()
@@ -112,7 +144,7 @@ mod tests {
     #[test]
     fn portuguese_core_texts() {
         assert_eq!(translate("pt-BR", "tray.exit", "Exit"), "Sair");
-        assert_eq!(translate("pt-BR", "tray.open", "Open A2DPWB"), "Abrir o A2DPWB");
+        assert_eq!(translate("pt-BR", "tray.open", "Open BlueCaster"), "Abrir o BlueCaster");
         assert_eq!(translate("pt-BR", "no.such.key", "fallback"), "fallback");
     }
 
@@ -120,5 +152,13 @@ mod tests {
     fn english_text() {
         let m = Msg::with("status.connecting_retry", &[&2, &3]);
         assert_eq!(m.english(), "Connection failed, trying again (2/3)...");
+    }
+
+    #[test]
+    fn a_codec_stop_names_its_codec() {
+        let m = Msg::codec_stop("error.codec_not_supported", codec::CodecKind::Ldac, CodecStopKind::Unsupported);
+        assert_eq!(m.english(), "The device does not support LDAC");
+        assert_eq!(m.codec_stop, Some(CodecStop { codec: codec::CodecKind::Ldac, kind: CodecStopKind::Unsupported }));
+        assert_eq!(Msg::new("error.codec_configure").codec_stop, None);
     }
 }

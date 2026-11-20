@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  chipTargetIndex,
   type AdapterFirmware,
   adapterFirmwareTag,
   buildChipOptions,
@@ -107,6 +108,12 @@ describe("firmware state", () => {
     expect(chipStatus(setting(0x8771, "rtl8761bu"), [other("Intel", "firmware.vendor_intel"), rtl(false)], []).kind).toBe(
       "missing",
     );
+    // The core can fetch the files: the Download button
+    expect(chipStatus(setting(CHIP_AUTO), [{ ...rtl(false), firmware_download: true }], [])).toEqual({
+      kind: "missing",
+      files: ["rtl8761bu_fw.bin", "rtl8761bu_config.bin"],
+      download: true,
+    });
   });
 
   it("tells about another vendor where v1 did, instead of 'no files needed'", () => {
@@ -144,10 +151,33 @@ describe("firmware state", () => {
     const s = setting(CHIP_AUTO);
     expect(adapterFirmwareTag(rtl(true), s)).toEqual({ key: "firmware.present", status: "good" });
     expect(adapterFirmwareTag(rtl(false), s)).toEqual({ key: "firmware.missing_short", status: "bad" });
-    expect(adapterFirmwareTag(other("Intel", "firmware.vendor_intel"), s).key).toBe("ui.adapter.firmware_not_realtek");
+    // Realtek's Windows driver has it (issue #86): as MediaTek's
+    expect(adapterFirmwareTag({ ...rtl(true), firmware_from_driver: true }, s)).toEqual({
+      key: "ui.adapter.firmware_from_driver",
+      args: ["Realtek"],
+      status: "good",
+    });
+    // Not on WinUSB yet (Windows runs it, or it is disabled): amber
+    expect(adapterFirmwareTag({ ...rtl(false), driver: "bluetooth" }, s)).toEqual({ key: "firmware.missing_short", status: "warn" });
+    // Another vendor's: where its firmware comes from (issue #86), how its
+    // loader went once one ran on it
+    expect(adapterFirmwareTag(other("Intel", "firmware.vendor_intel"), s).key).toBe("ui.adapter.firmware_from_folder");
+    const mtk = { ...other("MediaTek", "firmware.vendor_mediatek"), driver: "winusb" as const };
+    expect(adapterFirmwareTag(mtk, s)).toEqual({ key: "ui.adapter.firmware_from_driver", args: ["MediaTek"], status: "good" });
+    expect(adapterFirmwareTag(mtk, s, { vendor: "MediaTek", ok: true }).key).toBe("ui.adapter.firmware_loaded");
+    expect(adapterFirmwareTag(mtk, s, { vendor: "MediaTek", ok: false })).toEqual({
+      key: "ui.adapter.firmware_load_failed",
+      status: "bad",
+    });
+    // Another adapter's loader, or not on WinUSB: not this one's
+    expect(adapterFirmwareTag(mtk, s, { vendor: "Intel", ok: false }).key).toBe("ui.adapter.firmware_from_driver");
+    expect(adapterFirmwareTag({ ...mtk, driver: "bluetooth" }, s, { vendor: "MediaTek", ok: false }).key).toBe(
+      "ui.adapter.firmware_from_driver",
+    );
+    expect(adapterFirmwareTag(other("CSR", "firmware.vendor_csr"), s).key).toBe("ui.adapter.firmware_not_needed");
     expect(adapterFirmwareTag(other("Qualcomm", "firmware.vendor_unsupported"), s)).toEqual({
       key: "ui.adapter.firmware_unsupported",
-      status: "warn",
+      status: "bad",
     });
     expect(adapterFirmwareTag(rtl(null), setting(CHIP_NOT_REALTEK)).key).toBe("ui.adapter.firmware_not_realtek");
     expect(adapterFirmwareTag(other("Unknown", null), s)).toEqual({ key: "ui.adapter.firmware_choose_chip", status: "warn" });
@@ -160,6 +190,7 @@ describe("firmware state", () => {
       kind: "invalid",
       files: ["rtl8761bu_fw.bin", "rtl8761bu_config.bin"],
       file: "rtl8761bu_fw.bin",
+      download: false,
     });
     expect(adapterFirmwareTag(page, setting(CHIP_AUTO))).toEqual({ key: "firmware.invalid_short", status: "bad" });
     expect(chipStatus(setting(CHIP_AUTO), [{ ...rtl(false), firmware_invalid: null }], []).kind).toBe("missing");
@@ -170,6 +201,8 @@ describe("firmware state", () => {
   it("opens the vendor's firmware page", () => {
     expect(vendorFirmwareUrl("Intel")).toBe(LINKS.firmwareIntel);
     expect(vendorFirmwareUrl("Broadcom")).toBe(LINKS.firmwareBroadcom);
+    expect(vendorFirmwareUrl("MediaTek")).toBe(LINKS.firmwareMediaTek);
+    expect(vendorFirmwareUrl("Qualcomm")).toBe(LINKS.firmwareQualcomm);
     expect(vendorFirmwareUrl("CSR")).toBeNull();
     expect(firmwareUrl("Realtek")).toBe(LINKS.firmwareRealtek);
   });
@@ -192,3 +225,16 @@ describe("mock core firmware state", () => {
     expect(adapterWithFirmware({ ...rtl, realtek_chip: null }, setting(CHIP_AUTO), folder)).toMatchObject({ firmware_present: null });
   });
 });
+
+describe("chipTargetIndex", () => {
+  const base = { vendor: "x", realtek_chip: null, firmware_present: null, firmware_files: [], vendor_note: null };
+  it("picks the Realtek adapter, then a checked one, then a vendor note, then the first", () => {
+    expect(chipTargetIndex([])).toBe(-1);
+    expect(chipTargetIndex([base, base])).toBe(0);
+    const note = { ...base, vendor_note: { key: "firmware.vendor_intel", args: [] } };
+    expect(chipTargetIndex([base, note])).toBe(1);
+    expect(chipTargetIndex([note, { ...base, firmware_present: false }])).toBe(1);
+    expect(chipTargetIndex([note, base, { ...base, realtek_chip: "RTL8761BU" }])).toBe(2);
+  });
+});
+

@@ -23,7 +23,14 @@ pub async fn ipc_request(
     method: String,
     params: Option<Value>,
 ) -> Result<Value, ErrorInfo> {
-    ipc.request(window.label(), &method, params).await
+    let result = ipc.request(window.label(), &method, params).await;
+    // Only the connection's failures: the core's own errors are in its log
+    if let Err(e) = &result
+        && e.code.starts_with("ipc.")
+    {
+        tracing::warn!("[{}] {method} failed: {}", window.label(), e.code);
+    }
+    result
 }
 
 #[tauri::command]
@@ -72,9 +79,34 @@ pub async fn show_flyout(app: AppHandle) -> Result<(), String> {
     windows::show_flyout(&app).map_err(|e| e.to_string())
 }
 
+/// The flyout's page height (logical pixels): the flyout window fits it
+#[tauri::command]
+pub async fn fit_flyout(window: WebviewWindow, height: f64) -> Result<(), String> {
+    windows::fit_flyout(&window, height).map_err(|e| e.to_string())
+}
+
+/// The first-run setup opened or closed: the main window fits it
+#[tauri::command]
+pub async fn setup_window(window: WebviewWindow, active: bool) -> Result<(), String> {
+    windows::setup_window(&window, active).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn set_theme(app: AppHandle, theme: String) {
     windows::set_theme(&app, &theme);
+}
+
+#[derive(Serialize)]
+pub struct Accent {
+    light: String,
+    dark: String,
+}
+
+/// Windows' accent colours (read again when the window gets the focus, so a
+/// change in Settings shows); None keeps the UI's default
+#[tauri::command]
+pub fn accent_colors() -> Option<Accent> {
+    win_sys::accent::accent_colors().map(|a| Accent { light: a.light, dark: a.dark })
 }
 
 /// Opens a web page in the user's browser (https only)
@@ -113,6 +145,30 @@ pub fn reveal_path(path: String) -> Result<(), String> {
         return Err(format!("{path} does not exist"));
     }
     tauri_plugin_opener::reveal_item_in_dir(p).map_err(|e| e.to_string())
+}
+
+/// Longest text [`save_text_file`] writes
+const SAVE_TEXT_MAX: usize = 1 << 20;
+
+/// Writes `text` to a .txt file the user picks in Windows' Save As dialog
+/// (`name`: the file name suggested; an exported EQ) -> false when the
+/// dialog was cancelled. Only where the user chose: the page names no path.
+#[tauri::command]
+pub async fn save_text_file(window: WebviewWindow, name: String, text: String) -> Result<bool, String> {
+    if text.len() > SAVE_TEXT_MAX || name.is_empty() || name.contains(['\\', '/', ':']) {
+        return Err("not a file name, or too long".into());
+    }
+    let owner = window.hwnd().map(|h| h.0 as isize).unwrap_or(0);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    // The dialog blocks: a thread of its own, the window's event loop runs on
+    std::thread::spawn(move || {
+        let _ = tx.send(win_sys::file_dialog::save_file(owner, &name, "txt"));
+    });
+    let picked = rx.await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+    let Some(path) = picked else { return Ok(false) };
+    std::fs::write(&path, &text).map_err(|e| e.to_string())?;
+    tracing::info!("[{}] text file saved ({} bytes)", window.label(), text.len());
+    Ok(true)
 }
 
 /// The in-app update's state (also sent as `update://phase`)

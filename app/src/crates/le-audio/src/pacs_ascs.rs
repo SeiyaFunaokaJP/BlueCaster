@@ -3,9 +3,9 @@
 //! PDUs le_audio_bap.cpp builds inline).
 
 use crate::defs::{
-    ASE_OP_CONFIG_CODEC, ASE_OP_CONFIG_QOS, AseState, CAP_CHANNEL_COUNTS, CAP_FRAME_DURATIONS, CAP_MAX_FRAMES_PER_SDU,
-    CAP_OCTETS_PER_FRAME, CAP_SAMPLING_FREQUENCIES, CODING_FORMAT_LC3, META_CCID_LIST, META_PREFERRED_CONTEXTS,
-    META_STREAMING_CONTEXTS,
+    ASE_OP_CONFIG_CODEC, ASE_OP_CONFIG_QOS, ASE_OP_RECEIVER_START_READY, ASE_OP_RECEIVER_STOP_READY, AseState,
+    CAP_CHANNEL_COUNTS, CAP_FRAME_DURATIONS, CAP_MAX_FRAMES_PER_SDU, CAP_OCTETS_PER_FRAME, CAP_SAMPLING_FREQUENCIES,
+    CODING_FORMAT_LC3, META_CCID_LIST, META_PREFERRED_CONTEXTS, META_STREAMING_CONTEXTS,
 };
 use crate::ltv;
 
@@ -66,6 +66,7 @@ pub fn parse_pac_records(data: &[u8]) -> Option<Vec<PacRecord>> {
     let mut out = Vec::with_capacity(count as usize);
     for _ in 0..count {
         if pos + 6 > len {
+            tracing::debug!("PACS: PAC record header past the end at {pos} of {len}: {data:02X?}");
             return None;
         }
         let mut r = PacRecord::default();
@@ -74,6 +75,7 @@ pub fn parse_pac_records(data: &[u8]) -> Option<Vec<PacRecord>> {
         let cap_len = data[pos] as usize;
         pos += 1;
         if pos + cap_len + 1 > len {
+            tracing::debug!("PACS: PAC capabilities of {cap_len} bytes past the end at {pos} of {len}: {data:02X?}");
             return None;
         }
         r.capabilities = data[pos..pos + cap_len].to_vec();
@@ -81,6 +83,7 @@ pub fn parse_pac_records(data: &[u8]) -> Option<Vec<PacRecord>> {
         let meta_len = data[pos] as usize;
         pos += 1;
         if pos + meta_len > len {
+            tracing::debug!("PACS: PAC metadata of {meta_len} bytes past the end at {pos} of {len}: {data:02X?}");
             return None;
         }
         r.metadata = data[pos..pos + meta_len].to_vec();
@@ -109,6 +112,15 @@ pub fn parse_pac_records(data: &[u8]) -> Option<Vec<PacRecord>> {
         if let Some(v) = ltv::find(&r.metadata, META_PREFERRED_CONTEXTS).filter(|v| v.len() >= 2) {
             r.preferred_contexts = rd16(v);
         }
+        tracing::debug!(
+            "PACS: record codec {:02X?}, LC3 {}, caps {:?}, preferred contexts 0x{:04X}, raw caps {:02X?}, metadata {:02X?}",
+            r.codec_id,
+            r.lc3,
+            r.caps,
+            r.preferred_contexts,
+            r.capabilities,
+            r.metadata
+        );
         out.push(r);
     }
     Some(out)
@@ -192,6 +204,7 @@ impl Default for Ase {
 /// `sink` and `value_handle` are left as they are.
 pub fn parse_ase_value(data: &[u8], ase: &mut Ase) -> bool {
     if data.len() < 2 {
+        tracing::debug!("ASCS: ASE value too short: {data:02X?}");
         return false;
     }
     ase.id = data[0];
@@ -233,7 +246,10 @@ pub fn parse_ase_value(data: &[u8], ase: &mut Ase) -> bool {
             ase.cis_id = p[1];
         }
         AseState::Idle | AseState::Releasing => {}
-        AseState::Unknown => return false,
+        AseState::Unknown => {
+            tracing::debug!("ASCS: ASE {} in unknown state 0x{:02X}", data[0], data[1]);
+            return false;
+        }
     }
     true
 }
@@ -315,6 +331,18 @@ pub fn cp_ase_ids(opcode: u8, ase_ids: &[u8]) -> Vec<u8> {
     let mut v = vec![opcode, ase_ids.len() as u8];
     v.extend_from_slice(ase_ids);
     v
+}
+
+/// Receiver Start Ready (0x04): the client (the receiver of a source ASE's
+/// audio) is ready to receive, after the CIS is up and the ASE is Enabling
+pub fn cp_receiver_start_ready(ase_ids: &[u8]) -> Vec<u8> {
+    cp_ase_ids(ASE_OP_RECEIVER_START_READY, ase_ids)
+}
+
+/// Receiver Stop Ready (0x06): the client stopped receiving from source
+/// ASEs in Disabling (they then go to QoS Configured)
+pub fn cp_receiver_stop_ready(ase_ids: &[u8]) -> Vec<u8> {
+    cp_ase_ids(ASE_OP_RECEIVER_STOP_READY, ase_ids)
 }
 
 /// The Metadata of Enable: Streaming Audio Contexts (0x02) and, when
@@ -524,6 +552,8 @@ mod tests {
         );
         assert_eq!(cp_ase_ids(ASE_OP_RELEASE, &[1, 2]), [0x08, 2, 1, 2]);
         assert_eq!(cp_ase_ids(ASE_OP_DISABLE, &[]), [0x05, 0]);
+        assert_eq!(cp_receiver_start_ready(&[3]), [0x04, 1, 3]);
+        assert_eq!(cp_receiver_stop_ready(&[3, 4]), [0x06, 2, 3, 4]);
     }
 
     #[test]

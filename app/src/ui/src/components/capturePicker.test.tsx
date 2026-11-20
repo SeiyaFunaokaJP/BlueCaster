@@ -1,12 +1,11 @@
-// The capture source chosen in place on Home and in the flyout: the choices,
-// the profile they save, and a stream of something else left alone.
+// The capture source choices (a device's settings on Audio Devices), and
+// neither Home nor the flyout choosing it (issue #86).
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { cleanup, render, screen } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it } from "vitest";
 import { App } from "../app/App";
 import { MockCore, sampleProfile, type MockOptions } from "../ipc/mock";
 import { createCore } from "../ipc/store";
-import type { Profile } from "../ipc/types";
 import { captureChoices, captureValue, withCapture } from "./CapturePicker";
 
 let mock: MockCore | null = null;
@@ -27,8 +26,8 @@ afterEach(() => {
 });
 
 const DEVICES = [
-  { id: "spk", name: "Speakers", is_default: true, is_virtual: false, mix_rate: null, mix_channels: null, mix_bits: null },
-  { id: "cable", name: "CABLE Input", is_default: false, is_virtual: true, mix_rate: null, mix_channels: null, mix_bits: null },
+  { id: "spk", name: "Speakers", is_default: true, is_virtual: false, is_display: false, mix_rate: null, mix_channels: null, mix_bits: null, capture_name: null, capture_rate: null },
+  { id: "cable", name: "CABLE Input", is_default: false, is_virtual: true, is_display: false, mix_rate: null, mix_channels: null, mix_bits: null, capture_name: null, capture_rate: null },
 ];
 const APPS = [{ exe: "Spotify.exe", name: "Spotify" }];
 
@@ -46,6 +45,20 @@ describe("choices", () => {
     expect(captureChoices(sampleProfile(), DEVICES, APPS, false).apps).toEqual([]);
   });
 
+  it("offers the other output devices (issue #193)", () => {
+    const p = sampleProfile();
+    // Each device once: the virtual one stays under Virtual Device
+    expect(captureChoices(p, DEVICES, APPS, true).output).toEqual([{ value: "output:spk", label: "Speakers" }]);
+    const gone = sampleProfile({ capture_mode: "output", audio_device_id: "usb", audio_device_name: "USB Speakers" });
+    expect(captureChoices(gone, DEVICES, APPS, true).output[0]).toEqual({
+      value: "output:usb",
+      label: "USB Speakers (not connected)",
+    });
+    const o = withCapture(p, "output:spk", DEVICES, APPS);
+    expect(o).toMatchObject({ capture_mode: "output", audio_device_id: "spk", audio_device_name: "Speakers" });
+    expect(captureValue(o)).toBe("output:spk");
+  });
+
   it("sets what the capture source needs", () => {
     const p = sampleProfile();
     expect(withCapture(p, "virtual:cable", DEVICES, APPS)).toMatchObject({
@@ -60,64 +73,16 @@ describe("choices", () => {
   });
 });
 
-describe("in place", () => {
-  const saved = (calls: { method: string; params: unknown }[]) =>
-    calls.filter((c) => c.method === "profile.save").map((c) => (c.params as { profile: Profile }).profile);
-
-  it("Home saves the chosen source into the active profile", async () => {
-    const { calls } = start("#/home");
-    const select = await screen.findByRole("combobox", { name: "Capture Source" });
-    await screen.findByRole("option", { name: "CABLE Input (VB-Audio Virtual Cable)" });
-    fireEvent.change(select, { target: { value: "virtual:{0.0.0.00000000}.{cable}" } });
-    await waitFor(() => expect(saved(calls)).toHaveLength(1));
-    expect(saved(calls)[0]).toMatchObject({
-      name: "WH-1000XM5 (LDAC)",
-      capture_mode: "virtual",
-      audio_device_name: "CABLE Input (VB-Audio Virtual Cable)",
-    });
+describe("not in place", () => {
+  it("is not on Home, which has the codec instead (issue #86)", async () => {
+    start("#/home");
+    await screen.findAllByRole("button", { name: "Connect" });
+    expect(screen.queryByRole("combobox", { name: "Output Source" })).toBeNull();
   });
 
-  it("the flyout offers it too", async () => {
-    const { calls } = start("", { window: "flyout" });
-    const select = await screen.findByRole("combobox", { name: "Capture Source" });
-    await screen.findByRole("option", { name: "Spotify" });
-    fireEvent.change(select, { target: { value: "app:spotify.exe" } });
-    await waitFor(() => expect(saved(calls)[0]).toMatchObject({ capture_mode: "app", app_exe: "Spotify.exe" }));
-  });
-
-  it("shows the test tone in the picker; a source chosen then ends it and starts the profile", async () => {
-    const { mock, calls } = start("", { window: "flyout" });
-    const select = await screen.findByRole("combobox", { name: "Capture Source" });
-    await screen.findByRole("option", { name: "Spotify" });
-    await mock.call("stream.start_custom", { device: "AC:80:0A:12:34:56", codec: "sbc", quality: "hq", source: "tone" });
-    await waitFor(() => expect((select as HTMLSelectElement).value).toBe("tone"));
-    expect(screen.getByRole("option", { name: "Test tone" })).toBeInTheDocument();
-    fireEvent.change(select, { target: { value: "app:spotify.exe" } });
-    await waitFor(() => expect(calls.some((c) => c.method === "stream.start")).toBe(true));
-    expect(saved(calls)[0]).toMatchObject({ capture_mode: "app", app_exe: "Spotify.exe" });
-    const order = calls.map((c) => c.method).filter((m) => m === "profile.save" || m === "stream.start");
-    expect(order).toEqual(["profile.save", "stream.start"]);
-  });
-
-  it("choosing the profile's own source during the tone only starts the profile", async () => {
-    const { mock, calls } = start("", { window: "flyout" });
-    const select = await screen.findByRole("combobox", { name: "Capture Source" });
-    await mock.call("stream.start_custom", { device: "AC:80:0A:12:34:56", codec: "sbc", quality: "hq", source: "tone" });
-    await waitFor(() => expect((select as HTMLSelectElement).value).toBe("tone"));
-    fireEvent.change(select, { target: { value: "loopback" } });
-    await waitFor(() => expect(calls.some((c) => c.method === "stream.start")).toBe(true));
-    expect(saved(calls)).toHaveLength(0);
-  });
-
-  it("offers the test tone only in developer mode", async () => {
-    const { core, calls } = start("#/home");
-    await screen.findByRole("combobox", { name: "Capture Source" });
-    expect(screen.queryByRole("option", { name: "Test tone" })).toBeNull();
-    await core.request("settings.set", { settings: { ...core.state.snap!.settings, developer_mode: true } });
-    await screen.findByRole("option", { name: "Test tone" });
-    fireEvent.change(screen.getByRole("combobox", { name: "Capture Source" }), { target: { value: "tone" } });
-    await waitFor(() => expect(calls.some((c) => c.method === "stream.start_custom")).toBe(true));
-    expect(calls.find((c) => c.method === "stream.start_custom")!.params).toMatchObject({ source: "tone" });
-    expect(saved(calls)).toHaveLength(0);
+  it("is not in the flyout, kept simple (issue #86)", async () => {
+    start("", { window: "flyout" });
+    await screen.findByRole("button", { name: /Open BlueCaster/ });
+    expect(screen.queryByRole("combobox", { name: "Output Source" })).toBeNull();
   });
 });

@@ -10,6 +10,7 @@ publish.workspace = true
 bt-host.workspace = true
 codec = { workspace = true, features = ["lc3"] }
 le-audio.workspace = true
+dsp.workspace = true
 tracing.workspace = true
 rtrb.workspace = true
 

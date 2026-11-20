@@ -10,21 +10,28 @@ MODULES. A module may define any of:
                                 sink.adv_structures, keep state in sink.state
     async start(sink, args)     after the sink is powered on and advertising
 
-bap.py is the unicast server (PACS, ASCS, CAS) every sink has; csip, vcp,
+bap.py is the unicast server (PACS, ASCS, CAS) every sink has (mic.py its
+source ASE with --mic); csip, vcp,
 mcp, ccp and tmap_gmap are stubs for the profile work packages, each owned by
 one of them. emu_le_audio_sink.py calls the modules; add checks for
 run_test.py in your module's own files, not in bap.py.
 """
 
-from . import bap, ccp, controller, csip, mcp, tmap_gmap, vcp
+from . import bap, bas, ccp, controller, csip, gatt_cache, mcp, mic, tmap_gmap, vcp
 
-MODULES = [bap, csip, vcp, mcp, ccp, tmap_gmap]
+MODULES = [bap, mic, csip, vcp, mcp, ccp, tmap_gmap, bas, gatt_cache]
 
 
 def add_arguments(parser):
     # The emulated controllers themselves (controller.py)
     parser.add_argument('--no-iso-buffers', action='store_true',
-                        help="A2DPWB's controller has LE but no ISO buffers (LE Read Buffer Size v2: 0)")
+                        help="BlueCaster's controller has LE but no ISO buffers (LE Read Buffer Size v2: 0)")
+    parser.add_argument('--refuse-cis', type=int, metavar='N',
+                        help="BlueCaster's controller refuses the Nth CIS of LE Create CIS (0: the first) "
+                             'with 0x1E; the others come up')
+    parser.add_argument('--cis-up-after', type=float, metavar='SECONDS',
+                        help='with --refuse-cis: the other CIS come up this much later, '
+                             "on BlueCaster's side only")
     for module in MODULES:
         if hasattr(module, 'add_arguments'):
             module.add_arguments(parser)
@@ -32,7 +39,9 @@ def add_arguments(parser):
 
 def configure_sink(sink, args):
     if args.no_iso_buffers:
-        controller.NO_ISO_BUFFERS.add('A2DPWB')   # the controller served over H4 (emu_le_audio_sink.py)
+        controller.NO_ISO_BUFFERS.add('BlueCaster')   # the controller served over H4 (emu_le_audio_sink.py)
+    if args.refuse_cis is not None:
+        controller.REFUSE_CIS = (args.refuse_cis, args.cis_up_after)
     for module in MODULES:
         if hasattr(module, 'configure_sink'):
             module.configure_sink(sink, args)

@@ -1,20 +1,35 @@
-//! Win32 APIs for A2DPWB that no Rust library covers. The only crate besides
+//! Win32 APIs for BlueCaster that no Rust library covers. The only crate besides
 //! the `*-sys` crates where `unsafe` is allowed; every function here is
 //! safe to call.
 
+pub mod accent;
+pub mod app_icon;
+pub mod audio_notify;
 pub mod audio_policy;
 pub mod autostart;
+pub mod bt_keys;
 pub mod bt_paired;
+pub mod bt_radios;
+pub mod com;
+pub mod computer;
 pub mod console;
+pub mod crash;
+pub mod dpapi;
 pub mod driver;
 pub mod elevation;
+pub mod file_dialog;
 pub mod locale;
 pub mod media_keys;
 pub mod mmcss;
 pub mod notify;
+pub mod perf;
 pub mod pipe;
 pub mod power;
 pub mod process;
+pub mod quick_settings;
 pub mod single_instance;
 pub mod usb_adapters;
+pub mod usb_control;
+pub mod usb_isoch;
+pub mod webview;
 pub mod wlan;

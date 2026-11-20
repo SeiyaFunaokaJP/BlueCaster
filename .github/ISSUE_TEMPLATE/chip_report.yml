@@ -1,0 +1,55 @@
+name: Chip report
+description: An adapter BlueCaster cannot use yet (MediaTek, Qualcomm, …) — what its chip says, for whoever adds support
+labels: ["chip support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! This report is what a contributor needs to add support for your adapter's chip ([Adding Chip Support](https://seiyafunaokajp.github.io/BlueCaster/chip-support)).
+        After **Read chip info** (Adapters screen, developer mode), **Report on GitHub** fills in most of this form, usually including the probe report.
+
+  - type: input
+    id: version
+    attributes:
+      label: BlueCaster version
+      placeholder: e.g. 3.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: adapter
+    attributes:
+      label: Adapter
+      description: "Product name, and where it came from (built into a laptop: the laptop's model)."
+      placeholder: e.g. built into a Lenovo IdeaPad 5 (AMD)
+    validations:
+      required: true
+
+  - type: input
+    id: chip
+    attributes:
+      label: What the probe read
+      description: The summary line BlueCaster showed.
+      placeholder: e.g. MediaTek, USB 0E8D:0608, Bluetooth 5.2 (HCI 11), LMP subversion 0x1234, 10 of 11 requests answered
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows
+      placeholder: e.g. Windows build 26200 (24H2)
+
+  - type: textarea
+    id: probe
+    attributes:
+      label: Probe report
+      description: "If this field is empty or shows only a file name, drag the newest probe-….json file here from `%APPDATA%\\BlueCaster\\logs\\probe` (paste the path into Explorer's address bar). The report contains the adapter's Bluetooth address and name, nothing about your headphones."
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Does Windows' own Bluetooth work with it? The vendor's driver version (Device Manager), anything you tried.

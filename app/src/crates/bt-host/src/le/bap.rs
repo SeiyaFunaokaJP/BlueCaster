@@ -1,8 +1,9 @@
 //! BAP unicast client (v1 le_audio_bap.{h,cpp}).
 //!
-//! [`read_device`]: PACS client (Sink PAC records, Sink Audio Locations,
-//! Available / Supported Audio Contexts) and ASCS client (Sink / Source
-//! ASEs, ASE Control Point), notifications enabled, once per connection.
+//! [`read_device`]: PACS client (Sink / Source PAC records, Sink / Source
+//! Audio Locations, Available / Supported Audio Contexts) and ASCS client
+//! (Sink / Source ASEs, ASE Control Point), notifications enabled, once per
+//! connection.
 //!
 //! [`Unicast`]: the BAP unicast procedure for a StreamPlan over one or more
 //! devices, a state machine on the BTstack thread:
@@ -17,10 +18,15 @@
 //!   "no audio context available for Enable")
 //! LE Create CIS (all at once) + ISO data paths
 //! Sink ASEs: the server's Receiver Start Ready -> Streaming
-//! ISO SDUs (iso_send)
+//! Source ASEs (a conversational plan, the microphone): our Receiver
+//!   Start Ready once the CIS is up -> Streaming; ISO data to iso_recv
+//! ISO SDUs (iso_send) on the CIS with a sink ASE
 //! ```
 //!
-//! and back: Disable -> QoS Configured, HCI Disconnect of the CIS
+//! The source direction gets its own QoS (P->C in LE Set CIG Parameters,
+//! the source preset in Config QoS) and Enable contexts (Available Source
+//! Contexts). And back: Disable -> QoS Configured (source ASEs: Disabling,
+//! our Receiver Stop Ready, then QoS Configured), HCI Disconnect of the CIS
 //! ("disconnecting CIS"; servers may keep an ASE in Releasing until the CIS
 //! is gone), Release -> Idle, LE Remove CIG. Each step has a timeout; a
 //! failing step tears down what was set up and reports why.
@@ -36,10 +42,10 @@ use btstack_sys::consts::{ERROR_CODE_ACL_CONNECTION_ALREADY_EXISTS, ERROR_CODE_M
 use btstack_sys::{CigParams, CisParams, events};
 use le_audio::defs::*;
 use le_audio::pacs_ascs::{
-    Ase, ConfigCodec, ConfigQos, cp_ase_ids, cp_config_codec, cp_config_qos, cp_with_metadata, enable_metadata,
-    parse_ase_value, parse_pac_records,
+    Ase, ConfigCodec, ConfigQos, cp_ase_ids, cp_config_codec, cp_config_qos, cp_receiver_start_ready,
+    cp_receiver_stop_ready, cp_with_metadata, enable_metadata, parse_ase_value, parse_pac_records,
 };
-use le_audio::plan::{CisPlan, StreamPlan, choose_streaming_contexts, codec_config_ltvs};
+use le_audio::plan::{PlannedAse, StreamPlan, choose_streaming_contexts, codec_config_ltvs, source_codec_config_ltvs};
 
 use super::LeDeviceId;
 use super::core::{CON_HANDLE_INVALID, LeCtx, LeDevice};
@@ -60,19 +66,36 @@ pub fn read_device(ctx: &mut LeCtx<'_>, dev: LeDeviceId, done: ReadDeviceDone) {
     let Some(d) = ctx.device_mut(dev) else { return };
     let con = d.acl;
     d.sink_pacs.clear();
+    d.source_pacs.clear();
     d.ases.clear();
     d.ase_cp_handle = 0;
     d.has_pacs = d.find_service(UUID_SERVICE_PACS).is_some();
     d.has_ascs = d.find_service(UUID_SERVICE_ASCS).is_some();
     let sink_pacs: Vec<GattChar> = d.find_chars(UUID_SERVICE_PACS, UUID_CHR_SINK_PAC).into_iter().cloned().collect();
     let locations = d.find_char(UUID_SERVICE_PACS, UUID_CHR_SINK_AUDIO_LOCATIONS).cloned();
+    let source_pacs: Vec<GattChar> =
+        d.find_chars(UUID_SERVICE_PACS, UUID_CHR_SOURCE_PAC).into_iter().cloned().collect();
+    let source_locations = d.find_char(UUID_SERVICE_PACS, UUID_CHR_SOURCE_AUDIO_LOCATIONS).cloned();
     let available = d.find_char(UUID_SERVICE_PACS, UUID_CHR_AVAILABLE_AUDIO_CONTEXTS).cloned();
     let supported = d.find_char(UUID_SERVICE_PACS, UUID_CHR_SUPPORTED_AUDIO_CONTEXTS).cloned();
     let sink_ases: Vec<GattChar> = d.find_chars(UUID_SERVICE_ASCS, UUID_CHR_SINK_ASE).into_iter().cloned().collect();
     let source_ases: Vec<GattChar> =
         d.find_chars(UUID_SERVICE_ASCS, UUID_CHR_SOURCE_ASE).into_iter().cloned().collect();
     let cp = d.find_char(UUID_SERVICE_ASCS, UUID_CHR_ASE_CONTROL_POINT).cloned();
+    tracing::debug!(
+        "LE Audio: {}: reading PACS / ASCS: sink PAC {:04X?}, locations {:04X?}, available {:04X?}, supported {:04X?}, \
+         sink ASE {:04X?}, source ASE {:04X?}, control point {:04X?}",
+        d.addr,
+        sink_pacs.iter().map(|c| c.value_handle).collect::<Vec<_>>(),
+        locations.as_ref().map(|c| c.value_handle),
+        available.as_ref().map(|c| c.value_handle),
+        supported.as_ref().map(|c| c.value_handle),
+        sink_ases.iter().map(|c| c.value_handle).collect::<Vec<_>>(),
+        source_ases.iter().map(|c| c.value_handle).collect::<Vec<_>>(),
+        cp.as_ref().map(|c| c.value_handle)
+    );
     ctx.core.sink_pacs_by_char.retain(|(c, _), _| *c != con);
+    ctx.core.source_pacs_by_char.retain(|(c, _), _| *c != con);
 
     // Everything queued below counts; done() once all completed
     let counter = Rc::new(RefCell::new(Counter { pending: 0, done: Some(done) }));
@@ -92,6 +115,11 @@ pub fn read_device(ctx: &mut LeCtx<'_>, dev: LeDeviceId, done: ReadDeviceDone) {
             Some(Box::new(move |ctx, status| {
                 if status != 0 {
                     tracing::warn!("LE Audio: enabling notifications of 0x{h:04x} failed (0x{status:02x})");
+                } else {
+                    tracing::debug!(
+                        "LE Audio: {} enabled on 0x{h:04X}",
+                        if ind { "indications" } else { "notifications" }
+                    );
                 }
                 Counter::end(&c, ctx);
             })),
@@ -108,6 +136,8 @@ pub fn read_device(ctx: &mut LeCtx<'_>, dev: LeDeviceId, done: ReadDeviceDone) {
             Box::new(move |ctx, status, v| {
                 if status == 0 {
                     f(ctx, v);
+                } else {
+                    tracing::debug!("LE Audio: read of 0x{h:04X} failed (ATT 0x{status:02X})");
                 }
                 Counter::end(&c, ctx);
             }),
@@ -122,6 +152,7 @@ pub fn read_device(ctx: &mut LeCtx<'_>, dev: LeDeviceId, done: ReadDeviceDone) {
         let h = chr.value_handle;
         let on_value = Rc::new(move |ctx: &mut LeCtx<'_>, v: &[u8]| {
             let Some(d) = ctx.device_on(dev, con) else { return };
+            tracing::debug!("LE Audio: {}: Sink PAC 0x{h:04X}: {v:02X?}", d.addr);
             let Some(recs) = parse_pac_records(v) else {
                 tracing::warn!("LE Audio: {}: malformed Sink PAC ({} bytes)", d.addr, v.len());
                 return;
@@ -141,12 +172,49 @@ pub fn read_device(ctx: &mut LeCtx<'_>, dev: LeDeviceId, done: ReadDeviceDone) {
         read_and_listen(ctx, h, on_value, true);
         subscribe(ctx, chr);
     }
+    for chr in &source_pacs {
+        let h = chr.value_handle;
+        let on_value = Rc::new(move |ctx: &mut LeCtx<'_>, v: &[u8]| {
+            let Some(d) = ctx.device_on(dev, con) else { return };
+            tracing::debug!("LE Audio: {}: Source PAC 0x{h:04X}: {v:02X?}", d.addr);
+            let Some(recs) = parse_pac_records(v) else {
+                tracing::warn!("LE Audio: {}: malformed Source PAC ({} bytes)", d.addr, v.len());
+                return;
+            };
+            ctx.core.source_pacs_by_char.insert((con, h), recs);
+            let all: Vec<_> = ctx
+                .core
+                .source_pacs_by_char
+                .iter()
+                .filter(|((c, _), _)| *c == con)
+                .flat_map(|(_, r)| r.iter().cloned())
+                .collect();
+            if let Some(d) = ctx.device_mut(dev) {
+                d.source_pacs = all;
+            }
+        });
+        read_and_listen(ctx, h, on_value, true);
+        subscribe(ctx, chr);
+    }
+    if let Some(chr) = &source_locations {
+        let on_value = Rc::new(move |ctx: &mut LeCtx<'_>, v: &[u8]| {
+            if let Some(d) = ctx.device_on_mut(dev, con)
+                && v.len() >= 4
+            {
+                d.source_locations = u32::from_le_bytes([v[0], v[1], v[2], v[3]]);
+                tracing::debug!("LE Audio: {}: source audio locations 0x{:08X}", d.addr, d.source_locations);
+            }
+        });
+        read_and_listen(ctx, chr.value_handle, on_value, true);
+        subscribe(ctx, chr);
+    }
     if let Some(chr) = &locations {
         let on_value = Rc::new(move |ctx: &mut LeCtx<'_>, v: &[u8]| {
             if let Some(d) = ctx.device_on_mut(dev, con)
                 && v.len() >= 4
             {
                 d.sink_locations = u32::from_le_bytes([v[0], v[1], v[2], v[3]]);
+                tracing::debug!("LE Audio: {}: sink audio locations 0x{:08X}", d.addr, d.sink_locations);
             }
         });
         read_and_listen(ctx, chr.value_handle, on_value, true);
@@ -159,6 +227,12 @@ pub fn read_device(ctx: &mut LeCtx<'_>, dev: LeDeviceId, done: ReadDeviceDone) {
             {
                 d.available_sink_contexts = u16::from_le_bytes([v[0], v[1]]);
                 d.available_source_contexts = u16::from_le_bytes([v[2], v[3]]);
+                tracing::debug!(
+                    "LE Audio: {}: available contexts sink 0x{:04X} source 0x{:04X}",
+                    d.addr,
+                    d.available_sink_contexts,
+                    d.available_source_contexts
+                );
                 ctx.with_unicast(|u, env| u.on_available_contexts(env, dev));
             }
         });
@@ -172,6 +246,12 @@ pub fn read_device(ctx: &mut LeCtx<'_>, dev: LeDeviceId, done: ReadDeviceDone) {
             {
                 d.supported_sink_contexts = u16::from_le_bytes([v[0], v[1]]);
                 d.supported_source_contexts = u16::from_le_bytes([v[2], v[3]]);
+                tracing::debug!(
+                    "LE Audio: {}: supported contexts sink 0x{:04X} source 0x{:04X}",
+                    d.addr,
+                    d.supported_sink_contexts,
+                    d.supported_source_contexts
+                );
             }
         });
         read_and_listen(ctx, chr.value_handle, on_value, false);
@@ -188,9 +268,7 @@ pub fn read_device(ctx: &mut LeCtx<'_>, dev: LeDeviceId, done: ReadDeviceDone) {
             }
             let on_value = Rc::new(move |ctx: &mut LeCtx<'_>, v: &[u8]| on_ase_value(ctx, dev, con, h, v));
             read_and_listen(ctx, h, on_value, true);
-            if sink {
-                subscribe(ctx, chr);
-            }
+            subscribe(ctx, chr);
         }
     }
     if let Some(chr) = &cp {
@@ -234,6 +312,18 @@ pub fn read_device(ctx: &mut LeCtx<'_>, dev: LeDeviceId, done: ReadDeviceDone) {
                     d.ases.len(),
                     d.ase_cp_handle
                 );
+                if d.source_ase_count() > 0 || !d.source_pacs.is_empty() {
+                    tracing::info!(
+                        "LE Audio: {}: microphone: {} source ASE(s), source locations 0x{:08x}, contexts available \
+                         0x{:04x} supported 0x{:04x}; source PAC: {}",
+                        d.addr,
+                        d.source_ase_count(),
+                        d.source_locations,
+                        d.available_source_contexts,
+                        d.supported_source_contexts,
+                        le_audio::pacs_ascs::describe_pac_records(&d.source_pacs)
+                    );
+                }
             }
             Counter::end(&c, ctx);
         }),
@@ -252,6 +342,7 @@ pub(crate) fn on_ase_value(ctx: &mut LeCtx<'_>, dev: LeDeviceId, con: u16, h: u1
         return;
     }
     let old = ase.state;
+    tracing::debug!("LE Audio: {addr}: ASE value 0x{h:04X} {v:02X?} -> {parsed:?}");
     *ase = parsed;
     let (id, state, sink) = (ase.id, ase.state, ase.sink);
     if old != state {
@@ -290,6 +381,69 @@ const STOP_STEP_TIMEOUT_MS: u32 = 3000;
 /// Bumble sent Idle before Releasing), leaving a stale state that only the
 /// step timeout would end
 const REFRESH_MS: u32 = 500;
+/// After the CIS are up, the ASEs that are not Streaming yet are read again
+/// this often: EarFun earbuds left ASE 2 in Enabling with its CIS up and sent
+/// nothing more (issue #86); the read tells a lost notification from a
+/// server that did not start
+const WAIT_REFRESH_MS: u32 = 2000;
+
+/// Developer > Debug: LE Set CIG Parameters values that replace what the
+/// plan and the servers' preferences give (Config QoS gets the same), for
+/// trying a controller's ISO interval choice without a new build (issue
+/// #86). Taken as they are: no server preference caps them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CigOverrides {
+    /// Max transport latency C->P in ms; 0: as planned
+    pub latency_c_to_p_ms: u16,
+    /// Max transport latency P->C in ms; 0: as planned
+    pub latency_p_to_c_ms: u16,
+    /// RTN C->P; None: as planned
+    pub rtn_c_to_p: Option<u8>,
+    /// RTN P->C; None: as planned
+    pub rtn_p_to_c: Option<u8>,
+    /// Interleaved packing instead of sequential
+    pub interleaved: bool,
+}
+
+static CIG_OVERRIDES: std::sync::Mutex<CigOverrides> = std::sync::Mutex::new(CigOverrides {
+    latency_c_to_p_ms: 0,
+    latency_p_to_c_ms: 0,
+    rtn_c_to_p: None,
+    rtn_p_to_c: None,
+    interleaved: false,
+});
+
+/// Sets the overrides the next CIG is created with (default: none)
+pub fn set_cig_overrides(o: CigOverrides) {
+    *CIG_OVERRIDES.lock().unwrap_or_else(|e| e.into_inner()) = o;
+}
+
+fn cig_overrides() -> CigOverrides {
+    *CIG_OVERRIDES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Max transport latency (0..=4000 ms) and RTN (0..=15) out of range are
+/// clamped
+fn apply_overrides(o: CigOverrides, latency: &mut [u16; 2], rtn: &mut [u8; 2], packing: &mut u8) -> bool {
+    let mut any = false;
+    for (v, ms) in latency.iter_mut().zip([o.latency_c_to_p_ms, o.latency_p_to_c_ms]) {
+        if ms != 0 {
+            *v = ms.clamp(5, 4000);
+            any = true;
+        }
+    }
+    for (v, r) in rtn.iter_mut().zip([o.rtn_c_to_p, o.rtn_p_to_c]) {
+        if let Some(r) = r {
+            *v = r.min(15);
+            any = true;
+        }
+    }
+    if o.interleaved {
+        *packing = 1;
+        any = true;
+    }
+    any
+}
 
 /// Step of the unicast procedure
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -345,10 +499,12 @@ pub enum UnicastTimer {
     Drop,
     /// Reading the ASEs again while stopping ([`Unicast::on_refresh`])
     Refresh,
+    /// The CIG removal put off in a CIS event ([`Unicast::on_remove_timer`])
+    Remove,
 }
 
 impl UnicastTimer {
-    pub(crate) const ALL: usize = 3;
+    pub(crate) const ALL: usize = 4;
 }
 
 /// What the state machine needs of the LE core
@@ -360,6 +516,10 @@ pub trait UnicastEnv {
     /// The CCIDs of the modules for Enable with these contexts
     fn ccids(&mut self, contexts: u16) -> Vec<u8>;
     fn cig_create(&mut self, params: &CigParams) -> u8;
+    /// Developer > Debug's CIG values ([`set_cig_overrides`])
+    fn cig_overrides(&self) -> CigOverrides {
+        cig_overrides()
+    }
     fn cig_remove(&mut self, cig_id: u8) -> u8;
     fn cis_create(&mut self, cig_id: u8, cis_handles: &[u16], acl_handles: &[u16]) -> u8;
     fn can_send_command(&self) -> bool;
@@ -369,6 +529,10 @@ pub trait UnicastEnv {
     fn iso_packet_count(&self) -> u8;
     fn start_sending(&mut self, cis_handles: &[u16], queue_depth: u8, frame_us: u32);
     fn stop_sending(&mut self);
+    /// The microphone: ISO data of these CIS (source CIS in plan order) to
+    /// the receiver
+    fn start_receiving(&mut self, cis_handles: &[u16]);
+    fn stop_receiving(&mut self);
     /// A CIS of the stream went down (the sender stops waiting for it)
     fn cis_down(&mut self, handle: u16);
     /// The running stream broke (BtHost::le_stream_lost)
@@ -395,6 +559,8 @@ pub struct Unicast {
     cig_removing: bool,
     /// GAP_SUBEVENT_CIS_CREATED still to come
     cis_pending: usize,
+    /// Inside on_cis_created (BTstack is still handling the CIS event)
+    in_cis_event: bool,
     cis_up: usize,
     /// start() not reported yet
     starting: bool,
@@ -411,14 +577,58 @@ pub struct Unicast {
     cis_to_drop: Vec<u16>,
     /// HCI Disconnect sent, waiting for the event
     cis_dropping: Vec<u16>,
+    /// The source direction (P->C): max transport latency
+    latency_src_ms: u16,
+    /// RTN C->P and P->C of the CIG (Config QoS sends the same)
+    rtn: [u8; 2],
+    /// Source ASEs (device, ASE) Receiver Start Ready / Stop Ready went to
+    start_ready_sent: Vec<(u32, u8)>,
+    stop_ready_sent: Vec<(u32, u8)>,
+    /// Devices that rejected the Enable metadata: (device, fallback level)
+    /// they got Enable again with (enable_metadata_level)
+    enable_fallback: Vec<(u32, u8)>,
 }
 
-/// The CIS of each device in the plan, by device id (one CP write per
-/// device)
-fn by_device(plan: &StreamPlan) -> BTreeMap<u32, Vec<CisPlan>> {
-    let mut m: BTreeMap<u32, Vec<CisPlan>> = BTreeMap::new();
-    for c in &plan.cis {
-        m.entry(c.device_id).or_default().push(c.clone());
+/// Plainer Enable metadata levels after a rejection (enable_ases)
+const ENABLE_FALLBACK_LEVELS: u8 = 2;
+
+/// The Enable entries (ASE id, metadata) of one device's ASEs. Level 0:
+/// the chosen Streaming Audio Contexts plus the CCID List of the content
+/// control services the modules tie to them. Level 1: one context for
+/// every ASE (the microphone's while there is one), no CCID List. Level 2:
+/// Unspecified, no CCID List.
+fn enable_ases(env: &mut dyn UnicastEnv, plan: &StreamPlan, ases: &[PlannedAse], level: u8) -> Vec<(u8, Vec<u8>)> {
+    let src_contexts = plan.source.as_ref().map_or(0, |s| s.contexts);
+    let mut metadata = |contexts: u16, what: &str| {
+        let (contexts, mut ccids) = match level {
+            0 => (contexts, env.ccids(contexts)),
+            1 => ((if src_contexts != 0 { src_contexts } else { contexts }).isolate_lowest_one(), Vec::new()),
+            _ => (CONTEXT_UNSPECIFIED, Vec::new()),
+        };
+        ccids.sort_unstable();
+        ccids.dedup();
+        let meta = enable_metadata(contexts, &ccids);
+        tracing::debug!("LE Audio: Enable metadata{what} {meta:02X?}");
+        if !ccids.is_empty() || level > 0 {
+            let list: Vec<String> = ccids.iter().map(|c| c.to_string()).collect();
+            tracing::info!(
+                "LE Audio: Enable metadata{what}: contexts 0x{contexts:04x}, CCID list {}",
+                if list.is_empty() { "none".to_string() } else { list.join(",") }
+            );
+        }
+        meta
+    };
+    let meta = metadata(plan.contexts, "");
+    let src_meta = if src_contexts != 0 { metadata(src_contexts, " (microphone)") } else { Vec::new() };
+    ases.iter().map(|a| (a.ase_id, if a.sink { meta.clone() } else { src_meta.clone() })).collect()
+}
+
+/// The planned ASEs (sink and source) of each device, by device id (one CP
+/// write per device)
+fn by_device(plan: &StreamPlan) -> BTreeMap<u32, Vec<PlannedAse>> {
+    let mut m: BTreeMap<u32, Vec<PlannedAse>> = BTreeMap::new();
+    for a in plan.ases() {
+        m.entry(a.device_id).or_default().push(a);
     }
     m
 }
@@ -427,18 +637,27 @@ fn connected(env: &dyn UnicastEnv, id: u32) -> bool {
     env.device(id).is_some_and(|d| d.connected())
 }
 
-fn ase_of<'e>(env: &'e dyn UnicastEnv, c: &CisPlan) -> Option<&'e Ase> {
-    env.device(c.device_id)?.ase(c.ase_id)
+fn ase_of<'e>(env: &'e dyn UnicastEnv, a: &PlannedAse) -> Option<&'e Ase> {
+    env.device(a.device_id)?.ase(a.ase_id)
+}
+
+/// How often the ASEs are read again in this step (on_refresh); None: not
+fn refresh_ms(p: Phase) -> Option<u32> {
+    match p {
+        Phase::WaitStreaming => Some(WAIT_REFRESH_MS),
+        Phase::Disable | Phase::Release => Some(REFRESH_MS),
+        _ => None,
+    }
 }
 
 /// All planned ASEs satisfy pred (devices that are gone count as done while
 /// stopping)
 fn all_ases(env: &dyn UnicastEnv, plan: &StreamPlan, stopping: bool, pred: impl Fn(AseState) -> bool) -> bool {
-    plan.cis.iter().all(|c| {
-        if !connected(env, c.device_id) {
+    plan.ases().iter().all(|a| {
+        if !connected(env, a.device_id) {
             return stopping;
         }
-        ase_of(env, c).is_some_and(|a| pred(a.state))
+        ase_of(env, a).is_some_and(|s| pred(s.state))
     })
 }
 
@@ -471,16 +690,34 @@ impl Unicast {
     pub fn start(&mut self, env: &mut dyn UnicastEnv, plan: StreamPlan, done: UnicastDone) {
         tracing::info!("LE Audio: starting unicast stream: {}", plan.describe());
         for c in &plan.cis {
-            let locs: Vec<String> = c.channels.iter().map(|ch| format!("0x{:x}", ch.allocation)).collect();
-            tracing::info!(
-                "LE Audio:   CIS {}: device {} ASE {}, locations {}, SDU {} bytes",
-                c.cis_id,
-                c.device_id,
-                c.ase_id,
-                locs.join(","),
-                c.sdu_len(plan.preset.octets)
-            );
+            if c.has_sink() {
+                let locs: Vec<String> = c.channels.iter().map(|ch| format!("0x{:x}", ch.allocation)).collect();
+                tracing::info!(
+                    "LE Audio:   CIS {}: device {} ASE {}, locations {}, SDU {} bytes",
+                    c.cis_id,
+                    c.device_id,
+                    c.ase_id,
+                    locs.join(","),
+                    c.sdu_len(plan.preset.octets)
+                );
+            }
+            if let Some(s) = c.source_ase {
+                tracing::info!(
+                    "LE Audio:   CIS {}: device {} source ASE {} (microphone), location 0x{:x}, SDU {} bytes",
+                    c.cis_id,
+                    c.device_id,
+                    s.ase_id,
+                    s.allocation,
+                    s.sdu_len()
+                );
+            }
         }
+        if let Some(s) = plan.describe_source() {
+            tracing::info!("LE Audio: {s}");
+        }
+        self.start_ready_sent.clear();
+        self.stop_ready_sent.clear();
+        self.enable_fallback.clear();
         self.plan = Some(plan);
         self.start_done = Some(done);
         self.starting = true;
@@ -492,10 +729,17 @@ impl Unicast {
         self.cis_to_drop.clear();
         self.cis_dropping.clear();
         env.disarm(UnicastTimer::Drop);
+        env.disarm(UnicastTimer::Remove);
         self.enter(env, Phase::ConfigCodec);
     }
 
     pub fn stop(&mut self, env: &mut dyn UnicastEnv, done: UnicastStopped) {
+        tracing::debug!(
+            "LE Audio: unicast stop requested in {} (starting {}, {} stop(s) waiting)",
+            self.phase.name(),
+            self.starting,
+            self.stop_done.len()
+        );
         if self.phase == Phase::Idle {
             done();
             return;
@@ -518,10 +762,9 @@ impl Unicast {
         } else {
             env.arm(UnicastTimer::Step, if p.stopping() { STOP_STEP_TIMEOUT_MS } else { START_STEP_TIMEOUT_MS });
         }
-        if matches!(p, Phase::Disable | Phase::Release) {
-            env.arm(UnicastTimer::Refresh, REFRESH_MS);
-        } else {
-            env.disarm(UnicastTimer::Refresh);
+        match refresh_ms(p) {
+            Some(ms) => env.arm(UnicastTimer::Refresh, ms),
+            None => env.disarm(UnicastTimer::Refresh),
         }
         tracing::info!("LE Audio: unicast: {}", p.name());
         let Some(plan) = self.plan.clone() else { return };
@@ -535,14 +778,36 @@ impl Unicast {
                     }
                     let ases: Vec<ConfigCodec> = cis
                         .iter()
-                        .map(|c| ConfigCodec {
-                            ase_id: c.ase_id,
-                            target_latency: plan.preset.target_latency,
-                            target_phy: plan.phy,
-                            codec_id: [CODING_FORMAT_LC3, 0, 0, 0, 0],
-                            config: codec_config_ltvs(&plan, c),
+                        .map(|a| {
+                            let c = &plan.cis[a.cis];
+                            match (a.sink, c.source_ase, &plan.source) {
+                                (false, Some(dir), Some(src)) => ConfigCodec {
+                                    ase_id: a.ase_id,
+                                    target_latency: src.preset.target_latency,
+                                    target_phy: plan.phy,
+                                    codec_id: [CODING_FORMAT_LC3, 0, 0, 0, 0],
+                                    config: source_codec_config_ltvs(&plan, &dir),
+                                },
+                                _ => ConfigCodec {
+                                    ase_id: a.ase_id,
+                                    target_latency: plan.preset.target_latency,
+                                    target_phy: plan.phy,
+                                    codec_id: [CODING_FORMAT_LC3, 0, 0, 0, 0],
+                                    config: codec_config_ltvs(&plan, c),
+                                },
+                            }
                         })
                         .collect();
+                    for a in &ases {
+                        tracing::debug!(
+                            "LE Audio: device {dev} Config Codec ASE {}: latency {}, PHY 0x{:02X}, codec {:02X?}, config {:02X?}",
+                            a.ase_id,
+                            a.target_latency,
+                            a.target_phy,
+                            a.codec_id,
+                            a.config
+                        );
+                    }
                     env.cp_write(dev, cp_config_codec(&ases), "Config Codec");
                 }
             }
@@ -561,19 +826,39 @@ impl Unicast {
                     }
                     let ases: Vec<ConfigQos> = cis
                         .iter()
-                        .map(|c| ConfigQos {
-                            ase_id: c.ase_id,
-                            cig_id: plan.cig_id,
-                            cis_id: c.cis_id,
-                            sdu_interval_us: plan.preset.sdu_interval_us(),
-                            framing: self.framing,
-                            phy: self.phy,
-                            max_sdu: c.sdu_len(plan.preset.octets),
-                            rtn: plan.preset.rtn,
-                            max_transport_latency_ms: self.latency_ms,
-                            presentation_delay_us: plan.presentation_delay_us,
+                        .map(|a| {
+                            let c = &plan.cis[a.cis];
+                            match (a.sink, c.source_ase, &plan.source) {
+                                (false, Some(dir), Some(src)) => ConfigQos {
+                                    ase_id: a.ase_id,
+                                    cig_id: plan.cig_id,
+                                    cis_id: c.cis_id,
+                                    sdu_interval_us: src.preset.sdu_interval_us(),
+                                    framing: self.framing,
+                                    phy: self.phy,
+                                    max_sdu: dir.sdu_len(),
+                                    rtn: self.rtn[1],
+                                    max_transport_latency_ms: self.latency_src_ms,
+                                    presentation_delay_us: src.presentation_delay_us,
+                                },
+                                _ => ConfigQos {
+                                    ase_id: a.ase_id,
+                                    cig_id: plan.cig_id,
+                                    cis_id: c.cis_id,
+                                    sdu_interval_us: plan.preset.sdu_interval_us(),
+                                    framing: self.framing,
+                                    phy: self.phy,
+                                    max_sdu: c.sdu_len(plan.preset.octets),
+                                    rtn: self.rtn[0],
+                                    max_transport_latency_ms: self.latency_ms,
+                                    presentation_delay_us: plan.presentation_delay_us,
+                                },
+                            }
                         })
                         .collect();
+                    for a in &ases {
+                        tracing::debug!("LE Audio: device {dev} Config QoS {a:?}");
+                    }
                     env.cp_write(dev, cp_config_qos(&ases), "Config QoS");
                 }
             }
@@ -605,16 +890,28 @@ impl Unicast {
             }
 
             // Sink ASEs: the server (the audio receiver) sends Receiver
-            // Start Ready itself; the client waits for Streaming
-            Phase::WaitStreaming => {}
+            // Start Ready itself; the client waits for Streaming. Source
+            // ASEs: the client is the receiver and writes Receiver Start
+            // Ready once the CIS is up (the ASE stays Enabling until then)
+            Phase::WaitStreaming => {
+                let handles: Vec<u16> = plan.source_cis().map(|c| c.cis_handle).collect();
+                if !handles.is_empty() {
+                    env.start_receiving(&handles);
+                }
+                self.receiver_start_ready(env);
+            }
 
             Phase::Streaming => {
-                let handles: Vec<u16> = plan.cis.iter().map(|c| c.cis_handle).collect();
+                let handles: Vec<u16> = plan.sink_cis().map(|c| c.cis_handle).collect();
                 // BTstack queues up to `queue` SDUs per CIS and sends each as
                 // one HCI ISO data packet (plan_stream made sure none needs
                 // fragmenting): queue x CIS must stay within the
                 // controller's Total_Num_ISO_Data_Packets
                 let depth = queue_depth(env.iso_packet_count(), handles.len());
+                tracing::debug!(
+                    "LE Audio: streaming on CIS {handles:04X?}: {} ISO buffers -> queue depth {depth} per CIS",
+                    env.iso_packet_count()
+                );
                 if depth == 0 {
                     self.fail(env, "the adapter has fewer ISO data buffers than the stream has CIS");
                     return;
@@ -629,6 +926,7 @@ impl Unicast {
 
             Phase::Disable => {
                 env.stop_sending();
+                env.stop_receiving();
                 let mut any = false;
                 for (dev, cis) in by_device(&plan) {
                     if !connected(env, dev) {
@@ -641,9 +939,13 @@ impl Unicast {
                         })
                         .map(|c| c.ase_id)
                         .collect();
+                    // A source ASE already Disabling (the server began)
+                    any |=
+                        cis.iter().any(|c| !c.sink && ase_of(env, c).is_some_and(|a| a.state == AseState::Disabling));
                     if ids.is_empty() {
                         continue;
                     }
+                    tracing::debug!("LE Audio: device {dev} Disable ASE {ids:?}");
                     env.cp_write(dev, cp_ase_ids(ASE_OP_DISABLE, &ids), "Disable");
                     any = true;
                 }
@@ -682,6 +984,7 @@ impl Unicast {
                     if ids.is_empty() {
                         continue;
                     }
+                    tracing::debug!("LE Audio: device {dev} Release ASE {ids:?}");
                     env.cp_write(dev, cp_ase_ids(ASE_OP_RELEASE, &ids), "Release");
                     any = true;
                 }
@@ -704,66 +1007,127 @@ impl Unicast {
     /// LE Set CIG Parameters with the QoS of the preset within what the
     /// servers asked for; false when it failed (fail() ran)
     fn create_cig(&mut self, env: &mut dyn UnicastEnv, plan: &StreamPlan) -> bool {
-        let (mut lower, mut upper) = (0u32, 0xFF_FFFFu32);
-        let mut pd = plan.preset.presentation_delay_us;
-        let mut latency = plan.preset.max_transport_latency_ms;
+        // Per direction: presentation delay range, max transport latency
+        // (sink ASEs: C->P, source ASEs: P->C); framing and PHY for all
+        let mut range = [(0u32, 0xFF_FFFFu32); 2];
+        let src = plan.source.as_ref();
+        // One max transport latency for both directions, the larger of the
+        // two presets: the controller picks one ISO interval for the whole
+        // CIG, and a lower one for the microphone (32_2_2: 95 ms next to
+        // 48_6_2: 100 ms) made a MediaTek controller give up its 30 ms
+        // interval for 10 ms, where the earbuds refused the second CIS
+        // (0x1E, issue #86). The servers' preferences still cap each
+        // direction below.
+        let shared = src.map_or(plan.preset.max_transport_latency_ms, |s| {
+            s.preset.max_transport_latency_ms.max(plan.preset.max_transport_latency_ms)
+        });
+        let mut latency = [shared; 2];
+        // The servers' preferred RTN caps the preset's: a high-reliability
+        // preset's 13 assumes its 100 ms, not a server's 20 ms. With RTN 13
+        // in 20 ms over 2 CIS, three headphones on a Realtek adapter lost
+        // the ACL while the CIS came up (their preference: RTN 5)
+        let mut rtn_pref = [u8::MAX; 2];
         let mut phy = plan.phy;
-        let mut framing = plan.preset.framing;
-        for c in &plan.cis {
-            let Some(a) = ase_of(env, c) else { continue };
+        let mut framing = plan.preset.framing | src.map_or(0, |s| s.preset.framing);
+        for pa in plan.ases() {
+            let Some(a) = ase_of(env, &pa) else { continue };
+            let dir = usize::from(!pa.sink);
+            tracing::debug!(
+                "LE Audio: ASE {} ({}) preferences: framing {}, PHY 0x{:02X}, RTN {}, max latency {} ms, presentation \
+                 delay {}-{} us",
+                pa.ase_id,
+                if pa.sink { "sink" } else { "source" },
+                a.pref_framing,
+                a.pref_phy,
+                a.pref_rtn,
+                a.pref_max_latency_ms,
+                a.pd_min_us,
+                a.pd_max_us
+            );
             // Preferred_Framing 0x01: unframed ISO PDUs not supported
             if a.pref_framing == 0x01 {
                 framing = 1;
             }
             if a.pd_min_us != 0 {
-                lower = lower.max(a.pd_min_us);
+                range[dir].0 = range[dir].0.max(a.pd_min_us);
             }
             if a.pd_max_us != 0 {
-                upper = upper.min(a.pd_max_us);
+                range[dir].1 = range[dir].1.min(a.pd_max_us);
             }
             if a.pref_max_latency_ms != 0 {
-                latency = latency.min(a.pref_max_latency_ms);
+                latency[dir] = latency[dir].min(a.pref_max_latency_ms);
+                rtn_pref[dir] = rtn_pref[dir].min(a.pref_rtn);
             }
             if a.pref_phy != 0 && a.pref_phy & phy == 0 {
                 phy = PHY_1M;
             }
         }
-        pd = pd.min(upper).max(lower);
-        latency = latency.max(5);
-        self.latency_ms = latency;
+        let pd = plan.preset.presentation_delay_us.min(range[0].1).max(range[0].0);
+        let mut latency = [latency[0].max(5), latency[1].max(5)];
+        let mut rtn =
+            [plan.preset.rtn.min(rtn_pref[0]), src.map_or(plan.preset.rtn, |s| s.preset.rtn).min(rtn_pref[1])];
+        let mut packing = 0;
+        let overrides = env.cig_overrides();
+        if apply_overrides(overrides, &mut latency, &mut rtn, &mut packing) {
+            tracing::info!(
+                "LE Audio: Developer > Debug CIG: max latency {} / {} ms, RTN {} / {}, {} packing ({overrides:?})",
+                latency[0],
+                latency[1],
+                rtn[0],
+                rtn[1],
+                if packing != 0 { "interleaved" } else { "sequential" }
+            );
+        }
+        let [latency_c_to_p, latency_p_to_c] = latency;
+        self.latency_ms = latency_c_to_p;
+        self.latency_src_ms = latency_p_to_c;
+        self.rtn = rtn;
         self.phy = phy;
         self.framing = framing;
+        let src_pd = src.map(|s| s.preset.presentation_delay_us.min(range[1].1).max(range[1].0));
         if let Some(p) = self.plan.as_mut() {
             p.presentation_delay_us = pd;
             p.phy = phy;
+            if let (Some(s), Some(v)) = (p.source.as_mut(), src_pd) {
+                s.presentation_delay_us = v;
+            }
         }
         tracing::info!(
-            "LE Audio: QoS: SDU interval {} us, {}, max latency {latency} ms, RTN {}, PHY 0x{phy:02x}, presentation \
-             delay {pd} us",
+            "LE Audio: QoS: SDU interval {} us, {}, max latency {latency_c_to_p} ms, RTN {}, PHY 0x{phy:02x}, \
+             presentation delay {pd} us",
             plan.preset.sdu_interval_us(),
             if framing != 0 { "framed" } else { "unframed" },
-            plan.preset.rtn
+            rtn[0]
         );
+        if let (Some(s), Some(v)) = (src, src_pd) {
+            tracing::info!(
+                "LE Audio: microphone QoS: SDU interval {} us, max latency {latency_p_to_c} ms, RTN {}, presentation \
+                 delay {v} us",
+                s.preset.sdu_interval_us(),
+                rtn[1]
+            );
+        }
+        let src_interval = src.map_or(plan.preset.sdu_interval_us(), |s| s.preset.sdu_interval_us());
         let mut params = CigParams {
             cig_id: plan.cig_id,
             sdu_interval_c_to_p: plan.preset.sdu_interval_us(),
-            sdu_interval_p_to_c: plan.preset.sdu_interval_us(),
+            sdu_interval_p_to_c: src_interval,
             worst_case_sca: 0,
-            packing: 0,
+            packing,
             framing,
-            max_transport_latency_c_to_p: latency,
-            max_transport_latency_p_to_c: latency,
+            max_transport_latency_c_to_p: latency_c_to_p,
+            max_transport_latency_p_to_c: latency_p_to_c,
             cis: plan
                 .cis
                 .iter()
                 .map(|c| CisParams {
                     cis_id: c.cis_id,
                     max_sdu_c_to_p: c.sdu_len(plan.preset.octets),
-                    max_sdu_p_to_c: 0,
+                    max_sdu_p_to_c: c.source_ase.map_or(0, |s| s.sdu_len()),
                     phy_c_to_p: phy,
                     phy_p_to_c: phy,
-                    rtn_c_to_p: plan.preset.rtn,
-                    rtn_p_to_c: plan.preset.rtn,
+                    rtn_c_to_p: rtn[0],
+                    rtn_p_to_c: if c.source_ase.is_some() { rtn[1] } else { rtn[0] },
                 })
                 .collect(),
         };
@@ -805,10 +1169,27 @@ impl Unicast {
         // BTstack must not get gap_cig_remove() while it still waits for the
         // CIG or CIS of a running command: it would resume them afterwards
         if self.cig_pending || self.cis_pending > 0 {
+            tracing::debug!(
+                "LE Audio: CIG removal waits (CIG pending {}, {} CIS pending)",
+                self.cig_pending,
+                self.cis_pending
+            );
             return;
         }
         // ... nor while our own CIS disconnections are under way
         if !self.cis_to_drop.is_empty() || !self.cis_dropping.is_empty() {
+            tracing::debug!(
+                "LE Audio: CIG removal waits for CIS disconnections ({:04X?} to send, {:04X?} under way)",
+                self.cis_to_drop,
+                self.cis_dropping
+            );
+            return;
+        }
+        // ... nor from inside its CIS event: BTstack sets the CIG's state
+        // right after it, which undoes the removal (no LE Remove CIG)
+        if self.in_cis_event && !self.cig_removing {
+            tracing::debug!("LE Audio: CIG removal waits for the end of the CIS event");
+            env.arm(UnicastTimer::Remove, 1);
             return;
         }
         if !self.cig_removing {
@@ -826,26 +1207,35 @@ impl Unicast {
 
     /// Streaming Audio Contexts for Enable from what the devices have
     /// available now (Available Audio Contexts may have changed since
-    /// plan_stream)
-    fn current_contexts(&self, env: &dyn UnicastEnv) -> u16 {
-        let Some(plan) = &self.plan else { return 0 };
+    /// plan_stream): (sink, source); source 0 without a source direction
+    fn current_contexts(&self, env: &dyn UnicastEnv) -> (u16, u16) {
+        let Some(plan) = &self.plan else { return (0, 0) };
+        let mut sink = Vec::new();
+        let mut source = Vec::new();
         let mut seen = Vec::new();
-        let mut available = Vec::new();
-        for c in &plan.cis {
-            if seen.contains(&c.device_id) {
+        for a in plan.ases() {
+            if seen.contains(&(a.device_id, a.sink)) {
                 continue;
             }
-            seen.push(c.device_id);
-            if let Some(d) = env.device(c.device_id) {
-                available.push(d.available_sink_contexts);
+            seen.push((a.device_id, a.sink));
+            if let Some(d) = env.device(a.device_id) {
+                if a.sink {
+                    sink.push(d.available_sink_contexts);
+                } else {
+                    source.push(d.available_source_contexts);
+                }
             }
         }
-        choose_streaming_contexts(&available, plan.requested_contexts)
+        let src = plan.source.as_ref().map_or(0, |s| choose_streaming_contexts(&source, s.requested_contexts));
+        (choose_streaming_contexts(&sink, plan.requested_contexts), src)
     }
 
     fn contexts_text(&self, env: &dyn UnicastEnv) -> String {
         let Some(plan) = &self.plan else { return String::new() };
         let mut s = format!("wanted 0x{:04x}", plan.requested_contexts);
+        if let Some(src) = &plan.source {
+            s.push_str(&format!(" (microphone 0x{:04x})", src.requested_contexts));
+        }
         let mut seen = Vec::new();
         for c in &plan.cis {
             if seen.contains(&c.device_id) {
@@ -854,6 +1244,9 @@ impl Unicast {
             seen.push(c.device_id);
             if let Some(d) = env.device(c.device_id) {
                 s.push_str(&format!(", {} has 0x{:04x}", d.addr, d.available_sink_contexts));
+                if c.source_ase.is_some() {
+                    s.push_str(&format!(" (microphone 0x{:04x})", d.available_source_contexts));
+                }
             }
         }
         s
@@ -864,8 +1257,9 @@ impl Unicast {
     /// Contexts notification (on_available_contexts) until the step times
     /// out.
     fn send_enable(&mut self, env: &mut dyn UnicastEnv) -> bool {
-        let contexts = self.current_contexts(env);
-        if contexts == 0 {
+        let (contexts, src_contexts) = self.current_contexts(env);
+        let has_source = self.plan.as_ref().is_some_and(|p| p.source.is_some());
+        if contexts == 0 || (has_source && src_contexts == 0) {
             if !self.waiting_contexts {
                 tracing::warn!(
                     "LE Audio: no audio context available for Enable ({}): waiting",
@@ -884,26 +1278,99 @@ impl Unicast {
             );
         }
         plan.contexts = contexts;
-        let plan = plan.clone();
-        // Metadata: Streaming Audio Contexts, plus the CCID List of the
-        // content control services the modules tie to these contexts
-        let mut ccids = env.ccids(contexts);
-        ccids.sort_unstable();
-        ccids.dedup();
-        let meta = enable_metadata(contexts, &ccids);
-        if !ccids.is_empty() {
-            let list: Vec<String> = ccids.iter().map(|c| c.to_string()).collect();
-            tracing::info!("LE Audio: Enable metadata: contexts 0x{contexts:04x}, CCID list {}", list.join(","));
+        if let Some(s) = plan.source.as_mut() {
+            if src_contexts != s.requested_contexts {
+                tracing::info!(
+                    "LE Audio: microphone context 0x{src_contexts:04x} (0x{:04x} is not available)",
+                    s.requested_contexts
+                );
+            }
+            s.contexts = src_contexts;
         }
-        for (dev, cis) in by_device(&plan) {
+        let plan = plan.clone();
+        for (dev, ases) in by_device(&plan) {
             if !connected(env, dev) {
                 self.fail(env, "a device is not connected");
                 return false;
             }
-            let ases: Vec<(u8, Vec<u8>)> = cis.iter().map(|c| (c.ase_id, meta.clone())).collect();
+            let level = self.enable_fallback.iter().find(|(d, _)| *d == dev).map_or(0, |&(_, l)| l);
+            let ases = enable_ases(env, &plan, &ases, level);
             env.cp_write(dev, cp_with_metadata(ASE_OP_ENABLE, &ases), "Enable");
         }
         true
+    }
+
+    /// A device rejected the Enable metadata: Enable again with plainer
+    /// metadata (enable_metadata_level). False when there is no plainer
+    /// level left.
+    fn retry_enable(&mut self, env: &mut dyn UnicastEnv, dev: u32, rejected: &[u8]) -> bool {
+        let level = self.enable_fallback.iter().find(|(d, _)| *d == dev).map_or(0, |&(_, l)| l) + 1;
+        if level > ENABLE_FALLBACK_LEVELS {
+            return false;
+        }
+        let Some(plan) = self.plan.clone() else { return false };
+        let Some(mut ases) = by_device(&plan).remove(&dev) else { return false };
+        // Only the rejected ones: an accepted ASE is Enabling already
+        ases.retain(|a| rejected.contains(&a.ase_id));
+        if ases.is_empty() || !connected(env, dev) {
+            return false;
+        }
+        self.enable_fallback.retain(|(d, _)| *d != dev);
+        self.enable_fallback.push((dev, level));
+        tracing::warn!(
+            "LE Audio: device {dev} rejected the Enable metadata: Enable again with {}",
+            if level == 1 { "one audio context, no CCID list" } else { "the Unspecified context" }
+        );
+        let ases = enable_ases(env, &plan, &ases, level);
+        env.cp_write(dev, cp_with_metadata(ASE_OP_ENABLE, &ases), "Enable");
+        true
+    }
+
+    /// Source ASEs that are Enabling and whose CIS is up: Receiver Start
+    /// Ready (once per ASE)
+    fn receiver_start_ready(&mut self, env: &mut dyn UnicastEnv) {
+        let Some(plan) = self.plan.clone() else { return };
+        for (dev, ases) in by_device(&plan) {
+            if !connected(env, dev) {
+                continue;
+            }
+            let ids: Vec<u8> = ases
+                .iter()
+                .filter(|a| !a.sink && !self.start_ready_sent.contains(&(dev, a.ase_id)))
+                .filter(|a| self.cis_connected.contains(&plan.cis[a.cis].cis_handle))
+                .filter(|a| ase_of(env, a).is_some_and(|s| s.state == AseState::Enabling))
+                .map(|a| a.ase_id)
+                .collect();
+            if ids.is_empty() {
+                continue;
+            }
+            tracing::info!("LE Audio: device {dev} Receiver Start Ready ASE {ids:?}");
+            self.start_ready_sent.extend(ids.iter().map(|&id| (dev, id)));
+            env.cp_write(dev, cp_receiver_start_ready(&ids), "Receiver Start Ready");
+        }
+    }
+
+    /// Source ASEs in Disabling: Receiver Stop Ready (once per ASE; they go
+    /// to QoS Configured then)
+    fn receiver_stop_ready(&mut self, env: &mut dyn UnicastEnv) {
+        let Some(plan) = self.plan.clone() else { return };
+        for (dev, ases) in by_device(&plan) {
+            if !connected(env, dev) {
+                continue;
+            }
+            let ids: Vec<u8> = ases
+                .iter()
+                .filter(|a| !a.sink && !self.stop_ready_sent.contains(&(dev, a.ase_id)))
+                .filter(|a| ase_of(env, a).is_some_and(|s| s.state == AseState::Disabling))
+                .map(|a| a.ase_id)
+                .collect();
+            if ids.is_empty() {
+                continue;
+            }
+            tracing::info!("LE Audio: device {dev} Receiver Stop Ready ASE {ids:?}");
+            self.stop_ready_sent.extend(ids.iter().map(|&id| (dev, id)));
+            env.cp_write(dev, cp_receiver_stop_ready(&ids), "Receiver Stop Ready");
+        }
     }
 
     /// A device's Available Audio Contexts changed (PACS notification)
@@ -912,6 +1379,7 @@ impl Unicast {
             return;
         }
         let planned = self.plan.as_ref().is_some_and(|p| p.cis.iter().any(|c| c.device_id == dev.0));
+        tracing::debug!("LE Audio: device {} available contexts changed while Enable waits (planned {planned})", dev.0);
         if planned && self.send_enable(env) {
             self.advance(env);
         }
@@ -925,6 +1393,7 @@ impl Unicast {
         env.disarm(UnicastTimer::Drop);
         while let Some(&h) = self.cis_to_drop.first() {
             if !env.can_send_command() {
+                tracing::trace!("LE Audio: HCI busy, CIS disconnect 0x{h:04X} retried");
                 env.arm(UnicastTimer::Drop, 2);
                 return;
             }
@@ -939,9 +1408,17 @@ impl Unicast {
         }
     }
 
+    /// The CIS event that put the CIG removal off is done
+    pub fn on_remove_timer(&mut self, env: &mut dyn UnicastEnv) {
+        if self.phase == Phase::RemoveCig {
+            self.try_remove_cig(env);
+        }
+    }
+
     /// LE Remove CIG completed
     pub fn on_cig_removed(&mut self, env: &mut dyn UnicastEnv) {
         if !self.cig_removing {
+            tracing::debug!("LE Audio: CIG removal complete, none requested (ignored)");
             return;
         }
         self.cig_removing = false;
@@ -958,6 +1435,7 @@ impl Unicast {
         env.disarm(UnicastTimer::Step);
         env.disarm(UnicastTimer::Drop);
         env.disarm(UnicastTimer::Refresh);
+        env.disarm(UnicastTimer::Remove);
         self.waiting_contexts = false;
         self.cis_connected.clear();
         self.cis_to_drop.clear();
@@ -984,20 +1462,21 @@ impl Unicast {
         self.enter(env, Phase::Disable);
     }
 
-    /// While stopping: read the ASEs again that did not reach the state the
-    /// step waits for
+    /// While stopping, and while waiting for Streaming: read the ASEs again
+    /// that did not reach the state the step waits for
     pub fn on_refresh(&mut self, env: &mut dyn UnicastEnv) {
         let Some(plan) = self.plan.clone() else { return };
+        let Some(ms) = refresh_ms(self.phase) else { return };
         let done: fn(AseState) -> bool = match self.phase {
+            Phase::WaitStreaming => |s| s == AseState::Streaming,
             Phase::Disable => |s| !matches!(s, AseState::Enabling | AseState::Streaming | AseState::Disabling),
-            Phase::Release => |s| matches!(s, AseState::Idle | AseState::CodecConfigured | AseState::Unknown),
-            _ => return,
+            _ => |s| matches!(s, AseState::Idle | AseState::CodecConfigured | AseState::Unknown),
         };
-        for c in &plan.cis {
+        for c in plan.ases() {
             if !connected(env, c.device_id) {
                 continue;
             }
-            if let Some(a) = ase_of(env, c).filter(|a| !done(a.state)) {
+            if let Some(a) = ase_of(env, &c).filter(|a| !done(a.state)) {
                 tracing::info!(
                     "LE Audio: device {} ASE {} still {} in {}: reading it again",
                     c.device_id,
@@ -1008,11 +1487,19 @@ impl Unicast {
                 env.read_ase(c.device_id, c.ase_id);
             }
         }
-        env.arm(UnicastTimer::Refresh, REFRESH_MS);
+        env.arm(UnicastTimer::Refresh, ms);
     }
 
     /// The step timer fired
     pub fn on_timeout(&mut self, env: &mut dyn UnicastEnv) {
+        tracing::debug!(
+            "LE Audio: step timeout in {} (CIG exists {}, pending {}, removing {}, {} CIS pending)",
+            self.phase.name(),
+            self.cig_exists,
+            self.cig_pending,
+            self.cig_removing,
+            self.cis_pending
+        );
         match self.phase {
             Phase::Disable => {
                 tracing::warn!("LE Audio: Disable timed out");
@@ -1052,9 +1539,9 @@ impl Unicast {
                 let mut why = format!("no answer in {}", self.phase.name());
                 // Which ASEs did not get there
                 if let Some(plan) = &self.plan {
-                    for c in &plan.cis {
-                        let state = ase_of(env, c).map_or("gone", |a| a.state.name());
-                        why.push_str(&format!("; ASE {} {state}", c.ase_id));
+                    for a in plan.ases() {
+                        let state = ase_of(env, &a).map_or("gone", |s| s.state.name());
+                        why.push_str(&format!("; ASE {} {state}", a.ase_id));
                     }
                 }
                 self.fail(env, &why);
@@ -1063,6 +1550,11 @@ impl Unicast {
     }
 
     fn advance(&mut self, env: &mut dyn UnicastEnv) {
+        match self.phase {
+            Phase::WaitStreaming => self.receiver_start_ready(env),
+            Phase::Disable => self.receiver_stop_ready(env),
+            _ => {}
+        }
         let Some(plan) = &self.plan else { return };
         let next = match self.phase {
             Phase::ConfigCodec if all_ases(env, plan, false, |s| s == AseState::CodecConfigured) => {
@@ -1106,8 +1598,7 @@ impl Unicast {
         if self.phase == Phase::Idle {
             return;
         }
-        let planned =
-            self.plan.as_ref().is_some_and(|p| p.cis.iter().any(|c| c.device_id == dev.0 && c.ase_id == ase_id));
+        let planned = self.plan.as_ref().is_some_and(|p| p.has_ase(dev.0, ase_id));
         if !planned {
             return;
         }
@@ -1131,6 +1622,7 @@ impl Unicast {
             return;
         }
         let addr = env.device(dev.0).map(|d| d.addr.to_string()).unwrap_or_default();
+        tracing::debug!("LE Audio: {addr}: ASE control point response {v:02X?} in {}", self.phase.name());
         let (op, count) = (v[0], v[1]);
         if count == 0xFF {
             if v.len() >= 5 && v[3] != 0 {
@@ -1153,10 +1645,31 @@ impl Unicast {
                 continue;
             }
             tracing::warn!("LE Audio: {addr}: ASE {ase_id} op 0x{op:02x}: response 0x{code:02x} reason 0x{reason:02x}");
-            let planned =
-                self.plan.as_ref().is_some_and(|p| p.cis.iter().any(|c| c.device_id == dev.0 && c.ase_id == ase_id));
+            let planned = self.plan.as_ref().is_some_and(|p| p.has_ase(dev.0, ase_id));
             let start_phase =
                 matches!(self.phase, Phase::ConfigCodec | Phase::CreateCig | Phase::ConfigQos | Phase::Enable);
+            // Unsupported / Rejected / Invalid Metadata: some devices refuse
+            // a second context or a CCID list. The whole notification
+            // answers the same write: Enable again when all its failures are
+            // metadata ones.
+            if planned && self.phase == Phase::Enable && op == ASE_OP_ENABLE && self.fail_reason.is_empty() {
+                let entries: Vec<&[u8]> =
+                    (0..count as usize).filter_map(|j| v.get(2 + 3 * j..5 + 3 * j)).filter(|e| e[1] != 0).collect();
+                if entries.iter().all(|e| matches!(e[1], 0x0A..=0x0C)) {
+                    let rejected: Vec<u8> = entries.iter().map(|e| e[0]).collect();
+                    for e in entries.iter().skip(1) {
+                        tracing::warn!(
+                            "LE Audio: {addr}: ASE {} op 0x{op:02x}: response 0x{:02x} reason 0x{:02x}",
+                            e[0],
+                            e[1],
+                            e[2]
+                        );
+                    }
+                    if self.retry_enable(env, dev.0, &rejected) {
+                        return;
+                    }
+                }
+            }
             if planned && start_phase {
                 let why = format!("ASE {ase_id}: op 0x{op:02x} rejected (response 0x{code:02x} reason 0x{reason:02x})");
                 self.fail(env, &why);
@@ -1168,8 +1681,10 @@ impl Unicast {
     /// GAP_SUBEVENT_CIG_CREATED
     pub fn on_cig_created(&mut self, env: &mut dyn UnicastEnv, packet: &[u8]) {
         let Some(ev) = events::cig_created(packet) else { return };
+        tracing::debug!("LE Audio: CIG created event {ev:?} in {}", self.phase.name());
         let Some(plan) = self.plan.as_mut() else { return };
         if !self.cig_pending || ev.cig_id != plan.cig_id {
+            tracing::debug!("LE Audio: CIG event ignored (pending {}, planned CIG {})", self.cig_pending, plan.cig_id);
             return;
         }
         self.cig_pending = false;
@@ -1193,10 +1708,12 @@ impl Unicast {
     /// GAP_SUBEVENT_CIS_CREATED
     pub fn on_cis_created(&mut self, env: &mut dyn UnicastEnv, packet: &[u8]) {
         let Some(ev) = events::cis_created(packet) else { return };
+        tracing::debug!("LE Audio: CIS created event {ev:?} in {} ({} pending)", self.phase.name(), self.cis_pending);
         if self.plan.as_ref().is_none_or(|p| p.cig_id != ev.cig_id) || self.cis_pending == 0 {
             return;
         }
         self.cis_pending -= 1;
+        self.in_cis_event = true;
         if ev.status != 0 {
             let why = format!("CIS 0x{:04x} could not be established (0x{:02x})", ev.cis_handle, ev.status);
             if self.phase == Phase::CreateCis {
@@ -1212,8 +1729,14 @@ impl Unicast {
                 ev.cis_handle,
                 ev.iso_interval_1250us
             );
+            if matches!(self.phase, Phase::Release | Phase::RemoveCig) {
+                // Up after Release dropped the others: dropped as they were
+                self.cis_to_drop.push(ev.cis_handle);
+                self.drop_cis(env);
+            }
         }
         self.advance(env);
+        self.in_cis_event = false;
     }
 
     /// An ACL or CIS of the stream went down
@@ -1222,6 +1745,11 @@ impl Unicast {
             return;
         }
         let is_cis = self.plan.as_ref().is_some_and(|p| p.cis.iter().any(|c| c.cis_handle == handle));
+        tracing::debug!(
+            "LE Audio: stream link 0x{handle:04X} ({}) lost in {}",
+            if is_cis { "CIS" } else { "ACL" },
+            self.phase.name()
+        );
         if is_cis {
             if self.cis_dropping.contains(&handle) || self.cis_to_drop.contains(&handle) {
                 tracing::info!("LE Audio: CIS 0x{handle:04x} disconnected");
@@ -1249,7 +1777,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use le_audio::plan::{ChannelPlan, ChannelSource};
+    use le_audio::plan::{ChannelPlan, ChannelSource, CisPlan, SourceDir, SourcePlan};
     use le_audio::presets::PresetTable;
 
     use super::*;
@@ -1264,11 +1792,26 @@ mod tests {
         cig_status: Vec<u8>,
         can_send: bool,
         lost: Option<String>,
+        /// The last LE Set CIG Parameters
+        cig: Option<CigParams>,
+        /// Every ASE Control Point write in full
+        cp: Vec<Vec<u8>>,
+        overrides: CigOverrides,
     }
 
     impl Fake {
         fn new(devices: Vec<LeDevice>) -> Fake {
-            Fake { devices, log: Vec::new(), iso_count: 8, cig_status: Vec::new(), can_send: true, lost: None }
+            Fake {
+                devices,
+                log: Vec::new(),
+                iso_count: 8,
+                cig_status: Vec::new(),
+                can_send: true,
+                lost: None,
+                cig: None,
+                cp: Vec::new(),
+                overrides: CigOverrides::default(),
+            }
         }
         fn take(&mut self) -> Vec<String> {
             std::mem::take(&mut self.log)
@@ -1279,17 +1822,22 @@ mod tests {
     }
 
     impl UnicastEnv for Fake {
+        fn cig_overrides(&self) -> CigOverrides {
+            self.overrides
+        }
         fn device(&self, id: u32) -> Option<&LeDevice> {
             self.devices.get(id as usize)
         }
         fn cp_write(&mut self, device: u32, value: Vec<u8>, what: &'static str) {
             self.log.push(format!("{what} dev {device} {:02x?}", &value[..2.min(value.len())]));
+            self.cp.push(value);
         }
         fn ccids(&mut self, _contexts: u16) -> Vec<u8> {
             vec![2, 1, 2]
         }
         fn cig_create(&mut self, params: &CigParams) -> u8 {
             self.log.push(format!("cig create {} ({} CIS)", params.cig_id, params.cis.len()));
+            self.cig = Some(params.clone());
             if self.cig_status.is_empty() { 0 } else { self.cig_status.remove(0) }
         }
         fn cig_remove(&mut self, cig_id: u8) -> u8 {
@@ -1316,6 +1864,10 @@ mod tests {
         fn stop_sending(&mut self) {
             self.log.push("stop sending".into());
         }
+        fn start_receiving(&mut self, cis: &[u16]) {
+            self.log.push(format!("receive {cis:x?}"));
+        }
+        fn stop_receiving(&mut self) {}
         fn cis_down(&mut self, handle: u16) {
             self.log.push(format!("cis down {handle:x}"));
         }
@@ -1326,8 +1878,10 @@ mod tests {
             self.log.push(format!("streaming {streaming}"));
         }
         fn arm(&mut self, timer: UnicastTimer, ms: u32) {
-            if timer == UnicastTimer::Drop {
-                self.log.push(format!("arm drop {ms}"));
+            match timer {
+                UnicastTimer::Drop => self.log.push(format!("arm drop {ms}")),
+                UnicastTimer::Remove => self.log.push(format!("arm remove {ms}")),
+                _ => {}
             }
         }
         fn disarm(&mut self, _timer: UnicastTimer) {}
@@ -1359,6 +1913,7 @@ mod tests {
             acl: 0,
             cis_handle: 0xFFFF,
             channels: vec![ChannelPlan { allocation, source }],
+            source_ase: None,
         };
         StreamPlan {
             preset,
@@ -1371,6 +1926,8 @@ mod tests {
                 cis(0, 1, LOCATION_FRONT_LEFT, ChannelSource::Left),
                 cis(1, 2, LOCATION_FRONT_RIGHT, ChannelSource::Right),
             ],
+            source: None,
+            source_note: String::new(),
         }
     }
 
@@ -1536,6 +2093,261 @@ mod tests {
         assert!(r.unwrap_err().starts_with("no audio context available for the stream (wanted 0x0004"));
     }
 
+    /// A headset with a microphone (sink ASE 1 + source ASE 3 on CIS 0) and,
+    /// with `mic_member`, a second device with a source ASE only (CIS 1)
+    fn conversational_plan(mic_member: bool) -> StreamPlan {
+        let table = PresetTable::new();
+        let mut plan = earbuds_plan();
+        plan.cis.truncate(1);
+        let mic = |ase_id| SourceDir { ase_id, channels: 1, allocation: LOCATION_FRONT_LEFT, octets: 80 };
+        plan.cis[0].cis_id = 0;
+        plan.cis[0].source_ase = Some(mic(3));
+        if mic_member {
+            plan.cis.push(CisPlan {
+                device_id: 1,
+                ase_id: 0,
+                cis_id: 1,
+                acl: 0,
+                cis_handle: 0xFFFF,
+                channels: Vec::new(),
+                source_ase: Some(mic(3)),
+            });
+        }
+        let preset = table.find("32_2_1").unwrap().clone();
+        plan.source = Some(SourcePlan {
+            presentation_delay_us: preset.presentation_delay_us,
+            preset,
+            requested_contexts: CONTEXT_CONVERSATIONAL,
+            contexts: CONTEXT_CONVERSATIONAL,
+            rates: vec![32000],
+        });
+        plan
+    }
+
+    #[test]
+    fn the_microphone_shares_the_media_latency_within_the_server_preference() {
+        // A source ASE that allows less keeps its own cap
+        let mut d = mic_device(0, 0x40, true);
+        d.ases[1].pref_max_latency_ms = 60;
+        let mut env = Fake::new(vec![d]);
+        let mut u = Unicast::default();
+        u.start(&mut env, conversational_plan(false), Box::new(|_| {}));
+        env.take();
+        for (ase, state) in [(1, AseState::CodecConfigured), (3, AseState::CodecConfigured)] {
+            env.set_state(0, ase, state);
+            u.on_ase_update(&mut env, LeDeviceId(0), ase);
+        }
+        let cig = env.cig.clone().unwrap();
+        assert_eq!((cig.max_transport_latency_c_to_p, cig.max_transport_latency_p_to_c), (100, 60));
+    }
+
+    #[test]
+    fn developer_cig_overrides_reach_the_cig_and_config_qos() {
+        let mut env = Fake::new(vec![mic_device(0, 0x40, true)]);
+        env.overrides = CigOverrides {
+            latency_c_to_p_ms: 60,
+            latency_p_to_c_ms: 9000,
+            rtn_c_to_p: Some(2),
+            rtn_p_to_c: Some(40),
+            interleaved: true,
+        };
+        let mut u = Unicast::default();
+        u.start(&mut env, conversational_plan(false), Box::new(|_| {}));
+        for ase in [1, 3] {
+            env.set_state(0, ase, AseState::CodecConfigured);
+            u.on_ase_update(&mut env, LeDeviceId(0), ase);
+        }
+        let cig = env.cig.clone().unwrap();
+        // Out of range: clamped (4000 ms, RTN 15)
+        assert_eq!((cig.max_transport_latency_c_to_p, cig.max_transport_latency_p_to_c, cig.packing), (60, 4000, 1));
+        assert_eq!((cig.cis[0].rtn_c_to_p, cig.cis[0].rtn_p_to_c), (2, 15));
+        u.on_cig_created(&mut env, &cig_created(1, &[0x60]));
+        // Config QoS: per ASE 16 bytes after opcode and count; RTN at +10,
+        // max transport latency at +11
+        let qos = env.cp.last().unwrap().clone();
+        let ases: Vec<(u8, u8, u16)> =
+            qos[2..].chunks(16).map(|a| (a[0], a[10], u16::from_le_bytes([a[11], a[12]]))).collect();
+        assert_eq!(ases, [(1, 2, 60), (3, 15, 4000)]);
+    }
+
+    #[test]
+    fn no_developer_overrides_leave_the_plan_as_it_is() {
+        let (mut latency, mut rtn, mut packing) = ([100, 95], [13, 13], 0);
+        assert!(!apply_overrides(CigOverrides::default(), &mut latency, &mut rtn, &mut packing));
+        assert_eq!((latency, rtn, packing), ([100, 95], [13, 13], 0));
+    }
+
+    fn mic_device(id: u32, acl: u16, sink: bool) -> LeDevice {
+        let mut d = device(id, acl, if sink { &[1] } else { &[] }, CONTEXT_MEDIA);
+        d.available_source_contexts = CONTEXT_CONVERSATIONAL;
+        d.ases.push(Ase { id: 3, sink: false, state: AseState::Idle, value_handle: 0x23, ..Ase::default() });
+        d
+    }
+
+    #[test]
+    fn source_ases_get_receiver_start_and_stop_ready() {
+        let mut env = Fake::new(vec![mic_device(0, 0x40, true)]);
+        let mut u = Unicast::default();
+        let outcome: Outcome = Rc::default();
+        let o = outcome.clone();
+        u.start(&mut env, conversational_plan(false), Box::new(move |r| *o.borrow_mut() = Some(r)));
+        // Both ASEs in one Config Codec
+        assert_eq!(env.take(), ["Config Codec dev 0 [01, 02]"]);
+        let all = |u: &mut Unicast, env: &mut Fake, sink: AseState, source: AseState| {
+            env.set_state(0, 1, sink);
+            u.on_ase_update(env, LeDeviceId(0), 1);
+            env.set_state(0, 3, source);
+            u.on_ase_update(env, LeDeviceId(0), 3);
+        };
+        all(&mut u, &mut env, AseState::CodecConfigured, AseState::CodecConfigured);
+        assert_eq!(env.take(), ["cig create 1 (1 CIS)"]);
+        let cig = env.cig.clone().unwrap();
+        assert_eq!((cig.sdu_interval_c_to_p, cig.sdu_interval_p_to_c), (10000, 10000));
+        // One max transport latency for the CIG: the larger (issue #86)
+        assert_eq!((cig.max_transport_latency_c_to_p, cig.max_transport_latency_p_to_c), (100, 100));
+        assert_eq!((cig.cis[0].max_sdu_c_to_p, cig.cis[0].max_sdu_p_to_c), (155, 80));
+        assert_eq!((cig.cis[0].rtn_c_to_p, cig.cis[0].rtn_p_to_c), (13, 2));
+        u.on_cig_created(&mut env, &cig_created(1, &[0x60]));
+        assert_eq!(env.take(), ["Config QoS dev 0 [02, 02]"]);
+        all(&mut u, &mut env, AseState::QosConfigured, AseState::QosConfigured);
+        assert_eq!(env.take(), ["Enable dev 0 [03, 02]"]);
+        all(&mut u, &mut env, AseState::Enabling, AseState::Enabling);
+        assert_eq!(env.take(), ["cis create 1 [60] [40]"]);
+        u.on_cis_created(&mut env, &cis_created(1, 0x60, 0));
+        // The client is the receiver of the source ASE
+        assert_eq!(u.phase(), Phase::WaitStreaming);
+        assert_eq!(env.take(), ["receive [60]", "Receiver Start Ready dev 0 [04, 01]"]);
+        // Sent once only
+        u.on_ase_update(&mut env, LeDeviceId(0), 3);
+        assert!(env.take().is_empty());
+        env.set_state(0, 1, AseState::Streaming);
+        u.on_ase_update(&mut env, LeDeviceId(0), 1);
+        assert_eq!(u.phase(), Phase::WaitStreaming, "the source ASE is not streaming yet");
+        env.set_state(0, 3, AseState::Streaming);
+        u.on_ase_update(&mut env, LeDeviceId(0), 3);
+        assert_eq!(u.phase(), Phase::Streaming);
+        assert_eq!(env.take(), ["send [60] queue 2 10000 us", "streaming true"]);
+        assert_eq!(*outcome.borrow(), Some(Ok(())));
+
+        // Stop: the source ASE goes Disabling and waits for Receiver Stop
+        // Ready
+        u.stop(&mut env, Box::new(|| {}));
+        assert_eq!(env.take(), ["stop sending", "Disable dev 0 [05, 02]"]);
+        all(&mut u, &mut env, AseState::QosConfigured, AseState::Disabling);
+        assert_eq!(u.phase(), Phase::Disable);
+        assert_eq!(env.take(), ["Receiver Stop Ready dev 0 [06, 01]"]);
+        env.set_state(0, 3, AseState::QosConfigured);
+        u.on_ase_update(&mut env, LeDeviceId(0), 3);
+        assert_eq!(u.phase(), Phase::Release);
+        assert_eq!(env.take(), ["disconnect 60", "Release dev 0 [08, 02]"]);
+    }
+
+    #[test]
+    fn rejected_enable_metadata_is_retried_plainer() {
+        let mut env = Fake::new(vec![mic_device(0, 0x40, true)]);
+        let mut u = Unicast::default();
+        let outcome: Outcome = Rc::default();
+        let o = outcome.clone();
+        u.start(&mut env, conversational_plan(false), Box::new(move |r| *o.borrow_mut() = Some(r)));
+        let all = |u: &mut Unicast, env: &mut Fake, state: AseState| {
+            for ase in [1, 3] {
+                env.set_state(0, ase, state);
+                u.on_ase_update(env, LeDeviceId(0), ase);
+            }
+        };
+        all(&mut u, &mut env, AseState::CodecConfigured);
+        u.on_cig_created(&mut env, &cig_created(1, &[0x60]));
+        all(&mut u, &mut env, AseState::QosConfigured);
+        assert_eq!(
+            env.take(),
+            [
+                "Config Codec dev 0 [01, 02]",
+                "cig create 1 (1 CIS)",
+                "Config QoS dev 0 [02, 02]",
+                "Enable dev 0 [03, 02]"
+            ]
+        );
+        let first = env.cp.last().cloned().unwrap();
+        assert!(first.windows(2).any(|w| w == [0x03, META_CCID_LIST]), "a CCID list at first: {first:02x?}");
+        // Both ASEs: Rejected Metadata (as an EarFun answered)
+        u.on_cp_response(&mut env, LeDeviceId(0), &[ASE_OP_ENABLE, 2, 1, 0x0B, 0x00, 3, 0x0B, 0x02]);
+        assert_eq!(env.take(), ["Enable dev 0 [03, 02]"]);
+        assert!(outcome.borrow().is_none(), "not failed");
+        // One context (the microphone's, Conversational), no CCID list
+        let ctx = CONTEXT_CONVERSATIONAL.to_le_bytes();
+        let plain = vec![3, META_STREAMING_CONTEXTS, ctx[0], ctx[1]];
+        assert_eq!(env.cp.last().unwrap(), &cp_with_metadata(ASE_OP_ENABLE, &[(1, plain.clone()), (3, plain)]));
+        // Rejected again: Unspecified
+        u.on_cp_response(&mut env, LeDeviceId(0), &[ASE_OP_ENABLE, 1, 3, 0x0B, 0x02]);
+        let u1 = CONTEXT_UNSPECIFIED.to_le_bytes();
+        assert_eq!(
+            env.cp.last().unwrap(),
+            &cp_with_metadata(ASE_OP_ENABLE, &[(3, vec![3, META_STREAMING_CONTEXTS, u1[0], u1[1]])]),
+            "only the rejected ASE"
+        );
+        assert!(outcome.borrow().is_none());
+        // A third rejection fails the start (reported once the ASEs are
+        // released)
+        env.take();
+        u.on_cp_response(&mut env, LeDeviceId(0), &[ASE_OP_ENABLE, 1, 3, 0x0B, 0x02]);
+        assert!(!env.take().iter().any(|l| l.starts_with("Enable")));
+        assert!(u.phase().stopping(), "stopping, not {}", u.phase().name());
+        assert_eq!(u.fail_reason, "ASE 3: op 0x03 rejected (response 0x0b reason 0x02)");
+    }
+
+    #[test]
+    fn rejected_enable_for_another_reason_fails_at_once() {
+        let mut env = Fake::new(vec![mic_device(0, 0x40, true)]);
+        let mut u = Unicast::default();
+        let outcome: Outcome = Rc::default();
+        let o = outcome.clone();
+        u.start(&mut env, conversational_plan(false), Box::new(move |r| *o.borrow_mut() = Some(r)));
+        for state in [AseState::CodecConfigured, AseState::QosConfigured] {
+            for ase in [1, 3] {
+                env.set_state(0, ase, state);
+                u.on_ase_update(&mut env, LeDeviceId(0), ase);
+            }
+            if state == AseState::CodecConfigured {
+                u.on_cig_created(&mut env, &cig_created(1, &[0x60]));
+            }
+        }
+        env.take();
+        // Metadata on one ASE, Insufficient Resources on the other
+        u.on_cp_response(&mut env, LeDeviceId(0), &[ASE_OP_ENABLE, 2, 1, 0x0B, 0x00, 3, 0x0D, 0x00]);
+        assert!(!env.take().iter().any(|l| l.starts_with("Enable")));
+        assert!(u.phase().stopping(), "stopping, not {}", u.phase().name());
+    }
+
+    #[test]
+    fn a_source_only_cis_is_not_sent_on() {
+        let mut env = Fake::new(vec![mic_device(0, 0x40, true), mic_device(1, 0x41, false)]);
+        let mut u = Unicast::default();
+        u.start(&mut env, conversational_plan(true), Box::new(|_| {}));
+        assert_eq!(env.take(), ["Config Codec dev 0 [01, 02]", "Config Codec dev 1 [01, 01]"]);
+        let each = |u: &mut Unicast, env: &mut Fake, state: AseState| {
+            for (dev, ase) in [(0, 1), (0, 3), (1, 3)] {
+                env.set_state(dev, ase, state);
+                u.on_ase_update(env, LeDeviceId(dev), ase);
+            }
+        };
+        each(&mut u, &mut env, AseState::CodecConfigured);
+        let cig = env.cig.clone().unwrap();
+        assert_eq!((cig.cis[1].max_sdu_c_to_p, cig.cis[1].max_sdu_p_to_c), (0, 80));
+        u.on_cig_created(&mut env, &cig_created(1, &[0x60, 0x61]));
+        each(&mut u, &mut env, AseState::QosConfigured);
+        each(&mut u, &mut env, AseState::Enabling);
+        env.take();
+        u.on_cis_created(&mut env, &cis_created(1, 0x60, 0));
+        u.on_cis_created(&mut env, &cis_created(1, 0x61, 0));
+        assert_eq!(
+            env.take(),
+            ["receive [60, 61]", "Receiver Start Ready dev 0 [04, 01]", "Receiver Start Ready dev 1 [04, 01]"]
+        );
+        each(&mut u, &mut env, AseState::Streaming);
+        // Only the CIS with a sink ASE: the encode thread fills one SDU
+        assert_eq!(env.take(), ["send [60] queue 2 10000 us", "streaming true"]);
+    }
+
     #[test]
     fn link_loss_while_streaming_is_reported() {
         let mut env = Fake::new(vec![device(0, 0x40, &[1], CONTEXT_MEDIA), device(1, 0x41, &[1], CONTEXT_MEDIA)]);
@@ -1608,6 +2420,58 @@ mod tests {
         assert_eq!(env2.take(), ["disconnect 60", "disconnect 61"]);
     }
 
+    /// The second CIS refused, the stream torn down as far as the CIG
+    /// removal, which waits for the first CIS's event
+    fn refused_and_waiting_to_remove(u: &mut Unicast, env: &mut Fake) -> Outcome {
+        let outcome = start(u, env);
+        both(u, env, AseState::CodecConfigured);
+        u.on_cig_created(env, &cig_created(1, &[0x60, 0x61]));
+        both(u, env, AseState::QosConfigured);
+        both(u, env, AseState::Enabling);
+        env.take();
+        u.on_cis_created(env, &cis_created(1, 0x61, 0x1E));
+        assert_eq!(u.phase(), Phase::Disable);
+        assert_eq!(env.take(), ["stop sending", "Disable dev 0 [05, 01]", "Disable dev 1 [05, 01]"]);
+        both(u, env, AseState::QosConfigured);
+        assert_eq!(env.take(), ["Release dev 0 [08, 01]", "Release dev 1 [08, 01]"]);
+        both(u, env, AseState::Idle);
+        assert_eq!(u.phase(), Phase::RemoveCig);
+        assert!(env.take().is_empty(), "one CIS event is still to come");
+        outcome
+    }
+
+    #[test]
+    fn a_cis_up_while_the_cig_removal_waits_is_dropped_before_it() {
+        let mut env = Fake::new(vec![device(0, 0x40, &[1], CONTEXT_MEDIA), device(1, 0x41, &[1], CONTEXT_MEDIA)]);
+        let mut u = Unicast::default();
+        let outcome = refused_and_waiting_to_remove(&mut u, &mut env);
+        // BTstack would undo a removal asked for inside this event
+        u.on_cis_created(&mut env, &cis_created(1, 0x60, 0));
+        assert_eq!(env.take(), ["disconnect 60"]);
+        u.on_link_lost(&mut env, 0x60);
+        assert_eq!(env.take(), ["cis down 60", "cig remove 1"]);
+        u.on_cig_removed(&mut env);
+        assert_eq!(u.phase(), Phase::Idle);
+        let r = outcome.borrow().clone().unwrap();
+        assert_eq!(r.unwrap_err(), "CIS 0x0061 could not be established (0x1e)");
+    }
+
+    #[test]
+    fn the_last_cis_refused_while_the_cig_removal_waits_removes_it_after_the_event() {
+        let mut env = Fake::new(vec![device(0, 0x40, &[1], CONTEXT_MEDIA), device(1, 0x41, &[1], CONTEXT_MEDIA)]);
+        let mut u = Unicast::default();
+        refused_and_waiting_to_remove(&mut u, &mut env);
+        u.on_cis_created(&mut env, &cis_created(1, 0x60, 0x1E));
+        assert_eq!(env.take(), ["arm remove 1"]);
+        u.on_remove_timer(&mut env);
+        assert_eq!(env.take(), ["cig remove 1"]);
+        // The timer again changes nothing
+        u.on_remove_timer(&mut env);
+        assert!(env.take().is_empty());
+        u.on_cig_removed(&mut env);
+        assert_eq!(u.phase(), Phase::Idle);
+    }
+
     #[test]
     fn a_stale_state_while_stopping_is_read_again() {
         let mut env = Fake::new(vec![device(0, 0x40, &[1], CONTEXT_MEDIA), device(1, 0x41, &[1], CONTEXT_MEDIA)]);
@@ -1629,6 +2493,34 @@ mod tests {
         u.on_ase_update(&mut env, LeDeviceId(1), 1);
         assert_eq!(u.phase(), Phase::RemoveCig);
         // Not stopping in a step that waits for ASEs: nothing to read
+        u.on_refresh(&mut env);
+        assert!(!env.take().iter().any(|l| l.starts_with("read")));
+    }
+
+    #[test]
+    fn an_ase_still_enabling_with_its_cis_up_is_read_again() {
+        // Issue #86: one ASE went Streaming, the other stayed Enabling
+        let mut env = Fake::new(vec![device(0, 0x40, &[1], CONTEXT_MEDIA), device(1, 0x41, &[1], CONTEXT_MEDIA)]);
+        let mut u = Unicast::default();
+        let outcome = start(&mut u, &mut env);
+        both(&mut u, &mut env, AseState::CodecConfigured);
+        u.on_cig_created(&mut env, &cig_created(1, &[0x60, 0x61]));
+        both(&mut u, &mut env, AseState::QosConfigured);
+        both(&mut u, &mut env, AseState::Enabling);
+        u.on_cis_created(&mut env, &cis_created(1, 0x60, 0));
+        u.on_cis_created(&mut env, &cis_created(1, 0x61, 0));
+        env.set_state(0, 1, AseState::Streaming);
+        u.on_ase_update(&mut env, LeDeviceId(0), 1);
+        assert_eq!(u.phase(), Phase::WaitStreaming);
+        env.take();
+        u.on_refresh(&mut env);
+        assert_eq!(env.take(), ["read ASE 1 dev 1"]);
+        // The read finds it Streaming: the stream starts
+        env.set_state(1, 1, AseState::Streaming);
+        u.on_ase_update(&mut env, LeDeviceId(1), 1);
+        assert_eq!(u.phase(), Phase::Streaming);
+        assert_eq!(*outcome.borrow(), Some(Ok(())));
+        // Streaming: nothing to read
         u.on_refresh(&mut env);
         assert!(!env.take().iter().any(|l| l.starts_with("read")));
     }

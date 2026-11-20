@@ -225,7 +225,7 @@ export function update(m: TestModel, i: Inputs): string[] {
   // 4: this PC's own connection, with its status messages in the log
   if (m.measuring && m.leftIdle && i.serviceText !== m.serviceText) {
     m.serviceText = i.serviceText;
-    if (i.serviceText) log.push(`A2DPWB: ${i.serviceText}`);
+    if (i.serviceText) log.push(`BlueCaster: ${i.serviceText}`);
   }
   const link = m.steps.link.state;
   if (link === "running") {
@@ -371,6 +371,8 @@ export function sentSince(r: ReceiverState | null, base: Baseline): LinkTotals |
     dropped: sub(now.dropped, b?.dropped),
     capture_frames: sub(now.capture_frames, b?.capture_frames),
     capture_dropped: sub(now.capture_dropped, b?.capture_dropped),
+    capture_discontinuities: sub(now.capture_discontinuities, b?.capture_discontinuities),
+    capture_lost: sub(now.capture_lost, b?.capture_lost),
   };
 }
 

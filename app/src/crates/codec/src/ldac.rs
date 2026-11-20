@@ -24,7 +24,7 @@ const RTP_HEADER_SIZE: usize = 12;
 /// windows from it
 pub const ABR_INTERVAL_MS: u32 = 100;
 
-/// ABR thresholds in packets for A2DPWB's 64-slot send queue (v1): critical,
+/// ABR thresholds in packets for BlueCaster's 64-slot send queue (v1): critical,
 /// dangerous trend, safety for HQ / SQ. libldac's defaults (6, 4, 2) suit
 /// Android's shallower queue.
 const ABR_THRESHOLDS: (u32, u32, u32) = (12, 8, 4);
@@ -59,7 +59,12 @@ impl LdacEncoder {
             2 => ffi::LDACBT_CHANNEL_MODE_STEREO,
             n => return Err(unsupported(format!("{n} channels"))),
         };
-        // 24-bit audio goes in as int32, MSB-aligned (libldac's S32 format)
+        // 24-bit audio goes in as int32, MSB-aligned (libldac's S32 format):
+        // the float mix arrives at full 32-bit scale (pipeline convert.rs),
+        // as with Android's 32-bit choice (AOSP a2dp_vendor_ldac_encoder.cc,
+        // pcm_wlength 4). The bit depth is no part of LDAC's codec
+        // information, and libldac turns every format into float, so a
+        // "32-bit" choice would stream the same (issue #86).
         let (format, sample_format) = match config.bits_per_sample {
             16 => (PcmFormat::I16, SampleFormat::S16),
             24 => (PcmFormat::I32, SampleFormat::S32),
@@ -79,11 +84,18 @@ impl LdacEncoder {
             )));
         }
         let eqmid = match config.quality {
-            Quality::High | Quality::MediumHigh => ffi::LDACBT_EQMID_HQ,
+            Quality::High | Quality::MediumHigh | Quality::LowLatency => ffi::LDACBT_EQMID_HQ,
             Quality::Standard => ffi::LDACBT_EQMID_SQ,
             Quality::Mobile => ffi::LDACBT_EQMID_MQ,
         };
 
+        tracing::debug!(
+            "LDAC: quality {:?} -> eqmid {eqmid}, channel mode {channel_mode}, {format:?} input, transport mtu \
+             {transport_mtu} (media mtu {}), abr asked {}",
+            config.quality,
+            config.mtu,
+            config.abr
+        );
         let init_err = |e: ldac_sys::Error| EncoderError::Init { codec: CODEC, what: e.to_string() };
         let mut bt = LdacBt::new().map_err(init_err)?;
         bt.init_encode(
@@ -220,6 +232,29 @@ impl Encoder for LdacEncoder {
 
     fn abr_active(&self) -> bool {
         self.abr.is_some()
+    }
+
+    /// MQ (330 kbps at 48 / 96 kHz) while `on`, the quality mode asked for
+    /// after. Not under ABR, which moves the quality itself.
+    fn reduce(&mut self, on: bool) -> bool {
+        if self.abr.is_some() || self.eqmid >= ffi::LDACBT_EQMID_MQ {
+            return false;
+        }
+        let eqmid = if on { ffi::LDACBT_EQMID_MQ } else { self.eqmid };
+        if self.bt.eqmid() == eqmid {
+            return true;
+        }
+        match self.bt.set_eqmid(eqmid) {
+            Ok(()) => {
+                self.bitrate_kbps = u32::try_from(self.bt.bitrate()).unwrap_or(self.bitrate_kbps);
+                tracing::info!("LDAC: quality mode {eqmid} ({})", if on { "slow link" } else { "as asked" });
+                true
+            }
+            Err(e) => {
+                tracing::warn!("LDAC: quality mode {eqmid} failed: {e}");
+                false
+            }
+        }
     }
 
     /// Back to the quality mode asked for, with a fresh ABR module (its

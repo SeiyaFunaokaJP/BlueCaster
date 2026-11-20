@@ -1,4 +1,5 @@
-//! Link keys in link_keys.txt of the settings folder, in v1's format, so
+//! Link keys in link_keys.txt (the settings folder's `pairing\`, the caller
+//! names the file), in v1's format, so
 //! headphones paired with v1 connect without pairing again:
 //!
 //! ```text
@@ -6,7 +7,9 @@
 //! XX-XX-XX-XX-XX-XX <32 hex digits of the key> <key type>
 //! ```
 //!
-//! Kept in memory and written in full (temp file + rename) on every change.
+//! Kept in memory and written in full (temp file + rename) on every change,
+//! encrypted for the Windows user ([`win_sys::dpapi`]); a plain-text file
+//! (v1, older v3 builds) is read and rewritten encrypted.
 
 use std::path::{Path, PathBuf};
 
@@ -14,7 +17,6 @@ use btstack_sys::LinkKeyStore;
 
 /// v1 kept at most 32 keys; the oldest goes first
 const MAX_LINK_KEYS: usize = 32;
-const FILE_NAME: &str = "link_keys.txt";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkKeyEntry {
@@ -58,13 +60,14 @@ fn format_entry(e: &LinkKeyEntry) -> String {
 }
 
 impl FileLinkKeyStore {
-    /// Loads `dir`/link_keys.txt (missing or unreadable: empty)
-    pub fn open(dir: &Path) -> FileLinkKeyStore {
-        let path = dir.join(FILE_NAME);
-        let entries: Vec<LinkKeyEntry> = std::fs::read_to_string(&path)
-            .map(|text| text.lines().filter_map(parse_line).take(MAX_LINK_KEYS).collect())
+    /// Loads the file (missing, unreadable or not decryptable: empty); its
+    /// folder is made when a key is saved
+    pub fn open(file: &Path) -> FileLinkKeyStore {
+        let path = file.to_path_buf();
+        let entries: Vec<LinkKeyEntry> = win_sys::dpapi::read_secret(&path)
+            .map(|bytes| String::from_utf8_lossy(&bytes).lines().filter_map(parse_line).take(MAX_LINK_KEYS).collect())
             .unwrap_or_default();
-        tracing::info!("link keys: {} loaded from {}", entries.len(), path.display());
+        tracing::info!("link keys: {} loaded", entries.len());
         FileLinkKeyStore { path, entries }
     }
 
@@ -77,17 +80,36 @@ impl FileLinkKeyStore {
         for e in &self.entries {
             text.push_str(&format_entry(e));
         }
-        let tmp = self.path.with_extension("txt.tmp");
-        let result = std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &self.path));
-        if let Err(e) = result {
-            tracing::error!("link keys: cannot write {}: {e}", self.path.display());
+        if let Err(e) = win_sys::dpapi::write_secret(&self.path, text.as_bytes()) {
+            tracing::error!("link keys: cannot write the file: {e}");
         }
     }
 }
 
+/// Deletes `addr`'s key from `file` while no stack holds the
+/// file (a running stack: [`crate::BtHost::forget_link_key`])
+pub fn forget(file: &Path, addr: &[u8; 6]) {
+    FileLinkKeyStore::open(file).delete(addr);
+}
+
+/// Stores `addr`'s key in `file` while no stack holds the file (a running
+/// stack: [`crate::BtHost::store_link_key`])
+pub fn store(file: &Path, addr: &[u8; 6], key: &[u8; 16], key_type: i32) {
+    FileLinkKeyStore::open(file).put(addr, key, key_type);
+}
+
 impl LinkKeyStore for FileLinkKeyStore {
     fn get(&mut self, addr: &[u8; 6]) -> Option<([u8; 16], i32)> {
-        self.entries.iter().find(|e| &e.addr == addr).map(|e| (e.key, e.key_type))
+        let found = self.entries.iter().find(|e| &e.addr == addr).map(|e| (e.key, e.key_type));
+        tracing::debug!(
+            "link keys: lookup for {}: {}",
+            crate::events::addr_str(addr),
+            match &found {
+                Some((_, t)) => format!("found (type {t})"),
+                None => "none".into(),
+            }
+        );
+        found
     }
 
     fn put(&mut self, addr: &[u8; 6], key: &[u8; 16], key_type: i32) {
@@ -105,6 +127,7 @@ impl LinkKeyStore for FileLinkKeyStore {
         }
         self.save();
         tracing::info!("link keys: stored the key of {}", crate::events::addr_str(addr));
+        tracing::debug!("link keys: key type {key_type}, {} stored in all", self.entries.len());
     }
 
     fn delete(&mut self, addr: &[u8; 6]) {
@@ -127,27 +150,32 @@ mod tests {
 
     #[test]
     fn v1_file_round_trip() {
-        let dir = std::env::temp_dir().join(format!("a2dpwb-lk-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("bluecaster-lk-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("link_keys.txt");
         std::fs::write(
-            dir.join(FILE_NAME),
+            &file,
             "# BTstack link key database \u{2014} do not edit while app is running\n\
              00-A2-D0-00-00-02 00112233445566778899aabbccddeeff 4\n\
              garbage line\n",
         )
         .unwrap();
-        let mut store = FileLinkKeyStore::open(&dir);
+        let mut store = FileLinkKeyStore::open(&file);
+        // The plain-text file was rewritten encrypted
+        let on_disk = std::fs::read(&file).unwrap();
+        assert!(win_sys::dpapi::is_encrypted(&on_disk));
+        assert!(!String::from_utf8_lossy(&on_disk).contains("00112233"));
         let addr = [0x00, 0xA2, 0xD0, 0x00, 0x00, 0x02];
         let (key, t) = store.get(&addr).unwrap();
         assert_eq!(key[0], 0x00);
         assert_eq!(key[15], 0xFF);
         assert_eq!(t, 4);
         store.put(&[1, 2, 3, 4, 5, 6], &[7; 16], 5);
-        let reread = FileLinkKeyStore::open(&dir);
+        let reread = FileLinkKeyStore::open(&file);
         assert_eq!(reread.entries().len(), 2);
         assert_eq!(reread.entries()[1].addr, [1, 2, 3, 4, 5, 6]);
         store.delete(&addr);
-        assert_eq!(FileLinkKeyStore::open(&dir).entries().len(), 1);
+        assert_eq!(FileLinkKeyStore::open(&file).entries().len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

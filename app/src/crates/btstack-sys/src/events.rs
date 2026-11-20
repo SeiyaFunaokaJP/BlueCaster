@@ -130,6 +130,34 @@ pub fn cig_created(packet: &[u8]) -> Option<CigCreated> {
     Some(CigCreated { status: *packet.get(3)?, cig_id: *packet.get(4)?, cis_handles })
 }
 
+/// GAP_SUBEVENT_BIG_CREATED (HCI_EVENT_META_GAP): after LE Create BIG
+/// and the ISO data paths of all BIS
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BigCreated {
+    pub status: u8,
+    pub big_handle: u8,
+    /// In BIS index order
+    pub bis_handles: Vec<u16>,
+}
+
+pub fn big_created(packet: &[u8]) -> Option<BigCreated> {
+    if gap_meta_subevent(packet)? != GAP_SUBEVENT_BIG_CREATED {
+        return None;
+    }
+    // Bytes 5..7: iso_interval_1250us (since BTstack 1.8.3)
+    let n = *packet.get(7)? as usize;
+    let bis_handles = (0..n).map(|i| u16_at(packet, 8 + 2 * i)).collect::<Option<Vec<u16>>>()?;
+    Some(BigCreated { status: *packet.get(3)?, big_handle: *packet.get(4)?, bis_handles })
+}
+
+/// GAP_SUBEVENT_BIG_TERMINATED (HCI_EVENT_META_GAP): the BIG handle
+pub fn big_terminated(packet: &[u8]) -> Option<u8> {
+    if gap_meta_subevent(packet)? != GAP_SUBEVENT_BIG_TERMINATED {
+        return None;
+    }
+    packet.get(3).copied()
+}
+
 /// GAP_SUBEVENT_CIS_CREATED (HCI_EVENT_META_GAP)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CisCreated {
@@ -206,6 +234,34 @@ pub fn disconnection_complete(packet: &[u8]) -> Option<(u8, u16, u8)> {
     Some((*packet.get(2)?, u16_at(packet, 3)?, *packet.get(5)?))
 }
 
+/// The answer to Read Buffer Size (Command Complete): the controller's ACL
+/// and SCO data buffers. BTstack sizes SCO packets by `sco_packet_length`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BufferSize {
+    pub status: u8,
+    pub acl_packet_length: u16,
+    pub sco_packet_length: u8,
+    pub acl_packets: u16,
+    pub sco_packets: u16,
+}
+
+pub fn read_buffer_size(packet: &[u8]) -> Option<BufferSize> {
+    if command_complete_opcode(packet)? != HCI_OPCODE_READ_BUFFER_SIZE {
+        return None;
+    }
+    let status = *packet.get(5)?;
+    if status != 0 {
+        return Some(BufferSize { status, acl_packet_length: 0, sco_packet_length: 0, acl_packets: 0, sco_packets: 0 });
+    }
+    Some(BufferSize {
+        status,
+        acl_packet_length: u16_at(packet, 6)?,
+        sco_packet_length: *packet.get(8)?,
+        acl_packets: u16_at(packet, 9)?,
+        sco_packets: u16_at(packet, 11)?,
+    })
+}
+
 /// The answer to LE Read Buffer Size v2 (Command Complete)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LeBufferSizeV2 {
@@ -260,6 +316,25 @@ pub fn cis_can_send_now(packet: &[u8]) -> Option<CisCanSendNow> {
         stream_index: *packet.get(6)?,
         group_complete: *packet.get(7)? != 0,
     })
+}
+
+/// HCI_EVENT_BIS_CAN_SEND_NOW (to the ISO handler): one per BIS of the
+/// BIG, in BIS order, once every BIS has room. BTstack 1.8.1 emits it
+/// with a length of 4: the BIS handle it stores after the index is cut off
+/// (`hci_emit_bis_can_send_now` does not advance past it), so it is None
+/// then and the BIS is known by its index only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BisCanSendNow {
+    pub big_handle: u8,
+    pub bis_index: u8,
+    pub bis_handle: Option<u16>,
+}
+
+pub fn bis_can_send_now(packet: &[u8]) -> Option<BisCanSendNow> {
+    if !event_is(packet, HCI_EVENT_BIS_CAN_SEND_NOW) {
+        return None;
+    }
+    Some(BisCanSendNow { big_handle: *packet.get(2)?, bis_index: *packet.get(3)?, bis_handle: u16_at(packet, 4) })
 }
 
 // ---- SM ----
@@ -553,9 +628,38 @@ mod tests {
         let c = cis_created(&p).unwrap();
         assert_eq!((c.cig_id, c.cis_id, c.cis_handle, c.acl_handle, c.iso_interval_1250us), (1, 2, 0x60, 0x40, 8));
 
+        // status, BIG handle, ISO interval (BTstack 1.8.3), BIS count, handles
+        let p = [0xE7, 10, GAP_SUBEVENT_BIG_CREATED, 0, 0, 8, 0, 2, 0x10, 0x00, 0x11, 0x00];
+        assert_eq!(big_created(&p), Some(BigCreated { status: 0, big_handle: 0, bis_handles: vec![0x10, 0x11] }));
+        assert!(big_created(&p[..11]).is_none());
+        assert_eq!(big_terminated(&[0xE7, 2, GAP_SUBEVENT_BIG_TERMINATED, 0]), Some(0));
+        assert!(big_terminated(&p).is_none());
+        let p = [HCI_EVENT_BIS_CAN_SEND_NOW, 4, 0, 1, 0x11, 0x00];
+        assert_eq!(bis_can_send_now(&p), Some(BisCanSendNow { big_handle: 0, bis_index: 1, bis_handle: Some(0x11) }));
+        // As BTstack 1.8.1 emits it
+        assert_eq!(bis_can_send_now(&p[..4]), Some(BisCanSendNow { big_handle: 0, bis_index: 1, bis_handle: None }));
+
         let p = [0xE7, 0, GAP_SUBEVENT_BONDING_DELETED, 0, 6, 5, 4, 3, 2, 1, 3, 0x40, 0x00];
         let b = bonding_deleted(&p).unwrap();
         assert_eq!((b.addr, b.index, b.handle), ([1, 2, 3, 4, 5, 6], 3, 0x40));
+    }
+
+    #[test]
+    fn buffer_size() {
+        // The emulator's controller: ACL 1021 x 8, SCO 60 x 8
+        let p = [0x0E, 11, 1, 0x05, 0x10, 0, 0xFD, 0x03, 60, 8, 0, 8, 0];
+        let b = read_buffer_size(&p).unwrap();
+        assert_eq!(
+            b,
+            BufferSize { status: 0, acl_packet_length: 1021, sco_packet_length: 60, acl_packets: 8, sco_packets: 8 }
+        );
+        // A controller without SCO buffers
+        let p = [0x0E, 11, 1, 0x05, 0x10, 0, 0xFD, 0x03, 0, 8, 0, 0, 0];
+        assert_eq!(read_buffer_size(&p).map(|b| (b.sco_packet_length, b.sco_packets)), Some((0, 0)));
+        // Refused, truncated, another command
+        assert_eq!(read_buffer_size(&[0x0E, 4, 1, 0x05, 0x10, 1]).map(|b| b.status), Some(1));
+        assert!(read_buffer_size(&p[..12]).is_none());
+        assert!(read_buffer_size(&[0x0E, 4, 1, 0x60, 0x20, 0]).is_none());
     }
 
     #[test]

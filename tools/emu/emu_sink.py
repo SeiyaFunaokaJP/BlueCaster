@@ -1,17 +1,18 @@
-"""Virtual Bluetooth link with an A2DP test sink, for testing A2DPWB without hardware.
+"""Virtual Bluetooth link with an A2DP test sink, for testing BlueCaster without hardware.
 
 Runs two Bumble virtual controllers on one in-process link:
-  - controller "A2DPWB" is served as H4 over TCP; A2DPWB connects to it with
-    `a2dpwb-core.exe --cli --hci-tcp 127.0.0.1:<port>`
+  - controller "BlueCaster" is served as H4 over TCP; BlueCaster connects to it with
+    `bluecaster-core.exe --cli --hci-tcp 127.0.0.1:<port>`
   - controller "SINK" is driven by a Bumble host acting as an A2DP sink that
     offers SBC (SBC XQ capable), AAC, aptX, aptX HD, aptX LL, LDAC, LHDC V5,
-    FastStream, Opus and Opus 05 like a typical headset
+    FastStream, Opus, Opus 05 and aptX Adaptive like a typical headset; with
+    --hfp also an HFP hands-free unit with SCO audio (hfp_audio.py)
 
 The sink's HCI traffic is written to a PacketLogger (.pklg) capture, so
-a2dpwb_decode --received can check what actually arrived at the sink.
+bluecaster_decode --received can check what actually arrived at the sink.
 
 Run with the Python of the tools/emu virtual environment (see setup_env.py).
-Prints "READY" once A2DPWB can connect; stops on SIGTERM / Ctrl+C.
+Prints "READY" once BlueCaster can connect; stops on SIGTERM / Ctrl+C.
 """
 
 import argparse
@@ -33,26 +34,68 @@ from bumble.a2dp import (
 )
 from bumble.avdtp import (
     AVDTP_AUDIO_MEDIA_TYPE,
+    AVDTP_BAD_STATE_ERROR,
+    AVDTP_DELAY_REPORTING_SERVICE_CATEGORY,
+    AVDTP_DISCOVER,
     AVDTP_MEDIA_CODEC_SERVICE_CATEGORY,
     AVDTP_UNSUPPORTED_CONFIGURATION_ERROR,
+    DelayReport_Command,
     Discover_Response,
     EndPointInfo,
     Listener,
     MediaCodecCapabilities,
+    Open_Response,
+    Protocol,
+    ServiceCapabilities,
     Set_Configuration_Reject,
 )
 from bumble.controller import Controller
 from bumble.device import Device
+from bumble.core import BT_BR_EDR_TRANSPORT, UUID
 from bumble.host import Host
 from bumble.link import LocalLink
+from bumble.pairing import PairingConfig, PairingDelegate
+from bumble.smp import SMP_BR_CID
+from bumble.rfcomm import Server, make_service_sdp_records
 from bumble.snoop import Snooper
 from bumble.transport import open_transport
 from bumble.transport.common import AsyncPipeSink
 
-A2DPWB_ADDRESS = '00:A2:D0:00:00:01'
+BLUECASTER_ADDRESS = '00:A2:D0:00:00:01'
 SINK_ADDRESS = '00:A2:D0:00:00:02'
 
 log = logging.getLogger('emu_sink')
+
+
+# A BR/EDR + LE dual-mode controller's features. Bumble's default controller
+# is LE only (BR/EDR Not Supported): BTstack then never inquires.
+DUAL_MODE_FEATURES = (
+    hci.LmpFeatureMask.LMP_3_SLOT_PACKETS
+    | hci.LmpFeatureMask.LMP_5_SLOT_PACKETS
+    | hci.LmpFeatureMask.ENCRYPTION
+    | hci.LmpFeatureMask.ROLE_SWITCH
+    | hci.LmpFeatureMask.SNIFF_MODE
+    | hci.LmpFeatureMask.ENHANCED_DATA_RATE_ACL_2_MBPS_MODE
+    | hci.LmpFeatureMask.ENHANCED_DATA_RATE_ACL_3_MBPS_MODE
+    | hci.LmpFeatureMask.LMP_3_SLOT_ENHANCED_DATA_RATE_ACL_PACKETS
+    | hci.LmpFeatureMask.LMP_5_SLOT_ENHANCED_DATA_RATE_ACL_PACKETS
+    | hci.LmpFeatureMask.LE_SUPPORTED_CONTROLLER
+    | hci.LmpFeatureMask.SIMULTANEOUS_LE_AND_BR_EDR_TO_SAME_DEVICE_CAPABLE_CONTROLLER
+    | hci.LmpFeatureMask.SECURE_SIMPLE_PAIRING_CONTROLLER_SUPPORT
+    | hci.LmpFeatureMask.EXTENDED_INQUIRY_RESPONSE
+    | hci.LmpFeatureMask.EXTENDED_FEATURES
+)
+
+
+def strip_names(eir):
+    """The EIR without its (shortened or complete) local name."""
+    out, i = b'', 0
+    while i < len(eir) and eir[i]:
+        length = eir[i]
+        if eir[i + 1] not in (0x08, 0x09):
+            out += eir[i:i + 1 + length]
+        i += 1 + length
+    return out
 
 
 class EmuController(Controller):
@@ -66,6 +109,181 @@ class EmuController(Controller):
     # 1021 bytes); Bumble's default of 27 bytes is the LE minimum.
     acl_data_packet_length = 1021
     total_num_acl_data_packets = 8
+
+    # Inquiry, which Bumble's controller lacks: every other controller of the
+    # link with inquiry scan on answers, the first time after
+    # INQUIRY_FIRST_ANSWER and then again every INQUIRY_REPEAT (a real
+    # controller hears a device many times per inquiry); the format follows
+    # the inquiry mode the host wrote
+    INQUIRY_FIRST_ANSWER = 1.0
+    INQUIRY_REPEAT = 2.0
+    class_of_device = 0
+    inquiry_mode = 0
+    eir = b''
+    # False: the EIR it answers with leaves the name out (a name request
+    # gets it)
+    eir_name = True
+    inquiry_task = None
+    # Seconds between an HCI Disconnect and its Disconnection Complete: the
+    # link stays up meanwhile, as with headphones that take their time
+    disconnect_delay = 0
+
+    # Link details BlueCaster reads, none of which Bumble answers: link quality,
+    # supervision timeout and the remote version as a controller has them,
+    # the failed contact counter refused as unknown (the unsupported path)
+    supported_commands = Controller.supported_commands | {
+        hci.HCI_READ_LINK_QUALITY_COMMAND,
+        hci.HCI_READ_LINK_SUPERVISION_TIMEOUT_COMMAND,
+        hci.HCI_READ_FAILED_CONTACT_COUNTER_COMMAND,
+    }
+    REMOTE_VERSION = (12, 0x0094, 0x2209)  # Bluetooth 5.3, Airoha
+    # Leave Read Remote Version without any answer, as Bumble itself does
+    silent_remote_version = False
+    # Report encryption as AES-CCM (Secure Connections), not E0 (--ctkd)
+    aes_ccm = False
+    # Authentication asks the host for its link key first, as a real
+    # controller (--ctkd): a device paired before connects without pairing
+    # again. Bumble's controller always pairs anew.
+    link_key_request = False
+
+    def on_hci_authentication_requested_command(self, command):
+        connection = self.find_classic_connection_by_handle(command.connection_handle)
+        if not self.link_key_request or connection is None:
+            return super().on_hci_authentication_requested_command(command)
+        self._send_hci_command_status(hci.HCI_COMMAND_STATUS_PENDING, command.op_code)
+        # Link Key Request Reply: Bumble sends Authentication Complete;
+        # Negative Reply: it pairs
+        connection.ssp_state.is_initiator = True
+        self.send_hci_packet(hci.HCI_Link_Key_Request_Event(bd_addr=connection.peer_address))
+        return None
+
+    # --check-link-key: a function giving the link key the sink has for
+    # BlueCaster (None: none); a Link Key Request Reply with another key
+    # fails authentication, as LMP would with a real device
+    expected_link_key = None
+
+    def on_hci_link_key_request_reply_command(self, command):
+        connection = self.classic_connections.get(command.bd_addr)
+        if self.expected_link_key is None or connection is None:
+            return super().on_hci_link_key_request_reply_command(command)
+        expected = self.expected_link_key()
+        if expected is not None and bytes(command.link_key) == expected:
+            print('link key: authenticated with the key the sink has', flush=True)
+            return super().on_hci_link_key_request_reply_command(command)
+        print(f"link key: the key BlueCaster gave differs from the sink's ({'none there' if expected is None else 'another'}), "
+              'authentication failed', flush=True)
+        self.send_hci_packet(hci.HCI_Authentication_Complete_Event(
+            status=hci.HCI_ErrorCode.AUTHENTICATION_FAILURE_ERROR, connection_handle=connection.handle))
+        return hci.HCI_StatusAndAddressReturnParameters(status=hci.HCI_ErrorCode.SUCCESS, bd_addr=command.bd_addr)
+
+    def _complete(self, command, data):
+        self.send_hci_packet(hci.HCI_Command_Complete_Event(
+            num_hci_command_packets=1,
+            command_opcode=command.op_code,
+            return_parameters=hci.HCI_GenericReturnParameters(data),
+        ))
+
+    def on_hci_read_link_quality_command(self, command):
+        self._complete(command, bytes([0]) + bytes(command.parameters[:2]) + bytes([230]))
+
+    def on_hci_read_link_supervision_timeout_command(self, command):
+        self._complete(command, bytes([0]) + bytes(command.parameters[:2]) + (0x7D00).to_bytes(2, 'little'))
+
+    def on_hci_read_failed_contact_counter_command(self, command):
+        self._complete(command, bytes([hci.HCI_ErrorCode.UNKNOWN_HCI_COMMAND_ERROR]))
+
+    def on_hci_read_remote_version_information_command(self, command):
+        if self.silent_remote_version:
+            return None
+        handle = command.connection_handle
+        if self.find_classic_connection_by_handle(handle) is None:
+            self._send_hci_command_status(hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR, command.op_code)
+            return None
+        self._send_hci_command_status(hci.HCI_COMMAND_STATUS_PENDING, command.op_code)
+        version, company, subversion = self.REMOTE_VERSION
+        self.send_hci_packet(hci.HCI_Read_Remote_Version_Information_Complete_Event(
+            status=hci.HCI_ErrorCode.SUCCESS, connection_handle=handle,
+            version=version, manufacturer_name=company, subversion=subversion))
+        return None
+
+    def on_hci_read_afh_channel_map_command(self, command):
+        # Bumble does not answer it, and BTstack then sends no other command
+        self.send_hci_packet(hci.HCI_Command_Complete_Event(
+            num_hci_command_packets=1,
+            command_opcode=command.op_code,
+            return_parameters=hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.UNKNOWN_HCI_COMMAND_ERROR),
+        ))
+
+    def on_hci_write_class_of_device_command(self, command):
+        self.class_of_device = command.class_of_device
+        return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
+
+    def on_hci_write_extended_inquiry_response_command(self, command):
+        self.eir = bytes(command.extended_inquiry_response)
+        return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
+
+    def on_hci_write_inquiry_mode_command(self, command):
+        self.inquiry_mode = command.inquiry_mode
+        return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
+
+    def on_hci_inquiry_command(self, command):
+        if self.inquiry_task is not None:
+            self._send_hci_command_status(hci.HCI_ErrorCode.COMMAND_DISALLOWED_ERROR, command.op_code)
+            return None
+        self._send_hci_command_status(hci.HCI_COMMAND_STATUS_PENDING, command.op_code)
+        log.info('inquiry for %.2f s (mode %d)', command.inquiry_length * 1.28, self.inquiry_mode)
+        self.inquiry_task = asyncio.get_running_loop().create_task(
+            self.run_inquiry(command.inquiry_length * 1.28))
+        return None
+
+    def on_hci_inquiry_cancel_command(self, _command):
+        # No Inquiry Complete after a cancel (Core Vol 4 Part E 7.1.2)
+        if self.inquiry_task is not None:
+            self.inquiry_task.cancel()
+            self.inquiry_task = None
+        return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
+
+    def on_hci_disconnect_command(self, command):
+        if not self.disconnect_delay:
+            return super().on_hci_disconnect_command(command)
+        self._send_hci_command_status(hci.HCI_COMMAND_STATUS_PENDING, command.op_code)
+
+        def disconnect():
+            self._send_hci_command_status = lambda *_: None
+            try:
+                super(EmuController, self).on_hci_disconnect_command(command)
+            finally:
+                del self._send_hci_command_status
+
+        asyncio.get_running_loop().call_later(self.disconnect_delay, disconnect)
+
+    async def run_inquiry(self, length):
+        loop = asyncio.get_running_loop()
+        end = loop.time() + length
+        await asyncio.sleep(min(self.INQUIRY_FIRST_ANSWER, length))
+        while loop.time() < end:
+            for peer in list(self.link.controllers):
+                if peer is not self and isinstance(peer, EmuController) and peer.classic_scan_enable & 0x01:
+                    self.send_hci_packet(self.inquiry_result(peer))
+            await asyncio.sleep(max(0.0, min(self.INQUIRY_REPEAT, end - loop.time())))
+        self.inquiry_task = None
+        self.send_hci_packet(hci.HCI_Inquiry_Complete_Event(status=hci.HCI_ErrorCode.SUCCESS))
+
+    def inquiry_result(self, peer):
+        address, cod, psrm, clock, rssi = peer.public_address, peer.class_of_device, 1, 0x1234, -55
+        if self.inquiry_mode == 2:
+            eir = peer.eir if peer.eir_name else strip_names(peer.eir)
+            return hci.HCI_Extended_Inquiry_Result_Event(
+                num_responses=1, bd_addr=address, page_scan_repetition_mode=psrm, reserved=0,
+                class_of_device=cod, clock_offset=clock, rssi=rssi,
+                extended_inquiry_response=eir.ljust(240, b'\0')[:240])
+        if self.inquiry_mode == 1:
+            return hci.HCI_Inquiry_Result_With_RSSI_Event(
+                bd_addr=[address], page_scan_repetition_mode=[psrm], reserved=[0],
+                class_of_device=[cod], clock_offset=[clock], rssi=[rssi])
+        return hci.HCI_Inquiry_Result_Event(
+            bd_addr=[address], page_scan_repetition_mode=[psrm], reserved_0=[0], reserved_1=[0],
+            class_of_device=[cod], clock_offset=[clock])
 
     def on_hci_write_secure_connections_host_support_command(self, command):
         return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
@@ -86,6 +304,9 @@ class EmuController(Controller):
             return None
         self._send_hci_command_status(hci.HCI_COMMAND_STATUS_PENDING, command.op_code)
         enabled = command.encryption_enable
+        if enabled and self.aes_ccm:
+            # Secure Connections: AES-CCM, as a real link after SC pairing
+            enabled = 2
         self.send_hci_packet(
             hci.HCI_Encryption_Change_Event(
                 status=0, connection_handle=connection.handle, encryption_enabled=enabled
@@ -105,7 +326,7 @@ class EmuController(Controller):
 
 
 class PacketLoggerSnooper(Snooper):
-    """Writes HCI packets in PacketLogger format (as A2DPWB's own capture)."""
+    """Writes HCI packets in PacketLogger format (as BlueCaster's own capture)."""
 
     def __init__(self, path):
         self.file = open(path, 'wb', buffering=0)  # unbuffered: survives being killed
@@ -119,6 +340,8 @@ class PacketLoggerSnooper(Snooper):
             pl_type = 0x01
         elif h4_type == hci.HCI_ACL_DATA_PACKET:
             pl_type = 0x02 if to_controller else 0x03
+        elif h4_type == hci.HCI_SYNCHRONOUS_DATA_PACKET:
+            pl_type = 0x08 if to_controller else 0x09
         else:
             return
         now = time.time()
@@ -127,13 +350,30 @@ class PacketLoggerSnooper(Snooper):
 
 
 # Codec of each sink_codec_capabilities() entry, in order (for --in-use)
-CODEC_NAMES = ['sbc', 'aac', 'aptx', 'aptxhd', 'aptxll', 'ldac', 'lhdcv5', 'faststream', 'opus', 'opus05']
+CODEC_NAMES = ['sbc', 'aac', 'aptx', 'aptxhd', 'aptxll', 'ldac', 'lhdcv5', 'faststream', 'opus', 'opus05', 'aptxad']
+
+# aptX Adaptive as the B&W Px7 S2e lists it (AKS-Logic/aptx-adaptive-linux
+# spec/px7s2e-a2dp-caps.md), after the vendor header: an R1 sink, 48 + 44.1
+# kHz with its own flag 0x01, stereo + joint stereo, its target latencies (HQ
+# 0), the R1 end marker; 40 bytes in all
+APTXAD_R1 = [0x19, 0x0A, 0x37, 0x6A, 0x00, 0xAF, 0x64, 0x4B, 0x00, 0x00, 0xAA] + [0] * 23
+# An R2 sink: capability extension version 1, the R2.1 features word
+# 0x0F000003, setup preferences, the end marker at 24..25
+APTXAD_R2 = ([0x39, 0x0A, 0x37, 0x6A, 0x00, 0xAF, 0x64, 0x4B, 0x00, 0x01, 0x03, 0x00, 0x00, 0x0F,
+              0x02, 0x03, 0x03, 0x03, 0x00, 0xAA] + [0] * 14)
 
 
-def sink_codec_capabilities(sbc_dual=True, sbc_max_bitpool=53):
+def sink_codec_capabilities(sbc_dual=True, sbc_max_bitpool=53, aptxad_r2=False, aptxad_rates=None,
+                            lhdcv5_limited=False, aptxll_ext=False):
     """Endpoints a typical high-end headset offers (all sample rates / modes).
     SBC allows SBC XQ (dual channel, bitpool up to 53) unless sbc_dual is
-    False."""
+    False; aptX Adaptive is an R1 sink's unless aptxad_r2, with its rate
+    byte (bits 7..3 of byte 6) replaced by aptxad_rates when given. aptX LL
+    lists the extended capabilities (buffer levels) with aptxll_ext, as a
+    FiiO BTR13 does (issue #520)."""
+    aptxad = list(APTXAD_R2 if aptxad_r2 else APTXAD_R1)
+    if aptxad_rates is not None:
+        aptxad[0] = (aptxad_rates & 0xF8) | (aptxad[0] & 0x07)
     sbc = SbcMediaCodecInformation
     sbc_modes = sbc.ChannelMode.MONO | sbc.ChannelMode.STEREO | sbc.ChannelMode.JOINT_STEREO
     if sbc_dual:
@@ -184,12 +424,17 @@ def sink_codec_capabilities(sbc_dual=True, sbc_max_bitpool=53):
         ),
         vendor(0x0000004F, 0x0001, [aptx_freq_ch]),               # aptX
         vendor(0x000000D7, 0x0024, [aptx_freq_ch, 0, 0, 0, 0]),   # aptX HD
-        vendor(0x0000000A, 0x0002, [aptx_freq_ch, 0x00]),         # aptX LL
+        # aptX LL; extended: new caps flag, then target / initial level,
+        # SRA max rate and averaging time, good level (PipeWire a2dp_aptx_ll_ext_t)
+        vendor(0x0000000A, 0x0002, [aptx_freq_ch, 0x02, 0x00, 0xB4, 0x00, 0x68, 0x01, 0x32, 0x01, 0xB4, 0x00]
+               if aptxll_ext else [aptx_freq_ch, 0x00]),
         # LDAC: 44.1 / 48 / 88.2 / 96 kHz, mono / dual / stereo
         vendor(0x0000012D, 0x00AA, [0x3C, 0x07]),
         # LHDC V5 (Android a2dp_vendor_lhdcv5_constants.h): 44.1 / 48 / 96 / 192 kHz,
         # 16 / 24-bit, 64..1000 kbps, V5 ver.1 with 5 ms frames, low latency offered
-        vendor(0x0000053A, 0x4C35, [0x35, 0x06, 0x11, 0x40, 0x00]),
+        # (limited: 44.1 / 48 kHz and at most 400 kbps, as issue #237's earbuds)
+        vendor(0x0000053A, 0x4C35, [0x30, 0x16, 0x11, 0x40, 0x00] if lhdcv5_limited
+               else [0x35, 0x06, 0x11, 0x40, 0x00]),
         # FastStream (PipeWire a2dp_faststream_t) as a CSR headset lists it:
         # music (sink) and voice (source) directions, music at 44.1 / 48 kHz,
         # voice at 16 kHz
@@ -201,7 +446,166 @@ def sink_codec_capabilities(sbc_dual=True, sbc_max_bitpool=53):
         # direction stereo at front left + right (0x00000003), every frame
         # duration (0x1F), no bit rate limit; no return channel
         vendor(0x000005F1, 0x1005, [2, 0, 0x03, 0, 0, 0, 0x1F, 0, 0] + [0] * 9),
+        vendor(0x000000D7, 0x00AD, aptxad),
     ]
+
+
+def huawei_packet(command, params):
+    """A packet of the earbuds' protocol (app/src/crates/core/src/vendor/huawei.rs)."""
+    body = struct.pack('>H', command) + b''.join(bytes([k, len(v)]) + v for k, v in params)
+    packet = b'\x5A' + struct.pack('>H', len(body) + 1) + b'\0' + body
+    crc = 0
+    for b in packet:
+        crc ^= b << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021 if crc & 0x8000 else crc << 1) & 0xFFFF
+    return packet + struct.pack('>H', crc)
+
+
+class AvrcpKeys:
+    """Headphone buttons: once BlueCaster opens AVRCP, FAST FORWARD (no
+    Windows media key, so nothing on this PC reacts) is pressed and released
+    `count` times. Each answer must carry the state flag of its command
+    (AV/C pass through; issue #420: releases came back as presses)."""
+
+    def __init__(self, device, count):
+        from bumble import avc, avrcp
+        self.avc, self.count = avc, count
+        self.protocol = avrcp.Protocol()
+        self.protocol.listen(device)
+        device.sdp_service_records[0x00010004] = avrcp.ControllerServiceSdpRecord(0x00010004).to_service_attributes()
+        device.sdp_service_records[0x00010005] = avrcp.TargetServiceSdpRecord(0x00010005).to_service_attributes()
+        self.protocol.on('start', self.on_start)
+
+    def on_start(self):
+        print('AVRCP opened', flush=True)
+        task = asyncio.ensure_future(self.press())
+        task.add_done_callback(
+            lambda t: print(f'avrcp keys failed: {t.exception()!r}', flush=True) if t.exception() else None)
+
+    async def press(self):
+        await asyncio.sleep(1)
+        key = self.avc.PassThroughFrame.OperationId.FAST_FORWARD
+        matched = 0
+        for _ in range(self.count):
+            for pressed in (True, False):
+                sent = 'PRESSED' if pressed else 'RELEASED'
+                response = await asyncio.wait_for(self.protocol.send_key_event(key, pressed), 5)
+                print(f'avrcp key: {key.name} {sent} answered {response.response.name} '
+                      f'{response.state_flag.name} {response.operation_id.name}', flush=True)
+                matched += response.state_flag.name == sent and response.operation_id == key
+        print(f'avrcp keys: {matched} of {2 * self.count} answers carry the state flag sent', flush=True)
+
+
+class HuaweiEarbuds:
+    """The control service of Huawei earbuds: LDAC is listed from the
+    connection after a "sound quality first" write, also when the read
+    reported the mode on already (set from a phone, as issue #30's FreeBuds).
+    drop: the earbuds end the link at the write. silent: nothing answered.
+    no_ldac: the write is taken, and LDAC is never listed. channel: the
+    protocol is served there, and SDP does not list it."""
+
+    def __init__(self, device, mode_on, drop, silent, no_ldac, channel):
+        self.device, self.mode, self.drop, self.silent = device, int(mode_on), drop, silent
+        self.no_ldac = no_ldac
+        self.ldac = False
+        self.connection = None
+        device.on('connection', self.on_connection)
+        served = Server(device).listen(self.on_dlc, channel or 0)
+        if not channel:
+            device.sdp_service_records[0x00010002] = make_service_sdp_records(
+                0x00010002, served, UUID.from_16_bits(0x1101))
+
+    def on_connection(self, connection):
+        self.connection = connection
+
+    def on_dlc(self, dlc):
+        log.info('Huawei control channel open')
+        dlc.sink = lambda data: self.on_data(dlc, data)
+
+    def on_data(self, dlc, data):
+        command, params = struct.unpack('>H', data[4:6])[0], data[6:-2]
+        log.info('Huawei control: %04X %s', command, params.hex())
+        if self.silent:
+            return
+        if command == 0x2BA3:
+            dlc.write(huawei_packet(command, [(2, bytes([self.mode]))]))
+        elif command == 0x2B2F:
+            dlc.write(huawei_packet(command, [(1, b'\x01')]))
+        elif command == 0x2B6C:
+            dlc.write(huawei_packet(command, [(2, b'\x00')]))
+        elif command == 0x2B31:
+            # The phone has a name and an address, which BlueCaster does not log
+            dlc.write(huawei_packet(command, [(2, b'\x02'), (3, b'\x00'), (4, b'\xAA' * 6), (5, b'\x09'),
+                                              (9, b'Emulated phone')]))
+            dlc.write(huawei_packet(command, [(2, b'\x02'), (3, b'\x01'), (4, b'\xBB' * 6), (5, b'\x01'),
+                                              (9, b'BlueCaster')]))
+        elif command == 0x2BA2:
+            self.mode = params[2]
+            self.ldac = self.mode == 1 and not self.no_ldac
+            if self.drop:
+                asyncio.ensure_future(self.connection.disconnect())
+
+
+def oppo_packet(command, sequence, payload):
+    """A packet of the earbuds' protocol (app/src/crates/core/src/vendor/oppo.rs)."""
+    return b'\xAA' + bytes([7 + len(payload)]) + b'\0\0' + struct.pack('<HBH', command, sequence, len(payload)) + payload
+
+
+class OppoEarbuds:
+    """The HeyMelody service of Enco Free4 earbuds: LHDC V5 is listed without
+    its 400 kbps limit from the connection after a write that asks for
+    Hi-Res, also when the read reported it on already (set from a phone, as
+    issue #237's earbuds). drop: the earbuds end the link at the write.
+    product: what they report. no_change: the write is taken, and the limit
+    stays. spatial: spatial audio is on. no_write: the capabilities list
+    no feature write."""
+
+    PRODUCT = 0x068C10
+    # Writing features and reading the codec, and with codec_write the codec
+    CAPABILITIES = 1 << 7 | 1 << 17
+
+    def __init__(self, device, hi_res, drop, product, no_change, spatial, codec_write, no_write):
+        self.hi_res, self.drop, self.no_change = int(hi_res), drop, no_change
+        self.spatial, self.product = int(spatial), product or self.PRODUCT
+        self.capabilities = self.CAPABILITIES | (1 << 37 if codec_write else 0)
+        if no_write:
+            self.capabilities &= ~(1 << 7)
+        self.unlimited = False
+        self.connection = None
+        device.on('connection', self.on_connection)
+        served = Server(device).listen(self.on_dlc, 0)
+        device.sdp_service_records[0x00010003] = make_service_sdp_records(
+            0x00010003, served, UUID('0000079A-D102-11E1-9B23-00025B00A5A5'))
+
+    def on_connection(self, connection):
+        self.connection = connection
+
+    def on_dlc(self, dlc):
+        log.info('OPPO control channel open')
+        dlc.sink = lambda data: self.on_data(dlc, data)
+
+    def on_data(self, dlc, data):
+        command, sequence, length = struct.unpack('<HBH', data[4:9])
+        payload = data[9:9 + length]
+        log.info('OPPO control: %04X %s', command, payload.hex())
+        reply = lambda answer: dlc.write(oppo_packet(command | 0x8000, sequence, answer))
+        if command == 0x0100:
+            reply(b'\0' + self.capabilities.to_bytes(6, 'little'))
+        elif command == 0x0103:
+            reply(b'\0' + self.product.to_bytes(3, 'little'))
+        elif command == 0x010D:
+            reply(bytes([0, 3, 0x11, 1, 0x18, self.hi_res, 0x1B, self.spatial]))
+        elif command == 0x0114:
+            reply(bytes([0, 8]))
+        elif command in (0x0403, 0x041A):
+            on = command == 0x041A or payload[1] == 1
+            self.hi_res = int(on)
+            self.unlimited = on and not self.no_change
+            if self.drop:
+                asyncio.ensure_future(self.connection.disconnect())
+            else:
+                reply(b'\0')
 
 
 def refuse_dual_channel(sink):
@@ -227,36 +631,209 @@ def refuse_dual_channel(sink):
 
 async def main(args):
     link = LocalLink()
+    if args.le_link_key:
+        # LE data from the address the connection uses (BTstack connects with
+        # its public one), as for the LE Audio sinks
+        from le_audio.controller import LeLocalLink
+        link = LeLocalLink()
     transport = await open_transport(f'tcp-server:127.0.0.1:{args.port}')
-    EmuController(
-        'A2DPWB',
+    controller_class = EmuController
+    if args.hfp:
+        from hfp_audio import HfpEmuController  # SCO between the controllers
+        controller_class = HfpEmuController
+    bluecaster_controller = controller_class(
+        'BlueCaster',
         host_source=transport.source,
         host_sink=transport.sink,
         link=link,
-        public_address=A2DPWB_ADDRESS,
+        public_address=BLUECASTER_ADDRESS,
     )
-    sink_controller = EmuController('SINK', link=link, public_address=SINK_ADDRESS)
+    bluecaster_controller.disconnect_delay = args.disconnect_delay
+    bluecaster_controller.silent_remote_version = args.silent_remote_version
+    if args.dual_mode:
+        bluecaster_controller.lmp_features = DUAL_MODE_FEATURES
+    sink_controller = controller_class('SINK', link=link, public_address=SINK_ADDRESS)
+    if args.hfp:
+        from hfp_audio import VOICE_LMP_FEATURES
+        bluecaster_controller.lmp_features |= VOICE_LMP_FEATURES
+    sink_controller.eir_name = not args.no_eir_name
     host = Host(sink_controller, AsyncPipeSink(sink_controller))
     if args.capture:
         host.snooper = PacketLoggerSnooper(args.capture)
-    device = Device(name='A2DPWB Test Sink', address=SINK_ADDRESS, host=host)
+    device = Device(name=args.name, address=SINK_ADDRESS, host=host)
     device.classic_enabled = True
     device.class_of_device = 0x240404  # Audio / Video, wearable headset
     device.sdp_service_records = {
         0x00010001: make_audio_sink_service_sdp_records(0x00010001)
     }
+    if args.hfp:
+        from hfp_audio import HfSide
+        HfSide(device, args.hfp)
+    if args.avrcp_keys:
+        AvrcpKeys(device, args.avrcp_keys)
+    huawei = None
+    if args.huawei:
+        huawei = HuaweiEarbuds(device, args.huawei == 'on', args.huawei_drop, args.huawei_silent,
+                               args.huawei_no_ldac, args.huawei_channel)
+    oppo = None
+    if args.oppo:
+        oppo = OppoEarbuds(device, args.oppo == 'on', args.oppo_drop, args.oppo_product, args.oppo_no_change,
+                           args.oppo_spatial, args.oppo_codec_write, args.oppo_no_write)
+    if args.ctkd:
+        bluecaster_controller.aes_ccm = sink_controller.aes_ccm = True
+        bluecaster_controller.link_key_request = True
+        # Earbuds' LE identity: an IRK, and a random static address unless
+        # --ctkd-public-identity (then the classic one)
+        device.irk = bytes.fromhex('a0a1a2a3a4a5a6a7a8a9aaabacadaeaf')
+        device.static_address = hci.Address('C3:5A:11:22:33:44', hci.Address.RANDOM_DEVICE_ADDRESS)
+
+        class Refuse(PairingDelegate):
+            async def accept(self):
+                print('CTKD: refusing the pairing request', flush=True)
+                return False
+        make_config = device.pairing_config_factory
+
+        def ctkd_config(connection):
+            config = make_config(connection)
+            config.identity_address_type = (PairingConfig.AddressType.PUBLIC if args.ctkd_public_identity
+                                            else PairingConfig.AddressType.RANDOM)
+            if args.ctkd_refuse:
+                config.delegate = Refuse()
+            return config
+        device.pairing_config_factory = ctkd_config
+    # LE pairing of a dual-mode device (issue #86): its public address as
+    # identity, LinkKey in its key distribution (--le-link-key on) or not,
+    # CT2 (h7) with --le-ct2; the link key it derives is printed
+    sink_link_key = {'key': None}
+    if args.le_link_key:
+        distribution = PairingDelegate.DEFAULT_KEY_DISTRIBUTION
+        if args.le_link_key == 'on':
+            distribution |= PairingDelegate.KeyDistribution.DISTRIBUTE_LINK_KEY
+        make_le_config = device.pairing_config_factory
+
+        def le_config(connection):
+            config = make_le_config(connection)
+            if connection.transport == BT_BR_EDR_TRANSPORT:
+                return config
+            config.identity_address_type = PairingConfig.AddressType.PUBLIC
+            config.delegate = PairingDelegate(local_initiator_key_distribution=distribution,
+                                              local_responder_key_distribution=distribution)
+            return config
+        device.pairing_config_factory = le_config
+        if args.le_ct2:
+            from bumble import smp
+            session_init = smp.Session.__init__
+
+            def with_ct2(self, *a, **k):
+                session_init(self, *a, **k)
+                self.ct2 = True   # Bumble leaves it off; the request's CT2 then decides
+            smp.Session.__init__ = with_ct2
+    if args.check_link_key:
+        bluecaster_controller.aes_ccm = sink_controller.aes_ccm = True
+        bluecaster_controller.link_key_request = True
+        bluecaster_controller.expected_link_key = lambda: sink_link_key['key']
     await device.power_on()
+    # SMP over BR/EDR (Bumble serves it by default): with --ctkd as from
+    # --ctkd-from's connection on (none before, as a device without it),
+    # answering nothing with --ctkd-silent
+    smp_handler = device.l2cap_channel_manager.fixed_channels.get(SMP_BR_CID)
+    if args.ctkd_silent:
+        smp_handler = lambda handle, pdu: print(f'CTKD: ignoring SMP PDU 0x{pdu[0]:02X}', flush=True)
+
+    def smp_over_br_edr(connections):
+        on = smp_handler is not None and connections >= args.ctkd_from
+        device.l2cap_channel_manager.deregister_fixed_channel(SMP_BR_CID)
+        if on:
+            device.l2cap_channel_manager.register_fixed_channel(SMP_BR_CID, smp_handler)
+        print(f'SMP over BR/EDR {"listed" if on else "not listed"} (connection {connections})', flush=True)
+    if args.no_smp_br_edr:
+        # No LE keys from a classic pairing: a later LE pairing is a new one
+        device.l2cap_channel_manager.deregister_fixed_channel(SMP_BR_CID)
+    if args.le_audio_adv:
+        # Earbuds with LE Audio on (issue #86): over LE too, under the
+        # classic address, a CAS general announcement and the name
+        name = args.name.encode()[:21]
+        data = bytes([2, 0x01, 0x06, 4, 0x16, 0x53, 0x18, 0x00, len(name) + 1, 0x09]) + name
+        await device.start_advertising(own_address_type=hci.OwnAddressType.PUBLIC, auto_restart=True,
+                                       advertising_data=data)
+        print('advertising LE Audio (CAS)', flush=True)
     await device.set_discoverable(True)
     await device.set_connectable(True)
 
+    def same_codec(a, b):
+        """Capabilities of the same codec: type, and vendor and codec ID"""
+        if a.media_codec_type != b.media_codec_type:
+            return False
+        ids = lambda c: (getattr(c.media_codec_information, 'vendor_id', None),
+                         getattr(c.media_codec_information, 'codec_id', None))
+        return ids(a) == ids(b)
+
+    # The codec and configuration BlueCaster set last: headphones turned back on
+    # with --opens-stream set up that stream themselves
+    last_configuration = {}
+
+    def remember_configuration(name, sink):
+        last_configuration.update(name=name, configuration=list(sink.configuration))
+
     def on_avdtp_connection(server):
         log.info('AVDTP connection')
-        for name, capabilities in zip(CODEC_NAMES, sink_codec_capabilities(not args.sbc_no_dual, args.sbc_max_bitpool)):
-            if args.codecs and name not in args.codecs:
+        on_avdtp_connection.sinks = {}
+        if args.stray_reject:
+            # As a MediaTek headset on a new link: a REJECT of DISCOVER under
+            # the label of BlueCaster's OPEN, just before accepting the OPEN
+            send = server.send_message
+
+            def send_message(label, message, send=send):
+                if isinstance(message, Open_Response):
+                    print('stray reject: REJECT DISCOVER before the OPEN accept', flush=True)
+                    server.l2cap_channel.send_pdu(bytes([label << 4 | 0x03, AVDTP_DISCOVER, AVDTP_BAD_STATE_ERROR]))
+                send(label, message)
+            server.send_message = send_message
+        for _ in range(args.extra_seps):
+            # A codec BlueCaster does not know, discovered before the real ones
+            server.add_sink(MediaCodecCapabilities(
+                media_type=AVDTP_AUDIO_MEDIA_TYPE,
+                media_codec_type=A2DP_NON_A2DP_CODEC_TYPE,
+                media_codec_information=VendorSpecificMediaCodecInformation(0x0000FFFE, 0x0001, bytes(1)),
+            ))
+        for name, capabilities in zip(CODEC_NAMES, sink_codec_capabilities(not args.sbc_no_dual, args.sbc_max_bitpool,
+                                                                         args.aptxad_r2, args.aptxad_rates,
+                                                                         oppo is not None and not oppo.unlimited,
+                                                                         args.aptxll_ext)):
+            if args.codecs and name not in args.codecs and not (name == 'ldac' and huawei and huawei.ldac):
+                continue
+            # BTstack 1.8.1 keeps at most 10 discovered SEPs (a2dp.c
+            # AVDTP_MAX_SEP_NUM) and overflows its array beyond that: aptX
+            # Adaptive, the 11th, only when asked for with --codecs
+            if not args.codecs and name == 'aptxad':
                 continue
             sink = server.add_sink(capabilities)
+            sink.on('configuration', lambda sink=sink, name=name: remember_configuration(name, sink))
+            if args.delay_report is not None:
+                # Headphones with Delay Reporting: listed as a service
+                # capability, and the playout delay sent once the stream is
+                # open (AVDTP 8.19; in 1/10 ms)
+                sink.capabilities.append(ServiceCapabilities(AVDTP_DELAY_REPORTING_SERVICE_CATEGORY))
+
+                async def send_delay_report(sink, server=server):
+                    stream = sink.stream
+                    if stream is None:
+                        print('delay report: no stream', flush=True)
+                        return
+                    delay = round(args.delay_report * 10)
+                    print(f'delay report: sending {delay / 10:.1f} ms to SEID {stream.remote_endpoint.seid}', flush=True)
+                    await server.send_command(DelayReport_Command(acp_seid=stream.remote_endpoint.seid, delay=delay))
+                    print(f'delay report sent ({delay / 10:.1f} ms)', flush=True)
+
+                def report_delay(sink=sink):
+                    task = asyncio.ensure_future(send_delay_report(sink))
+                    task.add_done_callback(
+                        lambda t: print(f'delay report failed: {t.exception()!r}', flush=True) if t.exception() else None)
+
+                sink.on('open', report_delay)
             if name == 'sbc' and args.sbc_reject_dual:
                 refuse_dual_channel(sink)
+            on_avdtp_connection.sinks[name] = sink
             if name in args.in_use:
                 # As a multipoint headset streaming this codec to another
                 # device: listed by Discover with in_use = 1
@@ -268,31 +845,172 @@ async def main(args):
                     EndPointInfo(e.seid, e.in_use, e.media_type, e.tsep) for e in server.local_endpoints
                 ])
             server.on_discover_command = on_discover_command
-            # Media is checked from the HCI capture with a2dpwb_decode. Bumble
+            # Media is checked from the HCI capture with bluecaster_decode. Bumble
             # would parse every packet as RTP, but classic aptX / aptX LL carry
             # no RTP header, so the parser is bypassed.
             sink.on_avdtp_packet = lambda packet: None
 
-    Listener.for_device(device).on('connection', on_avdtp_connection)
-    device.on('connection', lambda c: log.info('ACL connection from %s', c.peer_address))
+    listener = Listener.for_device(device)
+    listener.on('connection', on_avdtp_connection)
+
+    async def turn_off_and_on(connection):
+        """Headphones switched off and on: they drop the link and page the PC,
+        and open A2DP themselves with --opens-a2dp."""
+        await asyncio.sleep(args.turn_off_after)
+        print('turned off', flush=True)
+        await connection.disconnect(hci.HCI_REMOTE_DEVICE_TERMINATED_CONNECTION_DUE_TO_POWER_OFF_ERROR)
+        await asyncio.sleep(2)
+        connection = await device.connect(BLUECASTER_ADDRESS, transport=BT_BR_EDR_TRANSPORT)
+        print('turned on', flush=True)
+        if args.opens_a2dp:
+            await asyncio.sleep(0.5)
+            protocol = await Protocol.connect(connection)
+            protocol.l2cap_channel.on('close', lambda: print('A2DP closed', flush=True))
+            listener.set_server(connection, protocol)
+            on_avdtp_connection(protocol)
+            print('A2DP opened', flush=True)
+            if args.opens_stream:
+                await open_last_stream(protocol)
+
+    async def open_last_stream(protocol):
+        """Configure and open the stream BlueCaster set up last, at once, as
+        headphones resuming it do: BTstack then discovers no capabilities."""
+        name = last_configuration.get('name')
+        sink = on_avdtp_connection.sinks.get(name)
+        if sink is None:
+            print('no earlier stream to open', flush=True)
+            return
+        codec = next(c for c in last_configuration['configuration'] if c.service_category == AVDTP_MEDIA_CODEC_SERVICE_CATEGORY)
+        for endpoint in await protocol.discover_remote_endpoints():
+            caps = next((c for c in endpoint.capabilities if c.service_category == AVDTP_MEDIA_CODEC_SERVICE_CATEGORY), None)
+            if caps and same_codec(caps, codec):
+                break
+        else:
+            print(f'BlueCaster has no {name} endpoint', flush=True)
+            return
+        sink.configuration = last_configuration['configuration']
+        stream = await protocol.create_stream(sink, endpoint)
+        await stream.open()
+        print(f'stream opened ({name})', flush=True)
+
+    def on_connection(connection):
+        log.info('ACL connection from %s', connection.peer_address)
+        connection.on('disconnection', lambda reason: print(f'link down (0x{reason:02X})', flush=True))
+        if args.le_link_key or args.check_link_key:
+            le = connection.transport != BT_BR_EDR_TRANSPORT
+
+            def on_pairing(keys):
+                if keys.link_key is not None:
+                    sink_link_key['key'] = keys.link_key.value
+                if le:
+                    print(f'LE pairing: link key {keys.link_key.value.hex() if keys.link_key else "-"}', flush=True)
+                else:
+                    print('classic pairing', flush=True)
+            connection.on('pairing', on_pairing)
+        on_connection.count += 1
+        if args.ctkd:
+            smp_over_br_edr(on_connection.count)
+            # The keys as the sink has them (virtual ones: printed for run_test.py)
+            identity = SINK_ADDRESS if args.ctkd_public_identity else str(device.static_address)
+            connection.on('pairing', lambda keys: print(
+                f'CTKD: keys LTK {keys.ltk.value.hex() if keys.ltk else "-"} IRK {device.irk.hex()} '
+                f'identity {identity}', flush=True))
+            connection.on('pairing_failure', lambda reason: print(f'CTKD: pairing failed 0x{reason:02X}', flush=True))
+        if args.turn_off_after and not on_connection.turned_off:
+            on_connection.turned_off = True
+            asyncio.ensure_future(turn_off_and_on(connection))
+    on_connection.turned_off = False
+    on_connection.count = 0
+
+    device.on('connection', on_connection)
     print(f'READY 127.0.0.1:{args.port} sink={SINK_ADDRESS}', flush=True)
     await asyncio.get_running_loop().create_future()
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--port', type=int, default=9001, help='TCP port for A2DPWB (H4)')
+    parser.add_argument('--port', type=int, default=9001, help='TCP port for BlueCaster (H4)')
     parser.add_argument('--capture', help='PacketLogger capture of the sink HCI traffic')
     parser.add_argument('--log-level', default='WARNING')
+    parser.add_argument('--turn-off-after', type=float, metavar='S',
+                        help='S seconds after the first connection, end the link as when turned off, then page BlueCaster')
+    parser.add_argument('--opens-a2dp', action='store_true', help='with --turn-off-after, open A2DP after paging')
+    parser.add_argument('--opens-stream', action='store_true',
+                        help='with --opens-a2dp, also configure and open the last stream')
+    parser.add_argument('--disconnect-delay', type=float, default=0, metavar='S',
+                        help="seconds until an HCI Disconnect from BlueCaster takes effect")
+    parser.add_argument('--silent-remote-version', action='store_true',
+                        help='never answer Read Remote Version Information (no Command Status either)')
+    parser.add_argument('--name', default='BlueCaster Test Sink',
+                        help='the Bluetooth name, as an inquiry or a name request gets it')
+    parser.add_argument('--no-eir-name', action='store_true',
+                        help='answer inquiries without the name in the EIR (BlueCaster asks for it)')
+    parser.add_argument('--dual-mode', action='store_true',
+                        help="report BR/EDR support on BlueCaster's controller (BTstack inquires only then)")
+    parser.add_argument('--le-audio-adv', action='store_true',
+                        help='also advertise over LE as an LE Audio device (CAS announcement, the classic address)')
     parser.add_argument('--in-use', nargs='*', default=[], choices=CODEC_NAMES, metavar='CODEC',
                         help='report the SEP of these codecs as in use by another device (multipoint)')
     parser.add_argument('--codecs', nargs='+', choices=CODEC_NAMES, metavar='CODEC',
                         help='offer only these codecs (default: all)')
+    parser.add_argument('--delay-report', type=float, metavar='MS',
+                        help='list Delay Reporting on every codec and report this playout delay once a stream opens')
+    parser.add_argument('--stray-reject', action='store_true',
+                        help="answer OPEN with a REJECT of DISCOVER under the OPEN's label first, then the accept")
+    parser.add_argument('--extra-seps', type=int, default=0, metavar='N',
+                        help='list N more sink SEPs (an unknown vendor codec) before the codecs')
     parser.add_argument('--sbc-no-dual', action='store_true',
                         help='SBC without dual channel (no SBC XQ)')
     parser.add_argument('--sbc-reject-dual', action='store_true',
                         help='list dual channel but reject a configuration with it')
     parser.add_argument('--sbc-max-bitpool', type=int, default=53,
                         help='largest SBC bitpool the sink takes (default 53)')
+    parser.add_argument('--aptxad-r2', action='store_true',
+                        help='aptX Adaptive as an R2 sink lists it (default: R1, the B&W Px7 S2e)')
+    parser.add_argument('--aptxad-rates', type=lambda x: int(x, 0),
+                        help='aptX Adaptive rate byte to list instead (e.g. 0xD1: an EarFun Air Pro 4+, '
+                             '96 kHz by its 0x80 bit only; 0x51: a Bose QC Ultra, no 96 kHz; issue #86)')
+    parser.add_argument('--aptxll-ext', action='store_true',
+                        help='aptX LL with the extended capabilities (17 bytes, as a FiiO BTR13; issue #520)')
+    parser.add_argument('--avrcp-keys', type=int, default=0, metavar='N',
+                        help='press and release FAST FORWARD N times over AVRCP, checking each answer')
+    parser.add_argument('--huawei', choices=['off', 'on'],
+                        help='serve the control channel of Huawei earbuds, their sound quality first mode as given')
+    parser.add_argument('--huawei-drop', action='store_true',
+                        help='end the link when sound quality first is written')
+    parser.add_argument('--huawei-silent', action='store_true',
+                        help='the control channel answers nothing (earbuds without the mode)')
+    parser.add_argument('--huawei-no-ldac', action='store_true',
+                        help='sound quality first is taken, and LDAC is never listed')
+    parser.add_argument('--huawei-channel', type=int,
+                        help='serve the control channel on this RFCOMM channel, not listed in SDP')
+    parser.add_argument('--oppo', choices=['off', 'on'],
+                        help='serve the control channel of Enco Free4 earbuds, Hi-Res as given; '
+                             'LHDC V5 lists 400 kbps at 44.1 / 48 kHz until a write asks for it')
+    parser.add_argument('--oppo-drop', action='store_true', help='end the link at a write')
+    parser.add_argument('--oppo-product', type=lambda s: int(s, 16), help='the product id reported, in hex')
+    parser.add_argument('--oppo-no-change', action='store_true', help='take writes and keep the limit')
+    parser.add_argument('--oppo-spatial', action='store_true', help='report spatial audio on')
+    parser.add_argument('--oppo-codec-write', action='store_true', help='advertise the codec write')
+    parser.add_argument('--oppo-no-write', action='store_true', help='advertise no feature write')
+    parser.add_argument('--ctkd', action='store_true',
+                        help='encrypt with AES-CCM (Secure Connections) and answer SMP over BR/EDR: the LE keys '
+                             'derived from the link key (cross-transport key derivation, issue #86)')
+    parser.add_argument('--ctkd-from', type=int, default=1, metavar='N',
+                        help='with --ctkd, list SMP over BR/EDR only from the Nth connection on')
+    parser.add_argument('--ctkd-refuse', action='store_true', help='with --ctkd, refuse the pairing request')
+    parser.add_argument('--ctkd-public-identity', action='store_true',
+                        help='with --ctkd, give the classic address as identity (default: a random static one)')
+    parser.add_argument('--hfp', nargs='?', const='cvsd', choices=['cvsd', 'msbc', 'lc3swb'],
+                        help='also an HFP hands-free unit with these codecs (cvsd: no codec negotiation), '
+                             'SCO carried between the controllers (hfp_audio.py)')
+    parser.add_argument('--ctkd-silent', action='store_true', help='with --ctkd, list SMP over BR/EDR, answer nothing')
+    parser.add_argument('--le-link-key', choices=['on', 'off'],
+                        help='LE pairing gives the public address as identity and LinkKey in its key '
+                             'distribution (on) or not (off); prints the link key derived (issue #86)')
+    parser.add_argument('--le-ct2', action='store_true', help='with --le-link-key, derive with h7 (CT2) when asked')
+    parser.add_argument('--no-smp-br-edr', action='store_true', help='do not list SMP over BR/EDR (no CTKD from BR/EDR)')
+    parser.add_argument('--check-link-key', action='store_true',
+                        help='authenticate a classic link only with the link key the sink has for BlueCaster')
     bumble.logging.setup_basic_logging(parser.parse_known_args()[0].log_level)
     asyncio.run(main(parser.parse_args()))

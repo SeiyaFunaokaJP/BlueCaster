@@ -1,17 +1,38 @@
-//! a2dpwb-driver.exe: puts a USB Bluetooth adapter on Windows' WinUSB driver
+//! bluecaster-driver.exe: puts a USB Bluetooth adapter on Windows' WinUSB driver
 //! and back (win-sys::driver), for the core service and the UI.
 //!
 //! ```text
-//! a2dpwb-driver list [--all] [--out <file>]
-//! a2dpwb-driver state <instance-id> [--out <file>]
-//! a2dpwb-driver assign <instance-id> [--out <file>]
-//! a2dpwb-driver restore <instance-id> [--previous <json> | --previous @<file>] [--out <file>]
-//! a2dpwb-driver restore --records <dir> [--out <file>]
+//! bluecaster-driver list [--all] [--out <file>]
+//! bluecaster-driver state <instance-id> [--out <file>]
+//! bluecaster-driver assign <instance-id> [--out <file>]
+//! bluecaster-driver restore <instance-id> [--previous <json> | --previous @<file>] [--keys <file>] [--out <file>]
+//! bluecaster-driver restore --records <dir> [--unrecorded] [--out <file>]
+//! bluecaster-driver unrecorded --records <dir> [--out <file>]
+//! bluecaster-driver windows-keys <radio-address> [--out <file>]
+//! bluecaster-driver remove-cable <setup> [--hifi] [--out <file>]
 //! ```
 //!
 //! The result is one JSON object on stdout (and in `--out`), logs go to
-//! stderr, nothing is asked interactively. `assign` and `restore` need
+//! stderr (and to the file of `--log <file>`, at debug level with
+//! `--verbose`: every command takes both), nothing is asked interactively. `assign` and `restore` need
 //! administrator rights; `list` and `state` do not.
+//!
+//! `windows-keys` reads the link keys and LE keys Windows' Bluetooth keeps for the radio
+//! with that address (win-sys::bt_keys), for the core to take over the
+//! devices paired with it. It needs administrator rights too; the keys go to
+//! stdout and `--out` only, never to the log.
+//!
+//! `restore --keys <file>` first writes BlueCaster's link keys from that file
+//! (`{"radio": "<address>", "keys": [{"address", "key"}]}`) to Windows,
+//! for the devices Windows paired with that radio too, while the adapter is
+//! still on WinUSB: Windows' Bluetooth reads them when the radio starts, so
+//! those devices connect in Windows without pairing again. The keys Windows
+//! had are given back as `replaced_keys` (stdout and `--out` only). With
+//! `le_keys` in the file (as `windows-keys` prints them; developer mode
+//! only) the LE keys of the devices Windows keeps LE keys of are written
+//! too, Windows' old ones given back as `replaced_le_keys`. Each value
+//! written is read back (`keys_verified`, `le_verified`); the log gets
+//! numbers only.
 //!
 //! Elevation: the exe has no manifest asking for administrator rights, so
 //! `list` and `state` run without a UAC prompt. The caller starts `assign`
@@ -30,7 +51,30 @@
 //! record in `<dir>` (the core keeps them in `<settings>\driver\`, one
 //! `assign` result per adapter) and deletes the records of the adapters
 //! given back. The uninstaller uses it: one UAC prompt for all adapters.
+//! With `--unrecorded` it also gives back the Bluetooth adapters on WinUSB
+//! that have no record (put there by Zadig, v1 or by hand): Windows chooses
+//! their driver. `unrecorded --records <dir>` lists those without a UAC
+//! prompt (exit code 4 when there is none), for the uninstaller to offer it
+//! (issue #86).
+//!
+//! `remove-cable` runs VB-Audio's own setup of VB-CABLE (or, with `--hifi`,
+//! of the Hi-Fi Cable) to remove it, without a window, then has Windows scan
+//! for hardware changes, which takes the removed output out of Windows'
+//! lists without a restart (issue #86). The scan needs administrator rights
+//! too, so both run in this one elevated step: one UAC prompt. The Hi-Fi
+//! Cable goes with the setup of the package it came in when that is there
+//! (ASIO Bridge goes too, as from Windows' installed apps); its own setup,
+//! run as that package runs it, leaves the Hi-Fi Cable's own entry in
+//! Windows' installed apps: taken out here once the driver has gone (issue
+//! #86).
+//!
+//! A GUI-subsystem program, so that no console window flashes up when the
+//! core or the uninstaller starts it (issue #86: SW_HIDE alone does not
+//! hide it where Windows Terminal is the default console). Started from a
+//! shell, it attaches to that shell's console for its output; redirected
+//! output works either way.
 
+#![cfg_attr(not(test), windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
@@ -59,19 +103,26 @@ mod exit {
 }
 
 const USAGE: &str = "usage:
-  a2dpwb-driver list [--all] [--out <file>]
-  a2dpwb-driver state <instance-id> [--out <file>]
-  a2dpwb-driver assign <instance-id> [--out <file>]
-  a2dpwb-driver restore <instance-id> [--previous <json> | --previous @<file>] [--out <file>]
-  a2dpwb-driver restore --records <dir> [--out <file>]";
+  bluecaster-driver list [--all] [--out <file>]
+  bluecaster-driver state <instance-id> [--out <file>]
+  bluecaster-driver assign <instance-id> [--out <file>]
+  bluecaster-driver restore <instance-id> [--previous <json> | --previous @<file>] [--keys <file>] [--out <file>]
+  bluecaster-driver restore --records <dir> [--unrecorded] [--out <file>]
+  bluecaster-driver unrecorded --records <dir> [--out <file>]
+  bluecaster-driver windows-keys <radio-address> [--out <file>]
+  bluecaster-driver remove-cable <setup> [--hifi] [--out <file>]
+every command: [--log <file>] [--verbose]";
 
 #[derive(Debug, PartialEq)]
 enum Command {
     List { all: bool },
     State { instance_id: String },
     Assign { instance_id: String },
-    Restore { instance_id: String, previous: Option<String> },
-    RestoreRecords { dir: PathBuf },
+    Restore { instance_id: String, previous: Option<String>, keys: Option<PathBuf> },
+    RestoreRecords { dir: PathBuf, unrecorded: bool },
+    Unrecorded { dir: PathBuf },
+    WindowsKeys { radio: [u8; 6] },
+    RemoveCable { setup: PathBuf, hifi: bool },
 }
 
 #[derive(Debug, PartialEq)]
@@ -80,17 +131,66 @@ struct Args {
     out: Option<PathBuf>,
 }
 
-fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_ansi(false)
-        .init();
+/// A log file this big is moved to `<name>.old` before the next run writes
+/// to it
+const LOG_ROTATE_BYTES: u64 = 1024 * 1024;
 
-    let argv: Vec<String> = std::env::args().skip(1).collect();
+/// `--log <file>` (append the log to it as well) and `--verbose` (debug
+/// level): the core passes them so that the elevated run's log ends up in
+/// its logs folder. They are taken out before the command is parsed.
+fn log_args(argv: Vec<String>) -> (Option<PathBuf>, bool, Vec<String>) {
+    let (mut log, mut verbose, mut rest) = (None, false, Vec::new());
+    let mut it = argv.into_iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--log" => log = it.next().map(PathBuf::from),
+            "--verbose" => verbose = true,
+            _ => rest.push(a),
+        }
+    }
+    (log, verbose, rest)
+}
+
+fn init_logging(log: Option<&std::path::Path>, verbose: bool) {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    let level = if verbose { "debug" } else { "info" };
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(level));
+    let file = log.and_then(|path| {
+        if std::fs::metadata(path).is_ok_and(|m| m.len() > LOG_ROTATE_BYTES) {
+            let _ = std::fs::rename(path, path.with_extension("log.old"));
+        }
+        std::fs::OpenOptions::new().create(true).append(true).open(path).ok()
+    });
+    let file_layer =
+        file.map(|f| tracing_subscriber::fmt::layer().with_writer(std::sync::Mutex::new(f)).with_ansi(false));
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr).with_ansi(false))
+        .with(file_layer)
+        .try_init();
+}
+
+fn main() -> ExitCode {
+    // Started from a shell: the output goes to its console
+    win_sys::console::attach_parent();
+    let (log, verbose, argv) = log_args(std::env::args().skip(1).collect());
+    init_logging(log.as_deref(), verbose);
+    tracing::info!(
+        "bluecaster-driver {} ({}), elevated {}: {}",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::ARCH,
+        win_sys::elevation::is_elevated(),
+        // The command and the option names: no address or path in the log
+        argv.iter()
+            .enumerate()
+            .filter(|(i, a)| *i == 0 || a.starts_with("--"))
+            .map(|(_, a)| a.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+
     let (code, result, out) = match parse_args(&argv) {
         Ok(args) => {
             let (code, result) = run(&args.command);
@@ -104,6 +204,8 @@ fn main() -> ExitCode {
     let mut result = result;
     result["exit_code"] = json!(code);
     let text = serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".into());
+    // Link keys are secrets: the log gets their number only
+    tracing::info!("exit {code}: {}", without_keys(&result));
     println!("{text}");
     if let Some(path) = out
         && let Err(e) = std::fs::write(&path, &text)
@@ -119,14 +221,20 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut out = None;
     let mut previous = None;
     let mut records = None;
+    let mut keys = None;
     let mut all = false;
+    let mut unrecorded = false;
+    let mut hifi = false;
     let mut it = argv.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--out" => out = Some(PathBuf::from(it.next().ok_or("--out needs a file")?)),
             "--previous" => previous = Some(it.next().ok_or("--previous needs a value")?.clone()),
             "--records" => records = Some(PathBuf::from(it.next().ok_or("--records needs a folder")?)),
+            "--keys" => keys = Some(PathBuf::from(it.next().ok_or("--keys needs a file")?)),
             "--all" => all = true,
+            "--unrecorded" => unrecorded = true,
+            "--hifi" => hifi = true,
             s if s.starts_with("--") => return Err(format!("unknown option {s}")),
             s => positional.push(s.to_string()),
         }
@@ -138,10 +246,20 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         "list" => Command::List { all },
         "state" => Command::State { instance_id: instance_id()? },
         "assign" => Command::Assign { instance_id: instance_id()? },
-        "restore" if previous.is_none() && records.is_some() => {
-            Command::RestoreRecords { dir: records.take().unwrap_or_default() }
+        "restore" if previous.is_none() && keys.is_none() && records.is_some() => {
+            let dir = records.take().unwrap_or_default();
+            Command::RestoreRecords { dir, unrecorded: std::mem::take(&mut unrecorded) }
         }
-        "restore" => Command::Restore { instance_id: instance_id()?, previous: previous.take() },
+        "unrecorded" => Command::Unrecorded { dir: records.take().ok_or("unrecorded needs --records <dir>")? },
+        "restore" => Command::Restore { instance_id: instance_id()?, previous: previous.take(), keys: keys.take() },
+        "windows-keys" => {
+            let a = positional.next().ok_or("windows-keys needs the radio's address")?;
+            Command::WindowsKeys { radio: parse_address(&a).ok_or(format!("bad address {a}"))? }
+        }
+        "remove-cable" => {
+            let setup = positional.next().ok_or("remove-cable needs VB-Audio's setup")?;
+            Command::RemoveCable { setup: PathBuf::from(setup), hifi: std::mem::take(&mut hifi) }
+        }
         other => return Err(format!("unknown command {other}")),
     };
     if let Some(extra) = positional.next() {
@@ -150,8 +268,17 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     if previous.is_some() {
         return Err("--previous is for restore only".into());
     }
+    if keys.is_some() {
+        return Err("--keys is for restore of one adapter only".into());
+    }
     if records.is_some() {
         return Err("--records is for restore without an instance ID or --previous only".into());
+    }
+    if unrecorded {
+        return Err("--unrecorded is for restore --records only".into());
+    }
+    if hifi {
+        return Err("--hifi is for remove-cable only".into());
     }
     Ok(Args { command, out })
 }
@@ -164,8 +291,192 @@ fn run(command: &Command) -> (u8, Value) {
             Err(e) => driver_error("state", &e),
         },
         Command::Assign { instance_id } => assign(instance_id),
-        Command::Restore { instance_id, previous } => restore(instance_id, previous.as_deref()),
-        Command::RestoreRecords { dir } => restore_records(dir),
+        Command::Restore { instance_id, previous, keys } => restore(instance_id, previous.as_deref(), keys.as_deref()),
+        Command::RestoreRecords { dir, unrecorded } => restore_records(dir, *unrecorded),
+        Command::Unrecorded { dir } => list_unrecorded(dir),
+        Command::WindowsKeys { radio } => windows_keys(radio),
+        Command::RemoveCable { setup, hifi } => remove_cable(setup, *hifi),
+    }
+}
+
+/// VB-Audio's setup arguments that remove a cable without a window:
+/// VB-CABLE's as community packages run it. The Hi-Fi Cable's with the
+/// setup of the package it came in (ASIO Bridge's UninstallString), which
+/// takes out the driver, ASIO Bridge and their entries in Windows'
+/// installed apps (issue #86); with the cable's own setup, as that package
+/// passes them.
+fn remove_args(setup: &std::path::Path, hifi: bool) -> &'static [&'static str] {
+    if !hifi {
+        &["-u", "-h"]
+    } else if hifi_package_setup(setup) {
+        &["-r", "-h", "-u"]
+    } else {
+        &["-h", "-u", "-H"]
+    }
+}
+
+/// "HiFiCableAsioBridgeSetup.exe": the package's setup, not the cable's own
+/// ("VBCABLE_Setup_x64.exe")
+fn hifi_package_setup(setup: &std::path::Path) -> bool {
+    setup.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase().starts_with("hificable"))
+}
+
+/// Runs VB-Audio's setup to remove the cable and waits for it, then scans
+/// for hardware changes (waiting for that too), so that the output leaves
+/// Windows' lists without a restart. The setup's exit code is reported, not
+/// judged: whether the cable went is what the caller checks.
+fn remove_cable(setup: &std::path::Path, hifi: bool) -> (u8, Value) {
+    if !win_sys::elevation::is_elevated() {
+        return (exit::NOT_ELEVATED, error_json("not_elevated", "remove-cable needs administrator rights"));
+    }
+    let name = if hifi { "Hi-Fi Cable" } else { "VB-CABLE" };
+    let started = std::time::Instant::now();
+    let status = {
+        use std::os::windows::process::CommandExt;
+        /// No console window for the setup
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = std::process::Command::new(setup);
+        command.args(remove_args(setup, hifi)).creation_flags(CREATE_NO_WINDOW);
+        // In its own folder, as the uninstaller starts it
+        if let Some(dir) = setup.parent().filter(|d| !d.as_os_str().is_empty()) {
+            command.current_dir(dir);
+        }
+        command.status()
+    };
+    let setup_exit = match status {
+        Ok(status) => status.code(),
+        Err(e) => {
+            tracing::error!("{name}: VB-Audio's setup did not start: {}", e.kind());
+            return (exit::FAILED, error_json("setup", &format!("the setup did not start: {}", e.kind())));
+        }
+    };
+    tracing::info!("{name}: setup exit {setup_exit:?} after {} ms", started.elapsed().as_millis());
+    let started = std::time::Instant::now();
+    let rescanned = driver::rescan_devices(true);
+    tracing::info!("{name}: scan for hardware changes {rescanned} in {} ms", started.elapsed().as_millis());
+    let entry_removed = hifi && remove_hifi_entry();
+    (
+        exit::OK,
+        json!({
+            "ok": true,
+            "command": "remove-cable",
+            "setup_exit": setup_exit,
+            "rescanned": rescanned,
+            "entry_removed": entry_removed,
+        }),
+    )
+}
+
+/// The Hi-Fi Cable's own entry in Windows' installed apps (the core's
+/// HIFI_KEY, the uninstaller's HiFiUninstKey)
+const HIFI_UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\VB:VBHIFI {87459874-1236-4469}";
+/// How long the Hi-Fi Cable's driver file may take to go after its setup
+const HIFI_DRIVER_GONE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The Hi-Fi Cable's driver file is in place (as the core's check)
+fn hifi_driver_installed() -> bool {
+    let dir = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| r"C:\Windows".into());
+    std::fs::read_dir(dir.join(r"System32\drivers")).is_ok_and(|list| {
+        list.flatten().any(|f| {
+            let n = f.file_name().to_string_lossy().to_lowercase();
+            n.starts_with("vbaudio_hfvaio") && n.ends_with(".sys")
+        })
+    })
+}
+
+/// Takes the Hi-Fi Cable's entry out of Windows' installed apps once its
+/// driver has gone: the setup leaves it when run without a window, and the
+/// entry then only opens that setup again (issue #86). Not while the driver
+/// is still there (Windows restarts first), and never ASIO Bridge's entry:
+/// that program stays installed. Whether an entry was removed.
+fn remove_hifi_entry() -> bool {
+    let started = std::time::Instant::now();
+    while hifi_driver_installed() {
+        if started.elapsed() >= HIFI_DRIVER_GONE_WAIT {
+            tracing::info!("Hi-Fi Cable: its driver is still there, its entry stays");
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    match win_sys::autostart::hklm_delete_key(HIFI_UNINSTALL_KEY) {
+        Ok(removed) => {
+            tracing::info!("Hi-Fi Cable: entry in the installed apps removed {removed}");
+            removed
+        }
+        Err(e) => {
+            tracing::warn!("Hi-Fi Cable: entry in the installed apps not removed: HRESULT 0x{:08x}", e.code().0 as u32);
+            false
+        }
+    }
+}
+
+/// "XX:XX:XX:XX:XX:XX" (or with dashes) in display order
+fn parse_address(s: &str) -> Option<[u8; 6]> {
+    let parts: Vec<&str> = s.split([':', '-']).collect();
+    let mut a = [0u8; 6];
+    if parts.len() != 6 {
+        return None;
+    }
+    for (b, p) in a.iter_mut().zip(parts) {
+        if p.len() != 2 {
+            return None;
+        }
+        *b = u8::from_str_radix(p, 16).ok()?;
+    }
+    Some(a)
+}
+
+fn windows_keys(radio: &[u8; 6]) -> (u8, Value) {
+    if !win_sys::elevation::is_elevated() {
+        return (exit::NOT_ELEVATED, error_json("not_elevated", "windows-keys needs administrator rights"));
+    }
+    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    match win_sys::bt_keys::read_keys(radio) {
+        Ok(keys) => {
+            let list: Vec<Value> = keys
+                .iter()
+                .flat_map(|k| &k.link_keys)
+                .map(|k| json!({ "address": win_sys::bt_paired::format_address(&k.address), "key": hex(&k.key) }))
+                .collect();
+            // As Windows keeps them: LTK and IRK least significant octet
+            // first, ERand as a number (16 hex digits)
+            let le: Vec<Value> = keys
+                .iter()
+                .flat_map(|k| &k.le_keys)
+                .map(|k| {
+                    json!({
+                        "address": win_sys::bt_paired::format_address(&k.address),
+                        "address_type": k.address_type,
+                        "ltk": hex(&k.ltk),
+                        "key_length": k.key_length,
+                        "ediv": k.ediv,
+                        "erand": k.erand.map(|r| format!("{r:016x}")),
+                        "irk": k.irk.map(|i| hex(&i)),
+                        "auth_req": k.auth_req,
+                    })
+                })
+                .collect();
+            // Names, types and sizes only: what Windows keeps, not the data
+            let names = |values: &[win_sys::bt_keys::ValueName]| -> Vec<Value> {
+                values
+                    .iter()
+                    .map(|v| json!({ "name": v.name, "kind": v.kind, "size": v.size, "count": v.count }))
+                    .collect()
+            };
+            (
+                exit::OK,
+                json!({
+                    "ok": true,
+                    "command": "windows-keys",
+                    "radio_found": keys.is_some(),
+                    "keys": list,
+                    "le_keys": le,
+                    "radio_values": keys.as_ref().map(|k| names(&k.radio_values)).unwrap_or_default(),
+                    "le_values": keys.as_ref().map(|k| names(&k.le_values)).unwrap_or_default(),
+                }),
+            )
+        }
+        Err(e) => (exit::FAILED, error_json("registry", &e.to_string())),
     }
 }
 
@@ -204,6 +515,7 @@ fn assign(instance_id: &str) -> (u8, Value) {
                     "class_changed": outcome.class_changed,
                     "reboot_required": outcome.reboot_required,
                     "state": StateJson::from(&outcome.state),
+                    "disconnected": outcome.disconnected,
                 }),
             )
         }
@@ -211,31 +523,175 @@ fn assign(instance_id: &str) -> (u8, Value) {
     }
 }
 
-fn restore(instance_id: &str, previous: Option<&str>) -> (u8, Value) {
+fn restore(instance_id: &str, previous: Option<&str>, keys: Option<&std::path::Path>) -> (u8, Value) {
     let previous = match previous.map(parse_previous).transpose() {
         Ok(p) => p,
         Err(message) => return (exit::USAGE, error_json("usage", &message)),
     };
+    let keys = match keys.map(parse_keys).transpose() {
+        Ok(k) => k,
+        Err(message) => return (exit::USAGE, error_json("usage", &message)),
+    };
+    // Written while the adapter is still on WinUSB: Windows' Bluetooth
+    // reads the keys when it starts the radio
+    let written = keys.and_then(|(radio, keys)| {
+        let on_winusb = driver::driver_state(instance_id).is_ok_and(|s| s.kind == driver::DriverKind::WinUsb);
+        if !on_winusb || !win_sys::elevation::is_elevated() {
+            return None;
+        }
+        Some(win_sys::bt_keys::write_keys(&radio, &keys.link, &keys.le).map_err(|e| {
+            tracing::warn!("restore: writing the keys to Windows failed: {e}");
+            e.to_string()
+        }))
+    });
     match driver::restore(instance_id, previous.as_ref()) {
         Ok(outcome) => {
             let verified = outcome.state.as_ref().is_some_and(|s| s.present && s.kind != driver::DriverKind::WinUsb)
                 && outcome.matches_previous != Some(false);
             let code = if verified { exit::OK } else { exit::UNVERIFIED };
-            (
-                code,
-                json!({
-                    "ok": verified,
-                    "command": "restore",
-                    "instance_id": instance_id,
-                    "already_restored": outcome.already_restored,
-                    "reboot_required": outcome.reboot_required,
-                    "matches_previous": outcome.matches_previous,
-                    "state": outcome.state.as_ref().map(StateJson::from),
-                }),
-            )
+            let mut result = json!({
+                "ok": verified,
+                "command": "restore",
+                "instance_id": instance_id,
+                "already_restored": outcome.already_restored,
+                "reboot_required": outcome.reboot_required,
+                "matches_previous": outcome.matches_previous,
+                "state": outcome.state.as_ref().map(StateJson::from),
+            });
+            add_written_keys(&mut result, written);
+            (code, result)
         }
-        Err(e) => driver_error("restore", &e),
+        Err(e) => {
+            let (code, mut result) = driver_error("restore", &e);
+            add_written_keys(&mut result, written);
+            (code, result)
+        }
     }
+}
+
+/// BlueCaster's keys from the file of `restore --keys`
+#[derive(Debug, Default)]
+struct KeysToWrite {
+    link: Vec<win_sys::bt_keys::WindowsLinkKey>,
+    /// Only when developer mode asked for them (issue #86)
+    le: Vec<win_sys::bt_keys::WindowsLeKey>,
+}
+
+fn unhex<const N: usize>(text: &str) -> Option<[u8; N]> {
+    if text.len() != N * 2 || !text.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; N];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+/// The file of `restore --keys`: the radio, BlueCaster's link keys and, if
+/// asked for, its LE keys as Windows keeps them (`windows-keys`' format)
+fn parse_keys(path: &std::path::Path) -> Result<([u8; 6], KeysToWrite), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    parse_keys_text(&text)
+}
+
+fn parse_keys_text(text: &str) -> Result<([u8; 6], KeysToWrite), String> {
+    let value: Value =
+        serde_json::from_str(text.trim_start_matches('\u{FEFF}')).map_err(|e| format!("--keys is not JSON: {e}"))?;
+    let radio =
+        value.get("radio").and_then(Value::as_str).and_then(parse_address).ok_or("--keys names no radio address")?;
+    let list = |name: &str| value.get(name).and_then(Value::as_array).cloned().unwrap_or_default();
+    let link = list("keys")
+        .iter()
+        .filter_map(|k| {
+            Some(win_sys::bt_keys::WindowsLinkKey {
+                address: parse_address(k.get("address")?.as_str()?)?,
+                key: unhex(k.get("key")?.as_str()?)?,
+            })
+        })
+        .collect();
+    let le = list("le_keys")
+        .iter()
+        .filter_map(|k| {
+            let number = |name: &str| k.get(name).and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
+            Some(win_sys::bt_keys::WindowsLeKey {
+                address: parse_address(k.get("address")?.as_str()?)?,
+                address_type: number("address_type"),
+                ltk: unhex(k.get("ltk")?.as_str()?)?,
+                key_length: number("key_length"),
+                ediv: number("ediv"),
+                erand: k.get("erand").and_then(Value::as_str).and_then(|t| u64::from_str_radix(t, 16).ok()),
+                irk: k.get("irk").and_then(Value::as_str).and_then(unhex),
+                auth_req: None,
+            })
+        })
+        .collect();
+    Ok((radio, KeysToWrite { link, le }))
+}
+
+/// What writing the keys did, in the restore's result: the devices written
+/// and Windows' keys they replaced (for the core's backup)
+fn add_written_keys(result: &mut Value, written: Option<Result<Option<win_sys::bt_keys::WrittenKeys>, String>>) {
+    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let address = |a: &[u8; 6]| win_sys::bt_paired::format_address(a);
+    match written {
+        None => {}
+        Some(Err(e)) => result["keys_error"] = json!(e),
+        Some(Ok(None)) => result["keys_written"] = json!([]),
+        Some(Ok(Some(w))) => {
+            result["keys_written"] = json!(w.replaced.iter().map(|k| address(&k.address)).collect::<Vec<_>>());
+            result["keys_same"] = json!(w.same.iter().map(address).collect::<Vec<_>>());
+            result["keys_verified"] = json!(w.verified);
+            result["replaced_keys"] = json!(
+                w.replaced
+                    .iter()
+                    .map(|k| json!({ "address": address(&k.address), "key": hex(&k.key) }))
+                    .collect::<Vec<_>>()
+            );
+            result["le_written"] = json!(w.le_replaced.iter().map(|k| address(&k.address)).collect::<Vec<_>>());
+            result["le_same"] = json!(w.le_same.iter().map(address).collect::<Vec<_>>());
+            result["le_verified"] = json!(w.le_verified);
+            // As Windows kept them, for the core's backup
+            result["replaced_le_keys"] = json!(
+                w.le_replaced
+                    .iter()
+                    .map(|k| {
+                        json!({
+                            "address": address(&k.address),
+                            "address_type": k.address_type,
+                            "ltk": hex(&k.ltk),
+                            "key_length": k.key_length,
+                            "ediv": k.ediv,
+                            "erand": k.erand.map(|r| format!("{r:016x}")),
+                            "irk": k.irk.map(|i| hex(&i)),
+                            "auth_req": k.auth_req,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+/// The result as the log may show it: lists of keys and of devices by
+/// their number only (no address or key in a log)
+fn without_keys(result: &Value) -> Value {
+    let mut shown = result.clone();
+    for field in
+        ["keys", "le_keys", "replaced_keys", "replaced_le_keys", "keys_written", "keys_same", "le_written", "le_same"]
+    {
+        if let Some(list) = result.get(field).and_then(Value::as_array) {
+            shown[field] = json!(list.len());
+        }
+    }
+    // The adapter's instance ID ends in its USB serial number, often its
+    // Bluetooth address
+    for pointer in ["/instance_id", "/state/instance_id"] {
+        if let Some(id) = shown.pointer_mut(pointer).filter(|id| id.is_string()) {
+            *id = Value::from("<adapter>");
+        }
+    }
+    shown
 }
 
 /// What to do with one file of `restore --records`
@@ -258,8 +714,8 @@ fn plan_record(text: &str) -> RecordPlan {
     let Some(instance_id) = value.get("instance_id").and_then(Value::as_str).filter(|s| !s.is_empty()) else {
         return RecordPlan::Skip { reason: "not_a_record", remove: false };
     };
-    // The adapter was on WinUSB (Zadig's, or another tool's) before A2DPWB
-    // was asked to assign it: nothing of A2DPWB's to undo
+    // The adapter was on WinUSB (Zadig's, or another tool's) before BlueCaster
+    // was asked to assign it: nothing of BlueCaster's to undo
     if value.get("already_winusb").and_then(Value::as_bool) == Some(true) {
         return RecordPlan::Skip { reason: "winusb_before", remove: true };
     }
@@ -278,20 +734,18 @@ fn worse(a: u8, b: u8) -> u8 {
     if rank(b) > rank(a) { b } else { a }
 }
 
-/// `restore --records <dir>`: every recorded adapter; a record is deleted
-/// once its adapter is back on its own driver. An unplugged adapter keeps
-/// its record (exit code 4 for the whole run).
-fn restore_records(dir: &std::path::Path) -> (u8, Value) {
+/// The records in `dir` and what to do with each (no folder: none)
+fn read_records(dir: &std::path::Path) -> Result<Vec<(PathBuf, RecordPlan)>, (u8, Value)> {
     let mut paths: Vec<PathBuf> = match std::fs::read_dir(dir) {
         Ok(entries) => entries
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("json")))
             .collect(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(e) => return (exit::FAILED, error_json("records", &format!("cannot read {}: {e}", dir.display()))),
+        Err(e) => return Err((exit::FAILED, error_json("records", &format!("cannot read {}: {e}", dir.display())))),
     };
     paths.sort();
-    let plans: Vec<(PathBuf, RecordPlan)> = paths
+    Ok(paths
         .into_iter()
         .map(|p| {
             let plan = match std::fs::read_to_string(&p) {
@@ -300,8 +754,70 @@ fn restore_records(dir: &std::path::Path) -> (u8, Value) {
             };
             (p, plan)
         })
+        .collect())
+}
+
+/// A Bluetooth adapter on WinUSB: by its Bluetooth class, or its interface
+/// read through WinUSB. Not `looks_like_bluetooth`, which takes any WinUSB
+/// device: a device put on WinUSB for something else is not ours to touch.
+fn winusb_bluetooth(d: &UsbDevice) -> bool {
+    d.driver_kind == driver::DriverKind::WinUsb
+        && (d.has_bluetooth_compat_id()
+            || d.usb_class == Some(usb_adapters::UsbClass::BLUETOOTH)
+            || d.winusb_bluetooth().is_some())
+}
+
+/// Of the Bluetooth adapters on WinUSB, those no record gives back
+fn without_record(on_winusb: Vec<String>, plans: &[(PathBuf, RecordPlan)]) -> Vec<String> {
+    let recorded: Vec<&str> = plans
+        .iter()
+        .filter_map(|(_, plan)| match plan {
+            RecordPlan::Restore { instance_id } => Some(instance_id.as_str()),
+            RecordPlan::Skip { .. } => None,
+        })
         .collect();
-    if plans.iter().any(|(_, plan)| matches!(plan, RecordPlan::Restore { .. })) && !win_sys::elevation::is_elevated() {
+    on_winusb.into_iter().filter(|id| !recorded.iter().any(|r| r.eq_ignore_ascii_case(id))).collect()
+}
+
+fn unrecorded_adapters(plans: &[(PathBuf, RecordPlan)]) -> Result<Vec<String>, (u8, Value)> {
+    let devices =
+        usb_adapters::enumerate(true).map_err(|e| (exit::FAILED, error_json("enumeration", &e.to_string())))?;
+    let ids = devices.iter().filter(|d| winusb_bluetooth(d)).map(|d| d.instance_id.clone()).collect();
+    Ok(without_record(ids, plans))
+}
+
+/// `unrecorded --records <dir>`: the Bluetooth adapters on WinUSB without
+/// a record; exit code 4 when there is none
+fn list_unrecorded(dir: &std::path::Path) -> (u8, Value) {
+    let ids = match read_records(dir).and_then(|plans| unrecorded_adapters(&plans)) {
+        Ok(ids) => ids,
+        Err(e) => return e,
+    };
+    let code = if ids.is_empty() { exit::NO_DEVICE } else { exit::OK };
+    (code, json!({ "ok": true, "command": "unrecorded", "adapters": ids }))
+}
+
+/// `restore --records <dir>`: every recorded adapter; a record is deleted
+/// once its adapter is back on its own driver. An unplugged adapter keeps
+/// its record (exit code 4 for the whole run). `unrecorded`: also the
+/// Bluetooth adapters on WinUSB without a record, Windows choosing their
+/// driver.
+fn restore_records(dir: &std::path::Path, unrecorded: bool) -> (u8, Value) {
+    let plans = match read_records(dir) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let others = if unrecorded {
+        match unrecorded_adapters(&plans) {
+            Ok(ids) => ids,
+            Err(e) => return e,
+        }
+    } else {
+        Vec::new()
+    };
+    if (!others.is_empty() || plans.iter().any(|(_, plan)| matches!(plan, RecordPlan::Restore { .. })))
+        && !win_sys::elevation::is_elevated()
+    {
         return driver_error("restore", &DriverError::NotElevated);
     }
     let mut code = exit::OK;
@@ -309,7 +825,7 @@ fn restore_records(dir: &std::path::Path) -> (u8, Value) {
     for (path, plan) in plans {
         let (one, mut result, remove) = match plan {
             RecordPlan::Restore { instance_id } => {
-                let (one, result) = restore(&instance_id, Some(&format!("@{}", path.display())));
+                let (one, result) = restore(&instance_id, Some(&format!("@{}", path.display())), None);
                 (one, result, one == exit::OK)
             }
             RecordPlan::Skip { reason, remove } => (exit::OK, json!({ "ok": true, "skipped": reason }), remove),
@@ -318,6 +834,13 @@ fn restore_records(dir: &std::path::Path) -> (u8, Value) {
             tracing::warn!("cannot delete the record {}: {e}", path.display());
         }
         result["record"] = json!(path.display().to_string());
+        result["exit_code"] = json!(one);
+        code = worse(code, one);
+        adapters.push(result);
+    }
+    for id in others {
+        let (one, mut result) = restore(&id, None, None);
+        result["unrecorded"] = json!(true);
         result["exit_code"] = json!(one);
         code = worse(code, one);
         adapters.push(result);
@@ -384,6 +907,7 @@ fn error_json(kind: &str, message: &str) -> Value {
 #[serde(default)]
 struct RecordJson {
     inf_name: String,
+    inf_section: String,
     version: String,
     service: String,
     provider: String,
@@ -395,6 +919,7 @@ impl From<&DriverRecord> for RecordJson {
     fn from(r: &DriverRecord) -> Self {
         RecordJson {
             inf_name: r.inf_name.clone(),
+            inf_section: r.inf_section.clone(),
             version: r.version.clone(),
             service: r.service.clone(),
             provider: r.provider.clone(),
@@ -408,6 +933,7 @@ impl From<RecordJson> for DriverRecord {
     fn from(r: RecordJson) -> Self {
         DriverRecord {
             inf_name: r.inf_name,
+            inf_section: r.inf_section,
             version: r.version,
             service: r.service,
             provider: r.provider,
@@ -452,7 +978,7 @@ struct StateJson {
     driver: DriverJson,
     problem_code: Option<u32>,
     interface_guids: Vec<String>,
-    a2dpwb_interface: bool,
+    bluecaster_interface: bool,
 }
 
 impl From<&DriverState> for StateJson {
@@ -464,7 +990,7 @@ impl From<&DriverState> for StateJson {
             driver: DriverJson::from(&s.driver),
             problem_code: s.problem_code,
             interface_guids: s.interface_guids.clone(),
-            a2dpwb_interface: s.has_a2dpwb_interface(),
+            bluecaster_interface: s.has_bluecaster_interface(),
         }
     }
 }
@@ -535,8 +1061,96 @@ impl From<&UsbDevice> for AdapterJson {
 mod tests {
     use super::*;
 
+    #[test]
+    fn keys_file_gives_link_and_le_keys() {
+        let ltk = "00112233445566778899aabbccddeeff";
+        let text = format!(
+            r#"{{"radio":"AA:BB:CC:DD:EE:FF",
+                "keys":[{{"address":"11:22:33:44:55:66","key":"{ltk}"}},{{"address":"bad","key":"{ltk}"}}],
+                "le_keys":[{{"address":"C0:11:22:33:44:55","address_type":1,"ltk":"{ltk}","key_length":16,
+                             "ediv":4660,"erand":"0102030405060708","irk":null}}]}}"#
+        );
+        let (radio, keys) = parse_keys_text(&text).unwrap();
+        assert_eq!(radio, [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+        assert_eq!(keys.link.len(), 1);
+        assert_eq!(keys.le.len(), 1);
+        let le = &keys.le[0];
+        assert_eq!((le.address_type, le.key_length, le.ediv), (Some(1), Some(16), Some(4660)));
+        assert_eq!(le.erand, Some(0x0102_0304_0506_0708));
+        assert_eq!(le.irk, None);
+        assert_eq!(le.ltk[15], 0xFF);
+        // A file without LE keys writes none
+        let (_, keys) = parse_keys_text(r#"{"radio":"AA:BB:CC:DD:EE:FF","keys":[]}"#).unwrap();
+        assert!(keys.le.is_empty());
+        assert!(parse_keys_text(r#"{"keys":[]}"#).is_err());
+    }
+
+    #[test]
+    fn no_address_or_key_reaches_the_log() {
+        let result = json!({
+            "ok": true,
+            "keys_written": ["11:22:33:44:55:66"],
+            "keys_same": [],
+            "keys_verified": 1,
+            "replaced_keys": [{ "address": "11:22:33:44:55:66", "key": "00" }],
+            "le_written": ["C0:11:22:33:44:55"],
+            "le_same": [],
+            "replaced_le_keys": [{ "address": "C0:11:22:33:44:55", "ltk": "00" }],
+        });
+        let shown = without_keys(&result).to_string();
+        assert!(!shown.contains("11:22") && !shown.contains("\"00\""), "{shown}");
+        assert_eq!(without_keys(&result)["keys_written"], 1);
+        assert_eq!(without_keys(&result)["le_written"], 1);
+    }
+
     fn args(s: &[&str]) -> Result<Args, String> {
         parse_args(&s.iter().map(|a| a.to_string()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn unrecorded_are_those_no_record_restores() {
+        let plans = vec![
+            (PathBuf::from("a.json"), RecordPlan::Restore { instance_id: r"USB\VID_0BDA&PID_8771\A".into() }),
+            (PathBuf::from("b.json"), RecordPlan::Skip { reason: "winusb_before", remove: true }),
+        ];
+        let on_winusb = vec![r"usb\vid_0bda&pid_8771\a".to_string(), r"USB\VID_0A12&PID_0001\B".to_string()];
+        assert_eq!(without_record(on_winusb, &plans), [r"USB\VID_0A12&PID_0001\B"]);
+        assert!(without_record(Vec::new(), &plans).is_empty());
+    }
+
+    #[test]
+    fn log_options_come_out_first() {
+        let argv: Vec<String> = ["assign", "--log", r"C:\l\bluecaster-driver.log", "X", "--verbose", "--out", "o.json"]
+            .map(String::from)
+            .into();
+        let (log, verbose, rest) = log_args(argv);
+        assert_eq!(log, Some(PathBuf::from(r"C:\l\bluecaster-driver.log")));
+        assert!(verbose);
+        assert_eq!(rest, ["assign", "X", "--out", "o.json"]);
+        let (log, verbose, _) = log_args(vec!["list".into()]);
+        assert_eq!((log, verbose), (None, false));
+    }
+
+    #[test]
+    fn remove_cable_command_line() {
+        assert_eq!(
+            args(&["remove-cable", r"C:\VB\VBCABLE_Setup_x64.exe", "--hifi", "--out", "o.json"]).unwrap(),
+            Args {
+                command: Command::RemoveCable { setup: PathBuf::from(r"C:\VB\VBCABLE_Setup_x64.exe"), hifi: true },
+                out: Some(PathBuf::from("o.json")),
+            }
+        );
+        assert_eq!(
+            args(&["remove-cable", "s.exe"]).unwrap().command,
+            Command::RemoveCable { setup: PathBuf::from("s.exe"), hifi: false }
+        );
+        assert!(args(&["remove-cable"]).is_err());
+        assert!(args(&["list", "--hifi"]).is_err());
+        let own = std::path::Path::new(r"C:\Program Files\VB\CABLEHiFi\VBCABLE_Setup_x64.exe");
+        let package = std::path::Path::new(r"C:\Program Files (x86)\VB\ASIOBridge\HiFiCableAsioBridgeSetup.exe");
+        assert_eq!(remove_args(own, false), ["-u", "-h"]);
+        assert_eq!(remove_args(own, true), ["-h", "-u", "-H"]);
+        assert_eq!(remove_args(package, true), ["-r", "-h", "-u"]);
     }
 
     #[test]
@@ -552,12 +1166,18 @@ mod tests {
         );
         assert_eq!(
             args(&["restore", "X", "--previous", "{}"]).unwrap().command,
-            Command::Restore { instance_id: "X".into(), previous: Some("{}".into()) }
+            Command::Restore { instance_id: "X".into(), previous: Some("{}".into()), keys: None }
         );
         assert_eq!(
             args(&["restore", "X"]).unwrap().command,
-            Command::Restore { instance_id: "X".into(), previous: None }
+            Command::Restore { instance_id: "X".into(), previous: None, keys: None }
         );
+        assert_eq!(
+            args(&["restore", "X", "--keys", r"C:\u\keys.json"]).unwrap().command,
+            Command::Restore { instance_id: "X".into(), previous: None, keys: Some(PathBuf::from(r"C:\u\keys.json")) }
+        );
+        assert!(args(&["restore", "--records", "D", "--keys", "k.json"]).is_err());
+        assert!(args(&["assign", "X", "--keys", "k.json"]).is_err());
         assert!(args(&[]).is_err());
         assert!(args(&["assign"]).is_err());
         assert!(args(&["assign", "X", "Y"]).is_err());
@@ -566,9 +1186,9 @@ mod tests {
         assert!(args(&["list", "--force"]).is_err());
         assert!(args(&["format"]).is_err());
         assert_eq!(
-            args(&["restore", "--records", r"C:\u\A2DPWB\driver", "--out", "o.json"]).unwrap(),
+            args(&["restore", "--records", r"C:\u\BlueCaster\driver", "--out", "o.json"]).unwrap(),
             Args {
-                command: Command::RestoreRecords { dir: PathBuf::from(r"C:\u\A2DPWB\driver") },
+                command: Command::RestoreRecords { dir: PathBuf::from(r"C:\u\BlueCaster\driver"), unrecorded: false },
                 out: Some(PathBuf::from("o.json"))
             }
         );
@@ -576,6 +1196,24 @@ mod tests {
         assert!(args(&["restore", "X", "--records", "D"]).is_err());
         assert!(args(&["restore", "--records", "D", "--previous", "{}"]).is_err());
         assert!(args(&["list", "--records", "D"]).is_err());
+        assert_eq!(
+            args(&["restore", "--records", "D", "--unrecorded"]).unwrap().command,
+            Command::RestoreRecords { dir: PathBuf::from("D"), unrecorded: true }
+        );
+        assert_eq!(
+            args(&["unrecorded", "--records", "D"]).unwrap().command,
+            Command::Unrecorded { dir: PathBuf::from("D") }
+        );
+        assert!(args(&["unrecorded"]).is_err());
+        assert!(args(&["restore", "X", "--unrecorded"]).is_err());
+        assert!(args(&["list", "--unrecorded"]).is_err());
+        assert_eq!(
+            args(&["windows-keys", "00:1A:7D:da:71:13"]).unwrap().command,
+            Command::WindowsKeys { radio: [0x00, 0x1A, 0x7D, 0xDA, 0x71, 0x13] }
+        );
+        assert!(args(&["windows-keys"]).is_err());
+        assert!(args(&["windows-keys", "00:1A:7D:DA:71"]).is_err());
+        assert!(args(&["windows-keys", "00:1A:7D:DA:71:1G"]).is_err());
     }
 
     #[test]
@@ -609,15 +1247,15 @@ mod tests {
     fn records_folder_without_work() {
         // A missing folder, and records with nothing to restore: no elevation
         // needed, the useless record goes, the unreadable one stays
-        let (code, v) = restore_records(std::path::Path::new(r"Z:\no\such\folder"));
+        let (code, v) = restore_records(std::path::Path::new(r"Z:\no\such\folder"), false);
         assert_eq!(code, exit::OK);
         assert_eq!(v["adapters"].as_array().unwrap().len(), 0);
-        let dir = std::env::temp_dir().join(format!("a2dpwb_driver_records_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("bluecaster_driver_records_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.json"), r#"{"instance_id":"USB\\X","already_winusb":true}"#).unwrap();
         std::fs::write(dir.join("b.json"), "not json").unwrap();
         std::fs::write(dir.join("c.txt"), "ignored").unwrap();
-        let (code, v) = restore_records(&dir);
+        let (code, v) = restore_records(&dir, false);
         assert_eq!(code, exit::OK);
         assert_eq!(v["adapters"].as_array().unwrap().len(), 2);
         assert!(!dir.join("a.json").exists());
@@ -629,6 +1267,7 @@ mod tests {
     fn previous_record_roundtrip() {
         let record = DriverRecord {
             inf_name: "oem28.inf".into(),
+            inf_section: "ibtusb.NT".into(),
             version: "24.40.11.1".into(),
             service: "BTHUSB".into(),
             provider: "Intel Corporation".into(),
@@ -650,7 +1289,7 @@ mod tests {
 
     #[test]
     fn previous_from_file() {
-        let path = std::env::temp_dir().join(format!("a2dpwb_driver_prev_{}.json", std::process::id()));
+        let path = std::env::temp_dir().join(format!("bluecaster_driver_prev_{}.json", std::process::id()));
         // With a BOM, as PowerShell's Out-File writes it
         std::fs::write(&path, "\u{FEFF}{\"inf_name\":\"bth.inf\",\"version\":\"10.0.1\",\"service\":\"BTHUSB\"}")
             .unwrap();

@@ -1,5 +1,5 @@
-//! BTstack for A2DPWB: the C library built from extern/btstack, and a safe
-//! layer over the parts A2DPWB uses.
+//! BTstack for BlueCaster: the C library built from extern/btstack, and a safe
+//! layer over the parts BlueCaster uses.
 //!
 //! BTstack is not thread-safe. Everything that calls into it takes a
 //! [`Stack`], a token that only exists on the thread running the BTstack run
@@ -30,25 +30,28 @@
 mod att;
 mod callbacks;
 pub mod consts;
+mod ctkd;
 pub mod events;
 mod ffi;
 mod le;
 mod stack;
 mod timer_resolution;
 mod transport;
+pub mod voice;
 
 pub use att::AttWriteRequest;
-pub use le::{CigParams, CisParams, ConnectionType, LeDbEntry, LeEncryption};
+pub use ctkd::{CtkdOutcome, ImportedLeBond, LeBondAdded, LeKeys, ctkd_enabled, set_ctkd};
+pub use le::{BigParams, CigParams, CisParams, ConnectionType, LeDbEntry, LeEncryption};
 pub use stack::{AclState, AvdtpState, HciState, Stack};
 pub use timer_resolution::HighTimerResolution;
 pub use transport::{
-    HciBackend, LE_HIDDEN_COMMAND_BITS, LE_SUPPORTED_FEATURE, Upstream, expect_transport_loss,
-    le_hidden_command_complete, le_hidden_intercept, le_hidden_patch_event,
+    ControlData, ControlKind, ControlRecipient, ControlRequest, HciBackend, LE_HIDDEN_COMMAND_BITS,
+    LE_SUPPORTED_FEATURE, Upstream, UsbDescriptors, expect_transport_loss, le_hidden_command_complete,
+    le_hidden_intercept, le_hidden_patch_event,
 };
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 /// Where a packet handed to [`App::on_packet`] comes from
@@ -74,6 +77,19 @@ pub enum Source {
     /// The ISO handler: HCI_EVENT_CIS_CAN_SEND_NOW (event packets, channel =
     /// CIS handle) and incoming ISO data (HCI_ISO_DATA_PACKET)
     Iso,
+    /// HFP audio gateway events (HCI_EVENT_HFP_META), after
+    /// [`Stack::hfp_ag_init`]
+    Hfp,
+    /// RFCOMM client channels ([`Stack::rfcomm_create_channel`]): their
+    /// events, and their data (RFCOMM_DATA_PACKET, channel = RFCOMM cid)
+    Rfcomm,
+    /// Results of [`Stack::sdp_query_rfcomm`]
+    SdpClient,
+    /// Results of [`Stack::sdp_query_services`]
+    SdpServices,
+    /// SCO data (HCI_SCO_DATA_PACKET: handle and packet status flag,
+    /// length, payload) and HCI_EVENT_SCO_CAN_SEND_NOW (event packets)
+    Sco,
 }
 
 impl Source {
@@ -88,6 +104,11 @@ impl Source {
             7 => Source::GattClient,
             8 => Source::AttServer,
             9 => Source::Iso,
+            10 => Source::Hfp,
+            11 => Source::Rfcomm,
+            12 => Source::SdpClient,
+            13 => Source::SdpServices,
+            14 => Source::Sco,
             _ => Source::Hci,
         }
     }
@@ -103,9 +124,9 @@ pub trait App {
     fn on_wake(&mut self, stack: &Stack);
     /// A timer started with [`Stack::timer_start`] fired
     fn on_timer(&mut self, stack: &Stack, id: u32);
-    /// The Intel bootloader firmware download started with
-    /// [`Stack::intel_download_firmware`] finished (0 = success)
-    fn on_intel_firmware(&mut self, _stack: &Stack, _result: i32) {}
+    /// A packet from the controller while a firmware loader drives the
+    /// transport, before HCI init ([`Stack::raw_begin`] .. [`Stack::raw_end`])
+    fn on_raw_packet(&mut self, _stack: &Stack, _packet_type: u8, _packet: &[u8]) {}
     /// The run loop has stopped; HCI is still initialized
     fn on_exit(&mut self, _stack: &Stack) {}
     /// A GATT client reads attribute `handle` of the PC's GATT database (a
@@ -131,6 +152,43 @@ pub trait LinkKeyStore {
     fn delete(&mut self, addr: &[u8; 6]);
     /// Entry `index` in storage order, for BTstack's iterator
     fn at(&self, index: usize) -> Option<([u8; 6], [u8; 16], i32)>;
+}
+
+/// Keeps BTstack's LE TLV (the LE bonds of le_device_db_tlv, the GATT
+/// server's client configurations) for [`Stack::le_init`]; values are
+/// copied in and out
+pub trait TlvStore {
+    fn get(&mut self, tag: u32) -> Option<Vec<u8>>;
+    /// An empty value deletes the tag
+    fn store(&mut self, tag: u32, value: &[u8]);
+    fn delete(&mut self, tag: u32);
+}
+
+/// A [`TlvStore`] in memory; its clones share it, so it can outlive one
+/// run (tests)
+#[derive(Clone, Default)]
+pub struct MemoryTlv(std::sync::Arc<std::sync::Mutex<TlvEntries>>);
+
+/// Tags and their values, in the order they were stored
+type TlvEntries = Vec<(u32, Vec<u8>)>;
+
+impl TlvStore for MemoryTlv {
+    fn get(&mut self, tag: u32) -> Option<Vec<u8>> {
+        let entries = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        entries.iter().find(|(t, _)| *t == tag).map(|(_, v)| v.clone())
+    }
+
+    fn store(&mut self, tag: u32, value: &[u8]) {
+        let mut entries = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        entries.retain(|(t, _)| *t != tag);
+        if !value.is_empty() {
+            entries.push((tag, value.to_vec()));
+        }
+    }
+
+    fn delete(&mut self, tag: u32) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).retain(|(t, _)| *t != tag);
+    }
 }
 
 /// Receives every HCI packet BTstack sends or receives (`incoming`), e.g. to
@@ -172,6 +230,8 @@ thread_local! {
     static PENDING: RefCell<VecDeque<callbacks::Pending>> = const { RefCell::new(VecDeque::new()) };
     static LOGGER: RefCell<Option<PacketLogger>> = const { RefCell::new(None) };
     static LINK_KEYS: RefCell<Option<Box<dyn LinkKeyStore>>> = const { RefCell::new(None) };
+    /// The LE TLV between le_init and le_deinit
+    static TLV: RefCell<Option<Box<dyn TlvStore>>> = const { RefCell::new(None) };
 }
 
 /// Wakes the run loop from any thread. Cheap and lock-free: usable from the
@@ -202,10 +262,10 @@ impl Remote {
 fn post_wake() {
     WAKERS.fetch_add(1, Ordering::AcqRel);
     if ALIVE.load(Ordering::Acquire) {
-        // SAFETY: ALIVE is set only between a2dpwb_runloop_init() and the
+        // SAFETY: ALIVE is set only between bluecaster_runloop_init() and the
         // run loop's teardown, which waits for WAKERS to drop to zero first;
-        // a2dpwb_wake() is thread-safe (mutex-protected callback list).
-        unsafe { ffi::a2dpwb_wake() };
+        // bluecaster_wake() is thread-safe (mutex-protected callback list).
+        unsafe { ffi::bluecaster_wake() };
     }
     WAKERS.fetch_sub(1, Ordering::AcqRel);
 }
@@ -228,13 +288,14 @@ where
     transport::reset();
     att::reset();
     le::reset();
+    ctkd::reset();
 
     // SAFETY: first BTstack calls of this run, on this thread; nothing else
     // uses BTstack (RUNNING).
     unsafe {
         ffi::btstack_memory_init();
-        ffi::a2dpwb_runloop_init();
-        ffi::a2dpwb_hci_dump_init();
+        ffi::bluecaster_runloop_init();
+        ffi::bluecaster_hci_dump_init();
     }
     ALIVE.store(true, Ordering::Release);
 
@@ -261,7 +322,7 @@ where
     // SAFETY: all profiles and HCI are deinitialized (stack.deinit()), the
     // run loop no longer runs; this resets BTstack's global state.
     unsafe {
-        ffi::a2dpwb_timers_clear();
+        ffi::bluecaster_timers_clear();
         ffi::btstack_memory_deinit();
         ffi::btstack_run_loop_deinit();
     }
@@ -280,19 +341,114 @@ pub fn poisoned() -> bool {
 /// USB VID:PID pairs of the Realtek controllers BTstack's Realtek driver
 /// knows (its firmware table). A static table: callable from any thread.
 pub fn realtek_usb_ids() -> Vec<(u16, u16)> {
-    static IDS: Mutex<Vec<(u16, u16)>> = Mutex::new(Vec::new());
-    let mut ids = IDS.lock().unwrap_or_else(|e| e.into_inner());
-    if ids.is_empty() {
+    realtek_usb_firmware().iter().map(|&(vid, pid, _)| (vid, pid)).collect()
+}
+
+/// BTstack's Realtek firmware table: VID, PID and the firmware name without
+/// extension ("rtl8852bu_fw"), which tells the chip family. A static table:
+/// callable from any thread.
+pub fn realtek_usb_firmware() -> &'static [(u16, u16, &'static str)] {
+    static TABLE: std::sync::OnceLock<Vec<(u16, u16, &'static str)>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
         // SAFETY: reads BTstack's constant firmware table; no state involved.
         let n = unsafe { ffi::btstack_chipset_realtek_get_num_usb_controllers() };
-        for i in 0..n {
-            let (mut vid, mut pid) = (0u16, 0u16);
-            // SAFETY: i < n; both pointers are valid for writes.
-            unsafe { ffi::btstack_chipset_realtek_get_vendor_product_id(i, &mut vid, &mut pid) };
-            ids.push((vid, pid));
-        }
+        (0..n)
+            .map(|i| {
+                let (mut vid, mut pid) = (0u16, 0u16);
+                // SAFETY: i < n; both pointers are valid for writes.
+                unsafe { ffi::btstack_chipset_realtek_get_vendor_product_id(i, &mut vid, &mut pid) };
+                // SAFETY: i < n; the name is a string literal of the table
+                // (static), or NULL
+                let name = unsafe { ffi::bluecaster_realtek_usb_fw_name(i) };
+                let name = if name.is_null() {
+                    ""
+                } else {
+                    // SAFETY: a NUL-terminated literal that lives forever
+                    unsafe { std::ffi::CStr::from_ptr(name) }.to_str().unwrap_or("")
+                };
+                (vid, pid, name)
+            })
+            .collect()
+    })
+}
+
+#[cfg(test)]
+mod realtek_download_tests {
+    use std::ffi::CString;
+    use std::path::{Path, PathBuf};
+
+    use crate::ffi;
+
+    /// The RTL8761BU's USB product ID in BTstack's table
+    const RTL8761BU: u16 = 0x8771;
+
+    /// The patch BTstack's Realtek download builds from these files, or 0
+    fn patch_length(firmware: &Path, config: &Path, rom: u8) -> u32 {
+        let fw = CString::new(firmware.to_string_lossy().as_bytes()).unwrap();
+        let cfg = CString::new(config.to_string_lossy().as_bytes()).unwrap();
+        // The driver's state is global: one test at a time
+        let _one = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: two NUL-terminated paths that outlive the call; no stack
+        // runs in this test binary
+        unsafe { ffi::bluecaster_realtek_patch_length(RTL8761BU, fw.as_ptr(), cfg.as_ptr(), rom) }
     }
-    ids.clone()
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A "Realtech" patch with one entry for ROM version 0 (chip ID 1) and
+    /// the RTL8761B's project ID
+    fn patch(payload_len: usize) -> Vec<u8> {
+        let mut f = b"Realtech".to_vec();
+        f.extend_from_slice(&0x1234_5678u32.to_le_bytes());
+        f.extend_from_slice(&1u16.to_le_bytes()); // patches
+        f.extend_from_slice(&1u16.to_le_bytes()); // chip ID: ROM version + 1
+        f.extend_from_slice(&(payload_len as u16).to_le_bytes());
+        f.extend_from_slice(&22u32.to_le_bytes()); // offset
+        f.extend(std::iter::repeat_n(0xA5, payload_len));
+        f.extend_from_slice(&[0xFF, 14, 0x01, 0x00, 0x51, 0x04, 0xFD, 0x77]);
+        f
+    }
+
+    fn temp_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("bc-rtk-download-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Issue #86: Realtek's driver firmware comes without a config file.
+    /// BTstack then closed a file it never opened, which ended the process.
+    #[test]
+    fn a_missing_config_file_is_no_crash() {
+        let dir = temp_dir();
+        let fw = dir.join("fw.bin");
+        std::fs::write(&fw, patch(600)).unwrap();
+        let config = dir.join("none_config.bin");
+        let without = patch_length(&fw, &config, 0);
+        std::fs::write(&config, [0x55, 0xAB, 0x23, 0x87, 0x00, 0x00]).unwrap();
+        let with = patch_length(&fw, &config, 0);
+        let missing_fw = patch_length(&dir.join("none_fw.bin"), &config, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(without, 600);
+        assert_eq!(with, 606);
+        assert_eq!(missing_fw, 0);
+    }
+
+    /// The RTL8761B firmware of Realtek's Windows driver on this PC, without
+    /// a config file, as the user's adapter (ROM version 1) gets it
+    #[test]
+    #[ignore = "needs Realtek's RTL8761B driver installed"]
+    fn the_driver_firmware_of_this_pc_without_a_config_file() {
+        let windows = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+        let store = windows.join("System32").join("DriverStore").join("FileRepository");
+        let fw = std::fs::read_dir(store)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path().join("rtl8761b_mp_chip_bt40_fw_asic_rom_patch_new.dat"))
+            .find(|p| p.is_file())
+            .expect("no RTL8761B driver firmware");
+        let length = patch_length(&fw, &std::env::temp_dir().join("bc-no-such-dir").join("rtl8761bu_config.bin"), 1);
+        println!("patch length {length}");
+        assert!(length > 0);
+    }
 }
 
 #[cfg(feature = "sbc-reference")]
@@ -315,8 +471,9 @@ pub mod sbc_reference {
             bitpool: i32,
         ) -> Encoder {
             // SAFETY: plain values; returns an owned, heap-allocated state.
-            let p =
-                unsafe { ffi::a2dpwb_sbc_ref_new(sample_rate, channel_mode, blocks, subbands, allocation, bitpool) };
+            let p = unsafe {
+                ffi::bluecaster_sbc_ref_new(sample_rate, channel_mode, blocks, subbands, allocation, bitpool)
+            };
             assert!(!p.is_null());
             Encoder(p)
         }
@@ -328,7 +485,7 @@ pub mod sbc_reference {
             // SAFETY: self.0 is a live state; the encoder reads blocks *
             // subbands * channels samples, which the caller provides; out has
             // out.len() bytes.
-            let n = unsafe { ffi::a2dpwb_sbc_ref_encode(self.0, pcm.as_ptr(), out.as_mut_ptr(), out.len() as i32) };
+            let n = unsafe { ffi::bluecaster_sbc_ref_encode(self.0, pcm.as_ptr(), out.as_mut_ptr(), out.len() as i32) };
             assert!(n >= 0);
             out.truncate(n as usize);
             out
@@ -337,8 +494,8 @@ pub mod sbc_reference {
 
     impl Drop for Encoder {
         fn drop(&mut self) {
-            // SAFETY: allocated by a2dpwb_sbc_ref_new, freed once.
-            unsafe { ffi::a2dpwb_sbc_ref_free(self.0) };
+            // SAFETY: allocated by bluecaster_sbc_ref_new, freed once.
+            unsafe { ffi::bluecaster_sbc_ref_free(self.0) };
         }
     }
 }

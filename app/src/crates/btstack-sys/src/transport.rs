@@ -28,11 +28,20 @@
 //!
 //! Hidden is the default of every run; [`crate::Stack::set_le_hidden`]
 //! (before hci_init) turns it off when LE Audio is on.
+//!
+//! # SCO hidden
+//!
+//! ENABLE_SCO_OVER_HCI (headset microphone) makes HCI init send Write
+//! Synchronous Flow Control Enable and Write Default Erroneous Data
+//! Reporting to every controller that lists them; BTstack has no switch for
+//! it at run time. Without voice ([`crate::Stack::set_sco_hidden`], the
+//! default of every run) their supported-commands bits are cleared the same
+//! way, so HCI init stays as it was without SCO support.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use crate::consts::{
     ERROR_CODE_UNKNOWN_HCI_COMMAND, HCI_COMMAND_DATA_PACKET, HCI_EVENT_COMMAND_COMPLETE, HCI_EVENT_PACKET,
@@ -59,6 +68,176 @@ pub trait HciBackend: Send {
     }
     /// Sends one packet (H4 packet type, packet without type byte)
     fn send(&mut self, packet_type: u8, packet: &[u8]) -> bool;
+    /// The controller runs its bootloader (an Intel controller before its
+    /// firmware download): events also arrive on the ACL data pipe (an
+    /// Intel bootloader answers there), and close sends no HCI Reset (a
+    /// bootloader does not know it; one was seen to answer nothing after
+    /// it). Off again at every open. Transports that tell packet types
+    /// apart and have no reset on close (H4) ignore it.
+    fn set_bootloader(&mut self, _on: bool) {}
+    /// A control transfer on the device's default pipe, for a chip loader
+    /// (vendor registers, string descriptors): IN gives the bytes read, OUT
+    /// none. Transports without one (H4) refuse it.
+    fn control(&mut self, _request: &ControlRequest) -> Result<Vec<u8>, String> {
+        Err("not a USB transport".into())
+    }
+    /// The open device's USB descriptors, for a chip report
+    fn usb_descriptors(&mut self) -> Option<UsbDescriptors> {
+        None
+    }
+    /// Whether this backend is an "H2" (USB isochronous) transport: BTstack
+    /// then sizes SCO payloads to 3 ms of audio, takes
+    /// HCI_EVENT_SCO_CAN_SEND_NOW from the transport as its send token
+    /// (deliver it as an event: `[0x6F, 0]`) and calls
+    /// [`set_sco_config`](Self::set_sco_config). Only asynchronous backends
+    /// can be; TCP returns false (SCO flows like ACL there).
+    fn is_h2(&self) -> bool {
+        false
+    }
+    /// BTstack's set_sco_config (H2 only): the voice setting (bit 0x0020:
+    /// 16-bit samples) and the number of SCO connections (0: none left).
+    /// The USB backend starts or stops its isochronous pipes here.
+    fn set_sco_config(&mut self, _voice_setting: u16, _connections: u8) {}
+    /// Whether SCO data can flow now (H2: the isochronous pipes run). Read
+    /// when an audio connection is up, after BTstack's set_sco_config.
+    fn sco_ready(&self) -> bool {
+        true
+    }
+}
+
+/// Which of the shim's transport tables BTstack gets
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransportKind {
+    Sync = 0,
+    Async = 1,
+    /// Asynchronous, named "H2_..." (SCO over USB isochronous)
+    H2 = 2,
+}
+
+/// bmRequestType's type bits
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlKind {
+    Standard,
+    Class,
+    Vendor,
+}
+
+/// bmRequestType's recipient bits
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlRecipient {
+    Device,
+    Interface,
+    Endpoint,
+    Other,
+    /// Recipient bits USB leaves reserved (4..=31), sent as they are
+    /// (Developer > Debug only; WinUSB transport, OUT only)
+    Reserved(u8),
+}
+
+/// The data stage: IN with the length to read, or OUT with the bytes
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlData {
+    In(u16),
+    Out(Vec<u8>),
+}
+
+/// A USB control transfer ([`HciBackend::control`])
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlRequest {
+    pub kind: ControlKind,
+    pub recipient: ControlRecipient,
+    pub request: u8,
+    pub value: u16,
+    pub index: u16,
+    pub data: ControlData,
+}
+
+impl ControlRequest {
+    /// GET_DESCRIPTOR of a string (USB 2.0 9.4.3), US English
+    pub fn string_descriptor(index: u8) -> ControlRequest {
+        ControlRequest {
+            kind: ControlKind::Standard,
+            recipient: ControlRecipient::Device,
+            request: 0x06,
+            value: 0x0300 | index as u16,
+            index: 0x0409,
+            data: ControlData::In(255),
+        }
+    }
+
+    /// GET_DESCRIPTOR of the device descriptor (USB 2.0 9.4.3)
+    pub fn device_descriptor() -> ControlRequest {
+        ControlRequest {
+            kind: ControlKind::Standard,
+            recipient: ControlRecipient::Device,
+            request: 0x06,
+            value: 0x0100,
+            index: 0,
+            data: ControlData::In(18),
+        }
+    }
+
+    /// The 8-byte SETUP packet: bmRequestType, bRequest, wValue, wIndex,
+    /// wLength (little endian)
+    pub fn setup_packet(&self) -> [u8; 8] {
+        let (dir, len) = match &self.data {
+            ControlData::In(n) => (0x80, *n),
+            ControlData::Out(d) => (0x00, d.len() as u16),
+        };
+        let kind = match self.kind {
+            ControlKind::Standard => 0,
+            ControlKind::Class => 1,
+            ControlKind::Vendor => 2,
+        };
+        let recipient = match self.recipient {
+            ControlRecipient::Device => 0,
+            ControlRecipient::Interface => 1,
+            ControlRecipient::Endpoint => 2,
+            ControlRecipient::Other => 3,
+            ControlRecipient::Reserved(bits) => bits & 0x1F,
+        };
+        let [v0, v1] = self.value.to_le_bytes();
+        let [i0, i1] = self.index.to_le_bytes();
+        let [l0, l1] = len.to_le_bytes();
+        [dir | kind << 5 | recipient, self.request, v0, v1, i0, i1, l0, l1]
+    }
+
+    /// The SETUP packet's fields for a log line: "IN vendor/device 0x63
+    /// value 0x0000 index 0x0000 length 4"
+    pub fn describe(&self) -> String {
+        let (dir, len) = match &self.data {
+            ControlData::In(n) => ("IN", *n as usize),
+            ControlData::Out(d) => ("OUT", d.len()),
+        };
+        let kind = match self.kind {
+            ControlKind::Standard => "standard",
+            ControlKind::Class => "class",
+            ControlKind::Vendor => "vendor",
+        };
+        let recipient = match self.recipient {
+            ControlRecipient::Device => "device".to_owned(),
+            ControlRecipient::Interface => "interface".to_owned(),
+            ControlRecipient::Endpoint => "endpoint".to_owned(),
+            ControlRecipient::Other => "other".to_owned(),
+            ControlRecipient::Reserved(bits) => format!("reserved 0x{:02X}", bits & 0x1F),
+        };
+        format!(
+            "{dir} {kind}/{recipient} 0x{:02X} value 0x{:04X} index 0x{:04X} length {len}",
+            self.request, self.value, self.index
+        )
+    }
+}
+
+/// A USB device's descriptors as the OS keeps them
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UsbDescriptors {
+    /// The device descriptor (18 bytes)
+    pub device: Vec<u8>,
+    /// Each configuration descriptor with its interfaces and endpoints
+    pub configurations: Vec<Vec<u8>>,
+    /// One line per interface setting: "interface 0 alt 0 class E0/01/01:
+    /// 0x81 interrupt 16, 0x02 bulk 64, 0x82 bulk 64"
+    pub summary: Vec<String>,
 }
 
 /// The way back from a backend's I/O threads into BTstack. Belongs to one
@@ -78,12 +257,44 @@ static RX: Mutex<RxQueue> = Mutex::new(RxQueue { packets: VecDeque::new(), free:
 static SENT: AtomicU32 = AtomicU32::new(0);
 static FAILED: AtomicBool = AtomicBool::new(false);
 static LOSS_EXPECTED: AtomicBool = AtomicBool::new(false);
+/// The controller's answer to Read Local Supported Commands of this run, as
+/// it sent it: 0 not seen, 1 without, 2 with the isochronous commands
+static CONTROLLER_ISO: AtomicU8 = AtomicU8::new(0);
 
 thread_local! {
     static BACKEND: RefCell<Option<Box<dyn HciBackend>>> = const { RefCell::new(None) };
     static OPEN: Cell<bool> = const { Cell::new(false) };
     /// The controller's LE support is hidden from BTstack (module docs)
     static LE_HIDDEN: Cell<bool> = const { Cell::new(true) };
+    /// A firmware loader in the app drives the transport (before HCI init):
+    /// received packets go to it, not to BTstack
+    static RAW: Cell<bool> = const { Cell::new(false) };
+    /// The open adapter's broken commands ([`broken_command_bits`])
+    static BROKEN: Cell<&'static [(usize, u8)]> = const { Cell::new(&[]) };
+    /// The SCO commands of HCI init are hidden from BTstack (module docs)
+    static SCO_HIDDEN: Cell<bool> = const { Cell::new(true) };
+}
+
+// ---- SCO hidden ----
+
+/// The supported-commands bits (octet, bit) BTstack's HCI init sends a
+/// command for because ENABLE_SCO_OVER_HCI is compiled in: Write
+/// Synchronous Flow Control Enable and Write Default Erroneous Data
+/// Reporting (hci.c, SUPPORTED_HCI_COMMANDS)
+pub const SCO_INIT_COMMAND_BITS: [(usize, u8); 2] = [(10, 4), (18, 3)];
+
+/// See [`crate::Stack::set_sco_hidden`]. False (and no change) once a
+/// backend is installed.
+pub(crate) fn set_sco_hidden(hidden: bool) -> bool {
+    if BACKEND.with(|b| b.borrow().is_some()) {
+        return false;
+    }
+    SCO_HIDDEN.with(|h| h.set(hidden));
+    true
+}
+
+pub(crate) fn sco_hidden() -> bool {
+    SCO_HIDDEN.with(|h| h.get())
 }
 
 // ---- LE hidden: pure functions ----
@@ -100,6 +311,21 @@ pub const LE_HIDDEN_COMMAND_BITS: [(usize, u8); 10] =
 
 /// LMP feature bit 38, LE Supported (Controller): octet 4, bit 6
 pub const LE_SUPPORTED_FEATURE: (usize, u8) = (4, 6);
+
+/// LE Read Buffer Size v2 in the supported commands: the controller has the
+/// isochronous channels LE Audio streams over (Bluetooth 5.2)
+pub const ISO_COMMAND_BIT: (usize, u8) = (41, 5);
+
+/// Whether a successful Read Local Supported Commands answer lists the
+/// isochronous commands; None for every other packet
+pub fn iso_commands_in(packet: &[u8]) -> Option<bool> {
+    if packet.len() < 6 + 64 || packet[0] != HCI_EVENT_COMMAND_COMPLETE || packet[5] != 0 {
+        return None;
+    }
+    let opcode = u16::from_le_bytes([packet[3], packet[4]]);
+    let (octet, bit) = ISO_COMMAND_BIT;
+    (opcode == HCI_OPCODE_READ_LOCAL_SUPPORTED_COMMANDS).then(|| packet[6 + octet] & (1 << bit) != 0)
+}
 
 /// The opcode of a command that is answered locally while LE is hidden (an
 /// LE controller command, OGF 0x08, or Write LE Host Supported), None for
@@ -140,6 +366,40 @@ pub fn le_hidden_patch_event(packet: &mut [u8]) {
     }
 }
 
+// ---- Controllers that list commands they cannot do ----
+
+/// Actions ATS2851 dongles ("Actions general adapter")
+pub const ATS2851: (u16, u16) = (0x10D7, 0xB012);
+
+/// The supported-commands bits (octet, bit) to clear for an adapter that
+/// lists commands it answers wrongly, so BTstack takes the path it has for a
+/// controller without them. ATS2851: Read Encryption Key Size (answered with
+/// a Command Status error, which BTstack never gets past; without it BTstack
+/// takes the key size as 16), Write Default Erroneous Data Reporting, LE Set
+/// Address Resolution Enable and LE Set Extended Advertising Enable
+/// (BTstack's switch to the extended LE commands, which the chip also
+/// refuses)
+pub fn broken_command_bits(vid: u16, pid: u16) -> &'static [(usize, u8)] {
+    match (vid, pid) {
+        ATS2851 => &[(18, 3), (20, 4), (35, 1), (36, 5)],
+        _ => &[],
+    }
+}
+
+/// Clears `bits` in a successful Read Local Supported Commands answer; other
+/// packets are left alone
+pub fn patch_broken_commands(packet: &mut [u8], bits: &[(usize, u8)]) {
+    if bits.is_empty() || packet.len() < 6 + 64 || packet[0] != HCI_EVENT_COMMAND_COMPLETE || packet[5] != 0 {
+        return;
+    }
+    if u16::from_le_bytes([packet[3], packet[4]]) != HCI_OPCODE_READ_LOCAL_SUPPORTED_COMMANDS {
+        return;
+    }
+    for &(octet, bit) in bits {
+        packet[6 + octet] &= !(1u8 << bit);
+    }
+}
+
 /// See [`crate::Stack::set_le_hidden`]. False (and no change) once a backend
 /// is installed.
 pub(crate) fn set_le_hidden(hidden: bool) -> bool {
@@ -152,6 +412,14 @@ pub(crate) fn set_le_hidden(hidden: bool) -> bool {
 
 pub(crate) fn le_hidden() -> bool {
     LE_HIDDEN.with(|h| h.get())
+}
+
+/// See [`crate::Stack::controller_iso`]
+pub(crate) fn controller_iso() -> Option<bool> {
+    match CONTROLLER_ISO.load(Ordering::Acquire) {
+        0 => None,
+        v => Some(v == 2),
+    }
 }
 
 impl Upstream {
@@ -215,24 +483,57 @@ pub(crate) fn loss_expected() -> bool {
 /// Clears what a previous run left
 pub(crate) fn reset() {
     let mut q = RX.lock().unwrap_or_else(|e| e.into_inner());
+    if !q.packets.is_empty() {
+        tracing::debug!(target: "hci", "transport reset: {} queued packet(s) dropped", q.packets.len());
+    }
     q.packets.clear();
     SENT.store(0, Ordering::Release);
     FAILED.store(false, Ordering::Release);
+    CONTROLLER_ISO.store(0, Ordering::Release);
     LE_HIDDEN.with(|h| h.set(true));
+    SCO_HIDDEN.with(|h| h.set(true));
+    RAW.with(|r| r.set(false));
+    BROKEN.with(|b| b.set(&[]));
 }
 
 pub(crate) fn failed() -> bool {
     FAILED.load(Ordering::Acquire)
 }
 
-pub(crate) fn install(backend: Box<dyn HciBackend>) -> bool {
+pub(crate) fn install(backend: Box<dyn HciBackend>) -> TransportKind {
     let is_async = backend.is_async();
+    let h2 = is_async && backend.is_h2();
+    tracing::debug!(target: "hci", "transport installed (async {is_async}, H2 {h2})");
     BACKEND.with(|b| *b.borrow_mut() = Some(backend));
-    is_async
+    kind()
 }
 
 pub(crate) fn is_async() -> bool {
     BACKEND.with(|b| b.borrow().as_ref().is_some_and(|b| b.is_async()))
+}
+
+/// The installed backend's kind (synchronous when none)
+pub(crate) fn kind() -> TransportKind {
+    BACKEND.with(|b| match b.borrow().as_ref() {
+        Some(b) if b.is_async() && b.is_h2() => TransportKind::H2,
+        Some(b) if b.is_async() => TransportKind::Async,
+        _ => TransportKind::Sync,
+    })
+}
+
+/// The installed backend's [`HciBackend::sco_ready`] (false without one)
+pub(crate) fn sco_ready() -> bool {
+    BACKEND.with(|b| b.borrow().as_ref().is_some_and(|b| b.sco_ready()))
+}
+
+/// BTstack's set_sco_config (the H2 transport only)
+pub(crate) fn set_sco_config(voice_setting: u16, connections: u8) {
+    tracing::debug!(target: "hci", "SCO config: voice setting 0x{voice_setting:04X}, {connections} connection(s)");
+    BACKEND.with(|b| {
+        if let Some(backend) = b.borrow_mut().as_mut() {
+            backend.set_sco_config(voice_setting, connections);
+        }
+    });
 }
 
 pub(crate) fn open() -> bool {
@@ -243,7 +544,21 @@ pub(crate) fn open() -> bool {
     });
     match result {
         Ok(()) => {
+            tracing::debug!(target: "hci", "HCI transport opened");
             OPEN.with(|o| o.set(true));
+            // A USB adapter's ID from its device descriptor (none over H4)
+            let ids = usb_descriptors().and_then(|d| {
+                let b = d.device.get(8..12)?;
+                Some((u16::from_le_bytes([b[0], b[1]]), u16::from_le_bytes([b[2], b[3]])))
+            });
+            let bits = ids.map_or(&[][..], |(vid, pid)| broken_command_bits(vid, pid));
+            if let (Some((vid, pid)), false) = (ids, bits.is_empty()) {
+                tracing::info!(
+                    target: "hci",
+                    "{vid:04X}:{pid:04X} lists commands it cannot do: hidden from BTstack {bits:?}"
+                );
+            }
+            BROKEN.with(|b| b.set(bits));
             true
         }
         Err(e) => {
@@ -254,6 +569,7 @@ pub(crate) fn open() -> bool {
 }
 
 pub(crate) fn close() {
+    tracing::debug!(target: "hci", "HCI transport closing (open {})", OPEN.with(|o| o.get()));
     OPEN.with(|o| o.set(false));
     BACKEND.with(|b| {
         if let Some(backend) = b.borrow_mut().as_mut() {
@@ -268,6 +584,43 @@ pub(crate) fn uninstall() {
     BACKEND.with(|b| b.borrow_mut().take());
 }
 
+/// Raw mode on or off ([`crate::Stack::raw_begin`])
+pub(crate) fn set_raw(on: bool) {
+    RAW.with(|r| r.set(on));
+    if !on {
+        // The loader's "packet sent" reports are not BTstack's: HCI would
+        // take one for its first command
+        SENT.store(0, Ordering::Release);
+    }
+}
+
+/// Sends without LE hidden (raw mode)
+pub(crate) fn send_raw(packet_type: u8, packet: &[u8]) -> bool {
+    let ok = BACKEND.with(|b| b.borrow_mut().as_mut().is_some_and(|b| b.send(packet_type, packet)));
+    tracing::trace!(target: "hci", "raw send type 0x{packet_type:02X}, {} bytes: {ok}", packet.len());
+    ok
+}
+
+/// A control transfer for a chip loader ([`HciBackend::control`])
+pub(crate) fn control(request: &ControlRequest) -> Result<Vec<u8>, String> {
+    BACKEND.with(|b| match b.borrow_mut().as_mut() {
+        Some(b) => b.control(request),
+        None => Err("no transport".into()),
+    })
+}
+
+pub(crate) fn usb_descriptors() -> Option<UsbDescriptors> {
+    BACKEND.with(|b| b.borrow_mut().as_mut().and_then(|b| b.usb_descriptors()))
+}
+
+pub(crate) fn set_bootloader(on: bool) {
+    BACKEND.with(|b| {
+        if let Some(backend) = b.borrow_mut().as_mut() {
+            backend.set_bootloader(on);
+        }
+    });
+}
+
 pub(crate) fn can_send(packet_type: u8) -> bool {
     BACKEND.with(|b| b.borrow_mut().as_mut().is_some_and(|b| b.can_send(packet_type)))
 }
@@ -279,7 +632,9 @@ pub(crate) fn send(packet_type: u8, packet: &[u8]) -> bool {
         answer_locally(opcode);
         return true;
     }
-    BACKEND.with(|b| b.borrow_mut().as_mut().is_some_and(|b| b.send(packet_type, packet)))
+    let ok = BACKEND.with(|b| b.borrow_mut().as_mut().is_some_and(|b| b.send(packet_type, packet)));
+    tracing::trace!(target: "hci", "send type 0x{packet_type:02X}, {} bytes: {ok}", packet.len());
+    ok
 }
 
 /// LE hidden: the command is not sent; from the run loop, as after any
@@ -300,27 +655,29 @@ fn answer_locally(opcode: u16) {
     post_wake();
 }
 
-/// On the run loop: hands queued completions and packets to BTstack
-pub(crate) fn pump() {
+/// On the run loop: hands queued completions and packets to BTstack, or
+/// in raw mode the packets to `raw` (the app's firmware loader)
+pub(crate) fn pump(mut raw: impl FnMut(u8, &[u8])) {
     let sent = SENT.swap(0, Ordering::AcqRel);
-    for _ in 0..sent {
-        // SAFETY: on the run loop thread; the shim checks for a handler.
-        unsafe { crate::ffi::a2dpwb_transport_packet_sent() };
+    if sent > 0 {
+        tracing::trace!(target: "hci", "{sent} packet(s) sent");
     }
-    let hidden = le_hidden();
+    if !RAW.with(|r| r.get()) {
+        for _ in 0..sent {
+            // SAFETY: on the run loop thread; the shim checks for a handler.
+            unsafe { crate::ffi::bluecaster_transport_packet_sent() };
+        }
+    }
     loop {
         let next = RX.lock().unwrap_or_else(|e| e.into_inner()).packets.pop_front();
         let Some((packet_type, mut buf)) = next else { break };
-        if hidden && packet_type == HCI_EVENT_PACKET {
-            le_hidden_patch_event(&mut buf);
-        }
-        if buf.len() <= u16::MAX as usize {
-            // SAFETY: on the run loop thread; buf is valid for its length;
-            // the shim copies it and checks the size.
-            let ok = unsafe { crate::ffi::a2dpwb_transport_deliver(packet_type, buf.as_ptr(), buf.len() as u16) };
-            if ok == 0 {
-                tracing::warn!(target: "hci", "dropped an incoming HCI packet of {} bytes", buf.len());
-            }
+        // Checked per packet: the loader may end raw mode, and HCI init
+        // start, in between
+        if RAW.with(|r| r.get()) {
+            tracing::trace!(target: "hci", "raw deliver type 0x{packet_type:02X}, {} bytes", buf.len());
+            raw(packet_type, &buf);
+        } else {
+            deliver(packet_type, &mut buf, le_hidden());
         }
         let mut q = RX.lock().unwrap_or_else(|e| e.into_inner());
         if q.free.len() < 64 {
@@ -329,10 +686,53 @@ pub(crate) fn pump() {
     }
 }
 
+/// One received packet to BTstack
+fn deliver(packet_type: u8, buf: &mut [u8], hidden: bool) {
+    if packet_type == HCI_EVENT_PACKET {
+        // As the controller sent it, before LE hidden clears its LE bits
+        if let Some(iso) = iso_commands_in(buf) {
+            tracing::debug!(target: "hci", "supported commands: ISO {}", if iso { "yes" } else { "no" });
+            CONTROLLER_ISO.store(if iso { 2 } else { 1 }, Ordering::Release);
+        }
+        patch_broken_commands(buf, BROKEN.with(|b| b.get()));
+        if sco_hidden() {
+            patch_broken_commands(buf, &SCO_INIT_COMMAND_BITS);
+        }
+        if hidden {
+            le_hidden_patch_event(buf);
+        }
+    }
+    tracing::trace!(target: "hci", "deliver type 0x{packet_type:02X}, {} bytes", buf.len());
+    if buf.len() <= u16::MAX as usize {
+        // SAFETY: on the run loop thread; buf is valid for its length;
+        // the shim copies it and checks the size.
+        let ok = unsafe { crate::ffi::bluecaster_transport_deliver(packet_type, buf.as_ptr(), buf.len() as u16) };
+        if ok == 0 {
+            tracing::warn!(target: "hci", "dropped an incoming HCI packet of {} bytes", buf.len());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::consts::{HCI_ACL_DATA_PACKET, HCI_ISO_DATA_PACKET};
+
+    #[test]
+    fn setup_packet_keeps_reserved_recipient_bits() {
+        let r = ControlRequest {
+            kind: ControlKind::Vendor,
+            recipient: ControlRecipient::Reserved(0x1F),
+            request: 0x07,
+            value: 0x1234,
+            index: 0x5678,
+            data: ControlData::Out(vec![1, 2, 3, 4]),
+        };
+        assert_eq!(r.setup_packet(), [0x5F, 0x07, 0x34, 0x12, 0x78, 0x56, 4, 0]);
+        assert_eq!(r.describe(), "OUT vendor/reserved 0x1F 0x07 value 0x1234 index 0x5678 length 4");
+        let device = ControlRequest { recipient: ControlRecipient::Device, data: ControlData::In(4), ..r };
+        assert_eq!(device.setup_packet(), [0xC0, 0x07, 0x34, 0x12, 0x78, 0x56, 4, 0]);
+    }
 
     #[test]
     fn le_commands_are_intercepted() {
@@ -403,6 +803,61 @@ mod tests {
         assert_eq!(commands[24], 0xBF);
         assert_eq!(commands[35], 0xD5);
         assert_eq!(commands[48], 0x7F);
+    }
+
+    #[test]
+    fn iso_commands_from_supported_commands() {
+        let mut commands = [0u8; 64];
+        assert_eq!(iso_commands_in(&command_complete(0x1002, &commands)), Some(false));
+        commands[41] = 1 << 5;
+        assert_eq!(iso_commands_in(&command_complete(0x1002, &commands)), Some(true));
+        // Other commands, a failed answer, a short one
+        assert_eq!(iso_commands_in(&command_complete(0x1003, &[0xFF; 64])), None);
+        let mut failed = command_complete(0x1002, &[0xFF; 64]);
+        failed[5] = 1;
+        assert_eq!(iso_commands_in(&failed), None);
+        assert_eq!(iso_commands_in(&command_complete(0x1002, &[0xFF; 8])), None);
+    }
+
+    #[test]
+    fn the_ats2851_loses_the_commands_it_cannot_do() {
+        let bits = broken_command_bits(0x10D7, 0xB012);
+        // Read Encryption Key Size: BTstack then takes the key size as 16
+        assert!(bits.contains(&(20, 4)));
+        let mut p = command_complete(0x1002, &[0xFF; 64]);
+        patch_broken_commands(&mut p, bits);
+        for (octet, byte) in p[6..].iter().enumerate() {
+            let cleared: u8 = bits.iter().filter(|(o, _)| *o == octet).fold(0, |m, (_, b)| m | (1 << b));
+            assert_eq!(*byte, !cleared, "octet {octet}");
+        }
+        // Other adapters, other answers, a failed answer: untouched
+        assert!(broken_command_bits(0x0BDA, 0x8771).is_empty());
+        for opcode in [0x1001u16, 0x1003] {
+            let mut p = command_complete(opcode, &[0xFF; 64]);
+            patch_broken_commands(&mut p, bits);
+            assert!(p[6..].iter().all(|&b| b == 0xFF));
+        }
+        let mut failed = command_complete(0x1002, &[0xFF; 64]);
+        failed[5] = 1;
+        let before = failed.clone();
+        patch_broken_commands(&mut failed, bits);
+        assert_eq!(failed, before);
+    }
+
+    #[test]
+    fn sco_init_commands_hidden_without_voice() {
+        // Write Synchronous Flow Control Enable, Write Default Erroneous
+        // Data Reporting: as hci.c's SUPPORTED_HCI_COMMANDS has them
+        assert_eq!(SCO_INIT_COMMAND_BITS, [(10, 4), (18, 3)]);
+        let mut p = command_complete(0x1002, &[0xFF; 64]);
+        patch_broken_commands(&mut p, &SCO_INIT_COMMAND_BITS);
+        assert_eq!((p[6 + 10], p[6 + 18]), (0xEF, 0xF7));
+        assert_eq!(p[6..].iter().filter(|&&b| b != 0xFF).count(), 2);
+        // Hidden by default (this thread has no backend), off for voice
+        assert!(sco_hidden());
+        assert!(set_sco_hidden(false));
+        assert!(!sco_hidden());
+        assert!(set_sco_hidden(true));
     }
 
     #[test]

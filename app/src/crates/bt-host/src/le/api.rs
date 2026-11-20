@@ -21,6 +21,7 @@ use le_audio::sdu_queue::{SduQueue, SduSet};
 
 use super::core::{ConnectResult, LeCtx, LeDone};
 use super::gatt_client::{GattChar, GattService, PROPERTY_INDICATE, PROPERTY_NOTIFY};
+use super::iso_recv::{LeRxHandle, LeRxStats, LeRxStream, RX_RING_SDUS};
 use super::iso_send::queue_depth;
 use super::{
     LeAddr, LeDeviceId, LeDeviceInfo, LeScanResult, LeSduSink, LeStreamRequest, LeStreamStarted, LeStreamStats,
@@ -37,6 +38,9 @@ const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// Waits look at the cancel this often
 const POLL: Duration = Duration::from_millis(50);
 const FIND_POLL: Duration = Duration::from_millis(100);
+/// [`BtHost::le_scan_start`]: 30 ms of every 60 ms (0.625 ms units)
+const SHARED_SCAN_INTERVAL: u16 = 0x0060;
+const SHARED_SCAN_WINDOW: u16 = 0x0030;
 
 /// A completion the worker waits for (the first `set` counts)
 #[derive(Default)]
@@ -127,6 +131,28 @@ impl BtHost {
         r
     }
 
+    /// Starts an LE scan that runs beside a classic one
+    /// ([`BtHost::scan_with`]) until [`BtHost::le_scan_stop`]: half the time
+    /// on air, the rest left to the inquiry and name requests. False when LE
+    /// Audio is not ready.
+    pub fn le_scan_start(&self) -> bool {
+        if !self.le_ready() {
+            return false;
+        }
+        tracing::info!("LE Audio: scanning beside the classic scan");
+        self.le_run(RUN_TIMEOUT, |ctx| ctx.start_scan_with(SHARED_SCAN_INTERVAL, SHARED_SCAN_WINDOW)).is_some()
+    }
+
+    /// The advertisers of the running [`BtHost::le_scan_start`] so far
+    pub fn le_scan_results(&self) -> Vec<LeScanResult> {
+        self.le_run(RUN_TIMEOUT, |ctx| ctx.scan_results()).unwrap_or_default()
+    }
+
+    /// Ends [`BtHost::le_scan_start`]'s scan: what it found
+    pub fn le_scan_stop(&self) -> Vec<LeScanResult> {
+        self.le_run(RUN_TIMEOUT, |ctx| ctx.stop_scan()).unwrap_or_default()
+    }
+
     /// Scans until `addr` is seen (to learn its address type and name).
     /// `addr` may be an identity address or an RPA of a bonded device: an
     /// advertiser whose RPA resolves to the same identity matches too, and
@@ -141,10 +167,15 @@ impl BtHost {
         self.le_run(RUN_TIMEOUT, move |ctx| ctx.start_find(want));
         let end = Instant::now() + timeout;
         let mut found = None;
+        tracing::debug!("LE Audio: find {want} for {} ms", timeout.as_millis());
         while found.is_none() && Instant::now() < end && !self.le_cancelled() {
             std::thread::sleep(FIND_POLL);
             found = self.le_run(RUN_TIMEOUT, move |ctx| ctx.find_match(want)).flatten();
         }
+        tracing::debug!(
+            "LE Audio: find {want}: {}",
+            found.as_ref().map_or("not found".to_string(), |r| format!("{} (type {})", r.addr, r.addr.addr_type))
+        );
         self.le_run(RUN_TIMEOUT, |ctx| {
             ctx.stop_scan();
         });
@@ -391,7 +422,12 @@ impl BtHost {
         if !self.le_on {
             return;
         }
-        self.le_wait(DISCONNECT_TIMEOUT, false, move |ctx, done| ctx.disconnect_device(device, done));
+        let ok = self.le_wait(DISCONNECT_TIMEOUT, false, move |ctx, done| ctx.disconnect_device(device, done));
+        tracing::debug!(
+            "LE Audio: disconnect device {}: {}",
+            device.0,
+            if ok { "done" } else { "failed or timed out" }
+        );
     }
 
     /// Disconnects every LE device (waits up to 3 s)
@@ -428,15 +464,24 @@ impl BtHost {
             return Err(why.into());
         }
         self.le.stream_lost.store(false, Ordering::Release);
+        self.le.set_members_missing.store(0, Ordering::Release);
         let hooks = self.le.hooks();
         let cancelled = || self.le_cancelled();
         for h in &hooks {
             tracing::debug!("LE Audio: {}: preparing the group", h.name());
             h.prepare_group(self, &mut devices, &cancelled);
         }
+        tracing::debug!(
+            "LE Audio: stream request {request:?} for devices {:?} (ISO {iso_count} x {iso_len})",
+            devices.iter().map(|d| d.0).collect::<Vec<_>>()
+        );
         for h in &hooks {
             h.adjust_stream_request(self, &devices, &mut request);
         }
+        tracing::debug!(
+            "LE Audio: stream request after the modules {request:?} for devices {:?}",
+            devices.iter().map(|d| d.0).collect::<Vec<_>>()
+        );
 
         let (ids, req) = (devices.clone(), request.clone());
         let plan = match self.le_run(RUN_TIMEOUT, move |ctx| ctx.plan_for(&ids, &req)) {
@@ -452,17 +497,55 @@ impl BtHost {
             }
         };
 
-        // The jitter buffer, with the silence for underruns
+        // The jitter buffer, with the silence for underruns (one SDU per CIS
+        // with a sink direction)
         let queue = Arc::new(Mutex::new(SduQueue::new()));
+        let sending = plan.sink_cis().count();
+        tracing::debug!(
+            "LE Audio: jitter buffer for {sending} CIS, controller queue depth {}",
+            queue_depth(iso_count, sending).max(1)
+        );
         queue
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .configure(queue_depth(iso_count, plan.cis.len()).max(1), silence(&plan));
+            .configure(queue_depth(iso_count, sending).max(1), silence(&plan));
         let status = LeStreamStatus { active: false, plan: plan.clone(), devices, summary: plan.describe() };
+
+        // The microphone's SDUs: a lock-free ring from the BTstack thread
+        let mut rx_handle = None;
+        let mut rx_producer = None;
+        if let Some(src) = &plan.source {
+            let (producer, consumer) = rtrb::RingBuffer::new(RX_RING_SDUS);
+            let stats = Arc::new(LeRxStats::default());
+            let streams = plan
+                .source_cis()
+                .filter_map(|c| {
+                    c.source_ase.map(|s| LeRxStream {
+                        device_id: c.device_id,
+                        cis_id: c.cis_id,
+                        ase_id: s.ase_id,
+                        channels: s.channels,
+                        octets: s.octets,
+                    })
+                })
+                .collect();
+            rx_handle = Some(LeRxHandle {
+                consumer,
+                streams,
+                sample_rate: src.preset.sampling_hz,
+                frame_us: u32::from(src.preset.frame_us),
+                preset: src.preset.name.clone(),
+                stats: stats.clone(),
+            });
+            rx_producer = Some((producer, stats));
+        } else if !plan.source_note.is_empty() {
+            tracing::warn!("LE Audio: streaming without the microphone: {}", plan.source_note);
+        }
 
         let why = Arc::new(Mutex::new(String::new()));
         let (q, st, w) = (queue.clone(), status.clone(), why.clone());
-        let ok = self.le_wait(START_TIMEOUT, true, move |ctx, done| ctx.start_unicast(plan, q, st, w, done));
+        let ok =
+            self.le_wait(START_TIMEOUT, true, move |ctx, done| ctx.start_unicast(plan, q, rx_producer, st, w, done));
         if !ok {
             let why = why.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let reason = if !why.is_empty() {
@@ -478,7 +561,10 @@ impl BtHost {
         }
         let status = self.le_run(RUN_TIMEOUT, |ctx| ctx.stream_status()).flatten().unwrap_or(status);
         tracing::info!("LE Audio: streaming: {}", status.summary);
-        Ok(LeStreamStarted { status, sink: LeSduSink::new(queue) })
+        if let Some(s) = status.plan.describe_source() {
+            tracing::info!("LE Audio: streaming: {s}");
+        }
+        Ok(LeStreamStarted { status, sink: LeSduSink::new(queue), rx: rx_handle })
     }
 
     /// Disable / release the ASEs, remove the CIG (devices stay connected;
@@ -487,13 +573,105 @@ impl BtHost {
         if !self.le_on || !self.le.initialized.load(Ordering::Acquire) {
             return;
         }
-        self.le_wait(STOP_TIMEOUT, false, |ctx, done| ctx.stop_unicast(done));
+        let started = Instant::now();
+        let ok = self.le_wait(STOP_TIMEOUT, false, |ctx, done| ctx.stop_unicast(done));
+        tracing::debug!(
+            "LE Audio: stream stop {} after {} ms",
+            if ok { "done" } else { "timed out" },
+            started.elapsed().as_millis()
+        );
+    }
+
+    /// Starts a broadcast (Auracast source, developer mode): advertising with
+    /// the announcements and the BASE, a BIG with one BIS per channel of
+    /// `le_audio::broadcast::plan(&config)`, ISO sending. Returns once audio
+    /// may flow ("Auracast: broadcasting ..."); push the SDU sets into the
+    /// returned sink. Nothing needs to be connected. Err: why (no ISO
+    /// buffers, the adapter cannot advertise or create the BIG, timeout).
+    pub fn le_start_broadcast(
+        &self,
+        config: le_audio::broadcast::BroadcastConfig,
+        silence: &dyn Fn(&StreamPlan) -> SduSet,
+    ) -> Result<LeStreamStarted, String> {
+        if !self.le_ready() {
+            return Err("LE Audio is not running".into());
+        }
+        let (iso_len, iso_count) = self.le_iso_buffers();
+        if iso_len == 0 || iso_count == 0 {
+            let why = "adapter does not support LE Audio (no ISO buffers)";
+            tracing::error!("Auracast: cannot broadcast: {why}");
+            return Err(why.into());
+        }
+        let plan = le_audio::broadcast::plan(&config);
+        if usize::from(plan.preset.octets) + 4 > usize::from(iso_len) {
+            let why = format!("SDUs of {} octets do not fit the adapter's ISO packets", plan.preset.octets);
+            tracing::error!("Auracast: cannot broadcast: {why}");
+            return Err(why);
+        }
+        self.le.stream_lost.store(false, Ordering::Release);
+        let summary = le_audio::broadcast::describe(&plan);
+        let depth = queue_depth(iso_count, plan.cis.len()).max(1);
+        let queue = Arc::new(Mutex::new(SduQueue::new()));
+        queue.lock().unwrap_or_else(|e| e.into_inner()).configure(depth, silence(&plan));
+        let status =
+            LeStreamStatus { active: false, plan: plan.clone(), devices: Vec::new(), summary: summary.clone() };
+        let why = Arc::new(Mutex::new(String::new()));
+        let (q, st, w, cfg, pl) = (queue.clone(), status, why.clone(), config.clone(), plan.clone());
+        let ok = self.le_wait(START_TIMEOUT, true, move |ctx, done| ctx.start_broadcast(cfg, pl, q, st, w, done));
+        if !ok {
+            let why = why.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let reason = if !why.is_empty() {
+                why
+            } else if self.le_cancelled() {
+                "cancelled".into()
+            } else {
+                "timeout".into()
+            };
+            tracing::error!("Auracast: setup failed: {reason}");
+            self.le_stop_broadcast();
+            return Err(reason);
+        }
+        let plan = self.le_run(RUN_TIMEOUT, |ctx| ctx.broadcast_plan()).flatten().unwrap_or(plan);
+        tracing::info!(
+            "Auracast: broadcasting \"{}\", Broadcast ID 0x{:06X}, {}: {summary}",
+            config.name,
+            config.broadcast_id,
+            if config.code.is_some() { "encrypted" } else { "open" }
+        );
+        let status = LeStreamStatus { active: true, plan, devices: Vec::new(), summary };
+        Ok(LeStreamStarted { status, sink: LeSduSink::new(queue), rx: None })
+    }
+
+    /// Ends the broadcast: LE Terminate BIG, advertising off (waits up to
+    /// 8 s)
+    pub fn le_stop_broadcast(&self) {
+        if !self.le_on || !self.le.initialized.load(Ordering::Acquire) {
+            return;
+        }
+        let started = Instant::now();
+        let ok = self.le_wait(STOP_TIMEOUT, false, |ctx, done| ctx.stop_broadcast(done));
+        tracing::debug!(
+            "Auracast: stop {} after {} ms",
+            if ok { "done" } else { "timed out" },
+            started.elapsed().as_millis()
+        );
     }
 
     /// True once after a device or CIS of the running stream was lost (the
     /// session stops and sets the stream up again)
     pub fn le_stream_lost(&self) -> bool {
         self.le.stream_lost.swap(false, Ordering::AcqRel)
+    }
+
+    /// Members of the last stream's coordinated sets left out (not found,
+    /// or down): it plays on the others, e.g. one earbud of two
+    pub fn le_set_members_missing(&self) -> u32 {
+        self.le.set_members_missing.load(Ordering::Acquire)
+    }
+
+    /// CSIP: `n` members of a set are left out of the stream being set up
+    pub(crate) fn le_note_set_members_missing(&self, n: u32) {
+        self.le.set_members_missing.fetch_add(n, Ordering::AcqRel);
     }
 
     /// Counters of the running (or last) stream
@@ -515,12 +693,15 @@ impl BtHost {
     /// Sets the headset volume (0-127) through the modules (VCP); false if
     /// no module handles it. Any thread.
     pub fn le_request_volume(&self, level: u8) -> bool {
-        self.le.hooks().iter().any(|h| h.request_volume(level))
+        let handled = self.le.hooks().iter().any(|h| h.request_volume(level));
+        tracing::debug!("LE Audio: volume request {level}: handled {handled}");
+        handled
     }
 
     /// "Low latency (GMAP)": read when a stream is set up. Off by default;
     /// per BtHost (set it after each start).
     pub fn le_set_low_latency(&self, on: bool) {
+        tracing::debug!("LE Audio: low latency (GMAP) {on}");
         self.le.low_latency.store(on, Ordering::Release);
     }
 
@@ -577,9 +758,11 @@ impl BtHost {
                 return ok;
             }
             if cancellable && self.le_cancelled() {
+                tracing::debug!("LE Audio: wait cancelled");
                 return false;
             }
             if Instant::now() >= deadline {
+                tracing::debug!("LE Audio: no completion within {} ms", timeout.as_millis());
                 return false;
             }
         }

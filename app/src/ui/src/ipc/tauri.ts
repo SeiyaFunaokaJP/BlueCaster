@@ -1,4 +1,4 @@
-// The transport inside a2dpwb.exe: commands and events of the Rust backend
+// The transport inside bluecaster.exe: commands and events of the Rust backend
 // (src-tauri/src/commands.rs, connection.rs).
 
 import { invoke } from "@tauri-apps/api/core";
@@ -33,10 +33,14 @@ export async function createTauriTransport(): Promise<Transport> {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       await getCurrentWindow().hide();
     },
+    fitHeight: (height) => invoke("fit_flyout", { height }),
+    setupWindow: (active) => invoke("setup_window", { active }),
     openUrl: (url) => invoke("open_url", { url }),
     openFolder: (path) => invoke("open_folder", { path }),
     revealPath: (path) => invoke("reveal_path", { path }),
+    saveTextFile: (name, text) => invoke<boolean>("save_text_file", { name, text }),
     setTheme: (theme) => invoke("set_theme", { theme }),
+    accentColors: () => invoke("accent_colors"),
     onNavigate(cb) {
       void listen<string>("ui://navigate", (e) => cb(e.payload));
     },
