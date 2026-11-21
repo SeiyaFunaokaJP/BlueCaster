@@ -138,7 +138,11 @@ Métodos para herramientas:
 | `stream.start` | `profile` | `null`; primero detiene la transmisión en curso |
 | `stream.stop` | -- | `null` |
 | `stream.set_volume` | `volume` (volumen absoluto AVRCP 0-127) | `null` |
+| `stream.volume_step` | `delta` (de -127 a 127) | el nuevo volumen; consulte [Controles rápidos](#quick-controls) |
 | `profile.set_active` | `name` | `null` |
+| `profile.set_headset_mic` | `name` (opcional), `mode` (`off`, `auto`, `on`) | `null`; consulte [Controles rápidos](#quick-controls) |
+| `profile.set_mic_muted` | `name` (opcional), `muted` (bool) | `null`; consulte [Controles rápidos](#quick-controls) |
+| `profile.set_media_eq` | `name` (opcional), `enabled` (bool) | `null`; consulte [Controles rápidos](#quick-controls) |
 | `device.scan` | `seconds` (3-600) | `Device[]`, también como evento `devices` |
 | `device.scan_stop` | -- | `null`; el `device.scan` en curso devuelve entonces su resultado |
 | `audio.devices` | -- | `AudioDevice[]` (orígenes de captura) |
@@ -147,6 +151,8 @@ Métodos para herramientas:
 | `rfcomm.open`, `rfcomm.send`, `rfcomm.close` | consulte [Paso directo RFCOMM](#rfcomm-passthrough) | |
 
 Envíe `logs` y `link` en cada `diag.subscribe`. Cada llamada fija los dos valores, así que si falta `logs` se desactivan los eventos de registro.
+
+Para cambiar un solo ajuste, use los [controles rápidos](#quick-controls) en lugar de `profile.save` o `settings.set`.
 
 Métodos que usa la ventana de BlueCaster y que una herramienta debe usar con cuidado: `profile.save` / `profile.delete`, `settings.set` (reemplaza **toda** la configuración: envíe el `settings` más reciente con su cambio, nunca un objeto parcial), `device.forget` / `device.rename`, `adapter.*` (`adapter.assign_winusb` y `adapter.restore_driver` muestran una solicitud de UAC; `adapter.probe` y `adapter.run_script`, las herramientas de chip del modo de desarrollador, detienen la pila Bluetooth), `app.quit`. Los demás sirven a las pantallas propias de la ventana y pueden cambiar sin previo aviso: `stream.start_custom`, el resto de métodos `device.*` (`device.import_windows_pairings` muestra una solicitud de UAC), `audio.apps`, `audio.mixer` / `audio.mixer_set`, los `diag.*` aparte de los dos anteriores, `receiver.*` y `app.*`. La lista completa con parámetros y resultados es el enum `Method` de `protocol.rs`.
 
@@ -176,6 +182,19 @@ Disponible cuando `welcome.features` contiene `"media_button"`. Cada vez que se 
 - `le_audio` es `true` si el evento llegó de unos auriculares LE Audio.
 - Los auriculares envían `play` o `pause` según crean que hay algo en reproducción. Esa suposición puede estar desactualizada. Para alternar la reproducción, trate ambos igual.
 - BlueCaster sigue pasando a Windows reproducir/pausa, siguiente, anterior y detener como teclas multimedia. Si su herramienta gestiona los botones por su cuenta, pida al usuario que desactive **Dispositivos de audio > Controlar la reproducción con los botones del dispositivo de audio**. Los eventos siguen llegando con esa opción desactivada.
+
+## Controles rápidos {#quick-controls}
+
+Disponibles cuando `welcome.features` contiene `"tool_controls"`. Cada método cambia un solo ajuste, así que una herramienta nunca tiene que enviar un perfil completo.
+
+- `name` es el nombre de un perfil guardado. Si se omite, se usa el perfil que está transmitiendo, o el perfil activo cuando no se transmite nada. Un nombre desconocido devuelve `profile.not_found`.
+- El cambio se guarda en el perfil y se aplica a la transmisión, igual que un cambio hecho en la ventana de BlueCaster. Todos los clientes reciben un evento `profiles`.
+- Enviar el valor actual no cambia nada.
+- `profile.set_headset_mic` funciona como los botones de modo del micrófono en la ventana. `off` silencia el micrófono, pero conserva el modo actual. `auto` y `on` cambian a ese modo y activan el micrófono. Sin el modo de desarrollador, `on` devuelve `developer.off`.
+- `profile.set_mic_muted` silencia o activa el micrófono del auricular sin cambiar el modo.
+- Los dos métodos del micrófono devuelven `profile.no_mic_output` mientras el micrófono del auricular no esté configurado para el dispositivo. Mientras el dispositivo se conecta, devuelven `stream.busy`.
+- `profile.set_media_eq` activa o desactiva el ecualizador de reproducción sin volver a conectar la transmisión. Los puntos del ecualizador se conservan.
+- `stream.volume_step` cambia el volumen de los auriculares en `delta` y devuelve el nuevo volumen (0-127). El paso parte del último volumen que indicaron los auriculares. Si no se transmite nada, o los auriculares aún no han indicado un volumen, el método devuelve `stream.volume_unknown`. Un `delta` fuera del rango de -127 a 127 devuelve `stream.bad_volume_step`.
 
 ## Compatibilidad {#compatibility}
 

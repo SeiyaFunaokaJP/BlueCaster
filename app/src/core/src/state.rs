@@ -1549,6 +1549,99 @@ fn restart_after_save(stream: &StreamStatus, saved: &str) -> bool {
         && stream.profile.as_deref() == Some(saved)
 }
 
+/// The stream of profile `name` is connecting (or connecting again)
+fn connecting(stream: &StreamStatus, name: &str) -> bool {
+    matches!(stream.state, StreamState::Connecting | StreamState::Reconnecting)
+        && stream.profile.as_deref() == Some(name)
+}
+
+/// The profile a tool's profile.set_* is for: `name`, or (None) the one
+/// streaming, else the active one. Error profile.not_found.
+fn tool_profile<'a>(s: &'a Snapshot, name: Option<&str>) -> Result<&'a Profile, ErrorInfo> {
+    let name = match name {
+        Some(n) => Some(n),
+        None => {
+            s.stream.profile.as_deref().filter(|n| restart_after_save(&s.stream, n)).or(s.active_profile.as_deref())
+        }
+    };
+    name.and_then(|n| s.profiles.iter().find(|p| p.name == n))
+        .ok_or_else(|| err("profile.not_found", "ipc.error.profile_not_found"))
+}
+
+/// profile.set_headset_mic: `p` with the headset mode `mode` as the window's
+/// mode buttons set it (InputSource.tsx): Off mutes a profile whose mode is
+/// Auto or On, the others set the mode and unmute. None: the mode shown is
+/// `mode` already (Off while muted; On outside developer mode shows as Auto).
+fn tool_headset_mic(p: &Profile, mode: ipc::HeadsetMicMode, developer: bool) -> Result<Option<Profile>, ErrorInfo> {
+    let shown = match HeadsetMic::parse(&p.headset_mic) {
+        _ if p.mic_muted => HeadsetMic::Off,
+        HeadsetMic::On if !developer => HeadsetMic::Auto,
+        m => m,
+    };
+    let wanted = HeadsetMic::parse(mode.as_str());
+    if wanted == shown {
+        return Ok(None);
+    }
+    if wanted == HeadsetMic::On && !developer {
+        return Err(err("developer.off", "ipc.error.developer_only"));
+    }
+    if wanted == HeadsetMic::Off {
+        return Ok(Some(Profile { mic_muted: true, ..p.clone() }));
+    }
+    if p.mic_device_id.is_empty() {
+        return Err(err("profile.no_mic_output", "ipc.error.no_mic_output"));
+    }
+    Ok(Some(Profile { headset_mic: wanted.as_str().into(), mic_muted: false, ..p.clone() }))
+}
+
+/// profile.set_mic_muted: `p` muted or not (Home's microphone button); None:
+/// it is already
+fn tool_mic_muted(p: &Profile, muted: bool) -> Result<Option<Profile>, ErrorInfo> {
+    if p.mic_muted == muted {
+        Ok(None)
+    } else if p.mic_device_id.is_empty() {
+        Err(err("profile.no_mic_output", "ipc.error.no_mic_output"))
+    } else {
+        Ok(Some(Profile { mic_muted: muted, ..p.clone() }))
+    }
+}
+
+/// The points the window's playback EQ starts with (lib/eq.ts
+/// DEFAULT_POINTS): flat, so turning it on changes nothing yet
+const FLAT_EQ_HZ: [f32; 10] = [31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0];
+
+/// profile.set_media_eq: `p` with its playback EQ on or off, the points
+/// kept; turned on without points, the window's flat ones. None: it is
+/// already.
+fn tool_media_eq(p: &Profile, enabled: bool) -> Option<Profile> {
+    if p.media_eq.enabled == enabled {
+        return None;
+    }
+    let mut eq = p.media_eq.clone();
+    eq.enabled = enabled;
+    if enabled && eq.bands.is_empty() {
+        eq.bands = FLAT_EQ_HZ
+            .iter()
+            .map(|&frequency| ipc::EqPoint { frequency, gain: 0.0, q: 1.41, band_type: ipc::EqBandType::Peaking })
+            .collect();
+    }
+    Some(Profile { media_eq: eq, ..p.clone() })
+}
+
+/// stream.volume_step: the volume `delta` away from the one the headphones
+/// last reported, within 0..127. Errors stream.bad_volume_step (beyond
+/// ±[`ipc::MAX_VOLUME_STEP`]), stream.volume_unknown (not streaming, or no
+/// volume reported yet).
+fn volume_step(stream: &StreamStatus, delta: i16) -> Result<u8, ErrorInfo> {
+    if !(-ipc::MAX_VOLUME_STEP..=ipc::MAX_VOLUME_STEP).contains(&delta) {
+        return Err(bad_request("stream.bad_volume_step", "stream.volume_step", format!("delta {delta}")));
+    }
+    let Some(volume) = stream.volume.filter(|_| stream.state == StreamState::Streaming) else {
+        return Err(err("stream.volume_unknown", "ipc.error.volume_unknown"));
+    };
+    Ok((i16::from(volume) + delta).clamp(0, 127) as u8)
+}
+
 /// The last stream of profile `name` stopped with an error its codec caused
 /// (refused, unsupported, in use; issue #86)
 fn stopped_by_codec(stream: &StreamStatus, name: &str) -> bool {
@@ -2890,6 +2983,206 @@ impl CoreState {
         }));
     }
 
+    /// profile.save: adds or replaces a profile; the stream of the profile
+    /// in use takes the change in place or starts again
+    fn save_profile(self: &Arc<Self>, profile: &Profile, original_name: Option<String>) -> Result<Value, ErrorInfo> {
+        if profile.name.trim().is_empty() || bt_host::parse_addr(&profile.device_address).is_none() {
+            return Err(err("profile.invalid", "error.invalid_address_format"));
+        }
+        let dir = self.config_dir();
+        let mut list = profiles::load(&dir);
+        let key = original_name.as_deref().unwrap_or(&profile.name).to_string();
+        let pos = list.iter().position(|p| p.name == key);
+        let mut merged = merge_profile(pos.map(|i| &list[i]), profile);
+        if pos.is_none() {
+            default_mic_output(&mut merged, &self.snapshot().1.stream, &list);
+        }
+        let known = if merged.le_audio { devices::load_le(&dir) } else { devices::load(&dir) };
+        // Another earbud of a saved set is that saved device: its
+        // profile is the saved device's, no second entry
+        if merged.le_audio
+            && let Some(d) = self.service.known_le_sets().saved_entry(&merged.device_address, &known)
+            && !d.address.eq_ignore_ascii_case(&merged.device_address)
+        {
+            tracing::info!("profile: a member of a saved coordinated set, saved for the set's device");
+            merged.device_address = d.address.clone();
+        }
+        let before = pos.map(|i| list[i].clone());
+        // Only the device's codec order changed (its cards dragged):
+        // the stream goes on unless the order changes its codec
+        let order_only = pos.is_some_and(|i| {
+            list[i].codec_order != merged.codec_order
+                && CoreProfile { codec_order: merged.codec_order.clone(), ..list[i].clone() } == merged
+        });
+        let auto_select = self.service.settings().auto_codec;
+        // Settings of a codec not in use: nothing the stream uses
+        // The playback EQ and the microphone's processing (one or
+        // both): the running stream takes them in place
+        let live_only = pos.is_some_and(|i| list[i].only_live_processing_differs(&merged));
+        let processing_only = live_only && pos.is_some_and(|i| list[i].mic_processing != merged.mic_processing);
+        let kept_only = live_only
+            || pos.is_some_and(|i| {
+                list[i].only_kept_settings_differ(&merged) || list[i].only_default_input_differs(&merged)
+            });
+        let in_order = merged.clone();
+        // The profile's device joins the saved ones of its kind (as
+        // a connection saves it)
+        let address = merged.device_address.clone();
+        if !known.iter().any(|d| d.address == address) {
+            let r = if merged.le_audio {
+                devices::save_le(&dir, &address, &merged.device_name)
+            } else {
+                devices::save(&dir, &address, &merged.device_name)
+            };
+            if let Err(e) = r {
+                tracing::warn!("cannot save the device {address}: {e}");
+            }
+        }
+        match pos {
+            Some(i) => list[i] = merged,
+            None => list.push(merged),
+        }
+        let (_, s) = self.snapshot();
+        let renamed_active = s.active_profile.as_deref() == Some(key.as_str()) && key != profile.name;
+        let active = match s.active_profile {
+            Some(a) if a == key => Some(profile.name.clone()),
+            other => other.or(Some(profile.name.clone())),
+        };
+        self.save_profiles(&list, active)?;
+        // A renamed active profile (its name follows the codec chosen
+        // on the Codecs screen) stays the one remembered
+        if renamed_active {
+            self.set_active_profile(Some(profile.name.clone()));
+        }
+        self.refresh_devices();
+        // The stream of this profile plays its EQ as saved from now
+        // on (also when it starts again below)
+        if restart_after_save(&s.stream, &key) {
+            media_eq::apply(Some(&in_order.media_eq));
+        }
+        // The profile in use starts again with what was saved (v1),
+        // but for another source, which needs nothing of the link
+        if processing_only && restart_after_save(&s.stream, &key) {
+            self.service.set_mic_processing(in_order.mic_processing);
+        }
+        let order_keeps_codec = order_only && !restart_for_order(&s.stream, &in_order, auto_select);
+        let headset = headset_change(&s.stream, before.as_ref(), &in_order);
+        let headset_kept = match headset {
+            Some(HeadsetChange::Unused) => true,
+            Some(HeadsetChange::InPlace) => {
+                tracing::info!(
+                    "profile {} saved while in use: headset microphone {} in place",
+                    bluecaster_core::diag::quoted(&key),
+                    in_order.headset_mic_mode().as_str()
+                );
+                // The session refuses an output that would feed the
+                // capture; false (no stream, or a stack without
+                // voice): it starts again instead
+                let mode = headset_mic_in_force(&in_order, self.service.settings().debug_mode);
+                let kept = self.service.set_headset_mic(
+                    mode,
+                    mode.is_on().then(|| in_order.mic_device_id.clone()),
+                    in_order.voice_codec_in_force(auto_select),
+                );
+                // Another output or mode: the session tries again
+                // and says so anew if it still cannot
+                let mut stream = self.with_snapshot(|s| s.stream.clone());
+                if kept && self.drop_mic_note(&mut stream) {
+                    self.publish(Event::Stream(stream));
+                }
+                kept
+            }
+            Some(HeadsetChange::Restart) | None => false,
+        };
+        if restart_after_save(&s.stream, &key) && !order_keeps_codec && !kept_only && !headset_kept {
+            let in_place = source_changes_in_place(&s.stream, before.as_ref(), &in_order)
+                && self.service.change_source(self.service.settings().source_in_force(in_order.source()));
+            let bitpools_in_place = !self.service.settings().auto_codec
+                && bitpools_change_in_place(&s.stream, before.as_ref(), &in_order)
+                && self.service.change_bitpools(in_order.bitpools());
+            // "Show only options it supports" turned, the stream
+            // set up the same either way (issue #86)
+            let unlisted_in_place = !bitpools_in_place
+                && !in_place
+                && before.as_ref().is_some_and(|b| b.only_unlisted_differs(&in_order))
+                && self.service.change_unlisted(in_order.unlisted_options);
+            let named_in_place = !bitpools_in_place
+                && !in_place
+                && !unlisted_in_place
+                && codec_named_in_place(&s.stream, before.as_ref(), &in_order)
+                && (before.as_ref().is_some_and(|b| b.unlisted_options == in_order.unlisted_options)
+                    || self.service.change_unlisted(in_order.unlisted_options));
+            if named_in_place {
+                tracing::info!(
+                    "profile {} saved while in use as {}: it names the codec it streams with, the stream stays",
+                    bluecaster_core::diag::quoted(&key),
+                    bluecaster_core::diag::quoted(&profile.name)
+                );
+                self.rename_stream_profile(&profile.name);
+            } else if unlisted_in_place {
+                tracing::info!(
+                    "profile {} saved while in use: the stream stays as it is",
+                    bluecaster_core::diag::quoted(&key)
+                );
+            } else if bitpools_in_place {
+                tracing::debug!("profile {} saved while in use: new bitpools", bluecaster_core::diag::quoted(&key));
+            } else if in_place {
+                tracing::info!(
+                    "profile {} saved while in use: its source changes in place",
+                    bluecaster_core::diag::quoted(&key)
+                );
+            } else {
+                tracing::info!(
+                    "profile {} saved while in use: it starts again as {}",
+                    bluecaster_core::diag::quoted(&key),
+                    bluecaster_core::diag::quoted(&profile.name)
+                );
+                self.restart_profile(&profile.name)?;
+            }
+        } else if reconnect_after_codec_stop(&s.stream, &key, before.as_ref(), &in_order) {
+            tracing::info!(
+                "profile {} saved after its codec stopped the stream: connecting again as {}",
+                bluecaster_core::diag::quoted(&key),
+                bluecaster_core::diag::quoted(&profile.name)
+            );
+            self.start_profile(&profile.name)?;
+        }
+        Ok(Value::Null)
+    }
+
+    /// Asks the headphones for this volume (0..127): AVRCP, or VCP for LE
+    /// Audio. Nothing without a stream.
+    fn request_volume(&self, volume: u8) {
+        if let Some(h) = self.service.host() {
+            // LE Audio: through VCP, not AVRCP (issue #86)
+            if self.service.le_stream().is_none() || !h.le_request_volume(volume.min(127)) {
+                h.request_volume(volume.min(127));
+            }
+        }
+    }
+
+    /// A tool's change of one value of a profile (profile.set_headset_mic,
+    /// set_mic_muted, set_media_eq): `change` gives the profile `name` (None:
+    /// [`tool_profile`]) with it, None when it has it already: nothing
+    /// happens then. Saved as the window saves it (profile.save), so the
+    /// stream takes it as from the window and every client gets the profiles.
+    /// `mic`: a change the stream may start again for, refused while that
+    /// stream connects (a tool that repeats it cannot keep it reconnecting).
+    fn save_tool_change(
+        self: &Arc<Self>,
+        name: Option<String>,
+        mic: bool,
+        change: impl FnOnce(&Profile) -> Result<Option<Profile>, ErrorInfo>,
+    ) -> Result<Value, ErrorInfo> {
+        let (_, s) = self.snapshot();
+        let p = tool_profile(&s, name.as_deref())?;
+        let Some(changed) = change(p)? else { return Ok(Value::Null) };
+        if mic && connecting(&s.stream, &p.name) {
+            return Err(err("stream.busy", "ipc.error.stream_busy"));
+        }
+        self.save_profile(&changed, None)
+    }
+
     fn restart_profile(&self, name: &str) -> Result<(), ErrorInfo> {
         self.restarting.store(true, Ordering::Release);
         let r = self.start_profile(name);
@@ -3281,13 +3574,27 @@ impl CoreState {
                 Ok(Value::Null)
             }
             Method::StreamSetVolume { volume } => {
-                if let Some(h) = self.service.host() {
-                    // LE Audio: through VCP, not AVRCP (issue #86)
-                    if self.service.le_stream().is_none() || !h.le_request_volume(volume.min(127)) {
-                        h.request_volume(volume.min(127));
-                    }
-                }
+                self.request_volume(volume);
                 Ok(Value::Null)
+            }
+            Method::StreamVolumeStep { delta } => {
+                let stream = self.with_snapshot(|s| s.stream.clone());
+                let volume = volume_step(&stream, delta)?;
+                if stream.volume != Some(volume) {
+                    tracing::debug!("IPC: stream.volume_step {delta}: volume {volume}");
+                    self.request_volume(volume);
+                }
+                Ok(json(&volume))
+            }
+            Method::ProfileSetHeadsetMic { name, mode } => {
+                let developer = self.service.settings().debug_mode;
+                self.save_tool_change(name, true, |p| tool_headset_mic(p, mode, developer))
+            }
+            Method::ProfileSetMicMuted { name, muted } => {
+                self.save_tool_change(name, true, |p| tool_mic_muted(p, muted))
+            }
+            Method::ProfileSetMediaEq { name, enabled } => {
+                self.save_tool_change(name, false, |p| Ok(tool_media_eq(p, enabled)))
             }
             Method::DeviceScan { seconds } => {
                 blocking(Box::new(move |me| {
@@ -3382,173 +3689,7 @@ impl CoreState {
                 self.refresh_devices();
                 Ok(Value::Null)
             }
-            Method::ProfileSave { profile, original_name } => {
-                if profile.name.trim().is_empty() || bt_host::parse_addr(&profile.device_address).is_none() {
-                    return Err(err("profile.invalid", "error.invalid_address_format"));
-                }
-                let dir = self.config_dir();
-                let mut list = profiles::load(&dir);
-                let key = original_name.as_deref().unwrap_or(&profile.name).to_string();
-                let pos = list.iter().position(|p| p.name == key);
-                let mut merged = merge_profile(pos.map(|i| &list[i]), &profile);
-                if pos.is_none() {
-                    default_mic_output(&mut merged, &self.snapshot().1.stream, &list);
-                }
-                let known = if merged.le_audio { devices::load_le(&dir) } else { devices::load(&dir) };
-                // Another earbud of a saved set is that saved device: its
-                // profile is the saved device's, no second entry
-                if merged.le_audio
-                    && let Some(d) = self.service.known_le_sets().saved_entry(&merged.device_address, &known)
-                    && !d.address.eq_ignore_ascii_case(&merged.device_address)
-                {
-                    tracing::info!("profile: a member of a saved coordinated set, saved for the set's device");
-                    merged.device_address = d.address.clone();
-                }
-                let before = pos.map(|i| list[i].clone());
-                // Only the device's codec order changed (its cards dragged):
-                // the stream goes on unless the order changes its codec
-                let order_only = pos.is_some_and(|i| {
-                    list[i].codec_order != merged.codec_order
-                        && CoreProfile { codec_order: merged.codec_order.clone(), ..list[i].clone() } == merged
-                });
-                let auto_select = self.service.settings().auto_codec;
-                // Settings of a codec not in use: nothing the stream uses
-                // The playback EQ and the microphone's processing (one or
-                // both): the running stream takes them in place
-                let live_only = pos.is_some_and(|i| list[i].only_live_processing_differs(&merged));
-                let processing_only = live_only && pos.is_some_and(|i| list[i].mic_processing != merged.mic_processing);
-                let kept_only = live_only
-                    || pos.is_some_and(|i| {
-                        list[i].only_kept_settings_differ(&merged) || list[i].only_default_input_differs(&merged)
-                    });
-                let in_order = merged.clone();
-                // The profile's device joins the saved ones of its kind (as
-                // a connection saves it)
-                let address = merged.device_address.clone();
-                if !known.iter().any(|d| d.address == address) {
-                    let r = if merged.le_audio {
-                        devices::save_le(&dir, &address, &merged.device_name)
-                    } else {
-                        devices::save(&dir, &address, &merged.device_name)
-                    };
-                    if let Err(e) = r {
-                        tracing::warn!("cannot save the device {address}: {e}");
-                    }
-                }
-                match pos {
-                    Some(i) => list[i] = merged,
-                    None => list.push(merged),
-                }
-                let (_, s) = self.snapshot();
-                let renamed_active = s.active_profile.as_deref() == Some(key.as_str()) && key != profile.name;
-                let active = match s.active_profile {
-                    Some(a) if a == key => Some(profile.name.clone()),
-                    other => other.or(Some(profile.name.clone())),
-                };
-                self.save_profiles(&list, active)?;
-                // A renamed active profile (its name follows the codec chosen
-                // on the Codecs screen) stays the one remembered
-                if renamed_active {
-                    self.set_active_profile(Some(profile.name.clone()));
-                }
-                self.refresh_devices();
-                // The stream of this profile plays its EQ as saved from now
-                // on (also when it starts again below)
-                if restart_after_save(&s.stream, &key) {
-                    media_eq::apply(Some(&in_order.media_eq));
-                }
-                // The profile in use starts again with what was saved (v1),
-                // but for another source, which needs nothing of the link
-                if processing_only && restart_after_save(&s.stream, &key) {
-                    self.service.set_mic_processing(in_order.mic_processing);
-                }
-                let order_keeps_codec = order_only && !restart_for_order(&s.stream, &in_order, auto_select);
-                let headset = headset_change(&s.stream, before.as_ref(), &in_order);
-                let headset_kept = match headset {
-                    Some(HeadsetChange::Unused) => true,
-                    Some(HeadsetChange::InPlace) => {
-                        tracing::info!(
-                            "profile {} saved while in use: headset microphone {} in place",
-                            bluecaster_core::diag::quoted(&key),
-                            in_order.headset_mic_mode().as_str()
-                        );
-                        // The session refuses an output that would feed the
-                        // capture; false (no stream, or a stack without
-                        // voice): it starts again instead
-                        let mode = headset_mic_in_force(&in_order, self.service.settings().debug_mode);
-                        let kept = self.service.set_headset_mic(
-                            mode,
-                            mode.is_on().then(|| in_order.mic_device_id.clone()),
-                            in_order.voice_codec_in_force(auto_select),
-                        );
-                        // Another output or mode: the session tries again
-                        // and says so anew if it still cannot
-                        let mut stream = self.with_snapshot(|s| s.stream.clone());
-                        if kept && self.drop_mic_note(&mut stream) {
-                            self.publish(Event::Stream(stream));
-                        }
-                        kept
-                    }
-                    Some(HeadsetChange::Restart) | None => false,
-                };
-                if restart_after_save(&s.stream, &key) && !order_keeps_codec && !kept_only && !headset_kept {
-                    let in_place = source_changes_in_place(&s.stream, before.as_ref(), &in_order)
-                        && self.service.change_source(self.service.settings().source_in_force(in_order.source()));
-                    let bitpools_in_place = !self.service.settings().auto_codec
-                        && bitpools_change_in_place(&s.stream, before.as_ref(), &in_order)
-                        && self.service.change_bitpools(in_order.bitpools());
-                    // "Show only options it supports" turned, the stream
-                    // set up the same either way (issue #86)
-                    let unlisted_in_place = !bitpools_in_place
-                        && !in_place
-                        && before.as_ref().is_some_and(|b| b.only_unlisted_differs(&in_order))
-                        && self.service.change_unlisted(in_order.unlisted_options);
-                    let named_in_place = !bitpools_in_place
-                        && !in_place
-                        && !unlisted_in_place
-                        && codec_named_in_place(&s.stream, before.as_ref(), &in_order)
-                        && (before.as_ref().is_some_and(|b| b.unlisted_options == in_order.unlisted_options)
-                            || self.service.change_unlisted(in_order.unlisted_options));
-                    if named_in_place {
-                        tracing::info!(
-                            "profile {} saved while in use as {}: it names the codec it streams with, the stream stays",
-                            bluecaster_core::diag::quoted(&key),
-                            bluecaster_core::diag::quoted(&profile.name)
-                        );
-                        self.rename_stream_profile(&profile.name);
-                    } else if unlisted_in_place {
-                        tracing::info!(
-                            "profile {} saved while in use: the stream stays as it is",
-                            bluecaster_core::diag::quoted(&key)
-                        );
-                    } else if bitpools_in_place {
-                        tracing::debug!(
-                            "profile {} saved while in use: new bitpools",
-                            bluecaster_core::diag::quoted(&key)
-                        );
-                    } else if in_place {
-                        tracing::info!(
-                            "profile {} saved while in use: its source changes in place",
-                            bluecaster_core::diag::quoted(&key)
-                        );
-                    } else {
-                        tracing::info!(
-                            "profile {} saved while in use: it starts again as {}",
-                            bluecaster_core::diag::quoted(&key),
-                            bluecaster_core::diag::quoted(&profile.name)
-                        );
-                        self.restart_profile(&profile.name)?;
-                    }
-                } else if reconnect_after_codec_stop(&s.stream, &key, before.as_ref(), &in_order) {
-                    tracing::info!(
-                        "profile {} saved after its codec stopped the stream: connecting again as {}",
-                        bluecaster_core::diag::quoted(&key),
-                        bluecaster_core::diag::quoted(&profile.name)
-                    );
-                    self.start_profile(&profile.name)?;
-                }
-                Ok(Value::Null)
-            }
+            Method::ProfileSave { profile, original_name } => self.save_profile(&profile, original_name),
             Method::MediaEqPreview { name, eq } => {
                 let (_, s) = self.snapshot();
                 if restart_after_save(&s.stream, &name) {
@@ -6426,6 +6567,144 @@ mod tests {
             json,
             serde_json::json!({"kind": "media_button", "value": {"button": "next", "pressed": true, "le_audio": false}})
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn tool_test_profile() -> Profile {
+        let core = CoreProfile {
+            name: "WH".into(),
+            device_address: "00:11:22:33:44:55".into(),
+            device_name: "WH".into(),
+            headset_mic: "auto".into(),
+            mic_device_id: "{cable}".into(),
+            ..CoreProfile::default()
+        };
+        to_ipc_profile(&core, 679)
+    }
+
+    /// profile.set_headset_mic does what the window's mode buttons do
+    #[test]
+    fn tool_headset_mode_follows_the_mode_buttons() {
+        use ipc::HeadsetMicMode::{Auto, Off, On};
+        let auto = tool_test_profile();
+        // Off mutes Auto, the mode kept; the mode in force already: nothing
+        let muted = tool_headset_mic(&auto, Off, false).unwrap().unwrap();
+        assert_eq!((muted.headset_mic.as_str(), muted.mic_muted), ("auto", true));
+        assert_eq!(tool_headset_mic(&auto, Auto, false).unwrap(), None);
+        assert_eq!(tool_headset_mic(&muted, Off, false).unwrap(), None);
+        // Auto unmutes
+        let back = tool_headset_mic(&muted, Auto, false).unwrap().unwrap();
+        assert_eq!(back, auto);
+        // On: developer mode only; On saved shows as Auto outside it
+        assert_eq!(tool_headset_mic(&auto, On, false).unwrap_err().code, "developer.off");
+        let on = tool_headset_mic(&auto, On, true).unwrap().unwrap();
+        assert_eq!((on.headset_mic.as_str(), on.mic_muted), ("on", false));
+        assert_eq!(tool_headset_mic(&on, Auto, false).unwrap(), None);
+        assert_eq!(tool_headset_mic(&on, Auto, true).unwrap().unwrap().headset_mic, "auto");
+        // From Off: the mode, once a microphone output is chosen
+        let off = Profile { headset_mic: "off".into(), ..auto.clone() };
+        assert_eq!(tool_headset_mic(&off, Off, true).unwrap(), None);
+        assert_eq!(tool_headset_mic(&off, Auto, false).unwrap().unwrap().headset_mic, "auto");
+        let no_output = Profile { mic_device_id: String::new(), ..off };
+        assert_eq!(tool_headset_mic(&no_output, Auto, false).unwrap_err().code, "profile.no_mic_output");
+        assert_eq!(tool_mic_muted(&no_output, true).unwrap_err().code, "profile.no_mic_output");
+        // Mute alone
+        assert_eq!(tool_mic_muted(&auto, false).unwrap(), None);
+        assert_eq!(tool_mic_muted(&auto, true).unwrap().unwrap(), muted);
+    }
+
+    #[test]
+    fn tool_media_eq_keeps_the_points() {
+        let p = tool_test_profile();
+        assert_eq!(tool_media_eq(&p, false), None);
+        let on = tool_media_eq(&p, true).unwrap();
+        assert!(on.media_eq.enabled);
+        assert_eq!(on.media_eq.bands.len(), 10);
+        assert!(on.media_eq.bands.iter().all(|b| b.gain == 0.0 && b.band_type == ipc::EqBandType::Peaking));
+        assert_eq!(tool_media_eq(&on, true), None);
+        let off = tool_media_eq(&on, false).unwrap();
+        assert_eq!((off.media_eq.enabled, off.media_eq.bands.len()), (false, 10));
+        // Saved points stay as they are
+        let mut custom = off.clone();
+        custom.media_eq.bands.truncate(2);
+        custom.media_eq.bands[0].gain = 6.0;
+        let again = tool_media_eq(&custom, true).unwrap();
+        assert_eq!(again.media_eq.bands, custom.media_eq.bands);
+        assert_eq!(Profile { media_eq: custom.media_eq.clone(), ..again }, custom);
+    }
+
+    #[test]
+    fn volume_steps_are_checked() {
+        let streaming = StreamStatus { state: StreamState::Streaming, volume: Some(60), ..StreamStatus::default() };
+        assert_eq!(volume_step(&streaming, 8).unwrap(), 68);
+        assert_eq!(volume_step(&streaming, -8).unwrap(), 52);
+        assert_eq!(volume_step(&streaming, 0).unwrap(), 60);
+        // Within 0..127 at either end
+        assert_eq!(volume_step(&streaming, 127).unwrap(), 127);
+        assert_eq!(volume_step(&streaming, -127).unwrap(), 0);
+        for delta in [128, -128, i16::MAX, i16::MIN] {
+            let e = volume_step(&streaming, delta).unwrap_err();
+            assert_eq!((e.code.as_str(), e.message.key.as_str()), ("stream.bad_volume_step", "ipc.error.bad_request"));
+        }
+        let unknown = StreamStatus { volume: None, ..streaming.clone() };
+        assert_eq!(volume_step(&unknown, 1).unwrap_err().code, "stream.volume_unknown");
+        let connecting = StreamStatus { state: StreamState::Connecting, ..streaming };
+        assert_eq!(volume_step(&connecting, 1).unwrap_err().code, "stream.volume_unknown");
+    }
+
+    /// The tools' profile.set_* save through profile.save once; the value
+    /// it has already saves nothing; a connecting stream refuses the
+    /// microphone's
+    #[test]
+    fn tool_changes_save_the_profile() {
+        let dir = std::env::temp_dir().join(format!("bluecaster-state-tool-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(paths::devices_dir(&dir)).unwrap();
+        let p = tool_test_profile();
+        profiles::save(&dir, &[merge_profile(None, &p)]).unwrap();
+        let state = state_in(&dir);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let call = |m: Method| rt.block_on(state.handle(m));
+        let profiles_events = |events: &mut broadcast::Receiver<(u64, Arc<Event>)>| {
+            std::iter::from_fn(|| events.try_recv().ok()).filter(|(_, e)| matches!(**e, Event::Profiles { .. })).count()
+        };
+
+        // No profile named, none streaming or active
+        let e = call(Method::ProfileSetMicMuted { name: None, muted: true }).unwrap_err();
+        assert_eq!((e.code.as_str(), e.message.key.as_str()), ("profile.not_found", "ipc.error.profile_not_found"));
+        let e = call(Method::ProfileSetMediaEq { name: Some("Other".into()), enabled: true }).unwrap_err();
+        assert_eq!(e.code, "profile.not_found");
+
+        let mut events = state.subscribe();
+        assert_eq!(call(Method::ProfileSetMicMuted { name: Some("WH".into()), muted: true }).unwrap(), Value::Null);
+        assert!(profiles::load(&dir)[0].mic_muted);
+        assert_eq!(profiles_events(&mut events), 1);
+        // Saved as profile.save saves it: it is the active one now
+        assert_eq!(state.snapshot().1.active_profile.as_deref(), Some("WH"));
+        // The same again: nothing saved, no event
+        assert_eq!(call(Method::ProfileSetMicMuted { name: None, muted: true }).unwrap(), Value::Null);
+        assert_eq!(
+            call(Method::ProfileSetHeadsetMic { name: None, mode: ipc::HeadsetMicMode::Off }).unwrap(),
+            Value::Null
+        );
+        assert_eq!(profiles_events(&mut events), 0);
+        let e = call(Method::ProfileSetHeadsetMic { name: None, mode: ipc::HeadsetMicMode::On }).unwrap_err();
+        assert_eq!((e.code.as_str(), e.message.key.as_str()), ("developer.off", "ipc.error.developer_only"));
+
+        // While its stream connects: the EQ (in place) yes, the microphone no
+        state.publish(Event::Stream(StreamStatus {
+            state: StreamState::Connecting,
+            profile: Some("WH".into()),
+            ..StreamStatus::default()
+        }));
+        let e = call(Method::ProfileSetHeadsetMic { name: None, mode: ipc::HeadsetMicMode::Auto }).unwrap_err();
+        assert_eq!((e.code.as_str(), e.message.key.as_str()), ("stream.busy", "ipc.error.stream_busy"));
+        assert!(profiles::load(&dir)[0].mic_muted);
+        assert_eq!(call(Method::ProfileSetMediaEq { name: None, enabled: true }).unwrap(), Value::Null);
+        let saved = &profiles::load(&dir)[0];
+        assert!(saved.media_eq.enabled && saved.mic_muted);
+        assert_eq!(state.snapshot().1.profiles[0].media_eq.bands.len(), 10);
+        assert_eq!(profiles_events(&mut events), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

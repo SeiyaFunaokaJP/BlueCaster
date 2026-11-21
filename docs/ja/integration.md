@@ -138,7 +138,11 @@ sequenceDiagram
 | `stream.start` | `profile` | `null`。実行中のストリームがあれば先に止める |
 | `stream.stop` | -- | `null` |
 | `stream.set_volume` | `volume`（AVRCP の絶対音量 0-127） | `null` |
+| `stream.volume_step` | `delta`（-127～127） | 新しい音量。[簡易操作](#quick-controls)を参照 |
 | `profile.set_active` | `name` | `null` |
+| `profile.set_headset_mic` | `name`（省略可）、`mode`（`off`、`auto`、`on`） | `null`。[簡易操作](#quick-controls)を参照 |
+| `profile.set_mic_muted` | `name`（省略可）、`muted`（bool） | `null`。[簡易操作](#quick-controls)を参照 |
+| `profile.set_media_eq` | `name`（省略可）、`enabled`（bool） | `null`。[簡易操作](#quick-controls)を参照 |
 | `device.scan` | `seconds`（3-600） | `Device[]`。`devices` イベントとしても届く |
 | `device.scan_stop` | -- | `null`。実行中の `device.scan` が応答を返す |
 | `audio.devices` | -- | `AudioDevice[]`（キャプチャのソース） |
@@ -147,6 +151,8 @@ sequenceDiagram
 | `rfcomm.open`、`rfcomm.send`、`rfcomm.close` | [RFCOMM パススルー](#rfcomm-passthrough)を参照 | |
 
 `diag.subscribe` では毎回 `logs` と `link` の両方を送ってください。呼び出すたびに両方が設定されるため、`logs` を省くとログのイベントはオフになります。
+
+設定を 1 つだけ変えるときは、`profile.save` や `settings.set` ではなく[簡易操作](#quick-controls)を使ってください。
 
 BlueCaster のウィンドウが使うメソッドのうち、ツールでは注意して使うべきもの: `profile.save` / `profile.delete`、`settings.set`（設定を **すべて** 置き換えます。最新の `settings` に変更を加えて送ってください。一部だけのオブジェクトは決して送らないでください）、`device.forget` / `device.rename`、`adapter.*`（`adapter.assign_winusb` と `adapter.restore_driver` は UAC の確認を出します。開発者モードのチップのツールである `adapter.probe` と `adapter.run_script` は Bluetooth スタックを止めます）、`app.quit`。それ以外のメソッドはウィンドウ自身の画面のためのもので、予告なく変わることがあります: `stream.start_custom`、ほかの `device.*`（`device.import_windows_pairings` は UAC の確認を出します）、`audio.apps`、`audio.mixer` / `audio.mixer_set`、上の 2 つ以外の `diag.*`、`receiver.*`、`app.*`。パラメーターと結果を含む全一覧は、`protocol.rs` の `Method` 列挙型にあります。
 
@@ -176,6 +182,19 @@ BlueCaster のウィンドウが使うメソッドのうち、ツールでは注
 - `le_audio` は、LE Audio のヘッドホンから届いたイベントでは `true` です。
 - ヘッドホンは、再生中かどうかを自分で判断して `play` か `pause` を送ります。この判断は最新でないことがあります。再生と一時停止を切り替えるだけなら、両方を同じように扱ってください。
 - BlueCaster は、再生/一時停止、次へ、前へ、停止をこれまでどおりメディアキーとして Windows に渡します。ツールがボタンを自分で処理する場合は、**オーディオデバイス > オーディオデバイスのボタンで再生を操作** をオフにするようユーザーに案内してください。この設定がオフでもイベントは届きます。
+
+## 簡易操作 {#quick-controls}
+
+`welcome.features` に `"tool_controls"` があるときに使えます。どのメソッドも設定を 1 つだけ変えるので、ツールがプロファイル全体を送る必要はありません。
+
+- `name` は保存済みのプロファイルの名前です。省略すると、ストリーミング中のプロファイルが対象になります。何もストリーミングしていなければ、アクティブなプロファイルが対象です。存在しない名前を指定すると `profile.not_found` が返ります。
+- 変更はプロファイルに保存され、BlueCaster のウィンドウで変えたときと同じようにストリームに反映されます。すべてのクライアントに `profiles` イベントが届きます。
+- 今と同じ値を送っても何も変わりません。
+- `profile.set_headset_mic` は、ウィンドウにあるマイクのモードボタンと同じように動きます。`off` はモードをそのままにしてマイクをミュートします。`auto` と `on` はそのモードに切り替えてミュートを解除します。開発者モードがオフのとき、`on` には `developer.off` が返ります。
+- `profile.set_mic_muted` は、モードを変えずにヘッドセットマイクをミュートまたはミュート解除します。
+- マイクの 2 つのメソッドは、そのデバイスのヘッドセットマイクが設定されるまで `profile.no_mic_output` を返します。デバイスの接続中は `stream.busy` を返します。
+- `profile.set_media_eq` は、ストリームを再接続せずに再生用のイコライザーをオンまたはオフにします。イコライザーのポイントはそのまま残ります。
+- `stream.volume_step` はヘッドホンの音量を `delta` だけ変え、新しい音量（0-127）を返します。基準は、ヘッドホンが最後に通知した音量です。何もストリーミングしていないとき、またはヘッドホンがまだ音量を通知していないときは `stream.volume_unknown` が返ります。`delta` が -127～127 の範囲外なら `stream.bad_volume_step` が返ります。
 
 ## 互換性 {#compatibility}
 

@@ -28,8 +28,14 @@ pub const PROTOCOL_VERSION: u32 = 1;
 
 /// The Welcome's `features`: "rfcomm" for rfcomm.open / send / close and
 /// their events (2.0.2), "media_button" for the [`Event::MediaButton`]
-/// events (after 3.0.2)
-pub const FEATURES: &[&str] = &["rfcomm", "media_button"];
+/// events (after 3.0.2), "tool_controls" for profile.set_headset_mic,
+/// profile.set_mic_muted, profile.set_media_eq and stream.volume_step
+/// (after 3.0.3)
+pub const FEATURES: &[&str] = &["rfcomm", "media_button", "tool_controls"];
+
+/// The largest step of `stream.volume_step`, either way: the whole AVRCP
+/// range (0..127)
+pub const MAX_VOLUME_STEP: i16 = 127;
 
 /// The longest `device.scan` (seconds); a longer one is cut to it
 pub const MAX_SCAN_SECONDS: u32 = 600;
@@ -607,6 +613,26 @@ pub struct MicTestState {
     pub played_ms: u32,
     /// Why the test stopped (a message key), None while fine
     pub error: Option<String>,
+}
+
+/// A headset mode as profile.set_headset_mic takes it (Profile.headset_mic)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum HeadsetMicMode {
+    Off,
+    Auto,
+    On,
+}
+
+impl HeadsetMicMode {
+    /// Profile.headset_mic's value
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HeadsetMicMode::Off => "off",
+            HeadsetMicMode::Auto => "auto",
+            HeadsetMicMode::On => "on",
+        }
+    }
 }
 
 /// The kind of a playback EQ point
@@ -1885,6 +1911,13 @@ pub enum Method {
     /// AVRCP absolute volume 0..127
     #[serde(rename = "stream.set_volume")]
     StreamSetVolume { volume: u8 },
+    /// Moves the headphone volume by `delta` (-127..127, within 0..127)
+    /// from the one the headphones last reported (StreamStatus.volume), as
+    /// stream.set_volume -> number: the volume asked for. Errors
+    /// stream.volume_unknown (no stream, or no volume reported yet),
+    /// stream.bad_volume_step (`delta` out of range). 0: nothing is sent.
+    #[serde(rename = "stream.volume_step")]
+    StreamVolumeStep { delta: i16 },
     /// -> Device[] (also as an event). `seconds` from 3 to
     /// [`MAX_SCAN_SECONDS`] (the setup looks until a device is added)
     #[serde(rename = "device.scan")]
@@ -1970,6 +2003,44 @@ pub enum Method {
     MediaEqPreview { name: String, eq: MediaEq },
     #[serde(rename = "profile.set_active")]
     ProfileSetActive { name: String },
+    /// For tools: the headset mode of the profile `name` (absent: the one
+    /// streaming, else the active one), saved as the window's mode buttons
+    /// save it: "off" mutes the microphone while the mode saved is Auto or
+    /// On (mic_muted, the mode kept), "auto" / "on" set the mode and
+    /// unmute. A running stream takes it as after profile.save. The value
+    /// in force already: nothing happens. Errors profile.not_found,
+    /// developer.off ("on" outside developer mode), profile.no_mic_output
+    /// (no microphone output chosen), stream.busy (its stream is
+    /// connecting) -> null
+    #[serde(rename = "profile.set_headset_mic")]
+    ProfileSetHeadsetMic {
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        name: Option<String>,
+        mode: HeadsetMicMode,
+    },
+    /// For tools: mutes or unmutes the headset microphone of the profile
+    /// `name` (absent as for profile.set_headset_mic), as Home's
+    /// microphone button; the mode stays. Errors as profile.set_headset_mic
+    /// but developer.off -> null
+    #[serde(rename = "profile.set_mic_muted")]
+    ProfileSetMicMuted {
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        name: Option<String>,
+        muted: bool,
+    },
+    /// For tools: turns the playback EQ of the profile `name` (absent as
+    /// for profile.set_headset_mic) on or off, its points kept (none
+    /// saved: the flat ones the window starts with). A running stream
+    /// takes it in place. Error profile.not_found -> null
+    #[serde(rename = "profile.set_media_eq")]
+    ProfileSetMediaEq {
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        name: Option<String>,
+        enabled: bool,
+    },
     /// -> SettingsApplied (the settings come back as an event too)
     #[serde(rename = "settings.set")]
     SettingsSet { settings: Box<Settings> },
@@ -2771,6 +2842,55 @@ mod tests {
         let custom = m(serde_json::json!({"method": "stream.start_custom", "params": {
             "device": "AA:BB:CC:DD:EE:FF", "codec": "sbc", "quality": "hq", "source": "tone"}}));
         assert!(matches!(custom, Method::StreamStartCustom { sample_rate: None, source_id: None, .. }));
+    }
+
+    /// The tools' methods ("tool_controls"): enums, bools and numbers only;
+    /// anything else does not parse (answered with ipc.bad_request)
+    #[test]
+    fn tool_control_requests() {
+        assert!(FEATURES.contains(&"tool_controls"));
+        let m = |j: serde_json::Value| serde_json::from_value::<Method>(j);
+        assert_eq!(
+            m(serde_json::json!({"method": "profile.set_headset_mic", "params": {"mode": "auto"}})).unwrap(),
+            Method::ProfileSetHeadsetMic { name: None, mode: HeadsetMicMode::Auto }
+        );
+        assert_eq!(
+            m(serde_json::json!({"method": "profile.set_headset_mic", "params": {"name": "WH", "mode": "on"}}))
+                .unwrap(),
+            Method::ProfileSetHeadsetMic { name: Some("WH".into()), mode: HeadsetMicMode::On }
+        );
+        assert_eq!(
+            m(serde_json::json!({"method": "profile.set_mic_muted", "params": {"name": null, "muted": true}})).unwrap(),
+            Method::ProfileSetMicMuted { name: None, muted: true }
+        );
+        assert_eq!(
+            m(serde_json::json!({"method": "profile.set_media_eq", "params": {"enabled": false}})).unwrap(),
+            Method::ProfileSetMediaEq { name: None, enabled: false }
+        );
+        assert_eq!(
+            m(serde_json::json!({"method": "stream.volume_step", "params": {"delta": -8}})).unwrap(),
+            Method::StreamVolumeStep { delta: -8 }
+        );
+        for bad in [
+            serde_json::json!({"method": "profile.set_headset_mic", "params": {"mode": "loud"}}),
+            serde_json::json!({"method": "profile.set_headset_mic", "params": {"mode": 1}}),
+            serde_json::json!({"method": "profile.set_headset_mic", "params": {}}),
+            serde_json::json!({"method": "profile.set_mic_muted", "params": {"muted": "yes"}}),
+            serde_json::json!({"method": "profile.set_media_eq", "params": {"name": 3, "enabled": true}}),
+            serde_json::json!({"method": "stream.volume_step", "params": {"delta": 1.5}}),
+            serde_json::json!({"method": "stream.volume_step", "params": {"delta": 70000}}),
+            serde_json::json!({"method": "stream.volume_step"}),
+        ] {
+            assert!(m(bad.clone()).is_err(), "{bad}");
+        }
+        let j = serde_json::to_value(Method::ProfileSetHeadsetMic { name: None, mode: HeadsetMicMode::Off }).unwrap();
+        assert_eq!(
+            j,
+            serde_json::json!({"method": "profile.set_headset_mic", "params": {"name": null, "mode": "off"}})
+        );
+        for mode in [HeadsetMicMode::Off, HeadsetMicMode::Auto, HeadsetMicMode::On] {
+            assert_eq!(serde_json::to_value(mode).unwrap(), mode.as_str());
+        }
     }
 
     /// State of a core built before the additions still parses

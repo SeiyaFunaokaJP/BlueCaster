@@ -138,7 +138,11 @@ Méthodes destinées aux outils :
 | `stream.start` | `profile` | `null` ; arrête d'abord un flux en cours |
 | `stream.stop` | -- | `null` |
 | `stream.set_volume` | `volume` (volume absolu AVRCP 0-127) | `null` |
+| `stream.volume_step` | `delta` (de -127 à 127) | le nouveau volume ; voir [Commandes rapides](#quick-controls) |
 | `profile.set_active` | `name` | `null` |
+| `profile.set_headset_mic` | `name` (facultatif), `mode` (`off`, `auto`, `on`) | `null` ; voir [Commandes rapides](#quick-controls) |
+| `profile.set_mic_muted` | `name` (facultatif), `muted` (bool) | `null` ; voir [Commandes rapides](#quick-controls) |
+| `profile.set_media_eq` | `name` (facultatif), `enabled` (bool) | `null` ; voir [Commandes rapides](#quick-controls) |
 | `device.scan` | `seconds` (3-600) | `Device[]`, aussi sous forme d'événement `devices` |
 | `device.scan_stop` | -- | `null` ; le `device.scan` en cours se termine alors |
 | `audio.devices` | -- | `AudioDevice[]` (sources de capture) |
@@ -147,6 +151,8 @@ Méthodes destinées aux outils :
 | `rfcomm.open`, `rfcomm.send`, `rfcomm.close` | voir [Relais RFCOMM](#rfcomm-passthrough) | |
 
 Envoyez `logs` et `link` à chaque `diag.subscribe`. Chaque appel définit les deux valeurs : sans `logs`, les événements de journal sont désactivés.
+
+Pour modifier un seul réglage, utilisez les [commandes rapides](#quick-controls) plutôt que `profile.save` ou `settings.set`.
 
 Méthodes qu'utilise la fenêtre de BlueCaster et qu'un outil ne doit utiliser qu'avec précaution : `profile.save` / `profile.delete`, `settings.set` (remplace **tous** les paramètres : envoyez les derniers `settings` avec votre modification, jamais un objet partiel), `device.forget` / `device.rename`, `adapter.*` (`adapter.assign_winusb` et `adapter.restore_driver` affichent une invite UAC ; `adapter.probe` et `adapter.run_script`, les outils de puce du mode développeur, arrêtent la pile Bluetooth), `app.quit`. Les autres méthodes servent aux écrans de la fenêtre et peuvent changer sans préavis : `stream.start_custom`, les autres méthodes `device.*` (`device.import_windows_pairings` affiche une invite UAC), `audio.apps`, `audio.mixer` / `audio.mixer_set`, les `diag.*` autres que les deux ci-dessus, `receiver.*` et `app.*`. La liste complète, avec les paramètres et les résultats, se trouve dans l'enum `Method` de `protocol.rs`.
 
@@ -176,6 +182,19 @@ Disponible quand `welcome.features` contient `"media_button"`. Chaque fois qu'un
 - `le_audio` vaut `true` quand l'événement vient d'un casque LE Audio.
 - Les casques envoient `play` ou `pause` selon qu'ils pensent ou non qu'une lecture est en cours. Cette information peut être périmée. Pour basculer la lecture, traitez les deux de la même façon.
 - BlueCaster continue de transmettre lecture/pause, suivant, précédent et arrêt à Windows sous forme de touches multimédias. Si votre outil gère lui-même les boutons, demandez à l'utilisateur de désactiver **Périphériques audio > Contrôler la lecture avec les boutons de l'appareil audio**. Les événements arrivent aussi quand ce réglage est désactivé.
+
+## Commandes rapides {#quick-controls}
+
+Disponibles quand `welcome.features` contient `"tool_controls"`. Chaque méthode modifie un seul réglage : un outil n'a donc jamais besoin d'envoyer un profil complet.
+
+- `name` est le nom d'un profil enregistré. Sans `name`, c'est le profil en cours de diffusion qui est utilisé, ou le profil actif si rien n'est diffusé. Un nom inconnu renvoie `profile.not_found`.
+- La modification est enregistrée dans le profil et appliquée au flux, comme une modification faite dans la fenêtre de BlueCaster. Tous les clients reçoivent un événement `profiles`.
+- Envoyer la valeur actuelle ne change rien.
+- `profile.set_headset_mic` fonctionne comme les boutons de mode du micro dans la fenêtre. `off` coupe le micro mais garde le mode actuel. `auto` et `on` passent à ce mode et réactivent le micro. Sans le mode développeur, `on` renvoie `developer.off`.
+- `profile.set_mic_muted` coupe ou réactive le micro du casque sans changer le mode.
+- Les deux méthodes du micro renvoient `profile.no_mic_output` tant que le micro du casque n'est pas configuré pour l'appareil. Pendant la connexion de l'appareil, elles renvoient `stream.busy`.
+- `profile.set_media_eq` active ou désactive l'égaliseur de lecture sans reconnecter le flux. Les points de l'égaliseur sont conservés.
+- `stream.volume_step` modifie le volume du casque de `delta` et renvoie le nouveau volume (0-127). Le pas part du dernier volume indiqué par le casque. Si rien n'est diffusé, ou si le casque n'a pas encore indiqué de volume, la méthode renvoie `stream.volume_unknown`. Un `delta` hors de la plage -127 à 127 renvoie `stream.bad_volume_step`.
 
 ## Compatibilité {#compatibility}
 

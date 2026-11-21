@@ -138,7 +138,11 @@ sequenceDiagram
 | `stream.start` | `profile` | `null`. 실행 중인 스트림이 있으면 먼저 중지 |
 | `stream.stop` | -- | `null` |
 | `stream.set_volume` | `volume` (AVRCP 절대 볼륨 0-127) | `null` |
+| `stream.volume_step` | `delta` (-127~127) | 새 볼륨. [빠른 제어](#quick-controls) 참조 |
 | `profile.set_active` | `name` | `null` |
+| `profile.set_headset_mic` | `name` (선택), `mode` (`off`, `auto`, `on`) | `null`. [빠른 제어](#quick-controls) 참조 |
+| `profile.set_mic_muted` | `name` (선택), `muted` (bool) | `null`. [빠른 제어](#quick-controls) 참조 |
+| `profile.set_media_eq` | `name` (선택), `enabled` (bool) | `null`. [빠른 제어](#quick-controls) 참조 |
 | `device.scan` | `seconds` (3-600) | `Device[]`, `devices` 이벤트로도 전달 |
 | `device.scan_stop` | -- | `null`. 실행 중이던 `device.scan`이 이때 결과를 반환 |
 | `audio.devices` | -- | `AudioDevice[]` (캡처 소스) |
@@ -147,6 +151,8 @@ sequenceDiagram
 | `rfcomm.open`, `rfcomm.send`, `rfcomm.close` | [RFCOMM 패스스루](#rfcomm-passthrough) 참고 | |
 
 `diag.subscribe`에는 항상 `logs`와 `link`를 모두 넣으세요. 호출할 때마다 두 값이 함께 설정되므로, `logs`를 빼면 로그 이벤트가 꺼집니다.
+
+설정 하나만 바꾸려면 `profile.save`나 `settings.set` 대신 [빠른 제어](#quick-controls)를 사용하세요.
 
 BlueCaster 창이 쓰는 메서드 중 도구에서는 주의해서 써야 하는 것: `profile.save` / `profile.delete`, `settings.set`(설정을 **모두** 대체합니다. 일부만 담은 객체는 절대 보내지 말고, 최신 `settings`에 변경 사항을 반영해 보내세요), `device.forget` / `device.rename`, `adapter.*`(`adapter.assign_winusb`와 `adapter.restore_driver`는 UAC 프롬프트를 표시하고, 개발자 모드의 칩 도구인 `adapter.probe`와 `adapter.run_script`는 Bluetooth 스택을 중지합니다), `app.quit`. 나머지 메서드(`stream.start_custom`, 그 밖의 `device.*`(`device.import_windows_pairings`는 UAC 프롬프트를 표시), `audio.apps`, `audio.mixer` / `audio.mixer_set`, 위 두 가지 외의 `diag.*`, `receiver.*`, `app.*`)는 창의 화면 전용이며 예고 없이 바뀔 수 있습니다. 매개변수와 결과를 포함한 전체 목록은 `protocol.rs`의 `Method` enum에 있습니다.
 
@@ -176,6 +182,19 @@ BlueCaster 창이 쓰는 메서드 중 도구에서는 주의해서 써야 하�
 - `le_audio`는 LE Audio 헤드폰에서 온 이벤트일 때 `true`입니다.
 - 헤드폰은 지금 재생 중인지 스스로 판단해 `play` 또는 `pause`를 보냅니다. 이 판단은 최신이 아닐 수 있습니다. 재생과 일시 정지를 전환하기만 한다면 둘을 똑같이 처리하세요.
 - BlueCaster는 재생/일시 정지, 다음, 이전, 정지를 계속 미디어 키로 Windows에 전달합니다. 도구가 버튼을 직접 처리한다면 사용자에게 **오디오 장치 > 오디오 장치 버튼으로 재생 제어**를 끄도록 안내하세요. 이 설정을 꺼도 이벤트는 계속 전달됩니다.
+
+## 빠른 제어 {#quick-controls}
+
+`welcome.features`에 `"tool_controls"`가 있을 때 사용할 수 있습니다. 각 메서드는 설정 하나만 바꾸므로 도구가 프로필 전체를 보낼 필요가 없습니다.
+
+- `name`은 저장된 프로필의 이름입니다. 생략하면 스트리밍 중인 프로필이 대상이 됩니다. 아무것도 스트리밍하지 않으면 활성 프로필이 대상입니다. 알 수 없는 이름에는 `profile.not_found`가 반환됩니다.
+- 변경 사항은 프로필에 저장되고, BlueCaster 창에서 바꿀 때와 똑같이 스트림에 적용됩니다. 모든 클라이언트가 `profiles` 이벤트를 받습니다.
+- 현재 값과 같은 값을 보내면 아무것도 바뀌지 않습니다.
+- `profile.set_headset_mic`은 창에 있는 마이크 모드 버튼과 같이 동작합니다. `off`는 현재 모드를 유지한 채 마이크를 음소거합니다. `auto`와 `on`은 해당 모드로 바꾸고 음소거를 해제합니다. 개발자 모드가 꺼져 있으면 `on`에는 `developer.off`가 반환됩니다.
+- `profile.set_mic_muted`는 모드를 바꾸지 않고 헤드셋 마이크를 음소거하거나 음소거를 해제합니다.
+- 두 마이크 메서드는 해당 장치의 헤드셋 마이크가 설정될 때까지 `profile.no_mic_output`을 반환합니다. 장치가 연결 중일 때는 `stream.busy`를 반환합니다.
+- `profile.set_media_eq`는 스트림을 다시 연결하지 않고 재생 이퀄라이저를 켜거나 끕니다. 이퀄라이저 포인트는 그대로 유지됩니다.
+- `stream.volume_step`은 헤드폰 볼륨을 `delta`만큼 바꾸고 새 볼륨(0-127)을 반환합니다. 기준은 헤드폰이 마지막으로 알려 준 볼륨입니다. 아무것도 스트리밍하지 않거나 헤드폰이 아직 볼륨을 알려 주지 않았으면 `stream.volume_unknown`이 반환됩니다. `delta`가 -127~127을 벗어나면 `stream.bad_volume_step`이 반환됩니다.
 
 ## 호환성 {#compatibility}
 

@@ -138,7 +138,11 @@ sequenceDiagram
 | `stream.start` | `profile` | `null`；會先停止正在執行的串流 |
 | `stream.stop` | -- | `null` |
 | `stream.set_volume` | `volume`（AVRCP 絕對音量 0-127） | `null` |
+| `stream.volume_step` | `delta`（-127 到 127） | 新的音量；請參閱[快速控制](#quick-controls) |
 | `profile.set_active` | `name` | `null` |
+| `profile.set_headset_mic` | `name`（選用）、`mode`（`off`、`auto`、`on`） | `null`；請參閱[快速控制](#quick-controls) |
+| `profile.set_mic_muted` | `name`（選用）、`muted`（bool） | `null`；請參閱[快速控制](#quick-controls) |
+| `profile.set_media_eq` | `name`（選用）、`enabled`（bool） | `null`；請參閱[快速控制](#quick-controls) |
 | `device.scan` | `seconds`（3-600） | `Device[]`，也會以 `devices` 事件送達 |
 | `device.scan_stop` | -- | `null`；執行中的 `device.scan` 隨即傳回 |
 | `audio.devices` | -- | `AudioDevice[]`（擷取來源） |
@@ -147,6 +151,8 @@ sequenceDiagram
 | `rfcomm.open`、`rfcomm.send`、`rfcomm.close` | 請參閱 [RFCOMM 轉送](#rfcomm-passthrough) | |
 
 呼叫 `diag.subscribe` 時，請一律同時傳入 `logs` 和 `link`。每次呼叫都會同時設定兩者，因此省略 `logs` 會關閉記錄事件。
+
+若只需變更一項設定，請使用[快速控制](#quick-controls)，而不是 `profile.save` 或 `settings.set`。
 
 以下方法由 BlueCaster 視窗使用，工具應謹慎使用：`profile.save` / `profile.delete`、`settings.set`（會取代 **所有** 設定：請傳送最新的 `settings` 並附上您的變更，絕不要只傳送部分物件）、`device.forget` / `device.rename`、`adapter.*`（`adapter.assign_winusb` 與 `adapter.restore_driver` 會顯示 UAC 提示；`adapter.probe` 與 `adapter.run_script` 是開發人員模式的晶片工具，會停止藍牙堆疊）、`app.quit`。其他方法只供視窗本身的畫面使用，可能隨時變更，恕不另行通知：`stream.start_custom`、其他 `device.*` 方法（`device.import_windows_pairings` 會顯示 UAC 提示）、`audio.apps`、`audio.mixer` / `audio.mixer_set`、上述兩者以外的 `diag.*`、`receiver.*` 與 `app.*`。包含參數與結果的完整清單，請參閱 `protocol.rs` 中的 `Method` enum。
 
@@ -176,6 +182,19 @@ sequenceDiagram
 - 事件來自 LE Audio 耳機時，`le_audio` 為 `true`。
 - 耳機會依照自己判斷的播放狀態傳送 `play` 或 `pause`，而這個判斷可能已經過時。如果只需要切換播放和暫停，請以相同方式處理兩者。
 - BlueCaster 仍會把播放/暫停、下一首、上一首和停止當成媒體鍵傳給 Windows。如果您的工具會自行處理按鈕，請引導使用者關閉 **音訊裝置 > 用音訊裝置的按鈕控制播放**。關閉這項設定後，事件仍會送達。
+
+## 快速控制 {#quick-controls}
+
+當 `welcome.features` 包含 `"tool_controls"` 時可以使用。每個方法只變更一項設定，因此工具不需要傳送整個設定檔。
+
+- `name` 是已儲存設定檔的名稱。省略時，會使用正在串流的設定檔；沒有串流時，則使用目前作用中的設定檔。名稱不明時會傳回 `profile.not_found`。
+- 變更會儲存到設定檔，並像在 BlueCaster 視窗中變更一樣套用到串流。所有用戶端都會收到 `profiles` 事件。
+- 傳送目前的值不會有任何變化。
+- `profile.set_headset_mic` 的作用與視窗中的麥克風模式按鈕相同。`off` 會將麥克風靜音，但保留目前的模式。`auto` 和 `on` 會切換到該模式並取消靜音。未開啟開發人員模式時，`on` 會傳回 `developer.off`。
+- `profile.set_mic_muted` 會將耳機麥克風靜音或取消靜音，不會變更模式。
+- 在為該裝置設定好耳機麥克風之前，兩個麥克風方法都會傳回 `profile.no_mic_output`。裝置連線中時，則會傳回 `stream.busy`。
+- `profile.set_media_eq` 會開啟或關閉播放等化器，串流不會重新連線。等化器的各個點會保留。
+- `stream.volume_step` 會將耳機音量變更 `delta`，並傳回新的音量（0-127）。步進以耳機最後回報的音量為起點。沒有串流，或耳機尚未回報音量時，此方法會傳回 `stream.volume_unknown`。`delta` 超出 -127 到 127 時會傳回 `stream.bad_volume_step`。
 
 ## 相容性 {#compatibility}
 
