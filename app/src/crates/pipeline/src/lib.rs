@@ -15,6 +15,7 @@ pub mod convert;
 pub mod eq;
 pub mod le;
 pub mod le_rx;
+pub mod mix;
 pub mod packetizer;
 
 use std::sync::Arc;

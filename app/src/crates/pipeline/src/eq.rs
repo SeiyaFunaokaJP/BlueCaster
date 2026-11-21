@@ -31,8 +31,9 @@ pub const CEILING_DB: f32 = -0.3;
 
 /// Frames processed at a time (the scratch buffers' length)
 const CHUNK: usize = 256;
-/// Most channels processed (the encoders take mono or stereo)
-const MAX_CHANNELS: usize = 2;
+/// Most channels processed (the A2DP encoders take mono or stereo, the LE
+/// path up to four speakers)
+const MAX_CHANNELS: usize = 4;
 /// Points of the response scanned for its highest boost, log spaced
 const SCAN_POINTS: usize = 192;
 
@@ -185,7 +186,7 @@ pub struct EqProcessor {
 }
 
 impl EqProcessor {
-    /// For interleaved audio of `channels` (1 or 2) at `sample_rate`
+    /// For interleaved audio of `channels` (1 to 4) at `sample_rate`
     pub fn new(handle: EqHandle, sample_rate: u32, channels: usize) -> EqProcessor {
         let rate = sample_rate.max(1) as f32;
         let mut p = EqProcessor {
@@ -198,7 +199,7 @@ impl EqProcessor {
             used: 0,
             preamp: 1.0,
             preamp_now: 1.0,
-            limiters: [Limiter::new(rate), Limiter::new(rate)],
+            limiters: std::array::from_fn(|_| Limiter::new(rate)),
             scratch: [[0.0; CHUNK]; MAX_CHANNELS],
             active: false,
         };

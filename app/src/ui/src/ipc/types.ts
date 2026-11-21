@@ -34,6 +34,9 @@ import type { LogLine as BLogLine } from "./bindings/LogLine";
 import type { Method as BMethod } from "./bindings/Method";
 import type { Profile as BProfile } from "./bindings/Profile";
 import type { MediaEq as BMediaEq } from "./bindings/MediaEq";
+import type { AuracastMix as BAuracastMix } from "./bindings/AuracastMix";
+import type { AuracastMixState as BAuracastMixState } from "./bindings/AuracastMixState";
+import type { AuracastMixPreset as BAuracastMixPreset } from "./bindings/AuracastMixPreset";
 import type { EqPoint as BEqPoint } from "./bindings/EqPoint";
 import type { EqBandType as BEqBandType } from "./bindings/EqBandType";
 import type { ReceivedStream as BReceivedStream } from "./bindings/ReceivedStream";
@@ -111,6 +114,9 @@ export type LogLine = Wire<BLogLine>;
 export type Method = Wire<BMethod>;
 export type Profile = Wire<BProfile>;
 export type MediaEq = Wire<BMediaEq>;
+export type AuracastMix = Wire<BAuracastMix>;
+export type AuracastMixState = Wire<BAuracastMixState>;
+export type AuracastMixPreset = Wire<BAuracastMixPreset>;
 export type EqPoint = Wire<BEqPoint>;
 export type EqBandType = BEqBandType;
 export type ReceivedStream = Wire<BReceivedStream>;
@@ -190,6 +196,11 @@ interface Results {
   "mic_test.status": MicTestState;
   "app.check_update": UpdateState;
   "settings.set": SettingsApplied;
+  "auracast.mix": AuracastMixState;
+  "auracast.mix_set": AuracastMixState;
+  "auracast.mix_preset_save": AuracastMixState;
+  "auracast.mix_preset_delete": AuracastMixState;
+  "auracast.set_source": boolean;
 }
 
 export type ResultOf<M extends MethodName> = M extends keyof Results

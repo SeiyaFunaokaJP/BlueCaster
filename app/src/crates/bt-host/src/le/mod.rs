@@ -147,6 +147,8 @@ pub struct LeRequest {
     pub mic_rate: Option<u32>,
 }
 
+pub use le_audio::broadcast::BroadcastLayout;
+
 /// What a broadcast was asked for (`stream.start_broadcast`, `--auracast`)
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LeBroadcast {
@@ -156,8 +158,11 @@ pub struct LeBroadcast {
     pub code: Option<String>,
     /// One mono BIS instead of left and right
     pub mono: bool,
-    /// Left and right as two broadcasts of their own (not with `mono`)
-    pub split: bool,
+    /// The channels and broadcasts (Mono when `mono`)
+    pub layout: le_audio::broadcast::BroadcastLayout,
+    /// A matrix layout's rear at another preset (same frame duration);
+    /// None: the request's
+    pub rear_preset: Option<String>,
 }
 
 /// One advertiser seen by [`crate::BtHost::le_scan`] /

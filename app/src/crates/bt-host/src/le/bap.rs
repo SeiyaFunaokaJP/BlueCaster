@@ -1916,6 +1916,7 @@ mod tests {
             cis_handle: 0xFFFF,
             channels: vec![ChannelPlan { allocation, source }],
             source_ase: None,
+            preset: None,
         };
         StreamPlan {
             preset,
@@ -2113,6 +2114,7 @@ mod tests {
                 cis_handle: 0xFFFF,
                 channels: Vec::new(),
                 source_ase: Some(mic(3)),
+                preset: None,
             });
         }
         let preset = table.find("32_2_1").unwrap().clone();

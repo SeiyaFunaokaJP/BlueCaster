@@ -639,6 +639,52 @@ pub struct MediaEq {
     pub bands: Vec<EqPoint>,
 }
 
+/// The Auracast matrix mixer (developer mode): outputs FL FR RL RR (rows)
+/// from the source's speakers FL FR FC LFE BL BR SL SR (columns)
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(default)]
+pub struct AuracastMix {
+    /// The matrix from the levels below, else `matrix` as set
+    pub auto: bool,
+    pub center_db: f32,
+    pub lfe_db: f32,
+    pub surround_db: f32,
+    pub normalize: bool,
+    /// 4 rows of 8 gains (linear)
+    pub matrix: Vec<Vec<f32>>,
+    /// Per output (ms)
+    pub delay_ms: Vec<f32>,
+    /// Per output: polarity inverted
+    pub invert: Vec<bool>,
+}
+
+/// A named mixer setting
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(default)]
+pub struct AuracastMixPreset {
+    pub name: String,
+    pub mix: AuracastMix,
+    /// One of the program's own (not saved, cannot be deleted)
+    pub builtin: bool,
+}
+
+/// The mixer as the Auracast tab shows it
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+pub struct AuracastMixState {
+    pub mix: AuracastMix,
+    pub presets: Vec<AuracastMixPreset>,
+    /// A broadcast runs with the mixer: changes are heard at once
+    pub live: bool,
+    /// The source's channels (of the broadcast running, else as asked)
+    pub channels: u32,
+    /// Which of the 8 columns the source has
+    pub present: Vec<bool>,
+    /// The broadcast has rear outputs (else only FL FR are heard)
+    pub rear: bool,
+    /// The matrix that plays (auto computed), 4 rows of 8
+    pub effective: Vec<Vec<f32>>,
+}
+
 /// A connection profile, as in profiles.json
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 
@@ -1855,8 +1901,13 @@ pub enum Method {
     /// profile stays. `name`: the Broadcast Name (4-32 bytes); `code`: the
     /// Broadcast Code (4-16 bytes; none or empty: open); `quality`: "hq"
     /// (48 kHz) or "sq" (24 kHz); `mono`: one channel instead of left and
-    /// right; `split`: left and right as two broadcasts of their own
-    /// ("<name> L" / "<name> R", one mono BIS each; not with `mono`);
+    /// right; `layout` (not with `mono`): "stereo" (default), "mono",
+    /// "split" (left and right as two broadcasts of their own, "<name> L" /
+    /// "<name> R", one mono BIS each) or "matrix_<front>_<rear>" (the
+    /// matrix mixer's outputs: front FL FR and rear RL RR each "stereo",
+    /// "separate", "subgroups" or "off"; older names quad, front_rear,
+    /// pairs, rear_subgroups, subgroups), unknown: error stream.bad_layout;
+    /// `split`: true is layout "split" (when no `layout` is given);
     /// `source` / `source_id` / `source_name` as for stream.start_custom
     /// ("app" fails with error.le_audio_capture). Error developer.off while
     /// developer mode is off; a name or code out of range fails the stream
@@ -1868,12 +1919,19 @@ pub enum Method {
         #[serde(default)]
         code: Option<String>,
         quality: String,
+        /// A matrix layout's rear (RL RR): "hq" or "sq"; None: `quality`
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        rear_quality: Option<String>,
         #[ts(optional = nullable)]
         #[serde(default)]
         mono: Option<bool>,
         #[ts(optional = nullable)]
         #[serde(default)]
         split: Option<bool>,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        layout: Option<String>,
         source: String,
         #[ts(optional = nullable)]
         #[serde(default)]
@@ -1970,6 +2028,38 @@ pub enum Method {
     MediaEqPreview { name: String, eq: MediaEq },
     #[serde(rename = "profile.set_active")]
     ProfileSetActive { name: String },
+    /// -> AuracastMixState: for the broadcast running, else a source of
+    /// `channels` (default 8) and rear outputs `rear` (default true)
+    #[serde(rename = "auracast.mix")]
+    AuracastMixGet {
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        channels: Option<u32>,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        rear: Option<bool>,
+    },
+    /// -> AuracastMixState: saved, and heard at once while broadcasting
+    #[serde(rename = "auracast.mix_set")]
+    AuracastMixSet {
+        mix: AuracastMix,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        channels: Option<u32>,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        rear: Option<bool>,
+    },
+    /// -> AuracastMixState
+    #[serde(rename = "auracast.mix_preset_save")]
+    AuracastMixPresetSave { name: String, mix: AuracastMix },
+    /// -> AuracastMixState
+    #[serde(rename = "auracast.mix_preset_delete")]
+    AuracastMixPresetDelete { name: String },
+    /// -> bool: the running broadcast takes "tone" or "loopback" (system
+    /// audio) in place, its broadcasts staying up; false: none runs
+    #[serde(rename = "auracast.set_source")]
+    AuracastSetSource { source: String },
     /// -> SettingsApplied (the settings come back as an event too)
     #[serde(rename = "settings.set")]
     SettingsSet { settings: Box<Settings> },

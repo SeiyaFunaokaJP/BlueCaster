@@ -603,8 +603,12 @@ it.
   stopped"). A BIG the controller ends counts as a lost stream
   (error.auracast). `BtHost::le_start_broadcast` / `le_stop_broadcast`.
 - core `le_stream::run_broadcast`: no device; capture as for unicast.
+- Layouts (`le_audio::broadcast::BroadcastLayout`; `--auracast-layout`,
+  the Auracast tab's channel choice, `stream.start_broadcast`'s `layout`):
+  stereo, mono, split, quad, front_rear. Below: split first, then the
+  speaker layouts built on it.
 - Split (`--auracast-split`, the Auracast tab's "Left / right separately",
-  `stream.start_broadcast`'s `split`): left and right as two broadcasts of
+  layout `split`): left and right as two broadcasts of
   their own, "<name> L" and "<name> R" (Broadcast_ID + 1 for R), each an
   advertising set (SID 1 / 2) and a BIG (handle 0 / 1) of one mono BIS
   without a location, for a pair of speakers that each tune to one
@@ -629,6 +633,47 @@ it.
   `--auracast-split` is an argument error, and `stream.start_broadcast` with
   both `mono` and `split` true is refused as a bad request
   (`stream.bad_channels`).
+- Quad (layout `quad`, the tab's "4 speakers"): the four speakers of a
+  multichannel source, each a mono broadcast of its own, "<name> FL" /
+  "FR" / "RL" / "RR" (BIG 0-3, SID 1-4, all four shim slots). Front +
+  rear (`front_rear`): the front as one stereo broadcast "<name> Front"
+  (two BIS, Front Left / Right) and the rear as two mono ones. The plan
+  marks the rear BIS `ChannelSource::RearLeft` / `RearRight`; a plan with
+  those makes the LE encoder take the speakers instead of the stereo
+  downmix: `audio_capture::Capture::channel_mask` (the mix format's
+  dwChannelMask) goes through `LePipelineConfig::channel_mask` to
+  `pipeline::le::speaker_matrix`, which maps the interleaved channels by
+  their mask bits to four lanes: front left / right (FL / FR, the centre at
+  -3 dB and the LFE at -6 dB in both, as the downmix) and rear left / right
+  (back and side, -3 dB each when a source has both, as 7.1). No mask, or
+  one that does not fit the channel count: the usual mask of the count. A
+  source without rear speakers (stereo) plays its front on the rear too.
+  The EQ runs on all four lanes. More than two BIS: RTN 2 instead of the
+  presets' 4 (`RTN_MANY_BIS`; four BIS at RTN 4 and their advertising
+  hardly fit a 10 ms interval). All broadcasts share one preset (one LC3
+  configuration in the encoder): mixed rates, e.g. 48 kHz front and 24 kHz
+  rear, need a preset per broadcast and are not done. Source: an output
+  device set to 5.1 / 7.1 (e.g. VB-Audio Hi-Fi Cable, its speaker setup in
+  the Windows sound settings) as the default output, captured as the
+  system audio (the tab's source), or chosen as the virtual / output device.
+  Tried on 2026-11-20 on the ASUS BT600: quad and front_rear do not start.
+  Two BIGs come up, the third LE Create BIG gets 0x0D (Connection Rejected,
+  Limited Resources) from the controller, at 24 and 48 kHz alike. Pairs
+  (layout `pairs`, "<name> Front" / "<name> Rear", two stereo broadcasts:
+  four BIS in two BIGs) tells whether the limit is two BIGs or two BIS.
+  It started at 24 and 48 kHz: the limit is two BIGs.
+- Rear subgroups (layout `rear_subgroups`, branch feat/auracast-subgroups):
+  the front in stereo, the rear as one broadcast "<name> Rear" whose BASE
+  has two subgroups of one mono BIS each, labelled by Program_Info (0x03)
+  "Rear left" / "Rear right", as multi-language broadcasts offer their
+  languages (`base_with`, `group_base_ad`). Three streams in two BIGs;
+  whether a receiver lets one pick the subgroup is what it tries. On
+  2026-11-20 (BT600, a phone and JBL GO 4): it starts, Front joins as
+  stereo, but the receiver shows "Rear left" or "Rear right" seemingly at
+  random, so a subgroup cannot be picked reliably. Layout `subgroups`
+  puts the front in subgroups too (mono BIS, "Front left" / "Front right").
+  It runs, but the receiver always takes the left (first) subgroup. Left
+  as it is for now: other receivers may let one pick.
 
 BTstack 1.8.1 pitfalls found along the way:
 - `HCI_EVENT_BIS_CAN_SEND_NOW` is emitted only 4 bytes long, so the BIS handle
@@ -654,6 +699,37 @@ either broadcast ends the other and removes both advertising sets. After a
 stop both sinks have received the same number of SDUs; before the stop
 let the last round finish, R ended one SDU short in 3 of 3 runs.
 Real hardware: not tried.
+
+### Matrix mixer
+
+A broadcast's outputs (FL FR RL RR) come from the source's speakers (FL FR
+FC LFE BL BR SL SR, by the capture's dwChannelMask) through a 4×8 matrix
+(`pipeline::mix`), then the EQ, then a per-output delay (0–500 ms, linear
+interpolation, so 0.01 ms steps work) and polarity. Automatic: fronts as
+they are, centre (-3 dB) and LFE (-6 dB) into both fronts, back/side into
+the rear (or folded into the fronts at -3 dB when the layout has no rear),
+with an optional row normalisation; or every gain by hand. The settings and
+named presets live in `auracast_mix.json`; the encode thread reads a
+versioned `MixHandle`, so changes from the Auracast tab (`auracast.mix_set`)
+are heard from the next block while broadcasting. Only the matrix layout
+(`matrix_<front>_<rear>`, each pair stereo / separate / subgroups / off;
+`BroadcastLayout::Matrix`) uses it: stereo, mono and split, and unicast
+streams, keep the fixed downmix. The BT600 runs two BIGs at most, which the
+Auracast tab warns about (stereo and subgroups take one BIG, separate two).
+
+The rear may run at another rate than the front (`rear_quality`,
+`BroadcastConfig::rear_preset`, same 10 ms frames): its BIS carry their own
+`CisPlan::preset`, each BIG and BASE is made from its group's
+(`group_plan`), and all broadcasts share one presentation delay. The encode
+thread works at the top rate (`StreamPlan::top_sampling_hz`); a 24 kHz
+channel next to 48 kHz ones goes through a 63-tap windowed-sinc decimator,
+and the 48 kHz channels through the same 31-sample (0.65 ms) delay, so front
+and rear stay in step.
+
+The source switches while broadcasting (`auracast.set_source`, tone or
+system audio): `Service::change_source` hands it to the broadcast loop,
+which stops the capture and starts the new one into the same queue; the
+BIGs stay (silence goes out for the moment in between).
 
 ## LE Audio off
 

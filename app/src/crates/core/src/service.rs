@@ -1532,9 +1532,10 @@ impl Service {
         }
     }
 
-    /// Changes the source of the running A2DP stream: the link stays up.
-    /// False when none is streaming (it connects or reconnects, a start or
-    /// stop is under way, LE Audio has its own capture path): the caller
+    /// Changes the source of the running A2DP stream or Auracast broadcast:
+    /// the link (the BIGs) stays up. False when none is streaming (it
+    /// connects or reconnects, a start or stop is under way, an LE Audio
+    /// unicast stream, application capture for a broadcast): the caller
     /// starts it again instead.
     pub fn change_source(&self, source: SourceRequest) -> bool {
         let Ok(_control) = self.control.try_lock() else { return false };
@@ -1543,6 +1544,12 @@ impl Service {
         }
         match self.last_request.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             Some(req) if req.le.is_none() => req.source = source.clone(),
+            Some(req)
+                if req.le.as_ref().is_some_and(|l| l.broadcast.is_some())
+                    && !matches!(source, SourceRequest::Application { .. }) =>
+            {
+                req.source = source.clone()
+            }
             _ => return false,
         }
         *self.inner.source_change.lock().unwrap_or_else(|e| e.into_inner()) = Some(source);
@@ -2522,6 +2529,12 @@ mod tests {
         *s.last_request.lock().unwrap() = Some(StreamRequest { le: Some(le), ..request() });
         assert!(!s.change_source(tone()));
         assert_eq!(s.inner.take_source_change(), None);
+        // An Auracast broadcast: in place too, but not to an application
+        let b = bt_host::LeRequest { broadcast: Some(bt_host::LeBroadcast::default()), ..Default::default() };
+        *s.last_request.lock().unwrap() = Some(StreamRequest { le: Some(b), ..request() });
+        assert!(!s.change_source(SourceRequest::Application { exe: "a.exe".into() }));
+        assert!(s.change_source(tone()));
+        assert_eq!(s.inner.take_source_change(), Some(tone()));
         // A start or stop under way
         *s.last_request.lock().unwrap() = Some(request());
         let control = s.control.lock().unwrap();

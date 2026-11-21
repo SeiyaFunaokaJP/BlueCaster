@@ -368,6 +368,9 @@ impl BtHost {
         if !self.le_ready() {
             return Err("LE Audio is not running".into());
         }
+        // A user operation: the cancel of the last stop would end its wait
+        // at the first poll (several BIGs take longer than that to come up)
+        self.le_fresh_operation();
         let (iso_len, iso_count) = self.le_iso_buffers();
         if iso_len == 0 || iso_count == 0 {
             let why = "adapter does not support LE Audio (no ISO buffers)";
@@ -375,8 +378,8 @@ impl BtHost {
             return Err(why.into());
         }
         let plan = le_audio::broadcast::plan(&config);
-        if usize::from(plan.preset.octets) + 4 > usize::from(iso_len) {
-            let why = format!("SDUs of {} octets do not fit the adapter's ISO packets", plan.preset.octets);
+        if usize::from(plan.max_octets()) + 4 > usize::from(iso_len) {
+            let why = format!("SDUs of {} octets do not fit the adapter's ISO packets", plan.max_octets());
             tracing::error!("Auracast: cannot broadcast: {why}");
             return Err(why);
         }

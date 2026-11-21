@@ -710,6 +710,71 @@ option {
   width: 2rem;
   height: 1rem;
 }
+
+/* The Auracast matrix mixer: outputs (rows) from source speakers (columns) */
+.pair-row-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--s2);
+}
+.mix-scroll {
+  overflow-x: auto;
+  padding: var(--s2) 0;
+}
+.mix-grid {
+  border-collapse: collapse;
+  font-size: var(--fs-12);
+}
+.mix-grid th,
+.mix-grid td {
+  padding: 2px;
+  text-align: center;
+  font-weight: normal;
+}
+.mix-grid thead th {
+  color: var(--text-2);
+}
+.mix-grid .input.mix-cell {
+  width: 4.2rem;
+  padding: 2px 4px;
+  text-align: right;
+}
+.mix-grid td.mix-on .input.mix-cell {
+  border-color: var(--accent-fill);
+}
+.mix-grid .input.mix-cell[readonly] {
+  background: var(--surface-2);
+}
+.mix-grid .input.mix-delay {
+  width: 5.5rem;
+  padding: 2px 4px;
+  text-align: right;
+}
+.mix-grid .mix-absent,
+.mix-grid tr.mix-absent {
+  opacity: 0.4;
+}
+.mix-levels {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s2) 0;
+}
+.mix-level {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--fs-14);
+}
+.mix-level .input {
+  width: 5rem;
+}
+.mix-preset-save .input {
+  flex: 1;
+  min-width: 0;
+}
 .switch.small::after {
   left: 0.15rem;
   width: 0.6rem;

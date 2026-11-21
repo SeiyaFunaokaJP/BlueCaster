@@ -453,6 +453,39 @@ describe("chip tools", () => {
 });
 
 describe("Auracast tab", () => {
+  it("takes a matrix's rates from the front and rear rows, not Quality", async () => {
+    const { core, calls } = await open();
+    await core.request("settings.set", {
+      settings: { ...core.state.snap!.settings, developer_mode: true },
+    });
+    fireEvent.click(
+      await screen.findByRole("tab", { name: t("ui.dev.auracast") }),
+    );
+    const start = await screen.findByRole("button", {
+      name: t("receiver.start"),
+    });
+    // Quality at 24 kHz, then the matrix: front 48 kHz (its own), rear 24 kHz
+    fireEvent.click(
+      screen.getByRole("radio", { name: t("ui.dev.auracast_sq") }),
+    );
+    fireEvent.click(
+      screen.getByRole("radio", { name: t("ui.dev.auracast_matrix") }),
+    );
+    const rates = await screen.findAllByRole("radio", {
+      name: t("ui.dev.auracast_24"),
+    });
+    expect(rates).toHaveLength(2);
+    fireEvent.click(rates[1]!);
+    expect(
+      screen.getByRole("radio", { name: t("ui.dev.auracast_sq") }),
+    ).toBeDisabled();
+    fireEvent.click(start);
+    await screen.findByText(t("status.broadcasting"));
+    expect(
+      calls.find((c) => c.method === "stream.start_broadcast")!.params,
+    ).toMatchObject({ quality: "hq", rear_quality: "sq", layout: "matrix_stereo_stereo" });
+  });
+
   it("starts and stops a broadcast", async () => {
     const { core, calls } = await open();
     await core.request("settings.set", {
@@ -497,8 +530,9 @@ describe("Auracast tab", () => {
       name: "Living room",
       code: "secret",
       quality: "sq",
+      rear_quality: null,
       mono: true,
-      split: false,
+      layout: null,
       source: "tone",
     });
     expect(screen.getByText(/1 ch over 1 BIS, 24_2_2/)).toBeInTheDocument();

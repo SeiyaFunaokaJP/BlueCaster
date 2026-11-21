@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! BlueCaster\
-//!   settings.json  profiles.json
+//!   settings.json  profiles.json  auracast_mix.json
 //!   devices\    devices.txt  le_audio_devices.txt  device_codecs.json  device_services.json
 //!   pairing\    link_keys.txt  le_audio_bonds.tlv   (the secrets: never in a bundle)
 //!   adapters\   adapter_caps.json  driver\<instance id>.json
@@ -246,6 +246,11 @@ pub fn settings_file(config: &Path) -> PathBuf {
 
 pub fn profiles_file(config: &Path) -> PathBuf {
     config.join("profiles.json")
+}
+
+/// The Auracast matrix mixer and its presets (developer mode)
+pub fn auracast_mix_file(config: &Path) -> PathBuf {
+    config.join("auracast_mix.json")
 }
 
 /// A capture started by hand (diagnostics): `hci_<stamp>.pklg` at the top

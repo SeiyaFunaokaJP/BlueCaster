@@ -9,10 +9,25 @@ import { useApp } from "../app/context";
 import { Button, Field, Section, Segmented } from "../components/controls";
 import { t, tm } from "../i18n";
 import type { Core } from "../ipc/store";
+import { AuracastMixer } from "./AuracastMixer";
 
 type Source = "tone" | "loopback";
 type Quality = "hq" | "sq";
-type Channels = "stereo" | "mono" | "split";
+type Channels = "stereo" | "mono" | "split" | "matrix";
+/** How a pair of matrix outputs is sent (le_audio::broadcast::PairMode) */
+export type PairMode = "stereo" | "separate" | "subgroups" | "off";
+
+/** The BIGs (broadcasts) a pair takes */
+export const pairBigs = (m: PairMode) => (m === "separate" ? 2 : m === "off" ? 0 : 1);
+/** BIGs the ASUS BT600 runs at most (a third: LE Create BIG 0x0D) */
+export const MAX_BIGS = 2;
+
+/** The layout as stream.start_broadcast takes it */
+export function layoutOf(c: { channels: Channels; front: PairMode; rear: PairMode }): string | null {
+  if (c.channels === "mono") return null;
+  if (c.channels === "matrix") return `matrix_${c.front}_${c.rear}`;
+  return c.channels;
+}
 
 /** The core's limits (le_audio::broadcast): UTF-8 bytes */
 export const NAME_BYTES = [4, 32] as const;
@@ -23,6 +38,11 @@ interface Choices {
   code: string;
   quality: Quality;
   channels: Channels;
+  /** Matrix: the front (FL FR) and the rear (RL RR), each with its rate */
+  front: PairMode;
+  rear: PairMode;
+  frontQuality: Quality;
+  rearQuality: Quality;
   source: Source;
 }
 
@@ -42,6 +62,10 @@ function createSession(core: Core) {
       code: "",
       quality: "hq",
       channels: "stereo",
+      front: "stereo",
+      rear: "stereo",
+      frontQuality: "hq",
+      rearQuality: "hq",
       source: "tone",
     });
     /** A broadcast asked for here, until the stream it started ends or another takes over */
@@ -109,9 +133,10 @@ export function Auracast() {
       core.request("stream.start_broadcast", {
         name: c.name.trim(),
         code: c.code === "" ? null : c.code,
-        quality: c.quality,
+        quality: c.channels === "matrix" ? c.frontQuality : c.quality,
+        rear_quality: c.channels === "matrix" ? c.rearQuality : null,
         mono: c.channels === "mono",
-        split: c.channels === "split",
+        layout: layoutOf(c),
         source: c.source,
       }),
     );
@@ -120,6 +145,23 @@ export function Auracast() {
   };
 
   const locked = () => live() || s.asking();
+  /** The source: the running broadcast switches to it in place */
+  const changeSource = (source: Source) => {
+    set({ source });
+    if (live()) void app.run(() => core.request("auracast.set_source", { source }));
+  };
+  const rateOptions = (): [Quality, string][] => [
+    ["hq", t("ui.dev.auracast_48")],
+    ["sq", t("ui.dev.auracast_24")],
+  ];
+  const matrix = () => choices().channels === "matrix";
+  const bigs = () => (matrix() ? pairBigs(choices().front) + pairBigs(choices().rear) : 0);
+  const pairOptions = (): [PairMode, string][] => [
+    ["stereo", t("ui.dev.auracast_pair_stereo")],
+    ["separate", t("ui.dev.auracast_pair_separate")],
+    ["subgroups", t("ui.dev.auracast_pair_subgroups")],
+    ["off", t("ui.dev.auracast_pair_off")],
+  ];
 
   return (
     <div>
@@ -131,7 +173,7 @@ export function Auracast() {
             kind={live() ? "danger" : "strong"}
             icon={live() ? "stop" : "play"}
             busy={s.asking()}
-            disabled={!live() && (nameError() !== null || codeError() !== null)}
+            disabled={!live() && (nameError() !== null || codeError() !== null || (matrix() && bigs() === 0))}
             onClick={startStop}
           >
             {live() ? t("receiver.stop") : t("receiver.start")}
@@ -172,7 +214,7 @@ export function Auracast() {
         <Choice<Quality>
           label={t("ui.dev.auracast_quality")}
           value={choices().quality}
-          disabled={locked()}
+          disabled={locked() || matrix()}
           options={[
             ["hq", t("ui.dev.auracast_hq")],
             ["sq", t("ui.dev.auracast_sq")],
@@ -187,18 +229,19 @@ export function Auracast() {
             ["stereo", t("ui.dev.auracast_stereo")],
             ["mono", t("ui.dev.auracast_mono")],
             ["split", t("ui.dev.auracast_split")],
+            ["matrix", t("ui.dev.auracast_matrix")],
           ]}
           onChange={(channels) => set({ channels })}
         />
         <Choice<Source>
           label={t("receiver.source")}
           value={choices().source}
-          disabled={locked()}
+          disabled={s.asking()}
           options={[
             ["tone", t("receiver.source_tone")],
             ["loopback", t("receiver.source_system")],
           ]}
-          onChange={(source) => set({ source })}
+          onChange={changeSource}
         />
         <Show when={status()}>
           {(st) => (
@@ -209,6 +252,77 @@ export function Auracast() {
           )}
         </Show>
       </Section>
+      <Show when={matrix()}>
+        <AuracastMixer rear={choices().rear !== "off"} live={live() && !s.asking()}>
+          <PairRow
+            label={t("ui.dev.auracast_front")}
+            mode={choices().front}
+            rate={choices().frontQuality}
+            disabled={locked()}
+            modes={pairOptions()}
+            rates={rateOptions()}
+            onMode={(front) => set({ front })}
+            onRate={(frontQuality) => set({ frontQuality })}
+          />
+          <PairRow
+            label={t("ui.dev.auracast_rear")}
+            mode={choices().rear}
+            rate={choices().rearQuality}
+            disabled={locked()}
+            modes={pairOptions()}
+            rates={rateOptions()}
+            onMode={(rear) => set({ rear })}
+            onRate={(rearQuality) => set({ rearQuality })}
+          />
+          <p class="hint">{t("ui.dev.auracast_speakers_hint")}</p>
+          <Show when={bigs() === 0}>
+            <p class="hint" style={{ color: "var(--bad-text)" }}>
+              {t("ui.dev.auracast_pairs_off_hint")}
+            </p>
+          </Show>
+          <Show when={bigs() > MAX_BIGS}>
+            <p class="hint field-warn">{t("ui.dev.auracast_bigs_hint", bigs(), MAX_BIGS)}</p>
+          </Show>
+        </AuracastMixer>
+      </Show>
+    </div>
+  );
+}
+
+/** A pair of matrix outputs: how it is sent, and its rate */
+function PairRow(props: {
+  label: string;
+  mode: PairMode;
+  rate: Quality;
+  disabled: boolean;
+  modes: [PairMode, string][];
+  rates: [Quality, string][];
+  onMode: (m: PairMode) => void;
+  onRate: (q: Quality) => void;
+}) {
+  return (
+    <div class="row pair-row">
+      <span class="row-text">
+        <span class="row-label">{props.label}</span>
+      </span>
+      <span class="pair-row-controls">
+        <Segmented<PairMode>
+          label={props.label}
+          value={props.mode}
+          options={props.modes.map(([value, label]) => ({ value, label, disabled: props.disabled }))}
+          onChange={props.onMode}
+        />
+        <Segmented<Quality>
+          label={`${props.label}: ${t("ui.dev.auracast_quality")}`}
+          value={props.rate}
+          options={props.rates.map(([value, label]) => ({
+            value,
+            label,
+            disabled: props.disabled || props.mode === "off",
+          }))}
+          onChange={props.onRate}
+        />
+      </span>
     </div>
   );
 }

@@ -106,10 +106,18 @@ impl LeStreamDetails {
     pub fn of(started: &LeStreamStarted) -> LeStreamDetails {
         let status = &started.status;
         let plan = &status.plan;
+        // Each configuration (a matrix broadcast's rear may run at another)
+        let mut presets: Vec<&str> = Vec::new();
+        for c in plan.sink_cis() {
+            let name = plan.preset_of(c).name.as_str();
+            if !presets.contains(&name) {
+                presets.push(name);
+            }
+        }
         LeStreamDetails {
-            preset: plan.preset.name.clone(),
+            preset: if presets.is_empty() { plan.preset.name.clone() } else { presets.join(" + ") },
             frame_us: plan.preset.frame_us.into(),
-            octets: plan.preset.octets.into(),
+            octets: plan.max_octets().into(),
             cis: plan.cis.len() as u32,
             devices: status.devices.len() as u32,
             low_latency: plan.preset.name.ends_with("_gr"),
@@ -143,6 +151,7 @@ pub struct LeAudioPath {
     pipeline: Option<LePipeline>,
     format: Format,
     rate: u32,
+    channel_mask: u32,
 }
 
 impl LeAudioPath {
@@ -160,18 +169,21 @@ impl LeAudioPath {
         }
     }
 
-    /// Starts capture and encoding for the stream `started`
+    /// Starts capture and encoding for the stream `started` (`mix`: the
+    /// broadcast's matrix mixer, else the fixed downmix)
     pub fn start(
         source: &SourceRequest,
         started: &LeStreamStarted,
         stats: Arc<LinkStats>,
+        mix: Option<pipeline::mix::MixHandle>,
     ) -> Result<LeAudioPath, String> {
         let plan = &started.status.plan;
-        let rate = plan.preset.sampling_hz;
+        let rate = plan.top_sampling_hz();
         let test_tone = matches!(source, SourceRequest::TestTone);
         let options = CaptureOptions { preferred_rate: Some(rate), fill_silence: !test_tone };
         let capture = Capture::open(&LeAudioPath::capture_source(source)?, &options).map_err(|e| e.to_string())?;
         let format = capture.format();
+        let channel_mask = capture.channel_mask();
         tracing::info!(
             "LE Audio: capture {} Hz, {} channel(s), {:?} -> LC3 at {rate} Hz",
             format.sample_rate,
@@ -182,8 +194,10 @@ impl LeAudioPath {
             LePipelineConfig {
                 plan: plan.clone(),
                 input: crate::stream::input_format(format),
+                channel_mask,
                 buffer: BufferPreset::Standard,
                 media_eq: Some(crate::media_eq::handle()),
+                mix,
             },
             started.sink.clone(),
             stats,
@@ -195,7 +209,12 @@ impl LeAudioPath {
                 return Err(e.to_string());
             }
         };
-        Ok(LeAudioPath { capture: Some(running), pipeline: Some(pipeline), format, rate })
+        Ok(LeAudioPath { capture: Some(running), pipeline: Some(pipeline), format, rate, channel_mask })
+    }
+
+    /// The captured speakers (dwChannelMask)
+    pub fn channel_mask(&self) -> u32 {
+        self.channel_mask
     }
 
     /// The captured format
@@ -567,7 +586,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     let mut default_guard = switch_default();
     // Restored while the headphones are off: switched again when they are back
     let mut switch_default_again = false;
-    let mut audio = match LeAudioPath::start(&req.source, &started, host.stats().clone()) {
+    let mut audio = match LeAudioPath::start(&req.source, &started, host.stats().clone(), None) {
         Ok(a) => Some(a),
         Err(e) => {
             tracing::error!("LE Audio: audio capture: {e}");
@@ -752,7 +771,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         tracing::info!("LE Audio stream restored: {}", started.status.summary);
         mic_streams += 1;
         mic = open_mic(inner, &mut started, mic_target.as_ref(), mic_streams, &mut mic_note);
-        audio = match LeAudioPath::start(&req.source, &started, host.stats().clone()) {
+        audio = match LeAudioPath::start(&req.source, &started, host.stats().clone(), None) {
             Ok(a) => Some(a),
             Err(e) => {
                 tracing::error!("LE Audio: audio capture: {e}");
@@ -852,14 +871,24 @@ pub fn broadcast_config(le: &LeRequest) -> Result<BroadcastConfig, String> {
         let names: Vec<String> = broadcast::presets().into_iter().map(|p| p.name).collect();
         format!("no broadcast configuration \"{preset_name}\" (one of {})", names.join(", "))
     })?;
+    let rear_preset = match b.rear_preset.as_deref() {
+        Some(n) => {
+            let r = broadcast::find_preset(n).ok_or_else(|| format!("no broadcast configuration \"{n}\""))?;
+            if r.frame_us != preset.frame_us {
+                return Err(format!("the rear's {n} has another frame duration than {}", preset.name));
+            }
+            Some(r)
+        }
+        None => None,
+    };
     let random = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64)
         ^ u64::from(std::process::id()).rotate_left(32);
     Ok(BroadcastConfig {
         name,
         code,
         preset,
-        stereo: !b.mono,
-        split: !b.mono && b.split,
+        rear_preset,
+        layout: if b.mono { broadcast::BroadcastLayout::Mono } else { b.layout },
         broadcast_id: broadcast::broadcast_id(random),
     })
 }
@@ -913,7 +942,14 @@ fn run_broadcast(inner: &Arc<Inner>, req: StreamRequest) {
             };
         }
     };
-    let audio = match LeAudioPath::start(&req.source, &started, host.stats().clone()) {
+    // The matrix mixer feeds a matrix layout only; stereo, mono and split
+    // keep the fixed downmix
+    let mix = config.layout.is_matrix().then(crate::auracast_mix::handle);
+    // A source switched in place (stream.start_broadcast's choice changed
+    // while it runs) was asked for before this one started: not again
+    inner.take_source_change();
+    let mut source = req.source.clone();
+    let mut audio = match LeAudioPath::start(&source, &started, host.stats().clone(), mix.clone()) {
         Ok(a) => a,
         Err(e) => {
             tracing::error!("Auracast: audio capture: {e}");
@@ -925,35 +961,74 @@ fn run_broadcast(inner: &Arc<Inner>, req: StreamRequest) {
     inner.notify(StreamState::Streaming, Msg::new("status.broadcasting"));
     let plan = &started.status.plan;
     let channels = plan.channel_count() as u32;
-    let rate = plan.preset.sampling_hz;
-    let format = audio.format();
+    let rate = plan.top_sampling_hz();
+    let rear = plan.cis.iter().flat_map(|c| &c.channels).any(|c| c.source.is_rear());
     inner.set_le_stream(Some(LeStreamDetails::of(&started)));
-    inner.stream_info(StreamInfo {
-        codec: CODEC_NAME.into(),
-        bitrate_kbps: plan.preset.kbps_per_channel() * channels,
-        sample_rate: rate,
-        channels,
-        bits: 0,
-        source_sample_rate: format.sample_rate,
-        source_channels: format.channels as u32,
-        source_bits: (format.sample_format.bytes_per_sample() * 8) as u32,
-        requested_codec: None,
-        requested_in_use: false,
-        abr: false,
-        bitrate_capped: false,
-        hi_res_set: false,
-        low_latency: false,
-        source: req.source.info(),
-        details: None,
-    });
+    // What the stream info and the mixer show of the capture
+    let show = |audio: &LeAudioPath, source: &SourceRequest| {
+        let format = audio.format();
+        if config.layout.is_matrix() {
+            crate::auracast_mix::set_live(Some(crate::auracast_mix::Live {
+                channels: usize::from(format.channels),
+                mask: audio.channel_mask(),
+                rear,
+            }));
+        }
+        inner.stream_info(StreamInfo {
+            codec: CODEC_NAME.into(),
+            bitrate_kbps: plan.sink_cis().map(|c| plan.preset_of(c).kbps_per_channel() * c.channels.len() as u32).sum(),
+            sample_rate: rate,
+            channels,
+            bits: 0,
+            source_sample_rate: format.sample_rate,
+            source_channels: format.channels as u32,
+            source_bits: (format.sample_format.bytes_per_sample() * 8) as u32,
+            requested_codec: None,
+            requested_in_use: false,
+            abr: false,
+            bitrate_capped: false,
+            hi_res_set: false,
+            low_latency: false,
+            source: source.info(),
+            details: None,
+        });
+    };
+    show(&audio, &source);
 
-    let mutes_output = req.mutes_output(&req.source);
+    let mut mutes_output = req.mutes_output(&source);
     let mut output_mute = OutputMute::new();
     output_mute.tick(mutes_output);
     let mut discontinuities = DiscontinuityLog::default();
     let mut lost = false;
+    let mut capture_failed = false;
     while !stopped() {
         inner.wait_tick(Duration::from_millis(200));
+        if let Some(next) = inner.take_source_change().filter(|n| *n != source) {
+            // The BIGs stay: the old capture stops, the new one encodes into
+            // the same queue (silence goes out in between)
+            tracing::info!("Auracast: source {:?} -> {:?}", source, next);
+            audio.stop_now();
+            match LeAudioPath::start(&next, &started, host.stats().clone(), mix.clone()) {
+                Ok(a) => {
+                    audio = a;
+                    source = next;
+                    discontinuities = DiscontinuityLog::default();
+                }
+                Err(e) => {
+                    tracing::error!("Auracast: audio capture of the new source: {e}");
+                    match LeAudioPath::start(&source, &started, host.stats().clone(), mix.clone()) {
+                        Ok(a) => audio = a,
+                        Err(e) => {
+                            tracing::error!("Auracast: audio capture of the old source again: {e}");
+                            capture_failed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            mutes_output = req.mutes_output(&source);
+            show(&audio, &source);
+        }
         output_mute.tick(mutes_output);
         discontinuities.tick(audio.discontinuities());
         if host.le_stream_lost() {
@@ -966,11 +1041,16 @@ fn run_broadcast(inner: &Arc<Inner>, req: StreamRequest) {
         stopped(),
         le_stats_line(&host.le_stream_stats())
     );
-    audio.stop();
+    if !capture_failed {
+        audio.stop();
+    }
+    crate::auracast_mix::set_live(None);
     host.le_stop_broadcast();
     drop(output_mute);
     inner.set_le_stream(None);
-    if lost && !stopped() {
+    if capture_failed {
+        inner.notify(StreamState::Error, Msg::new("error.wasapi_init"));
+    } else if lost && !stopped() {
         inner.notify(StreamState::Error, Msg::with("error.auracast", &[&"the adapter ended the broadcast"]));
     } else {
         ready();

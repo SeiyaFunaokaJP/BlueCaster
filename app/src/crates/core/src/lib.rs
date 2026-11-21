@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod adapter;
+pub mod auracast_mix;
 pub mod compat;
 pub mod default_input;
 pub mod devices;

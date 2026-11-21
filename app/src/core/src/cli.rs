@@ -110,8 +110,16 @@ LE Audio (experimental, LC3 over LE isochronous channels):
   --auracast-code <code>
                         encrypt the broadcast with this code (4-16 bytes)
   --auracast-mono       one mono channel instead of left and right
-  --auracast-split      left and right as two broadcasts of their own
-                        (<name> L / <name> R, a mono channel each)
+  --auracast-layout <layout>
+                        stereo (default); split: left and right as two
+                        broadcasts of their own (<name> L / <name> R, a mono
+                        channel each); matrix-<front>-<rear>: the matrix
+                        mixer's outputs, front (FL FR) and rear (RL RR) each
+                        stereo (one broadcast), separate (a mono broadcast
+                        each), subgroups (one broadcast of two subgroups) or
+                        off; older names: quad, front-rear, pairs,
+                        rear-subgroups, subgroups
+  --auracast-split      the same as --auracast-layout split
 
 Headset microphone:
   --headset-mic [on|auto]
@@ -258,8 +266,8 @@ struct LeArgs {
     broadcast_code: Option<String>,
     /// --auracast-mono
     broadcast_mono: bool,
-    /// --auracast-split
-    broadcast_split: bool,
+    /// --auracast-layout (--auracast-split: split)
+    broadcast_layout: Option<String>,
 }
 
 /// --le-scan without a time (v1 scan_seconds)
@@ -500,13 +508,33 @@ fn parse(args: &[String]) -> Result<Args, String> {
             }
             "--auracast-code" => a.le.broadcast_code = Some(value(&mut it, "--auracast-code")?),
             "--auracast-mono" => a.le.broadcast_mono = true,
-            "--auracast-split" => a.le.broadcast_split = true,
+            "--auracast-split" => a.le.broadcast_layout = Some("split".into()),
+            "--auracast-layout" => {
+                let v = value(&mut it, "--auracast-layout")?;
+                if bt_host::BroadcastLayout::parse(&v).is_none() {
+                    return Err(
+                        "--auracast-layout takes stereo, mono, split, matrix-<front>-<rear> (each stereo, separate, subgroups or off), quad, front-rear, pairs, rear-subgroups or subgroups"
+                            .into(),
+                    );
+                }
+                a.le.broadcast_layout = Some(v);
+            }
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown option {other}")),
         }
     }
-    if a.le.broadcast_mono && a.le.broadcast_split {
-        return Err("--auracast-mono and --auracast-split cannot be used together".into());
+    // Mono: one channel, not split or a matrix
+    let layout = a.le.broadcast_layout.as_deref().and_then(bt_host::BroadcastLayout::parse);
+    if a.le.broadcast_mono {
+        match layout {
+            Some(bt_host::BroadcastLayout::Split) => {
+                return Err("--auracast-mono and --auracast-split cannot be used together".into());
+            }
+            Some(l) if l.is_matrix() => {
+                return Err(format!("--auracast-mono and --auracast-layout {} cannot be used together", l.as_str()));
+            }
+            _ => {}
+        }
     }
     Ok(a)
 }
@@ -1260,7 +1288,7 @@ fn le_broadcast(a: &Args, service: &Service, rx: &mpsc::Receiver<ServiceEvent>, 
         code: le.broadcast_code.clone(),
         quality: "hq".into(),
         mono: Some(le.broadcast_mono),
-        split: Some(le.broadcast_split),
+        layout: le.broadcast_layout.clone(),
         source: "tone".into(),
         ..Default::default()
     };
@@ -1387,6 +1415,7 @@ fn le_run(a: &Args, service: &Service, running: &Arc<AtomicBool>) -> i32 {
         &source,
         started,
         host.stats().clone(),
+        None,
     ) {
         Ok(path) => {
             let rate = path.rate();
@@ -1732,8 +1761,11 @@ mod tests {
             parse(&args("--cli --hci-tcp 127.0.0.1:9900 --auracast BlueCaster-test --test-tone --duration 5")).unwrap();
         assert!(a.le.on && a.test_tone && a.device.is_none());
         assert_eq!(a.le.broadcast.as_deref(), Some("BlueCaster-test"));
-        assert!(a.le.broadcast_code.is_none() && !a.le.broadcast_mono && !a.le.broadcast_split);
-        assert!(parse(&args("--cli --auracast Speakers --auracast-split")).unwrap().le.broadcast_split);
+        assert!(a.le.broadcast_code.is_none() && !a.le.broadcast_mono && a.le.broadcast_layout.is_none());
+        let layout = |s: &str| parse(&args(s)).map(|a| a.le.broadcast_layout);
+        assert_eq!(layout("--cli --auracast Speakers --auracast-split").unwrap().as_deref(), Some("split"));
+        assert_eq!(layout("--cli --auracast Speakers --auracast-layout quad").unwrap().as_deref(), Some("quad"));
+        assert!(layout("--cli --auracast Speakers --auracast-layout 5.1").is_err());
         let a = parse(&[
             "--cli".into(),
             "--auracast".into(),

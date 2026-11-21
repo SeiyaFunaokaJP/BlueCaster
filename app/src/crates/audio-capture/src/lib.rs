@@ -221,39 +221,46 @@ enum Backend {
 /// delivered. Dropping it closes the source.
 pub struct Capture {
     format: Format,
+    channel_mask: u32,
     backend: Option<Backend>,
 }
 
 impl Capture {
     pub fn open(source: &Source, options: &CaptureOptions) -> Result<Capture, CaptureError> {
-        let (format, backend) = match source {
+        let (format, channel_mask, backend) = match source {
             Source::SystemLoopback => {
                 let o = loopback::Opened::open(loopback::Target::Device(None), options)?;
-                (o.format, Backend::Loopback(o))
+                (o.format, o.channel_mask, Backend::Loopback(o))
             }
             Source::RenderDevice { id } => {
                 if id.is_empty() {
                     return Err(CaptureError::DeviceNotFound(String::new()));
                 }
                 let o = loopback::Opened::open(loopback::Target::Device(Some(id.clone())), options)?;
-                (o.format, Backend::Loopback(o))
+                (o.format, o.channel_mask, Backend::Loopback(o))
             }
             Source::Application { process_id } => {
                 let o = loopback::Opened::open(loopback::Target::Process(*process_id), options)?;
-                (o.format, Backend::Loopback(o))
+                (o.format, o.channel_mask, Backend::Loopback(o))
             }
             Source::TestTone => {
                 let rate = options.preferred_rate.filter(|&r| r >= 100).unwrap_or(DEFAULT_RATE);
                 tracing::debug!("audio source: test tone, requested {:?}, using {rate} Hz", options.preferred_rate);
-                (tone::format(rate), Backend::Tone)
+                (tone::format(rate), loopback::STEREO_MASK, Backend::Tone)
             }
         };
-        Ok(Capture { format, backend: Some(backend) })
+        Ok(Capture { format, channel_mask, backend: Some(backend) })
     }
 
     /// The format the source will deliver
     pub fn format(&self) -> Format {
         self.format
+    }
+
+    /// The speakers of the delivered channels, in their interleaved order
+    /// (WAVEFORMATEXTENSIBLE dwChannelMask bits; 0 = not stated)
+    pub fn channel_mask(&self) -> u32 {
+        self.channel_mask
     }
 
     /// Start delivering to `sink` on the capture thread

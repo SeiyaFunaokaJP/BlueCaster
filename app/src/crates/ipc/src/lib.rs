@@ -184,5 +184,6 @@ mod tests {
         KeysComparison::export_all(&cfg).unwrap();
         WindowsPairedDevice::export_all(&cfg).unwrap();
         VoiceRxCounters::export_all(&cfg).unwrap();
+        AuracastMixState::export_all(&cfg).unwrap();
     }
 }

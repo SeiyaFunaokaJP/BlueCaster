@@ -1147,9 +1147,15 @@ pub struct BroadcastStream {
     pub code: Option<String>,
     /// "hq" or "sq"
     pub quality: String,
+    /// A matrix layout's rear: "hq" or "sq"; None: `quality`
+    pub rear_quality: Option<String>,
     pub mono: Option<bool>,
-    /// Left and right as two broadcasts of their own
+    /// Left and right as two broadcasts of their own (layout "split"
+    /// when no `layout` is given)
     pub split: Option<bool>,
+    /// The channels and broadcasts (`BroadcastLayout::as_str`); None:
+    /// stereo (or split)
+    pub layout: Option<String>,
     pub source: String,
     pub source_id: Option<String>,
     pub source_name: Option<String>,
@@ -1159,13 +1165,28 @@ pub struct BroadcastStream {
 /// stream.start_custom, no device, LE Audio with the broadcast
 pub fn broadcast_request(b: &BroadcastStream, legacy_max_media_payload: u16) -> Result<StreamRequest, ErrorInfo> {
     const METHOD: &str = "stream.start_broadcast";
-    let preset = match b.quality.trim().to_ascii_lowercase().as_str() {
-        "" | "hq" => bluecaster_core::BROADCAST_PRESET_HQ,
-        "sq" => bluecaster_core::BROADCAST_PRESET_SQ,
-        other => return Err(bad_request("stream.bad_quality", METHOD, format!("unknown quality \"{other}\""))),
+    let preset_of = |q: &str| match q.trim().to_ascii_lowercase().as_str() {
+        "" | "hq" => Ok(bluecaster_core::BROADCAST_PRESET_HQ),
+        "sq" => Ok(bluecaster_core::BROADCAST_PRESET_SQ),
+        other => Err(bad_request("stream.bad_quality", METHOD, format!("unknown quality \"{other}\""))),
     };
-    // One mono channel, or left and right as broadcasts of their own: not both
-    if b.mono == Some(true) && b.split == Some(true) {
+    let preset = preset_of(&b.quality)?;
+    let rear_preset = b.rear_quality.as_deref().map(preset_of).transpose()?;
+    let layout = match b.layout.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+        None if b.split == Some(true) => bt_host::BroadcastLayout::Split,
+        None => bt_host::BroadcastLayout::Stereo,
+        Some(l) => bt_host::BroadcastLayout::parse(l).ok_or_else(|| {
+            bad_request(
+                "stream.bad_layout",
+                METHOD,
+                format!("unknown layout \"{l}\" (one of {})", bt_host::BroadcastLayout::NAMES),
+            )
+        })?,
+    };
+    // One mono channel, or left and right as broadcasts of their own (or
+    // any layout of more than one channel): not both
+    let one_channel = matches!(layout, bt_host::BroadcastLayout::Stereo | bt_host::BroadcastLayout::Mono);
+    if b.mono == Some(true) && !one_channel {
         return Err(bad_request("stream.bad_channels", METHOD, "mono and split cannot be used together".into()));
     }
     let c = CustomStream {
@@ -1185,7 +1206,8 @@ pub fn broadcast_request(b: &BroadcastStream, legacy_max_media_payload: u16) -> 
             name: b.name.clone(),
             code: b.code.clone(),
             mono: b.mono.unwrap_or(false),
-            split: b.split.unwrap_or(false),
+            layout,
+            rear_preset: rear_preset.map(Into::into),
         }),
         ..bt_host::LeRequest::default()
     });
@@ -3272,8 +3294,30 @@ impl CoreState {
                 };
                 self.start_custom(&c).map(|()| Value::Null)
             }
-            Method::StreamStartBroadcast { name, code, quality, mono, split, source, source_id, source_name } => {
-                let b = BroadcastStream { name, code, quality, mono, split, source, source_id, source_name };
+            Method::StreamStartBroadcast {
+                name,
+                code,
+                quality,
+                rear_quality,
+                mono,
+                split,
+                layout,
+                source,
+                source_id,
+                source_name,
+            } => {
+                let b = BroadcastStream {
+                    name,
+                    code,
+                    quality,
+                    rear_quality,
+                    mono,
+                    split,
+                    layout,
+                    source,
+                    source_id,
+                    source_name,
+                };
                 self.start_broadcast(&b).map(|()| Value::Null)
             }
             Method::StreamStop => {
@@ -3548,6 +3592,47 @@ impl CoreState {
                     self.start_profile(&profile.name)?;
                 }
                 Ok(Value::Null)
+            }
+            Method::AuracastSetSource { source } => {
+                let source = match source.trim().to_ascii_lowercase().as_str() {
+                    "tone" => bluecaster_core::stream::SourceRequest::TestTone,
+                    "" | "loopback" => bluecaster_core::stream::SourceRequest::SystemLoopback,
+                    other => {
+                        return Err(bad_request(
+                            "stream.bad_source",
+                            "auracast.set_source",
+                            format!("unknown source \"{other}\""),
+                        ));
+                    }
+                };
+                Ok(Value::Bool(self.service.change_source(source)))
+            }
+            Method::AuracastMixGet { channels, rear } => {
+                Ok(json(&bluecaster_core::auracast_mix::state(&self.config_dir(), channels, rear)))
+            }
+            Method::AuracastMixSet { mix, channels, rear } => {
+                let dir = self.config_dir();
+                bluecaster_core::auracast_mix::set(&dir, &mix).map_err(|e| {
+                    tracing::warn!("Auracast mixer: not saved: {e}");
+                    err("auracast.mix_save_failed", "error.settings_save")
+                })?;
+                Ok(json(&bluecaster_core::auracast_mix::state(&dir, channels, rear)))
+            }
+            Method::AuracastMixPresetSave { name, mix } => {
+                let dir = self.config_dir();
+                bluecaster_core::auracast_mix::save_preset(&dir, &name, &mix).map_err(|e| {
+                    tracing::warn!("Auracast mixer: preset not saved: {e}");
+                    err("auracast.mix_save_failed", "error.settings_save")
+                })?;
+                Ok(json(&bluecaster_core::auracast_mix::state(&dir, None, None)))
+            }
+            Method::AuracastMixPresetDelete { name } => {
+                let dir = self.config_dir();
+                bluecaster_core::auracast_mix::delete_preset(&dir, &name).map_err(|e| {
+                    tracing::warn!("Auracast mixer: preset not deleted: {e}");
+                    err("auracast.mix_save_failed", "error.settings_save")
+                })?;
+                Ok(json(&bluecaster_core::auracast_mix::state(&dir, None, None)))
             }
             Method::MediaEqPreview { name, eq } => {
                 let (_, s) = self.snapshot();
@@ -4289,7 +4374,9 @@ mod tests {
         for (mono, split) in [(Some(true), Some(false)), (Some(false), Some(true)), (None, None), (Some(true), None)] {
             let req = broadcast_request(&b(mono, split), 0).expect("accepted");
             let le = req.le.and_then(|l| l.broadcast).expect("a broadcast");
-            assert_eq!((le.mono, le.split), (mono.unwrap_or(false), split.unwrap_or(false)));
+            let layout =
+                if split == Some(true) { bt_host::BroadcastLayout::Split } else { bt_host::BroadcastLayout::Stereo };
+            assert_eq!((le.mono, le.layout), (mono.unwrap_or(false), layout));
         }
     }
 

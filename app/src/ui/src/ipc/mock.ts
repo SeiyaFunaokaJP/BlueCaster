@@ -29,6 +29,9 @@ import type {
 import type {
   AdapterInfo,
   AudioApp,
+  AuracastMix,
+  AuracastMixPreset,
+  AuracastMixState,
   MixerApp,
   AudioDevice,
   CaptureState,
@@ -1079,6 +1082,34 @@ function sourceOf(mode: string, id: string, name: string): SourceInfo {
 
 export class MockCore implements Transport {
   private mixer = MIXER_APPS;
+  private auracastMix: AuracastMix = {
+    auto: true,
+    center_db: -3,
+    lfe_db: -6,
+    surround_db: 0,
+    normalize: false,
+    matrix: [
+      [1, 0, 0.708, 0.501, 0, 0, 0, 0],
+      [0, 1, 0.708, 0.501, 0, 0, 0, 0],
+      [0, 0, 0, 0, 0.707, 0, 0.707, 0],
+      [0, 0, 0, 0, 0, 0.707, 0, 0.707],
+    ],
+    delay_ms: [0, 0, 0, 0],
+    invert: [false, false, false, false],
+  };
+  private mixPresets: AuracastMixPreset[] = [];
+  private mixState(): AuracastMixState {
+    const builtin = { name: "standard", mix: this.auracastMix, builtin: true };
+    return {
+      mix: this.auracastMix,
+      presets: [builtin, ...this.mixPresets],
+      live: false,
+      channels: 8,
+      present: [true, true, true, true, true, true, true, true],
+      rear: true,
+      effective: this.auracastMix.matrix,
+    };
+  }
   /** Addresses paired in Windows' Bluetooth (device.windows_paired) */
   windowsPaired: string[] = [];
   windowsPairedThrough: string[] | null = null;
@@ -1767,6 +1798,23 @@ export class MockCore implements Transport {
           console.info("[mock] tray balloon: tray.minimized_hint");
         }
         return null;
+      case "auracast.set_source":
+        return this.snap.stream.state === "streaming";
+      // The mixer: kept here, its matrix as set (no automatic one)
+      case "auracast.mix":
+        return this.mixState();
+      case "auracast.mix_set":
+        this.auracastMix = p.mix as AuracastMix;
+        return this.mixState();
+      case "auracast.mix_preset_save":
+        this.mixPresets = [
+          ...this.mixPresets.filter((x) => x.name !== p.name),
+          { name: p.name as string, mix: p.mix as AuracastMix, builtin: false },
+        ];
+        return this.mixState();
+      case "auracast.mix_preset_delete":
+        this.mixPresets = this.mixPresets.filter((x) => x.name !== p.name);
+        return this.mixState();
       case "app.quit":
         return null;
       default:
