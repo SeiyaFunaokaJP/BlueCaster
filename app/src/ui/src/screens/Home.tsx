@@ -22,7 +22,7 @@ import {
   MIC_NOTES,
   MicBadge,
   micShown,
-  openFirmwareFolder,
+  FirmwareFolderButton,
   QualityIndicator,
   Ring,
   showsBattery,
@@ -91,9 +91,7 @@ function FirmwareMissing() {
           // download, the folder for the files fetched by hand, the details
           <>
             <Show when={downloadable()}>{(a) => <FirmwareDownload files={a().firmware_files} kind="strong" />}</Show>
-            <Button icon="folder_open" onClick={() => void openFirmwareFolder(app)}>
-              {t("firmware.open_folder")}
-            </Button>
+            <FirmwareFolderButton />
             <Button kind={downloadable() ? undefined : "strong"} icon="usb_stick" onClick={toFirmware}>
               {t("ui.home.firmware_fix")}
             </Button>

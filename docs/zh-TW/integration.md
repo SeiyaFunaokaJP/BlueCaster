@@ -33,6 +33,20 @@ nav_order: 2.7
 - 要檢查核心是否在執行，請查看管道，而不是核心的 mutex：管道不存在，就表示核心沒有執行。
 - 以 `BLUECASTER_INSTANCE=<name>` 啟動的開發版本，會改在 `\\.\pipe\bluecaster-<SID>-<name>` 上接聽，因此可以與已安裝的版本同時執行。
 
+### 服務管道 {#the-service-pipe}
+
+BlueCaster 服務是開發人員模式中的原型功能，可讓使用者在登入畫面上使用藍牙鍵盤和滑鼠。在安裝了此服務的電腦上，核心會以 Windows 服務的形式執行。這時不會有每位使用者專屬的管道。核心會改為提供一條所有使用者共用的管道：
+
+```
+\\.\pipe\bluecaster-service
+```
+
+- 請先嘗試 `bluecaster-<user SID>`，再嘗試 `bluecaster-service`。服務不會以舊名稱提供管道。兩條管道上的訊框、交握與請求都相同。
+- 開啟管道時，只要求 `GENERIC_READ | FILE_WRITE_DATA`。若要變更管道的模式，請加上 `FILE_WRITE_ATTRIBUTES`。要求 `GENERIC_WRITE` 的用戶端會被管道拒絕，因為這項存取權包含建立管道其他執行個體的權限（`FILE_CREATE_PIPE_INSTANCE`）。Python 的 `open(..., "r+b")` 會要求 `GENERIC_WRITE`，因此請改用 `CreateFileW`（例如透過 `ctypes`）。
+- 若要確認伺服器確實是 BlueCaster，請比對管道伺服器的處理程序識別碼（`GetNamedPipeServerProcessId`）與 `BlueCaster` 服務的處理程序識別碼（`QueryServiceStatusEx`）。服務停止期間，其他程式可能會建立同名的管道。
+- 變更整台電腦的請求會傳回錯誤 `ipc.needs_admin`，例如開發人員模式、介面卡驅動程式，以及新增鍵盤和滑鼠。工具無法授予系統管理員核准。請要求使用者在 BlueCaster 視窗中進行變更，由視窗向 Windows 要求核准。
+- 核心以服務形式執行時，部分請求會傳回 `ipc.not_in_service`。`app.quit` 就是其中之一，因為服務必須持續執行，鍵盤和滑鼠才能使用。請改用 `app.close`：它會停止串流，並關閉 BlueCaster 視窗與系統匣圖示。
+
 ### 訊框 {#frames}
 
 雙向的每則訊息都是一個訊框：先是 JSON 的長度（**u32 little-endian**），接著是 JSON（UTF-8）。超過 4 MiB 的訊框會被拒絕。
@@ -138,7 +152,11 @@ sequenceDiagram
 | `stream.start` | `profile` | `null`；會先停止正在執行的串流 |
 | `stream.stop` | -- | `null` |
 | `stream.set_volume` | `volume`（AVRCP 絕對音量 0-127） | `null` |
+| `stream.volume_step` | `delta`（-127 到 127） | 新的音量；請參閱[快速控制](#quick-controls) |
 | `profile.set_active` | `name` | `null` |
+| `profile.set_headset_mic` | `name`（選用）、`mode`（`off`、`auto`、`on`） | `null`；請參閱[快速控制](#quick-controls) |
+| `profile.set_mic_muted` | `name`（選用）、`muted`（bool） | `null`；請參閱[快速控制](#quick-controls) |
+| `profile.set_media_eq` | `name`（選用）、`enabled`（bool） | `null`；請參閱[快速控制](#quick-controls) |
 | `device.scan` | `seconds`（3-600） | `Device[]`，也會以 `devices` 事件送達 |
 | `device.scan_stop` | -- | `null`；執行中的 `device.scan` 隨即傳回 |
 | `audio.devices` | -- | `AudioDevice[]`（擷取來源） |
@@ -147,6 +165,8 @@ sequenceDiagram
 | `rfcomm.open`、`rfcomm.send`、`rfcomm.close` | 請參閱 [RFCOMM 轉送](#rfcomm-passthrough) | |
 
 呼叫 `diag.subscribe` 時，請一律同時傳入 `logs` 和 `link`。每次呼叫都會同時設定兩者，因此省略 `logs` 會關閉記錄事件。
+
+若只需變更一項設定，請使用[快速控制](#quick-controls)，而不是 `profile.save` 或 `settings.set`。
 
 以下方法由 BlueCaster 視窗使用，工具應謹慎使用：`profile.save` / `profile.delete`、`settings.set`（會取代 **所有** 設定：請傳送最新的 `settings` 並附上您的變更，絕不要只傳送部分物件）、`device.forget` / `device.rename`、`adapter.*`（`adapter.assign_winusb` 與 `adapter.restore_driver` 會顯示 UAC 提示；`adapter.probe` 與 `adapter.run_script` 是開發人員模式的晶片工具，會停止藍牙堆疊）、`app.quit`。其他方法只供視窗本身的畫面使用，可能隨時變更，恕不另行通知：`stream.start_custom`、其他 `device.*` 方法（`device.import_windows_pairings` 會顯示 UAC 提示）、`audio.apps`、`audio.mixer` / `audio.mixer_set`、上述兩者以外的 `diag.*`、`receiver.*` 與 `app.*`。包含參數與結果的完整清單，請參閱 `protocol.rs` 中的 `Method` enum。
 
@@ -176,6 +196,21 @@ sequenceDiagram
 - 事件來自 LE Audio 耳機時，`le_audio` 為 `true`。
 - 耳機會依照自己判斷的播放狀態傳送 `play` 或 `pause`，而這個判斷可能已經過時。如果只需要切換播放和暫停，請以相同方式處理兩者。
 - BlueCaster 仍會把播放/暫停、下一首、上一首和停止當成媒體鍵傳給 Windows。如果您的工具會自行處理按鈕，請引導使用者關閉 **音訊裝置 > 用音訊裝置的按鈕控制播放**。關閉這項設定後，事件仍會送達。
+
+## 快速控制 {#quick-controls}
+
+當 `welcome.features` 包含 `"tool_controls"` 時可以使用。每個方法只變更一項設定，因此工具不需要傳送整個設定檔。
+
+**在 BlueCaster 3.1 之前為實驗性功能。** 方法名稱和參數仍可能依據意見回饋調整。如有不相容的變更，`"tool_controls"` 將替換為新的功能名稱，讓工具能判斷核心支援哪個版本。
+
+- `name` 是已儲存設定檔的名稱。省略時，會使用正在串流的設定檔；沒有串流時，則使用目前作用中的設定檔。名稱不明時會傳回 `profile.not_found`。
+- 變更會儲存到設定檔，並像在 BlueCaster 視窗中變更一樣套用到串流。所有用戶端都會收到 `profiles` 事件。
+- 傳送目前的值不會有任何變化。
+- `profile.set_headset_mic` 的作用與視窗中的麥克風模式按鈕相同。`off` 會將麥克風靜音，但保留目前的模式。`auto` 和 `on` 會切換到該模式並取消靜音。未開啟開發人員模式時，`on` 會傳回 `developer.off`。
+- `profile.set_mic_muted` 會將耳機麥克風靜音或取消靜音，不會變更模式。
+- 在為該裝置設定好耳機麥克風之前，兩個麥克風方法都會傳回 `profile.no_mic_output`。裝置連線中時，則會傳回 `stream.busy`。
+- `profile.set_media_eq` 會開啟或關閉播放等化器，串流不會重新連線。等化器的各個點會保留。
+- `stream.volume_step` 會將耳機音量變更 `delta`，並傳回新的音量（0-127）。步進以耳機最後回報的音量為起點。沒有串流，或耳機尚未回報音量時，此方法會傳回 `stream.volume_unknown`。`delta` 超出 -127 到 127 時會傳回 `stream.bad_volume_step`。
 
 ## 相容性 {#compatibility}
 

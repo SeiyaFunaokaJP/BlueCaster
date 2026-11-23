@@ -28,8 +28,15 @@ pub const PROTOCOL_VERSION: u32 = 1;
 
 /// The Welcome's `features`: "rfcomm" for rfcomm.open / send / close and
 /// their events (2.0.2), "media_button" for the [`Event::MediaButton`]
-/// events (after 3.0.2)
-pub const FEATURES: &[&str] = &["rfcomm", "media_button"];
+/// events (after 3.0.2), "tool_controls" for profile.set_headset_mic,
+/// profile.set_mic_muted, profile.set_media_eq and stream.volume_step
+/// (after 3.0.3), "hid-host" for the hid.* methods and the
+/// [`Event::HidDevices`] events (experimental, issue #413)
+pub const FEATURES: &[&str] = &["rfcomm", "media_button", "tool_controls", "hid-host"];
+
+/// The largest step of `stream.volume_step`, either way: the whole AVRCP
+/// range (0..127)
+pub const MAX_VOLUME_STEP: i16 = 127;
 
 /// The longest `device.scan` (seconds); a longer one is cut to it
 pub const MAX_SCAN_SECONDS: u32 = 600;
@@ -301,6 +308,15 @@ pub struct Device {
     /// both earbuds stream together)
     #[serde(default)]
     pub le_audio_set: bool,
+    /// Keyboards and mice (experimental, issue #413): a Bluetooth LE
+    /// keyboard or mouse with its address type for hid.add. Such entries
+    /// are only in Snapshot.hid_candidates, never in the device list.
+    #[serde(default)]
+    pub hid_le: Option<u8>,
+    /// LE Audio: the addresses of the other members of its coordinated set
+    /// (the other earbud), once a connection learned it
+    #[serde(default)]
+    pub set_addresses: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Default)]
@@ -609,6 +625,26 @@ pub struct MicTestState {
     pub error: Option<String>,
 }
 
+/// A headset mode as profile.set_headset_mic takes it (Profile.headset_mic)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum HeadsetMicMode {
+    Off,
+    Auto,
+    On,
+}
+
+impl HeadsetMicMode {
+    /// Profile.headset_mic's value
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HeadsetMicMode::Off => "off",
+            HeadsetMicMode::Auto => "auto",
+            HeadsetMicMode::On => "on",
+        }
+    }
+}
+
 /// The kind of a playback EQ point
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 pub enum EqBandType {
@@ -637,6 +673,52 @@ pub struct EqPoint {
 pub struct MediaEq {
     pub enabled: bool,
     pub bands: Vec<EqPoint>,
+}
+
+/// The Auracast matrix mixer (developer mode): outputs FL FR RL RR (rows)
+/// from the source's speakers FL FR FC LFE BL BR SL SR (columns)
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(default)]
+pub struct AuracastMix {
+    /// The matrix from the levels below, else `matrix` as set
+    pub auto: bool,
+    pub center_db: f32,
+    pub lfe_db: f32,
+    pub surround_db: f32,
+    pub normalize: bool,
+    /// 4 rows of 8 gains (linear)
+    pub matrix: Vec<Vec<f32>>,
+    /// Per output (ms)
+    pub delay_ms: Vec<f32>,
+    /// Per output: polarity inverted
+    pub invert: Vec<bool>,
+}
+
+/// A named mixer setting
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(default)]
+pub struct AuracastMixPreset {
+    pub name: String,
+    pub mix: AuracastMix,
+    /// One of the program's own (not saved, cannot be deleted)
+    pub builtin: bool,
+}
+
+/// The mixer as the Auracast tab shows it
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+pub struct AuracastMixState {
+    pub mix: AuracastMix,
+    pub presets: Vec<AuracastMixPreset>,
+    /// A broadcast runs with the mixer: changes are heard at once
+    pub live: bool,
+    /// The source's channels (of the broadcast running, else as asked)
+    pub channels: u32,
+    /// Which of the 8 columns the source has
+    pub present: Vec<bool>,
+    /// The broadcast has rear outputs (else only FL FR are heard)
+    pub rear: bool,
+    /// The matrix that plays (auto computed), 4 rows of 8
+    pub effective: Vec<Vec<f32>>,
 }
 
 /// A connection profile, as in profiles.json
@@ -1130,6 +1212,17 @@ pub struct Settings {
     /// Windows driver's (AdapterInfo::firmware_driver)
     #[serde(default)]
     pub realtek_custom_firmware: bool,
+    /// The adapter BlueCaster uses when several are on WinUSB: its
+    /// AdapterInfo::instance_id; empty: automatic (the first one found).
+    /// A change restarts Bluetooth (at once when idle).
+    #[serde(default)]
+    pub adapter_id: String,
+    /// The adapter Auracast broadcasts go on (developer mode), an
+    /// AdapterInfo::instance_id: Bluetooth restarts on it for a broadcast,
+    /// and back on `adapter_id` for the next scan or connection; empty: the
+    /// one everything else uses
+    #[serde(default)]
+    pub auracast_adapter_id: String,
     /// auto, off, or Wi-Fi channels such as "6,11"
     pub afh: String,
     pub remote_sink: String,
@@ -1148,6 +1241,11 @@ pub struct Settings {
     /// each with the codec chosen for it (read when the next stream starts)
     #[serde(default = "yes")]
     pub auto_codec: bool,
+    /// Developer mode: keyboards and mice through BlueCaster (experimental,
+    /// issue #413), in force while developer_mode is on. settings.set can
+    /// only turn it off; hid.enable turns it on.
+    #[serde(default)]
+    pub hid_host: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, Default)]
@@ -1227,6 +1325,36 @@ pub struct Snapshot {
     /// The vendors with protocols of their own (developer mode's overrides)
     #[serde(default)]
     pub vendors: Vec<VendorInfo>,
+    /// The keyboards and mice added for the HID host (experimental)
+    #[serde(default)]
+    pub hid_devices: Vec<HidDevice>,
+    /// The Bluetooth LE keyboards and mice the last scan found (HID host
+    /// on): kept apart from `devices`, which the audio screens use
+    #[serde(default)]
+    pub hid_candidates: Vec<Device>,
+    /// The number the user types on the keyboard being added (hid.add),
+    /// while its pairing shows one
+    #[serde(default)]
+    pub hid_passkey: Option<HidPasskey>,
+    /// The keyboards and mice being added: each stays only once its input
+    /// reaches Windows
+    #[serde(default)]
+    pub hid_checks: Vec<HidCheck>,
+    /// The keyboard or mouse removed again last because no input arrived,
+    /// until the user adds one again or dismisses the notice
+    #[serde(default)]
+    pub hid_rolled_back: Option<HidRolledBack>,
+    /// The last self-test of the path that passes keyboard and mouse input
+    /// to Windows; None: none ran yet
+    #[serde(default)]
+    pub hid_health: Option<HidHealth>,
+    /// The core runs as a Windows service: its data folder is protected.
+    /// `config_dir` and `log_dir` are empty, results name files in the
+    /// user's folder (handed over through the session agent), and
+    /// `app.quit` is refused (`app.close` ends the user's session of the
+    /// app instead).
+    #[serde(default)]
+    pub service_mode: bool,
 }
 
 /// A crash report (logs\crash\<process>-<stamp>.txt): a panic or a crash
@@ -1788,8 +1916,28 @@ pub enum Event {
     /// A headphone button arrived (to every connection, not part of the
     /// state), also with the "media keys" setting off
     MediaButton(ButtonPress),
+    /// A keyboard or mouse was added, removed, connected or went away
+    /// (state, hid_devices)
+    HidDevices(Vec<HidDevice>),
+    /// The Bluetooth LE keyboards and mice a scan found (state,
+    /// hid_candidates)
+    HidCandidates(Vec<Device>),
+    /// Pairing the keyboard being added shows a number to type on it, or
+    /// no longer does (state, hid_passkey)
+    HidPasskey(Option<HidPasskey>),
+    /// A keyboard or mouse being added started or ended its countdown, or
+    /// was removed again (state, hid_checks and hid_rolled_back)
+    HidCheck {
+        checks: Vec<HidCheck>,
+        rolled_back: Option<HidRolledBack>,
+    },
+    /// The self-test has a new result (state, hid_health)
+    HidHealth(Option<HidHealth>),
     /// The core is shutting down
     Bye,
+    /// Service mode: the user chose Exit (app.close, the tray). The UI
+    /// closes; the core keeps running. Not state, no revision.
+    UiClose,
 }
 
 // ---------------------------------------------------------------------------
@@ -1855,8 +2003,13 @@ pub enum Method {
     /// profile stays. `name`: the Broadcast Name (4-32 bytes); `code`: the
     /// Broadcast Code (4-16 bytes; none or empty: open); `quality`: "hq"
     /// (48 kHz) or "sq" (24 kHz); `mono`: one channel instead of left and
-    /// right; `split`: left and right as two broadcasts of their own
-    /// ("<name> L" / "<name> R", one mono BIS each; not with `mono`);
+    /// right; `layout` (not with `mono`): "stereo" (default), "mono",
+    /// "split" (left and right as two broadcasts of their own, "<name> L" /
+    /// "<name> R", one mono BIS each) or "matrix_<front>_<rear>" (the
+    /// matrix mixer's outputs: front FL FR and rear RL RR each "stereo",
+    /// "separate", "subgroups" or "off"; older names quad, front_rear,
+    /// pairs, rear_subgroups, subgroups), unknown: error stream.bad_layout;
+    /// `split`: true is layout "split" (when no `layout` is given);
     /// `source` / `source_id` / `source_name` as for stream.start_custom
     /// ("app" fails with error.le_audio_capture). Error developer.off while
     /// developer mode is off; a name or code out of range fails the stream
@@ -1868,12 +2021,19 @@ pub enum Method {
         #[serde(default)]
         code: Option<String>,
         quality: String,
+        /// A matrix layout's rear (RL RR): "hq" or "sq"; None: `quality`
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        rear_quality: Option<String>,
         #[ts(optional = nullable)]
         #[serde(default)]
         mono: Option<bool>,
         #[ts(optional = nullable)]
         #[serde(default)]
         split: Option<bool>,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        layout: Option<String>,
         source: String,
         #[ts(optional = nullable)]
         #[serde(default)]
@@ -1885,6 +2045,13 @@ pub enum Method {
     /// AVRCP absolute volume 0..127
     #[serde(rename = "stream.set_volume")]
     StreamSetVolume { volume: u8 },
+    /// Moves the headphone volume by `delta` (-127..127, within 0..127)
+    /// from the one the headphones last reported (StreamStatus.volume), as
+    /// stream.set_volume -> number: the volume asked for. Errors
+    /// stream.volume_unknown (no stream, or no volume reported yet),
+    /// stream.bad_volume_step (`delta` out of range). 0: nothing is sent.
+    #[serde(rename = "stream.volume_step")]
+    StreamVolumeStep { delta: i16 },
     /// -> Device[] (also as an event). `seconds` from 3 to
     /// [`MAX_SCAN_SECONDS`] (the setup looks until a device is added)
     #[serde(rename = "device.scan")]
@@ -1970,6 +2137,79 @@ pub enum Method {
     MediaEqPreview { name: String, eq: MediaEq },
     #[serde(rename = "profile.set_active")]
     ProfileSetActive { name: String },
+    /// The auracast.* methods: error developer.off while developer mode is
+    /// off.
+    /// -> AuracastMixState: for the broadcast running, else a source of
+    /// `channels` (default 8) and rear outputs `rear` (default true)
+    #[serde(rename = "auracast.mix")]
+    AuracastMixGet {
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        channels: Option<u32>,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        rear: Option<bool>,
+    },
+    /// -> AuracastMixState: saved, and heard at once while broadcasting
+    #[serde(rename = "auracast.mix_set")]
+    AuracastMixSet {
+        mix: AuracastMix,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        channels: Option<u32>,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        rear: Option<bool>,
+    },
+    /// -> AuracastMixState; a built-in preset's name is refused
+    /// (auracast.mix_save_failed)
+    #[serde(rename = "auracast.mix_preset_save")]
+    AuracastMixPresetSave { name: String, mix: AuracastMix },
+    /// -> AuracastMixState
+    #[serde(rename = "auracast.mix_preset_delete")]
+    AuracastMixPresetDelete { name: String },
+    /// -> bool: the running broadcast takes "tone" or "loopback" (system
+    /// audio) in place, its broadcasts staying up; false: none runs
+    #[serde(rename = "auracast.set_source")]
+    AuracastSetSource { source: String },
+    /// For tools: the headset mode of the profile `name` (absent: the one
+    /// streaming, else the active one), saved as the window's mode buttons
+    /// save it: "off" mutes the microphone while the mode saved is Auto or
+    /// On (mic_muted, the mode kept), "auto" / "on" set the mode and
+    /// unmute. A running stream takes it as after profile.save. The value
+    /// in force already: nothing happens. Errors profile.not_found,
+    /// developer.off ("on" outside developer mode), profile.no_mic_output
+    /// (no microphone output chosen), stream.busy (its stream is
+    /// connecting) -> null
+    #[serde(rename = "profile.set_headset_mic")]
+    ProfileSetHeadsetMic {
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        name: Option<String>,
+        mode: HeadsetMicMode,
+    },
+    /// For tools: mutes or unmutes the headset microphone of the profile
+    /// `name` (absent as for profile.set_headset_mic), as Home's
+    /// microphone button; the mode stays. Errors as profile.set_headset_mic
+    /// but developer.off -> null
+    #[serde(rename = "profile.set_mic_muted")]
+    ProfileSetMicMuted {
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        name: Option<String>,
+        muted: bool,
+    },
+    /// For tools: turns the playback EQ of the profile `name` (absent as
+    /// for profile.set_headset_mic) on or off, its points kept (none
+    /// saved: the flat ones the window starts with). A running stream
+    /// takes it in place. Error profile.not_found -> null
+    #[serde(rename = "profile.set_media_eq")]
+    ProfileSetMediaEq {
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        name: Option<String>,
+        enabled: bool,
+    },
     /// -> SettingsApplied (the settings come back as an event too)
     #[serde(rename = "settings.set")]
     SettingsSet { settings: Box<Settings> },
@@ -2156,6 +2396,51 @@ pub enum Method {
     /// rfcomm.timeout.
     #[serde(rename = "rfcomm.close")]
     RfcommClose { channel_id: u32 },
+    /// Keyboards and mice through BlueCaster (experimental, developer mode,
+    /// feature "hid-host"): a new code the user has to type into hid.enable,
+    /// valid for 120 s and once -> HidCode
+    #[serde(rename = "hid.code")]
+    HidCode,
+    /// Turns the HID host on: the code of hid.code, and the user's two
+    /// statements -> null. Errors ipc.error.developer_only,
+    /// error.hid.not_confirmed, error.hid.wrong_code (a new code is needed).
+    #[serde(rename = "hid.enable")]
+    HidEnable { code: String, other_input_at_hand: bool, risk_understood: bool },
+    /// Turns it off at once -> null
+    #[serde(rename = "hid.disable")]
+    HidDisable,
+    /// -> HidStatus
+    #[serde(rename = "hid.status")]
+    HidStatus,
+    /// Adds a keyboard or mouse and connects it, pairing on the way (it has
+    /// to be in pairing mode; several seconds) -> null. Errors error.hid.off,
+    /// error.hid.too_many, error.hid.connect_failed, error.hid.restart_pending,
+    /// error.hid.le_unavailable (an LE device, the adapter without LE).
+    #[serde(rename = "hid.add")]
+    HidAdd {
+        address: String,
+        name: String,
+        /// A Bluetooth LE device: its address type (Device.hid_le); None
+        /// for a classic one
+        #[serde(default)]
+        le: Option<u8>,
+    },
+    /// Connects one on the list again -> null; errors as hid.add
+    #[serde(rename = "hid.connect")]
+    HidConnect { address: String },
+    /// Disconnects one, takes it off the list and forgets its pairing -> null
+    #[serde(rename = "hid.remove")]
+    HidRemove { address: String },
+    /// Removes a keyboard or mouse being added (one of Snapshot.hid_checks)
+    /// now, as its countdown would -> null. Does nothing for a device that
+    /// is not under check (its countdown may have just ended). There is no
+    /// request that confirms a device: only its input reaching Windows does.
+    #[serde(rename = "hid.check_cancel")]
+    HidCheckCancel { address: String },
+    /// The notice of a device removed again (Snapshot.hid_rolled_back)
+    /// goes away -> null
+    #[serde(rename = "hid.check_dismiss")]
+    HidCheckDismiss,
     /// -> UpdateState; error update.failed (update.error) when the check
     /// failed
     #[serde(rename = "app.check_update")]
@@ -2172,6 +2457,18 @@ pub enum Method {
     /// the audio
     #[serde(rename = "app.quit_for_update")]
     AppQuitForUpdate,
+    /// The user's Exit in service mode, where the core keeps running:
+    /// streaming stops, the UI closes (event ui_close) and the tray icon
+    /// goes until BlueCaster is started again -> null. Keyboards and mice
+    /// keep working. Without service mode the same as app.quit.
+    #[serde(rename = "app.close")]
+    AppClose,
+    /// Service mode: runs `call`, a request that answered ipc.needs_admin,
+    /// through the elevated helper (a UAC prompt) -> the call's result.
+    /// Errors ipc.admin_declined, ipc.bad_request (a call that needs no
+    /// administrator), and the call's own.
+    #[serde(rename = "app.run_as_admin")]
+    AppRunAsAdmin { call: Box<Method> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -2636,6 +2933,121 @@ pub struct RfcommClosed {
     pub reason: String,
 }
 
+/// A keyboard or mouse added for the HID host (experimental)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+
+pub struct HidDevice {
+    /// "XX:XX:XX:XX:XX:XX"
+    pub address: String,
+    pub name: String,
+    pub connected: bool,
+    /// Added as a Bluetooth LE device
+    #[serde(default)]
+    pub le: bool,
+}
+
+/// What the HID host did since its stack started: counts only, nothing of
+/// what was typed
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Default)]
+
+pub struct HidCounts {
+    /// Input reports received
+    pub reports: u64,
+    /// Reports in a format the host does not read
+    pub undecoded: u64,
+    /// Key and pointer events decoded
+    pub events: u64,
+    /// Events Windows took
+    pub injected: u64,
+    /// Events Windows did not take (a window running as administrator, the
+    /// secure desktop)
+    pub blocked: u64,
+    /// Connections refused (a device not on the list)
+    pub refused: u64,
+}
+
+/// hid.status' result
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+
+pub struct HidStatus {
+    pub devices: Vec<HidDevice>,
+    /// None while no stack with the HID host runs
+    pub counts: Option<HidCounts>,
+}
+
+/// A keyboard or mouse being added, until its input reaches Windows
+/// (Snapshot.hid_checks)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+
+pub struct HidCheck {
+    /// "XX:XX:XX:XX:XX:XX"
+    pub address: String,
+    pub name: String,
+    /// From its report descriptor: "keyboard", "mouse", "both", or "" while
+    /// not known
+    pub kind: String,
+    /// The countdown runs; false: the device is not ready for input yet
+    /// (connecting, pairing)
+    pub waiting: bool,
+    /// Milliseconds left of the countdown when this was sent
+    pub remaining_ms: u32,
+    /// The countdown's length in milliseconds
+    pub window_ms: u32,
+}
+
+/// A keyboard or mouse removed again because its input did not reach
+/// Windows (Snapshot.hid_rolled_back)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+
+pub struct HidRolledBack {
+    pub address: String,
+    pub name: String,
+    /// As hid.add's `le`, for adding it again
+    #[serde(default)]
+    pub le: Option<u8>,
+    /// "no_input": connected, but no input arrived in time;
+    /// "disconnected": it went away during the countdown; "not_connected":
+    /// it never got ready; "cancelled": hid.check_cancel
+    pub reason: String,
+}
+
+/// The self-test of the path to Windows (Snapshot.hid_health)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+
+pub struct HidHealth {
+    /// "ok", "not_tested" (no input goes to Windows) or "failed"
+    pub state: String,
+    /// With "failed": "helper" (the input helper did not start),
+    /// "refused" (Windows refused the test input) or "timeout"
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// A number to type on a keyboard being added, then Enter (Snapshot.hid_passkey)
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+
+pub struct HidPasskey {
+    /// The device's "XX:XX:XX:XX:XX:XX"
+    pub address: String,
+    /// Six digits
+    pub passkey: String,
+}
+
+/// Its Debug form hides the number: a logged state never holds it
+impl std::fmt::Debug for HidPasskey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HidPasskey").field("passkey", &"hidden").finish_non_exhaustive()
+    }
+}
+
+/// hid.code's result
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+
+pub struct HidCode {
+    /// Six digits
+    pub code: String,
+}
+
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
@@ -2771,6 +3183,55 @@ mod tests {
         let custom = m(serde_json::json!({"method": "stream.start_custom", "params": {
             "device": "AA:BB:CC:DD:EE:FF", "codec": "sbc", "quality": "hq", "source": "tone"}}));
         assert!(matches!(custom, Method::StreamStartCustom { sample_rate: None, source_id: None, .. }));
+    }
+
+    /// The tools' methods ("tool_controls"): enums, bools and numbers only;
+    /// anything else does not parse (answered with ipc.bad_request)
+    #[test]
+    fn tool_control_requests() {
+        assert!(FEATURES.contains(&"tool_controls"));
+        let m = |j: serde_json::Value| serde_json::from_value::<Method>(j);
+        assert_eq!(
+            m(serde_json::json!({"method": "profile.set_headset_mic", "params": {"mode": "auto"}})).unwrap(),
+            Method::ProfileSetHeadsetMic { name: None, mode: HeadsetMicMode::Auto }
+        );
+        assert_eq!(
+            m(serde_json::json!({"method": "profile.set_headset_mic", "params": {"name": "WH", "mode": "on"}}))
+                .unwrap(),
+            Method::ProfileSetHeadsetMic { name: Some("WH".into()), mode: HeadsetMicMode::On }
+        );
+        assert_eq!(
+            m(serde_json::json!({"method": "profile.set_mic_muted", "params": {"name": null, "muted": true}})).unwrap(),
+            Method::ProfileSetMicMuted { name: None, muted: true }
+        );
+        assert_eq!(
+            m(serde_json::json!({"method": "profile.set_media_eq", "params": {"enabled": false}})).unwrap(),
+            Method::ProfileSetMediaEq { name: None, enabled: false }
+        );
+        assert_eq!(
+            m(serde_json::json!({"method": "stream.volume_step", "params": {"delta": -8}})).unwrap(),
+            Method::StreamVolumeStep { delta: -8 }
+        );
+        for bad in [
+            serde_json::json!({"method": "profile.set_headset_mic", "params": {"mode": "loud"}}),
+            serde_json::json!({"method": "profile.set_headset_mic", "params": {"mode": 1}}),
+            serde_json::json!({"method": "profile.set_headset_mic", "params": {}}),
+            serde_json::json!({"method": "profile.set_mic_muted", "params": {"muted": "yes"}}),
+            serde_json::json!({"method": "profile.set_media_eq", "params": {"name": 3, "enabled": true}}),
+            serde_json::json!({"method": "stream.volume_step", "params": {"delta": 1.5}}),
+            serde_json::json!({"method": "stream.volume_step", "params": {"delta": 70000}}),
+            serde_json::json!({"method": "stream.volume_step"}),
+        ] {
+            assert!(m(bad.clone()).is_err(), "{bad}");
+        }
+        let j = serde_json::to_value(Method::ProfileSetHeadsetMic { name: None, mode: HeadsetMicMode::Off }).unwrap();
+        assert_eq!(
+            j,
+            serde_json::json!({"method": "profile.set_headset_mic", "params": {"name": null, "mode": "off"}})
+        );
+        for mode in [HeadsetMicMode::Off, HeadsetMicMode::Auto, HeadsetMicMode::On] {
+            assert_eq!(serde_json::to_value(mode).unwrap(), mode.as_str());
+        }
     }
 
     /// State of a core built before the additions still parses
@@ -2926,6 +3387,13 @@ mod tests {
             crashes: Vec::new(),
             audio_endpoints: 0,
             vendors: Vec::new(),
+            hid_devices: Vec::new(),
+            hid_candidates: Vec::new(),
+            hid_passkey: None,
+            hid_checks: Vec::new(),
+            hid_rolled_back: None,
+            hid_health: None,
+            service_mode: false,
         })
         .unwrap();
         snap.as_object_mut().unwrap().remove("le_scanning");
@@ -2972,6 +3440,80 @@ mod tests {
             serde_json::to_value(&closed).unwrap(),
             serde_json::json!({"kind": "rfcomm_closed", "value": {"channel_id": 3, "reason": "remote"}})
         );
+    }
+
+    /// The HID host's requests and state; an older core's settings
+    /// without it read as off
+    #[test]
+    fn hid_wire_format() {
+        let m = |j: serde_json::Value| serde_json::from_value::<Method>(j).unwrap();
+        assert_eq!(m(serde_json::json!({"method": "hid.code"})), Method::HidCode);
+        assert_eq!(
+            m(serde_json::json!({"method": "hid.enable", "params": {
+                "code": "123456", "other_input_at_hand": true, "risk_understood": false}})),
+            Method::HidEnable { code: "123456".into(), other_input_at_hand: true, risk_understood: false }
+        );
+        assert_eq!(
+            m(serde_json::json!({"method": "hid.add", "params": {"address": "A", "name": "K"}})),
+            Method::HidAdd { address: "A".into(), name: "K".into(), le: None }
+        );
+        assert_eq!(
+            m(serde_json::json!({"method": "hid.add", "params": {"address": "A", "name": "K", "le": 1}})),
+            Method::HidAdd { address: "A".into(), name: "K".into(), le: Some(1) }
+        );
+        assert_eq!(
+            m(serde_json::json!({"method": "hid.check_cancel", "params": {"address": "A"}})),
+            Method::HidCheckCancel { address: "A".into() }
+        );
+        assert_eq!(m(serde_json::json!({"method": "hid.check_dismiss"})), Method::HidCheckDismiss);
+        let check = HidCheck {
+            address: "A".into(),
+            name: "K".into(),
+            kind: "keyboard".into(),
+            waiting: true,
+            remaining_ms: 1000,
+            window_ms: 30000,
+        };
+        assert_eq!(
+            serde_json::to_value(Event::HidCheck { checks: vec![check], rolled_back: None }).unwrap(),
+            serde_json::json!({"kind": "hid_check", "value": {"checks": [{"address": "A", "name": "K",
+                "kind": "keyboard", "waiting": true, "remaining_ms": 1000, "window_ms": 30000}], "rolled_back": null}})
+        );
+        assert_eq!(
+            serde_json::to_value(Event::HidHealth(Some(HidHealth {
+                state: "failed".into(),
+                reason: Some("refused".into())
+            })))
+            .unwrap(),
+            serde_json::json!({"kind": "hid_health", "value": {"state": "failed", "reason": "refused"}})
+        );
+        let e = Event::HidDevices(vec![HidDevice { address: "A".into(), name: "K".into(), connected: true, le: true }]);
+        assert_eq!(
+            serde_json::to_value(&e).unwrap(),
+            serde_json::json!({"kind": "hid_devices", "value": [{"address": "A", "name": "K", "connected": true, "le": true}]})
+        );
+        // An older core's list: classic devices
+        let old: HidDevice =
+            serde_json::from_value(serde_json::json!({"address": "A", "name": "K", "connected": false})).unwrap();
+        assert!(!old.le);
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "language": "en", "theme": "system", "start_with_windows": false, "start_minimized": false,
+            "minimize_to_tray": true, "check_updates_on_startup": true, "include_prereleases": false,
+            "media_keys": true, "developer_mode": true, "bt_chip_pid": 0,
+            "bt_chip_fw_stem": "", "afh": "auto", "remote_sink": ""}))
+        .unwrap();
+        assert!(!settings.hid_host);
+        assert!(FEATURES.contains(&"hid-host"));
+        let p = HidPasskey { address: "A".into(), passkey: "012345".into() };
+        assert_eq!(
+            serde_json::to_value(Event::HidPasskey(Some(p.clone()))).unwrap(),
+            serde_json::json!({"kind": "hid_passkey", "value": {"address": "A", "passkey": "012345"}})
+        );
+        assert_eq!(
+            serde_json::to_value(Event::HidPasskey(None)).unwrap(),
+            serde_json::json!({"kind": "hid_passkey", "value": null})
+        );
+        assert!(!format!("{:?}", Event::HidPasskey(Some(p))).contains("012345"));
     }
 
     #[test]

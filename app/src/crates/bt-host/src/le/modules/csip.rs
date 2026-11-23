@@ -18,9 +18,10 @@
 //! - `on_scan_result`: an advertised RSI (AD 0x2E) is checked against every
 //!   known SIRK (sih, CSIS 4.7); a match sets `set_id` / `note` /
 //!   `le_audio`.
-//! - `prepare_group` (worker): waits for the CSIS reads of the devices of
-//!   the stream, adds set members that are already connected, scans (up to
-//!   `SCAN_TIMEOUT_MS`) for RSIs of the set and connects the members found
+//! - `prepare_group` (worker): waits for the CSIS reads of every connected
+//!   device, adds set members that are already connected, scans (up to
+//!   `SCAN_TIMEOUT_MS`, or the host's `le_set_member_wait`) for RSIs of the
+//!   set and connects the members found
 //!   one after the other (the core sets up one LE connection at a time),
 //!   then orders each set's devices by rank. Members not found in time are
 //!   left out with a warning; the stream goes to the members available. A
@@ -95,6 +96,8 @@ const READ_TIMEOUT_MS: u64 = 6000;
 /// Looking for the missing members
 const SCAN_TIMEOUT_MS: u64 = 10000;
 const CONNECT_TIMEOUT_MS: u64 = 30000;
+/// The link of a member just seen: up by then, or not at that address
+const LINK_TIMEOUT_MS: u64 = 5000;
 /// RSIs remembered (resolved or not)
 const RSI_CACHE_MAX: usize = 256;
 const LOCK_WRITE_TIMEOUT_MS: u64 = 5000;
@@ -847,6 +850,15 @@ impl LeGroupHooks for CsipHooks {
         for &id in ids.iter() {
             wait_member(host, id);
         }
+        // The other connected devices too: an earbud connected a moment ago
+        // whose reads still run is no member yet, and was looked for with a
+        // scan that could not find it (connected), up to the timeout
+        let others: Vec<LeDeviceId> =
+            host.le_devices().into_iter().filter(|d| d.connected && !ids.contains(&d.id)).map(|d| d.id).collect();
+        for id in others {
+            wait_member(host, id);
+        }
+        let wait = host.le_member_wait().unwrap_or(Duration::from_millis(SCAN_TIMEOUT_MS));
         let mut out: Vec<LeDeviceId> = Vec::new();
         let mut sets_done: Vec<usize> = Vec::new();
         let add = |out: &mut Vec<LeDeviceId>, id: LeDeviceId| {
@@ -868,8 +880,8 @@ impl LeGroupHooks for CsipHooks {
                 have.push(me.clone());
             }
             let size = have.iter().map(|s| s.size).max().unwrap_or(0).max(me.size) as usize;
-            if have.len() < size && !cancelled() {
-                self.find_members(host, me.set, size, &mut have, cancelled);
+            if have.len() < size && !wait.is_zero() && !cancelled() {
+                self.find_members(host, me.set, size, wait, &mut have, cancelled);
             }
             // A member that went down meanwhile is left out (the device named
             // by the caller stays: the core reports it)
@@ -893,7 +905,7 @@ impl LeGroupHooks for CsipHooks {
                      available",
                     have.len(),
                     me.set,
-                    SCAN_TIMEOUT_MS / 1000
+                    wait.as_secs()
                 );
             }
             tracing::info!("CSIP: streaming to coordinated set {}, {} of {size} members: {list}", me.set, have.len());
@@ -907,11 +919,19 @@ impl LeGroupHooks for CsipHooks {
 
 impl CsipHooks {
     /// Scan for RSIs of the set and connect the members found, one at a time
-    fn find_members(&self, host: &BtHost, set: usize, size: usize, have: &mut Vec<Snap>, cancelled: &dyn Fn() -> bool) {
+    fn find_members(
+        &self,
+        host: &BtHost,
+        set: usize,
+        size: usize,
+        wait: Duration,
+        have: &mut Vec<Snap>,
+        cancelled: &dyn Fn() -> bool,
+    ) {
         tracing::info!(
             "CSIP: coordinated set {set}: {} of {size} members connected, looking for the others (up to {} s)",
             have.len(),
-            SCAN_TIMEOUT_MS / 1000
+            wait.as_secs()
         );
         let shared = &self.shared;
         shared.tried.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -919,7 +939,7 @@ impl CsipHooks {
         // Scan until on_scan_result saw a member not tried yet (or the time is
         // up)
         let stop = || shared.member_seen.load(Ordering::Acquire) || cancelled();
-        let deadline = Instant::now() + Duration::from_millis(SCAN_TIMEOUT_MS);
+        let deadline = Instant::now() + wait;
         while have.len() < size && !cancelled() {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.as_millis() == 0 {
@@ -944,7 +964,12 @@ impl CsipHooks {
                     r.addr,
                     r.name
                 );
-                let id = match host.le_connect(r.addr, &r.name, Duration::from_millis(CONNECT_TIMEOUT_MS)) {
+                let id = match host.le_connect_within(
+                    r.addr,
+                    &r.name,
+                    Duration::from_millis(LINK_TIMEOUT_MS),
+                    Duration::from_millis(CONNECT_TIMEOUT_MS),
+                ) {
                     Ok(id) => id,
                     Err(error) => {
                         tracing::warn!("CSIP: set member {}: {error}", r.addr);

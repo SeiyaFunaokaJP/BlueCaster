@@ -559,24 +559,25 @@ struct AppSource {
 
 impl AppSource {
     fn attach(&mut self, input: &SharedInput) -> bool {
-        let Some(pid) = audio_capture::find_process(&self.exe) else {
-            tracing::trace!("app capture: {} not found", self.exe);
+        let Some(pid) = session_host::activity::find_process(&self.exe) else {
+            tracing::trace!("app capture: {} not found", crate::diag::log_name(&self.exe));
             return false;
         };
-        tracing::debug!("app capture: attaching to {} (PID {pid}) at {} Hz", self.exe, self.sample_rate);
+        let exe = crate::diag::log_name(&self.exe);
+        tracing::debug!("app capture: attaching to {exe} (PID {pid}) at {} Hz", self.sample_rate);
         let options = CaptureOptions { preferred_rate: Some(self.sample_rate), fill_silence: true };
         let started = Capture::open(&Source::Application { process_id: pid }, &options)
             .and_then(|c| c.start(Box::new(input.clone())));
         match started {
             Ok(r) => {
-                tracing::info!("capturing app {} (PID {pid})", self.exe);
+                tracing::info!("capturing app {exe} (PID {pid})");
                 self.running = Some(r);
                 self.process_id = pid;
                 true
             }
             Err(e) => {
                 if self.failed_pid != pid {
-                    tracing::warn!("cannot capture {} (PID {pid}): {e}", self.exe);
+                    tracing::warn!("cannot capture {exe} (PID {pid}): {e}");
                 }
                 self.failed_pid = pid;
                 false
@@ -586,7 +587,8 @@ impl AppSource {
 
     fn exited(&self) -> bool {
         self.running.is_some()
-            && (audio_capture::process_exited(self.process_id) || self.running.as_ref().is_some_and(|r| r.ended()))
+            && (session_host::activity::process_exited(self.process_id)
+                || self.running.as_ref().is_some_and(|r| r.ended()))
     }
 
     fn detach(&mut self) {
@@ -818,9 +820,8 @@ impl DefaultDeviceGuard {
     fn follow(&mut self, source: &SourceRequest) {
         match source.default_switch_device() {
             Some((id, name)) => {
-                let restore = self.0.take();
-                *self = DefaultDeviceGuard::switch_to(id, name);
-                self.0 = restore.or(self.0.take());
+                let keep = self.0.take();
+                *self = DefaultDeviceGuard::switch_keeping(id, name, keep);
             }
             None => *self = DefaultDeviceGuard(None),
         }
@@ -830,16 +831,34 @@ impl DefaultDeviceGuard {
     /// at the end even when the switch failed: Windows may have switched
     /// one role (Console, Multimedia) before the other failed.
     pub(crate) fn switch_to(id: &str, name: &str) -> DefaultDeviceGuard {
+        DefaultDeviceGuard::switch_keeping(id, name, None)
+    }
+
+    /// [`DefaultDeviceGuard::switch_to`], restoring `keep` at the end when
+    /// it is a device to restore already. The device to restore is held by
+    /// the session agent too (restored if the core goes away).
+    fn switch_keeping(id: &str, name: &str, keep: Option<String>) -> DefaultDeviceGuard {
         // The session before kept it switched for this one: its device to
-        // restore is this one's
-        let handed = handover().restore.take();
-        let before = audio_capture::default_render_device();
-        let name = crate::diag::quoted(name);
-        tracing::debug!("default output: switching to {name} ({id}), was {before:?}, handed over {handed:?}");
-        if let Err(e) = audio_capture::set_default_render_device(id) {
+        // restore is this one's. So is a restore the session agent did not
+        // get (it was lost).
+        let handed = handover().restore.take().or_else(session_host::default_device::take_lost_restore);
+        let before = session_host::devices::default_render_device();
+        let name = crate::diag::quoted(crate::diag::log_name(name));
+        if crate::paths::service_mode() {
+            // The service's log: no device IDs
+            tracing::debug!(
+                "default output: switching (one before: {}, handed over: {})",
+                before.is_some(),
+                handed.is_some()
+            );
+        } else {
+            tracing::debug!("default output: switching to {name} ({id}), was {before:?}, handed over {handed:?}");
+        }
+        let restore = keep.or(handed).or_else(|| restore_target(before, id));
+        if let Err(e) = session_host::default_device::switch_render_default(id, restore.as_deref()) {
             tracing::warn!("failed to make {name} the default output device: {e}");
         }
-        DefaultDeviceGuard(handed.or_else(|| restore_target(before, id)))
+        DefaultDeviceGuard(restore)
     }
 }
 
@@ -903,8 +922,8 @@ pub(crate) fn restore_unclaimed_default() {
 }
 
 fn restore_default(id: &str) {
-    tracing::debug!("default output: restoring {id}");
-    if let Err(e) = audio_capture::set_default_render_device(id) {
+    tracing::debug!("default output: restoring {}", crate::diag::log_name(id));
+    if let Err(e) = session_host::default_device::restore_render_default(id) {
         tracing::warn!("could not restore the default output device: {e}");
     }
 }
@@ -949,7 +968,7 @@ impl Drop for DefaultDeviceGuard {
     fn drop(&mut self) {
         if let Some(id) = self.0.take() {
             let mut h = handover();
-            let current = h.next.is_some().then(audio_capture::default_render_device).flatten();
+            let current = h.next.is_some().then(session_host::devices::default_render_device).flatten();
             let now = h.end(current.as_deref(), id);
             drop(h);
             match now {
@@ -1342,9 +1361,9 @@ fn sbc_abr(req: &StreamRequest, kind: CodecKind) -> bool {
 /// cannot be read
 fn source_mix(source: &SourceRequest) -> Option<audio_capture::MixFormat> {
     match source {
-        SourceRequest::SystemLoopback | SourceRequest::Application { .. } => audio_capture::mix_format(None),
+        SourceRequest::SystemLoopback | SourceRequest::Application { .. } => session_host::devices::mix_format(None),
         SourceRequest::VirtualDevice { id, .. } | SourceRequest::OutputDevice { id, .. } if !id.is_empty() => {
-            audio_capture::mix_format(Some(id))
+            session_host::devices::mix_format(Some(id))
         }
         _ => None,
     }

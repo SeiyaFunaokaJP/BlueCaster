@@ -48,6 +48,8 @@ const TIMER_LINK_COMMAND: u32 = 8;
 const TIMER_ESCO_WATCH: u32 = 9;
 /// Packets waiting on a stream that takes none (crate::stall_watch)
 const TIMER_STALL_WATCH: u32 = 10;
+/// The keyboards' lights follow Windows' lock keys (crate::hid)
+const TIMER_HID_LEDS: u32 = 11;
 const RTK_VERIFY_RETRY_MS: u32 = 100;
 const RTK_VERIFY_TRIES: u8 = 20;
 /// Each L2CAP packet starts with a 4-byte header
@@ -91,6 +93,10 @@ pub(crate) struct Setup {
     pub local_name: String,
     /// HostConfig::le_keys
     pub le_keys: Option<crate::LeKeysConfig>,
+    /// HostConfig::hid
+    pub hid: Option<crate::HidConfig>,
+    /// What classic and LE keyboards and mice share (the LE core has it too)
+    pub hid_engine: crate::hid::SharedHid,
 }
 
 /// LMP subversions Realtek chips report while running their ROM code,
@@ -146,6 +152,8 @@ pub(crate) struct HostApp {
     pub hfp_acl: Option<u16>,
     /// The HFP audio connection (headset microphone)
     pub voice: crate::voice::Voice,
+    /// Keyboards and mice (experimental, HostConfig::hid)
+    pub hid: crate::hid::HidHost,
     pub streaming: bool,
     /// Codec of the configured stream (RTP or not)
     pub stream_codec: Option<CodecKind>,
@@ -252,6 +260,7 @@ impl HostApp {
         afh: Option<Box<dyn crate::AfhSource>>,
         le: Option<LeCore>,
     ) -> HostApp {
+        let hid = crate::hid::HidHost::new(setup.hid_engine.clone());
         HostApp {
             shared,
             controls,
@@ -272,6 +281,7 @@ impl HostApp {
             remote_addr: None,
             hfp_acl: None,
             voice: Default::default(),
+            hid,
             streaming: false,
             stream_codec: None,
             endpoints: HashMap::new(),
@@ -650,6 +660,11 @@ impl HostApp {
         if self.setup.battery || self.setup.voice {
             stack.hfp_ag_init(self.setup.voice);
             self.voice.on_ag_init();
+        }
+        // Keyboards and mice (experimental, developer mode; issue #413)
+        if self.setup.hid.is_some() {
+            self.hid.stack_init(stack);
+            stack.timer_start(TIMER_HID_LEDS, crate::hid::LEDS_TICK_MS);
         }
         // LE Audio (developer mode): SM, GATT client / server, ISO. Without
         // it only SM and the bonds file, for the LE keys of classic devices
@@ -1432,10 +1447,29 @@ impl HostApp {
                 }
             }
             HCI_EVENT_PIN_CODE_REQUEST => {
+                let Some(addr) = addr_at(p, 2) else { return };
+                // A keyboard being added (legacy pairing): a PIN of
+                // BlueCaster's, shown to the user, who types it on the
+                // keyboard. Neither address nor PIN in the log.
+                let pin = crate::hid::Passkey::random();
+                if self.setup.hid_engine.borrow_mut().passkey_shown(&[addr], pin) {
+                    tracing::info!("hid: legacy pairing of the new device, answering with the number shown");
+                    stack.pin_code_response(&addr, &pin.digits());
+                    return;
+                }
                 // Legacy pairing: the default PIN
-                if let Some(addr) = addr_at(p, 2) {
-                    tracing::info!("PIN code requested by {} (legacy pairing), answering 0000", addr_str(&addr));
-                    stack.pin_code_response(&addr, "0000");
+                tracing::info!("PIN code requested by {} (legacy pairing), answering 0000", addr_str(&addr));
+                stack.pin_code_response(&addr, "0000");
+            }
+            HCI_EVENT_USER_PASSKEY_NOTIFICATION => {
+                // The device types the number (only the device being added
+                // as a keyboard is answered as a display, see shim.c)
+                let (Some(addr), Some(value)) = (addr_at(p, 2), p.get(8..12)) else { return };
+                let mut v = [0u8; 4];
+                v.copy_from_slice(value);
+                let passkey = crate::hid::Passkey::new(u32::from_le_bytes(v));
+                if !self.setup.hid_engine.borrow_mut().passkey_shown(&[addr], passkey) {
+                    tracing::warn!("pairing: a device asks for a number to be typed on it, which is not shown");
                 }
             }
             // Security steps, logged so that an authentication failure
@@ -1449,6 +1483,8 @@ impl HostApp {
                 // The key itself (bytes 8..24) is never logged
                 if let (Some(addr), Some(kind)) = (addr_at(p, 2), u8_at(p, 24)) {
                     tracing::info!("new link key from pairing with {} (type {kind})", addr_str(&addr));
+                    // A keyboard being added paired (legacy pairing ends here)
+                    self.setup.hid_engine.borrow_mut().pairing_end(stack, Some(&addr), None);
                 }
             }
             HCI_EVENT_IO_CAPABILITY_RESPONSE => {
@@ -1472,6 +1508,9 @@ impl HostApp {
                             hci_error_string(status)
                         );
                     }
+                    // A keyboard being added: its number goes away, and
+                    // pairing is as usual again
+                    self.setup.hid_engine.borrow_mut().pairing_end(stack, Some(&addr), None);
                 }
             }
             HCI_EVENT_AUTHENTICATION_COMPLETE => {
@@ -2749,6 +2788,24 @@ impl HostApp {
             _ => {}
         }
     }
+
+    /// Windows' lock keys read; every keyboard that shows other lights is
+    /// sent them (also one connected since the last tick whose report could
+    /// not go out yet)
+    fn hid_leds_tick(&mut self, stack: &Stack) {
+        let any = {
+            let mut engine = self.setup.hid_engine.borrow_mut();
+            engine.poll_leds();
+            engine.leds().is_some() && !engine.connected().is_empty()
+        };
+        if !any {
+            return;
+        }
+        self.hid.sync_leds(stack);
+        if let Some(le) = self.le.as_mut().filter(|le| le.initialized()) {
+            le.run(stack, crate::le::modules::hogp::HogpModule::sync_leds);
+        }
+    }
 }
 
 impl App for HostApp {
@@ -2797,6 +2854,11 @@ impl App for HostApp {
             }
             Source::SdpClient => self.rfcomm.on_sdp(stack, packet),
             Source::SdpServices => self.sdp_services.on_event(packet),
+            Source::Hid => {
+                if event_type(packet) == Some(HCI_EVENT_HID_META) {
+                    self.hid.on_event(stack, packet)
+                }
+            }
             Source::Rfcomm | Source::Sco => {}
             Source::Avrcp | Source::AvrcpController | Source::AvrcpTarget => {
                 if event_type(packet) == Some(HCI_EVENT_AVRCP_META) {
@@ -2852,6 +2914,10 @@ impl App for HostApp {
             TIMER_LINK_COMMAND => self.link_command_timeout(stack),
             TIMER_ESCO_WATCH => self.esco_tick(stack),
             TIMER_STALL_WATCH => self.stall_tick(stack),
+            TIMER_HID_LEDS => {
+                self.hid_leds_tick(stack);
+                stack.timer_start(TIMER_HID_LEDS, crate::hid::LEDS_TICK_MS);
+            }
             TIMER_LOADER => {
                 if let Some(loader) = self.loader.as_mut() {
                     let actions = loader.on_timeout();
@@ -2887,6 +2953,8 @@ impl App for HostApp {
         tracing::debug!("run loop exit (a2dp cid 0x{:04X}, avrcp cid 0x{:04X})", self.a2dp_cid, self.avrcp_cid);
         self.set_streaming(false);
         self.rfcomm.stop();
+        // Nothing may stay pressed in Windows
+        self.hid.stop();
         if let Some(le) = self.le.as_mut() {
             le.stack_deinit(stack);
         }

@@ -91,6 +91,10 @@ pub struct ScannedDevice {
     /// LE Audio: member of a coordinated set (advertises a CSIP RSI);
     /// connecting it streams to the whole set
     pub le_audio_set: bool,
+    /// Keyboards and mice (experimental, issue #413): an LE advertiser that
+    /// looks like a keyboard or mouse, with its address type. Only listed
+    /// while that feature is on; never an audio or LE Audio entry.
+    pub hid_le: Option<u8>,
 }
 
 /// One device, not two (issue #86): a scan that finds the other side
@@ -100,7 +104,8 @@ pub struct ScannedDevice {
 fn save_twins(dir: &std::path::Path, found: &[ScannedDevice]) -> usize {
     let saved = crate::devices::load_all(dir);
     let mut n = 0;
-    for d in found {
+    // A keyboard or mouse is neither side of headphones
+    for d in found.iter().filter(|d| d.hid_le.is_none()) {
         let has = |le: bool| saved.iter().find(|s| s.le_audio == le && s.address.eq_ignore_ascii_case(&d.address));
         if has(d.le_audio).is_some() {
             continue;
@@ -137,6 +142,7 @@ impl ScannedDevice {
             audio: d.is_audio(),
             le_audio: false,
             le_audio_set: false,
+            hid_le: None,
         }
     }
 }
@@ -144,6 +150,43 @@ impl ScannedDevice {
 /// Appearance categories (the value's upper 10 bits)
 const APPEARANCE_PHONE: u16 = 0x001;
 const APPEARANCE_COMPUTER: u16 = 0x002;
+/// Human Interface Device, 0x03C0-0x03FF (keyboard, mouse, ...)
+const APPEARANCE_HID: u16 = 0x00F;
+/// The HID service, advertised by LE keyboards and mice
+const UUID_SERVICE_HID: u16 = 0x1812;
+
+/// Keyboards and mice (experimental, issue #413): the connectable LE
+/// advertisers that look like one (the HID service advertised, or an
+/// appearance of the HID category), listed by their identity when known,
+/// with its address type. Never audio entries.
+fn hid_le_entries(results: &[LeScanResult]) -> Vec<ScannedDevice> {
+    let mut out: Vec<ScannedDevice> = Vec::new();
+    for r in results.iter().filter(|r| r.connectable) {
+        if !r.uuids16.contains(&UUID_SERVICE_HID) && r.appearance >> 6 != APPEARANCE_HID {
+            continue;
+        }
+        let a = r.identity.unwrap_or(r.addr);
+        let address = a.to_string();
+        match out.iter_mut().find(|e| e.address == address) {
+            Some(e) => {
+                if !r.name.is_empty() {
+                    e.name = r.name.clone();
+                }
+            }
+            None => out.push(ScannedDevice {
+                address,
+                name: r.name.clone(),
+                rssi: r.rssi,
+                class_of_device: 0,
+                audio: false,
+                le_audio: false,
+                le_audio_set: false,
+                hid_le: Some(a.addr_type),
+            }),
+        }
+    }
+    out
+}
 
 /// The addresses of advertisers listed as LE Audio only for their audio
 /// appearance that are a classic device (`classic`: found or saved): a
@@ -233,6 +276,7 @@ fn le_scan_entries(
                 audio: true,
                 le_audio: true,
                 le_audio_set: set_member,
+                hid_le: None,
             },
             facts,
         ));
@@ -420,6 +464,18 @@ pub enum ServiceEvent {
     /// A headphone button arrived (for the IPC clients; the media key, if
     /// any, went to Windows already)
     Button(ipc::ButtonPress),
+    /// Keyboards and mice (experimental): one was added, removed, connected
+    /// or went away ([`Service::hid_devices`])
+    HidDevices,
+    /// The number to type on a keyboard being added appeared or went away
+    /// ([`Service::hid_passkey`])
+    HidPasskey,
+    /// A device being added started or ended its countdown, or one was
+    /// removed again ([`Service::hid_checks`], [`Service::hid_rolled_back`])
+    HidCheck,
+    /// The self-test of the path to Windows has a new result
+    /// ([`Service::hid_health`])
+    HidHealth,
 }
 
 /// Headset mode switched for the running classic stream
@@ -475,17 +531,79 @@ fn le_config(le_on: bool, cli: Option<&LeCliOptions>, opts: &ServiceOptions) -> 
         bonds_file: Some(crate::paths::le_bonds_file(&opts.config_dir)),
         imported_bonds_file: Some(crate::paths::windows_le_keys_file(&opts.config_dir)),
         bond_dir: Some(crate::paths::pairing_dir(&opts.config_dir)),
-        media: if dry_run { None } else { crate::le_media::windows_backend() },
+        // Windows' media session, here or in the session agent (a dry run
+        // with the agent: its simulated player)
+        media: session_host::media::media_backend(dry_run),
         ccp_sim: cli.and_then(|c| c.ccp_sim.clone()),
         ccp_console: cli.is_some_and(|c| c.ccp_console),
     })
 }
 
+/// The lock behind [`Service::settings_tx`]: one thread at a time, which
+/// may enter again
+#[derive(Default)]
+pub(crate) struct SettingsTx {
+    owner: Mutex<Option<(std::thread::ThreadId, usize)>>,
+    free: Condvar,
+}
+
+impl SettingsTx {
+    pub(crate) fn enter(&self) -> SettingsTxGuard<'_> {
+        let me = std::thread::current().id();
+        let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            match owner.as_mut() {
+                None => {
+                    *owner = Some((me, 1));
+                    break;
+                }
+                Some((id, depth)) if *id == me => {
+                    *depth += 1;
+                    break;
+                }
+                Some(_) => owner = self.free.wait(owner).unwrap_or_else(|e| e.into_inner()),
+            }
+        }
+        SettingsTxGuard(self)
+    }
+}
+
+/// See [`Service::settings_tx`]
+pub struct SettingsTxGuard<'a>(&'a SettingsTx);
+
+impl Drop for SettingsTxGuard<'_> {
+    fn drop(&mut self) {
+        let mut owner = self.0.owner.lock().unwrap_or_else(|e| e.into_inner());
+        match owner.as_mut() {
+            Some((_, depth)) if *depth > 1 => *depth -= 1,
+            _ => {
+                *owner = None;
+                self.0.free.notify_one();
+            }
+        }
+    }
+}
+
+/// A broadcast session's claim on the Auracast adapter
+/// ([`Inner::broadcast_wanted`]): dropped when the session ends, so the
+/// next scan or connection goes back on the adapter to use
+pub(crate) struct BroadcastGuard(Arc<Inner>);
+
+impl Drop for BroadcastGuard {
+    fn drop(&mut self) {
+        self.0.broadcast.store(false, Ordering::Release);
+        self.0.broadcast_adapter.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.0.leave_broadcast_adapter();
+    }
+}
+
 pub(crate) struct Inner {
     opts: ServiceOptions,
     pub settings: Mutex<Settings>,
+    /// One change of the saved settings at a time ([`Service::settings_tx`])
+    settings_tx: SettingsTx,
     events: Mutex<Sender<ServiceEvent>>,
-    host: Mutex<Option<Arc<BtHost>>>,
+    pub(crate) host: Mutex<Option<Arc<BtHost>>>,
     stats: Arc<LinkStats>,
     stop: AtomicBool,
     running: AtomicBool,
@@ -512,11 +630,23 @@ pub(crate) struct Inner {
     voice_events: Mutex<Vec<bt_host::VoiceEvent>>,
     /// The microphone test (Diagnostics)
     pub mic_test: crate::mic_test::MicTest,
+    /// Keyboards and mice (experimental, crate::hid)
+    pub(crate) hid: crate::hid::HidState,
     /// The microphone's processing in force (the request's, changed in
     /// place by [`Service::set_mic_processing`])
     pub mic_dsp: voice_link::MicDsp,
     /// The running stack was started with LE Audio
     le_active: AtomicBool,
+    /// A broadcast session wants the stack (le_stream::run_broadcast): it
+    /// opens the Auracast adapter (adapter::adapter_for)
+    broadcast: AtomicBool,
+    /// The adapter the running stack was started for (adapter::adapter_for;
+    /// empty: automatic)
+    host_adapter: Mutex<String>,
+    /// The adapter the running broadcast's stack opened (its instance ID):
+    /// a broadcast set up again goes on the same one, also when none is
+    /// chosen; empty: no broadcast, or none opened yet
+    broadcast_adapter: Mutex<String>,
     /// A device scan runs
     scanning: AtomicBool,
     /// The LE Audio stream being sent (le_stream)
@@ -535,6 +665,10 @@ pub(crate) struct Inner {
     turned_off: AtomicBool,
     /// The source the running A2DP session changes to at its next tick
     source_change: Mutex<Option<SourceRequest>>,
+    /// The source a broadcast went on with after the one it was changed to
+    /// could not be captured: the request is put back to it
+    /// ([`Service::change_source`], [`Service::restart_adapter`])
+    source_kept: Mutex<Option<SourceRequest>>,
     /// Other bitpools for the session to take in place
     /// ([`Service::change_bitpools`])
     bitpool_change: Mutex<Option<stream::Bitpools>>,
@@ -561,8 +695,21 @@ impl Inner {
     }
 
     /// An event for the state machine (the LE stream's headset volume)
+    /// No stack runs, nothing is about to start one, and the PC is not
+    /// going to sleep: crate::hid may start one for its keyboards and mice
+    pub(crate) fn hid_may_start(&self) -> bool {
+        self.host.lock().unwrap_or_else(|e| e.into_inner()).is_none()
+            && !self.running.load(Ordering::Acquire)
+            && !self.power.suspending()
+    }
+
     pub(crate) fn send_event(&self, e: ServiceEvent) {
         let _ = self.events.lock().unwrap_or_else(|e| e.into_inner()).send(e);
+    }
+
+    /// A sender of service events, for threads of their own
+    pub(crate) fn event_sender(&self) -> Sender<ServiceEvent> {
+        self.events.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn stop_requested(&self) -> bool {
@@ -571,6 +718,12 @@ impl Inner {
 
     pub fn take_source_change(&self) -> Option<SourceRequest> {
         self.source_change.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    /// The session could not capture the source it was changed to and plays
+    /// `source` again
+    pub fn keep_source(&self, source: SourceRequest) {
+        *self.source_kept.lock().unwrap_or_else(|e| e.into_inner()) = Some(source);
     }
 
     pub fn take_bitpool_change(&self) -> Option<stream::Bitpools> {
@@ -690,8 +843,90 @@ impl Inner {
         self.le_active.load(Ordering::Acquire)
     }
 
+    /// The adapter the next stack opens first: the Auracast adapter while a
+    /// broadcast wants the stack, else the adapter to use
+    fn wanted_adapter(&self) -> String {
+        let s = self.settings.lock().unwrap_or_else(|e| e.into_inner());
+        crate::adapter::adapter_for(&s, self.broadcast.load(Ordering::Acquire)).to_string()
+    }
+
+    /// The adapter a broadcast set up again goes on: the chosen one, else
+    /// the one its stack opened before (empty: none opened yet)
+    fn broadcast_adapter(&self) -> String {
+        let wanted = self.wanted_adapter();
+        if wanted.is_empty() {
+            self.broadcast_adapter.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        } else {
+            wanted
+        }
+    }
+
+    /// The adapter the broadcast's next stack opens first is there (always,
+    /// when none is chosen and none was opened yet, or with a virtual
+    /// controller)
+    pub(crate) fn wanted_adapter_present(&self) -> bool {
+        self.opts.hci_tcp.is_some() || crate::adapter::chosen_present(&self.broadcast_adapter())
+    }
+
+    /// The Auracast adapter is set and not there: a broadcast would go on
+    /// the first other adapter found
+    pub(crate) fn auracast_adapter_missing(&self) -> bool {
+        if self.opts.hci_tcp.is_some() {
+            return false;
+        }
+        let id = {
+            let s = self.settings.lock().unwrap_or_else(|e| e.into_inner());
+            if s.debug_mode { s.auracast_adapter_id.trim().to_string() } else { String::new() }
+        };
+        !id.is_empty() && !crate::adapter::chosen_present(&id)
+    }
+
+    /// The broadcast's stack is up: the adapter it opened is the one a
+    /// set-up after a loss waits for and opens again
+    pub(crate) fn note_broadcast_adapter(&self) {
+        if self.opts.hci_tcp.is_none()
+            && let Some(id) = hci_transport::usb::last_opened_instance()
+        {
+            *self.broadcast_adapter.lock().unwrap_or_else(|e| e.into_inner()) = id;
+        }
+    }
+
+    /// A broadcast session wants the stack, until the guard drops: the
+    /// next stack started or checked (ensure_host) is the Auracast
+    /// adapter's
+    pub(crate) fn broadcast_wanted(self: &Arc<Self>) -> BroadcastGuard {
+        self.broadcast_adapter.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.broadcast.store(true, Ordering::Release);
+        BroadcastGuard(self.clone())
+    }
+
+    /// The broadcast ended on an adapter of its own: that stack is shut
+    /// down, so the Auracast adapter is free and not shown as in use; the
+    /// next scan or connection starts one on the adapter to use
+    fn leave_broadcast_adapter(&self) {
+        let mut slot = self.host.lock().unwrap_or_else(|e| e.into_inner());
+        let same =
+            self.host_adapter.lock().unwrap_or_else(|e| e.into_inner()).eq_ignore_ascii_case(&self.wanted_adapter());
+        if same {
+            return;
+        }
+        if let Some(h) = slot.take() {
+            tracing::info!("Auracast: the broadcast ended, leaving the Auracast adapter");
+            h.shutdown();
+            self.adapter_changed(false);
+        }
+    }
+
     fn host_config(&self, le_on: bool) -> HostConfig {
-        let s = self.settings.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut s = self.settings.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        // The Auracast adapter for a broadcast: configure opens it first
+        s.adapter_id = self.wanted_adapter();
+        *self.host_adapter.lock().unwrap_or_else(|e| e.into_inner()) = s.adapter_id.clone();
+        // A broadcast set up again with no adapter chosen: the one it ran on
+        // before, not the first one found (host_adapter stays "automatic")
+        if self.broadcast.load(Ordering::Acquire) {
+            s.adapter_id = self.broadcast_adapter();
+        }
         let transport = match &self.opts.hci_tcp {
             Some(addr) => TransportConfig::Tcp(addr.clone()),
             // bt-host adds the adapters it knows to `known`
@@ -711,6 +946,8 @@ impl Inner {
             imported_bonds_file: Some(crate::paths::windows_le_keys_file(&self.opts.config_dir)),
         });
         c.battery = true;
+        // Keyboards and mice (experimental, developer mode; issue #413)
+        c.hid = self.hid_config();
         // Headset microphone: the session's request, or the developer
         // CLI's --headset-mic-toggle
         c.voice = self.voice_wanted.load(Ordering::Acquire)
@@ -770,6 +1007,7 @@ impl Inner {
                     h.set_media_keys(s.media_keys);
                     h.set_afh_policy(self.opts.afh.as_deref().unwrap_or(afh_policy(&s)));
                     self.le_active.store(le_on, Ordering::Release);
+                    self.hid.stack_started();
                     self.streamed.store(false, Ordering::Release);
                     self.note_le_capable(&h);
                     self.pump_events(&h);
@@ -836,20 +1074,21 @@ impl Inner {
     fn pump_events(self: &Arc<Self>, host: &Arc<BtHost>) {
         let Some(rx) = host.take_events() else { return };
         let weak: Weak<Inner> = Arc::downgrade(self);
+        // The emulator's buttons press no key on this PC
+        let keys_dry_run = self.opts.hci_tcp.is_some();
         let _ = std::thread::Builder::new().name("host-events".into()).spawn(move || {
             while let Ok(e) = rx.recv() {
                 match e {
                     HostEvent::MediaKey(k) => {
                         tracing::debug!("host event: media key {k:?}");
                         let key = match k {
-                            bt_host::MediaKey::PlayPause => win_sys::media_keys::MediaKey::PlayPause,
-                            bt_host::MediaKey::Stop => win_sys::media_keys::MediaKey::Stop,
-                            bt_host::MediaKey::Next => win_sys::media_keys::MediaKey::Next,
-                            bt_host::MediaKey::Previous => win_sys::media_keys::MediaKey::Previous,
+                            bt_host::MediaKey::PlayPause => session_host::media::Key::PlayPause,
+                            bt_host::MediaKey::Stop => session_host::media::Key::Stop,
+                            bt_host::MediaKey::Next => session_host::media::Key::Next,
+                            bt_host::MediaKey::Previous => session_host::media::Key::Previous,
                         };
-                        if let Err(e) = win_sys::media_keys::send(key) {
-                            tracing::warn!("media key {k:?}: {e}");
-                        }
+                        // In the user's session; never waits for the agent
+                        session_host::media::send_media_key(key, keys_dry_run);
                     }
                     HostEvent::Button { button, pressed, le_audio } => {
                         tracing::debug!(
@@ -899,6 +1138,12 @@ impl Inner {
                                 .send(ServiceEvent::VoiceCodecs(codecs));
                         }
                     }
+                    // A keyboard or mouse (experimental): no address in the log
+                    HostEvent::Hid(e) => {
+                        if let Some(inner) = weak.upgrade() {
+                            inner.on_hid_event(e);
+                        }
+                    }
                     HostEvent::ConnectionLost | HostEvent::TransportFailed => {
                         tracing::debug!("host event: {e:?}");
                     }
@@ -931,8 +1176,26 @@ impl Inner {
                 // Turned on or off while streaming or scanning: applied now,
                 // before the next scan or connection (v1)
                 Some(if le_wanted { "LE Audio was turned on" } else { "LE Audio was turned off" })
+            } else if !self
+                .host_adapter
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .eq_ignore_ascii_case(&self.wanted_adapter())
+            {
+                // A broadcast on the Auracast adapter, or back from it
+                Some(if self.broadcast.load(Ordering::Acquire) {
+                    "the broadcast goes on the Auracast adapter"
+                } else {
+                    "back on the adapter to use after a broadcast"
+                })
             } else if (self.voice_wanted.load(Ordering::Acquire) || self.mic_test.needs_voice()) && !h.voice_enabled() {
                 Some("headset mode needs the stack with voice")
+            } else if self.hid_wanted() != h.hid_enabled() {
+                Some(if h.hid_enabled() {
+                    "keyboards and mice were turned off"
+                } else {
+                    "keyboards and mice were turned on"
+                })
             } else if !h.controller_responds(CONTROLLER_PROBE) {
                 Some("the Bluetooth adapter stopped answering")
             } else {
@@ -947,6 +1210,7 @@ impl Inner {
                     tracing::warn!("restarting BTstack: {why}");
                     h.shutdown();
                     *slot = None;
+                    self.hid_stack_stopped();
                     self.adapter_changed(false);
                 }
             }
@@ -972,7 +1236,9 @@ impl Inner {
     /// just connected then refused the PC's page for 30 s to 2 min (issue
     /// #86). So is a link that came up moments ago ([`FRESH_LINK`]): a codec
     /// chosen right after connecting. An older link left from the stream
-    /// that just ended does not count.
+    /// that just ended does not count. Also kept while a keyboard or mouse
+    /// is connected through BlueCaster: losing input for the reconnection
+    /// is worse than the stutter.
     pub fn host_for_stream(self: &Arc<Self>, device: [u8; 6]) -> Result<Arc<BtHost>, Msg> {
         let old = self.host.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let streamed = self.streamed.swap(false, Ordering::AcqRel);
@@ -983,6 +1249,10 @@ impl Inner {
                 tracing::info!("keeping BTstack: {} connected to the PC by itself on it", bt_host::addr_str(&device));
             } else if streamed && link_is_fresh(h.link_age(device)) {
                 tracing::info!("keeping BTstack: the link to {} just came up", bt_host::addr_str(&device));
+            } else if streamed && self.hid_links_up() {
+                // Untested on hardware: the stutter of issue #84 may come
+                // back on this kept stack (docs/hid-host-dev.md)
+                tracing::info!("keeping BTstack: a keyboard or mouse is connected");
             } else if streamed {
                 tracing::info!("restarting BTstack: a stream ran on it before");
                 self.shutdown_host();
@@ -1024,6 +1294,7 @@ impl Inner {
         if let Some(h) = old {
             tracing::info!("stopping BTstack until the PC resumes");
             h.shutdown_lost();
+            self.hid_stack_stopped();
             self.adapter_changed(false);
         }
     }
@@ -1097,6 +1368,7 @@ impl Inner {
             // free for the next stack
             h.shutdown();
             tracing::debug!("host shutdown: took {} ms", t.elapsed().as_millis());
+            self.hid_stack_stopped();
             self.adapter_changed(false);
         }
     }
@@ -1120,6 +1392,7 @@ impl Inner {
     /// settings when it changes)
     pub fn remember_volume(&self, addr: &str, volume: Option<u8>) {
         let Some(v) = volume else { return };
+        let _tx = self.settings_tx.enter();
         let mut s = self.settings.lock().unwrap_or_else(|e| e.into_inner());
         let key = addr.to_uppercase();
         if s.saved_volumes.get(&key) == Some(&(v as i32)) {
@@ -1258,7 +1531,7 @@ impl Inner {
 }
 
 pub struct Service {
-    inner: Arc<Inner>,
+    pub(crate) inner: Arc<Inner>,
     worker: Mutex<Option<JoinHandle<()>>>,
     /// Held while a session is stopped and the next one started: one start
     /// or stop at a time (issue #86: two codec switches in quick succession
@@ -1340,6 +1613,7 @@ impl Service {
         let inner = Arc::new(Inner {
             opts,
             settings: Mutex::new(settings),
+            settings_tx: SettingsTx::default(),
             events: Mutex::new(events),
             host: Mutex::new(None),
             stats: Arc::new(LinkStats::default()),
@@ -1356,8 +1630,12 @@ impl Service {
             voice_change: Mutex::new(None),
             voice_events: Mutex::new(Vec::new()),
             mic_test: Default::default(),
+            hid: Default::default(),
             mic_dsp: voice_link::MicDsp::new(),
             le_active: AtomicBool::new(false),
+            broadcast: AtomicBool::new(false),
+            host_adapter: Mutex::new(String::new()),
+            broadcast_adapter: Mutex::new(String::new()),
             scanning: AtomicBool::new(false),
             le_stream: Mutex::new(None),
             le_support: Mutex::new(None),
@@ -1365,6 +1643,7 @@ impl Service {
             waiting: AtomicBool::new(false),
             turned_off: AtomicBool::new(false),
             source_change: Mutex::new(None),
+            source_kept: Mutex::new(None),
             bitpool_change: Mutex::new(None),
             unlisted_keeps: Mutex::new(None),
         });
@@ -1403,6 +1682,11 @@ impl Service {
         pipeline::set_thread_priority_hook(|| pro_audio("encode thread"));
         hci_transport::set_acl_out_priority_hook(|| pro_audio("USB ACL writer"));
         bt_host::set_runloop_priority_hook(|| pro_audio("BTstack thread"));
+        // Keyboards and mice (experimental): devices added and not confirmed
+        // before the last exit are removed, then their stack runs from the
+        // start
+        inner.hid_remove_unconfirmed();
+        inner.hid_keep();
         Service {
             inner,
             worker: Mutex::new(None),
@@ -1444,13 +1728,26 @@ impl Service {
             settings.debug_mode
         );
         apply_dev_overrides(&settings);
-        let host = self.host();
-        if let Some(h) = &host {
-            h.set_media_keys(settings.media_keys);
-            h.set_afh_policy(self.inner.opts.afh.as_deref().unwrap_or(afh_policy(&settings)));
-        }
+        let media_keys = settings.media_keys;
+        let afh = self.inner.opts.afh.clone().unwrap_or_else(|| afh_policy(&settings).to_owned());
         let old = std::mem::replace(&mut *self.inner.settings.lock().unwrap_or_else(|e| e.into_inner()), settings);
         let new_le = self.inner.settings.lock().unwrap_or_else(|e| e.into_inner()).le_audio();
+        // A stack starting or stopping holds the slot, for up to tens of
+        // seconds with an adapter that does not answer: the settings are not
+        // kept waiting. A stack that starts reads them once it is up, and
+        // the next scan or connection checks LE Audio (ensure_host)
+        let host = match self.inner.host.try_lock() {
+            Ok(slot) => slot.clone(),
+            Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner().clone(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                tracing::debug!("settings applied: the stack is starting or stopping, it reads them when up");
+                None
+            }
+        };
+        if let Some(h) = &host {
+            h.set_media_keys(media_keys);
+            h.set_afh_policy(&afh);
+        }
         if old.le_audio() != new_le && host.is_some() && self.inner.le_active() != self.inner.le_wanted() {
             if self.is_running() || self.is_scanning() {
                 tracing::info!(
@@ -1465,6 +1762,23 @@ impl Service {
                 self.inner.shutdown_host();
             }
         }
+        self.hid_setting_changed(old.hid_host());
+    }
+
+    /// Service mode, after the one-time move put the user's files into the
+    /// folder (crate::service_data): the settings and the devices' codecs
+    /// read again, and an idle stack released so that the next one reads
+    /// the moved pairing keys and device lists. A stack in use (a stream,
+    /// a scan) is replaced at its next use. Returns the settings read.
+    pub fn reload_saved(&self) -> Settings {
+        let dir = self.inner.opts.config_dir.clone();
+        let settings = Settings::load(&dir);
+        *self.inner.codecs.lock().unwrap_or_else(|e| e.into_inner()) = crate::devices::load_codecs(&dir);
+        self.set_settings(settings.clone());
+        let idle = !self.is_running() && !self.is_scanning();
+        let released = self.reload_adapter(idle);
+        tracing::info!("service: the moved data read again (stack released now: {released})");
+        settings
     }
 
     /// HFP audio for every stack this service starts, so that headset mode
@@ -1511,6 +1825,8 @@ impl Service {
     /// Stops the stack, releasing the adapter (e.g. before its driver is
     /// changed); the next use starts a new one
     pub fn release_adapter(&self) {
+        // Keyboards and mice (experimental) do not take the adapter back
+        self.inner.hid.hold();
         self.forget_session();
         self.shutdown();
     }
@@ -1532,22 +1848,40 @@ impl Service {
         }
     }
 
-    /// Changes the source of the running A2DP stream: the link stays up.
-    /// False when none is streaming (it connects or reconnects, a start or
-    /// stop is under way, LE Audio has its own capture path): the caller
+    /// Changes the source of the running A2DP stream or Auracast broadcast:
+    /// the link (the BIGs) stays up. False when none is streaming (it
+    /// connects or reconnects, a start or stop is under way, an LE Audio
+    /// unicast stream, application capture for a broadcast): the caller
     /// starts it again instead.
     pub fn change_source(&self, source: SourceRequest) -> bool {
         let Ok(_control) = self.control.try_lock() else { return false };
         if !self.is_running() || self.state() != StreamState::Streaming {
             return false;
         }
+        self.follow_kept_source();
         match self.last_request.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             Some(req) if req.le.is_none() => req.source = source.clone(),
+            Some(req)
+                if req.le.as_ref().is_some_and(|l| l.broadcast.is_some())
+                    && !matches!(source, SourceRequest::Application { .. }) =>
+            {
+                req.source = source.clone()
+            }
             _ => return false,
         }
         *self.inner.source_change.lock().unwrap_or_else(|e| e.into_inner()) = Some(source);
         self.inner.tick.1.notify_all();
         true
+    }
+
+    /// A change of source the session could not make
+    /// ([`Inner::keep_source`]): the request names the source that plays
+    fn follow_kept_source(&self) {
+        let kept = self.inner.source_kept.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let (Some(source), Some(req)) = (kept, self.last_request.lock().unwrap_or_else(|e| e.into_inner()).as_mut())
+        {
+            req.source = source;
+        }
     }
 
     /// Headset mode off, on or auto, its output and the best call codec
@@ -1734,7 +2068,7 @@ impl Service {
 
     /// Drops `addr`'s link key alone (its LE keys stay with its LE Audio
     /// entry's own bond)
-    fn forget_link_key_only(&self, addr: [u8; 6]) {
+    pub(crate) fn forget_link_key_only(&self, addr: [u8; 6]) {
         if !self.host().is_some_and(|h| h.forget_link_key_only(addr)) {
             bt_host::link_keys::forget(&crate::paths::link_keys_file(&self.inner.opts.config_dir), &addr);
         }
@@ -1792,6 +2126,7 @@ impl Service {
     /// Disconnect, and not when the headphones were turned off: a session
     /// that waits for them just ends (issue #86).
     pub fn restart_adapter(&self) -> Option<StreamRequest> {
+        self.follow_kept_source();
         let last = self.last_request.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let again = reconnect_after_restart(
             self.is_running() && self.inner.stop_requested(),
@@ -1859,6 +2194,16 @@ impl Service {
         tracing::info!("device {address}: what it offered forgotten");
         self.inner.save_codecs(&known);
         true
+    }
+
+    /// Held while the saved settings change: read them ([`Service::settings`]),
+    /// change the copy, save it and apply it ([`Service::set_settings`]) under
+    /// one guard. Without it, a copy read before another change is saved
+    /// after it and takes that change back (the user's settings moved into
+    /// the service's folder were replaced by the defaults this way). The
+    /// same thread may take it again.
+    pub fn settings_tx(&self) -> SettingsTxGuard<'_> {
+        self.inner.settings_tx.enter()
     }
 
     pub fn settings(&self) -> Settings {
@@ -2045,6 +2390,9 @@ impl Service {
         self.inner.notify(StreamState::Idle, Msg::new("status.initializing_scan"));
         let host = self.inner.ensure_host()?;
         let mut le_scan = false;
+        // Keyboards and mice (experimental): LE ones are listed too, also
+        // without LE Audio (the stack runs LE for them)
+        let hid_le = self.inner.hid_wanted() && host.hid_enabled();
         if self.inner.le_active() {
             let until = Instant::now() + LE_SCAN_READY_WAIT;
             while !host.le_ready() && Instant::now() < until {
@@ -2054,9 +2402,20 @@ impl Service {
             if !le_scan {
                 tracing::warn!("LE Audio not ready, LE scan skipped");
             }
+        } else if hid_le {
+            let until = Instant::now() + LE_SCAN_READY_WAIT;
+            while !host.hid_le_ready() && !host.hid_le_unavailable() && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            le_scan = host.hid_le_ready() && host.le_scan_start();
+            if !le_scan {
+                tracing::info!("keyboards and mice: no LE scan (the adapter has no LE, or it is not ready)");
+            }
         }
+        // LE Audio's entries only with LE Audio on
+        let audio_le = le_scan && self.inner.le_active();
         let le_started = Instant::now();
-        let (saved_le, own, sets) = if le_scan {
+        let (saved_le, own, sets) = if audio_le {
             let own: Vec<String> = win_sys::bt_radios::radios().into_iter().filter_map(|r| r.address).collect();
             (crate::devices::load_le(&self.inner.opts.config_dir), own, self.inner.known_le_sets(Some(&host)))
         } else {
@@ -2066,8 +2425,8 @@ impl Service {
         self.inner.notify(StreamState::Idle, Msg::new("status.scanning_devices"));
         let classic = host.scan_with(seconds, &mut |found| {
             let mut list: Vec<ScannedDevice> = found.iter().map(ScannedDevice::classic).collect();
-            if le_scan {
-                let results = host.le_scan_results();
+            let results = if le_scan { host.le_scan_results() } else { Vec::new() };
+            if audio_le {
                 let mut le = le_scan_entries(&results, &saved_le, &own, &sets).0;
                 let classic: Vec<String> =
                     list.iter().map(|d| d.address.clone()).chain(saved.iter().map(|d| d.address.clone())).collect();
@@ -2081,6 +2440,9 @@ impl Service {
                     .collect();
                 fill_le_names(&mut le, &known);
                 list.extend(le);
+            }
+            if hid_le {
+                list.extend(hid_le_entries(&results));
             }
             // A device is listed once its name is known: most follow within
             // seconds (name request, scan response), and "Unknown" turning
@@ -2111,6 +2473,16 @@ impl Service {
                 }
             }
             let results = host.le_scan_stop();
+            let hid = if hid_le { hid_le_entries(&results) } else { Vec::new() };
+            if hid_le {
+                tracing::info!("LE scan: {} keyboard(s) or mice", hid.len());
+            }
+            if !audio_le {
+                le_found = hid.len();
+                list.extend(hid);
+                self.inner.notify(StreamState::Idle, Msg::with("status.scan_complete", &[&(classic.len() + le_found)]));
+                return Ok(list);
+            }
             for r in results.iter().filter(|r| r.le_audio) {
                 tracing::debug!(
                     "le scan: advertiser {} {} appearance 0x{:04X}, connectable {}, UUIDs {:04X?}",
@@ -2172,8 +2544,9 @@ impl Service {
                     e.le_audio_set
                 );
             }
-            le_found = found;
+            le_found = found + hid.len();
             list.extend(entries);
+            list.extend(hid);
             save_twins(&self.inner.opts.config_dir, &list);
         }
         self.inner.notify(StreamState::Idle, Msg::with("status.scan_complete", &[&(classic.len() + le_found)]));
@@ -2208,6 +2581,7 @@ impl Service {
 
     /// Stops streaming and the stack (the adapter is released)
     pub fn shutdown(&self) {
+        self.inner.hid.hold();
         self.stop_streaming();
         self.inner.shutdown_host();
     }
@@ -2255,6 +2629,28 @@ fn link_is_fresh(age: Option<Duration>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_thread_at_a_time_changes_the_saved_settings() {
+        let tx = Arc::new(SettingsTx::default());
+        let outer = tx.enter();
+        // The same thread again: no deadlock
+        let inner = tx.enter();
+        let (t2, entered) = (tx.clone(), Arc::new(AtomicBool::new(false)));
+        let seen = entered.clone();
+        let other = std::thread::spawn(move || {
+            let _g = t2.enter();
+            seen.store(true, Ordering::Release);
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!entered.load(Ordering::Acquire), "another thread waits");
+        drop(inner);
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!entered.load(Ordering::Acquire), "still held once");
+        drop(outer);
+        other.join().unwrap();
+        assert!(entered.load(Ordering::Acquire));
+    }
 
     #[test]
     fn afh_blend_runs_only_in_developer_mode() {
@@ -2305,6 +2701,7 @@ mod tests {
             audio: true,
             le_audio,
             le_audio_set: false,
+            hid_le: None,
         };
         let list =
             [found("AA:BB:CC:DD:EE:01", false), found("aa:bb:cc:dd:ee:01", true), found("AA:BB:CC:DD:EE:02", true)];
@@ -2330,6 +2727,33 @@ mod tests {
         };
         let (tx, _rx) = std::sync::mpsc::channel();
         Service::new(opts, tx)
+    }
+
+    #[test]
+    fn a_broadcast_set_up_again_goes_on_the_adapter_it_ran_on() {
+        const OPENED: &str = r"USB\VID_1234&PID_5678\NOT-THERE";
+        const AURACAST: &str = r"USB\VID_1234&PID_5678\NOT-THERE-EITHER";
+        let s = service();
+        let inner = &s.inner;
+        // Nothing chosen, none opened yet: automatic, nothing to wait for
+        assert_eq!(inner.broadcast_adapter(), "");
+        assert!(inner.wanted_adapter_present());
+        assert!(!inner.auracast_adapter_missing());
+        let guard = inner.broadcast_wanted();
+        // The adapter the stack opened is the one to wait for
+        *inner.broadcast_adapter.lock().unwrap() = OPENED.into();
+        assert_eq!(inner.broadcast_adapter(), OPENED);
+        assert!(!inner.wanted_adapter_present());
+        // The Auracast adapter comes first, in developer mode only
+        inner.settings.lock().unwrap().auracast_adapter_id = AURACAST.into();
+        assert!(!inner.auracast_adapter_missing());
+        assert_eq!(inner.broadcast_adapter(), OPENED);
+        inner.settings.lock().unwrap().debug_mode = true;
+        assert!(inner.auracast_adapter_missing());
+        assert_eq!(inner.broadcast_adapter(), AURACAST);
+        // The session ended: the next broadcast starts anew
+        drop(guard);
+        assert_eq!(*inner.broadcast_adapter.lock().unwrap(), "");
     }
 
     #[test]
@@ -2522,6 +2946,18 @@ mod tests {
         *s.last_request.lock().unwrap() = Some(StreamRequest { le: Some(le), ..request() });
         assert!(!s.change_source(tone()));
         assert_eq!(s.inner.take_source_change(), None);
+        // An Auracast broadcast: in place too, but not to an application
+        let b = bt_host::LeRequest { broadcast: Some(bt_host::LeBroadcast::default()), ..Default::default() };
+        *s.last_request.lock().unwrap() = Some(StreamRequest { le: Some(b), ..request() });
+        assert!(!s.change_source(SourceRequest::Application { exe: "a.exe".into() }));
+        assert!(s.change_source(tone()));
+        assert_eq!(s.inner.take_source_change(), Some(tone()));
+        // The broadcast could not capture it and kept the old source: so
+        // does the request
+        s.inner.keep_source(SourceRequest::SystemLoopback);
+        s.follow_kept_source();
+        let kept = s.last_request.lock().unwrap().as_ref().map(|r| r.source.clone());
+        assert_eq!(kept, Some(SourceRequest::SystemLoopback));
         // A start or stop under way
         *s.last_request.lock().unwrap() = Some(request());
         let control = s.control.lock().unwrap();
@@ -2658,6 +3094,49 @@ mod tests {
             set_id: set,
             ..LeScanResult::default()
         }
+    }
+
+    #[test]
+    fn keyboards_and_mice_are_listed_apart_and_never_saved_as_audio() {
+        let hid = |addr: &str, uuids: Vec<u16>, appearance: u16, connectable| LeScanResult {
+            uuids16: uuids,
+            appearance,
+            connectable,
+            le_audio: false,
+            ..le(addr, "Keys", None)
+        };
+        let rpa = bt_host::LeAddr { addr: [0x5A, 1, 2, 3, 4, 5], addr_type: 1 };
+        let identity = bt_host::LeAddr { addr: [0xC0, 1, 2, 3, 4, 5], addr_type: 1 };
+        let results = [
+            hid("00:A2:D0:00:00:05", vec![0x1812], 0, true),
+            // A mouse by its appearance only (0x03C2)
+            hid("00:A2:D0:00:00:06", vec![], 0x03C2, true),
+            // Not connectable, or neither: not listed
+            hid("00:A2:D0:00:00:07", vec![0x1812], 0x03C1, false),
+            hid("00:A2:D0:00:00:08", vec![0x180F], 0x0941, true),
+            // A bonded one under an RPA: by its identity
+            LeScanResult { addr: rpa, identity: Some(identity), ..hid("00:00:00:00:00:00", vec![0x1812], 0, true) },
+        ];
+        let list = hid_le_entries(&results);
+        let listed: Vec<(&str, Option<u8>, bool, bool)> =
+            list.iter().map(|e| (e.address.as_str(), e.hid_le, e.audio, e.le_audio)).collect();
+        assert_eq!(
+            listed,
+            [
+                ("00:A2:D0:00:00:05", Some(0), false, false),
+                ("00:A2:D0:00:00:06", Some(0), false, false),
+                ("C0:01:02:03:04:05", Some(1), false, false)
+            ]
+        );
+        // An LE Audio device saved under the same address: the keyboard
+        // entry is not taken as its classic side
+        let dir = std::env::temp_dir().join(format!("bluecaster-hid-twins-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(crate::paths::devices_dir(&dir)).unwrap();
+        crate::devices::save_le(&dir, "00:A2:D0:00:00:05", "Buds").unwrap();
+        assert_eq!(save_twins(&dir, &list), 0);
+        assert!(crate::devices::load(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -42,14 +42,42 @@ use super::modules::tmap_gmap::TmapGmapModule;
 use super::{LeAddr, LeConfig, LeDeviceId, LeDeviceInfo, LeScanResult, LeStreamRequest, LeStreamStats, LeStreamStatus};
 use crate::Controls;
 use crate::app::{HostApp, Job};
+use crate::hid::SharedHid;
 
 /// hci_con_handle_t of no connection
 pub const CON_HANDLE_INVALID: u16 = 0xFFFF;
+
+/// The background connection to keyboards and mice listens 15 ms of every
+/// 160 ms (0.625 ms units): the radio is shared with an audio stream, and a
+/// device that wakes up advertises often. LE Audio's own connects listen
+/// half the time, as before.
+const BACKGROUND_SCAN_INTERVAL: u16 = 0x0100;
+const BACKGROUND_SCAN_WINDOW: u16 = 0x0018;
+const CONNECT_SCAN_INTERVAL: u16 = 0x0060;
+const CONNECT_SCAN_WINDOW: u16 = 0x0030;
+/// The passive scan for bonded keyboards and mice that advertise with a
+/// resolvable private address ([`LeCtx::hid_watch_seen`]): as often as the
+/// background connection listens
+const HID_WATCH_SCAN_INTERVAL: u16 = BACKGROUND_SCAN_INTERVAL;
+const HID_WATCH_SCAN_WINDOW: u16 = BACKGROUND_SCAN_WINDOW;
+/// A connect to a keyboard or mouse found by its resolvable private
+/// address is given up after this long (it advertised just now)
+const HID_DIRECT_TIMEOUT_MS: u32 = 5000;
+/// SMP Pairing Failed reasons of a device that wants a passkey or more
+/// than Just Works gives: Passkey Entry Failed, Authentication
+/// Requirements, Pairing Not Supported
+const SMP_NEEDS_MORE_THAN_JUST_WORKS: [u8; 3] = [0x01, 0x03, 0x05];
 
 /// Addresses resolved / looked up are used for connecting at most this long
 /// after they were seen (RPAs change every ~15 min); at most this many kept
 const RPA_FRESH_MS: u32 = 5 * 60 * 1000;
 const RPA_CACHE_MAX: usize = 512;
+
+/// The quiet scan of [`BtHost::le_find_any_quietly`](crate::BtHost): a
+/// 20 ms window every 200 ms (0.625 ms units), the rest of the radio time
+/// left to a running stream
+pub const QUIET_SCAN_INTERVAL: u16 = 0x0140;
+pub const QUIET_SCAN_WINDOW: u16 = 0x0020;
 
 /// What a failed re-encryption with the stored LE keys leads to
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +156,10 @@ pub struct LeDevice {
     /// Address of the current / last link (maybe an RPA)
     pub peer_addr: LeAddr,
     pub name: String,
+    /// A keyboard or mouse on the HID list (issue #413): only HID over GATT
+    /// acts on it, LE Audio's profiles leave it alone, and its address is
+    /// not logged
+    pub hid: bool,
 
     // ---- link ----
     /// ACL handle, CON_HANDLE_INVALID when down
@@ -177,6 +209,7 @@ impl LeDevice {
             identity_known: false,
             peer_addr: addr,
             name: String::new(),
+            hid: false,
             acl: CON_HANDLE_INVALID,
             encrypted: false,
             pairing: false,
@@ -204,6 +237,11 @@ impl LeDevice {
 
     pub fn connected(&self) -> bool {
         self.acl != CON_HANDLE_INVALID
+    }
+
+    /// For the log: the address, but not a keyboard's or mouse's
+    pub fn shown(&self) -> String {
+        if self.hid { "a keyboard or mouse".into() } else { self.addr.to_string() }
     }
 
     /// The first service with this UUID (primary or secondary)
@@ -260,6 +298,8 @@ pub(crate) struct LeShared {
     pub initialized: AtomicBool,
     /// HCI working (v1 hci_working_)
     pub hci_working: AtomicBool,
+    /// The controller has LE (known once HCI works)
+    pub le_supported: AtomicBool,
     /// LE Read Buffer Size v2: ISO_Data_Packet_Length, Total_Num_ISO_Data_Packets
     pub iso_len: AtomicU32,
     pub iso_count: AtomicU32,
@@ -270,6 +310,12 @@ pub(crate) struct LeShared {
     /// Members of the stream's coordinated sets that were not found or
     /// went down: the stream plays on the others (CSIP prepare_group)
     pub set_members_missing: AtomicU32,
+    /// How long CSIP prepare_group looks for the members of a set not
+    /// connected (None: its own time; zero: not at all)
+    pub set_member_wait: Mutex<Option<std::time::Duration>>,
+    /// Devices of the running stream that lost their link or CIS while
+    /// the others play on
+    pub stream_dropped: Mutex<Vec<LeDeviceId>>,
     /// Counters of the running (or last) stream, published by the sender
     pub stats: Arc<Mutex<LeStreamStats>>,
     /// The modules' worker / any-thread parts (registry order)
@@ -331,6 +377,24 @@ pub struct LeCore {
     battery: bool,
     /// The GAP Device Name (HostConfig::local_name)
     local_name: String,
+    /// LE Audio is on: its profile modules, services and logs. False: the
+    /// core runs only for keyboards and mice.
+    audio: bool,
+    /// Keyboards and mice (issue #413): the list and what classic and LE
+    /// share; None: no HID
+    hid: Option<SharedHid>,
+    /// The LE keyboards and mice the controller connects to in the
+    /// background ([`LeCtx::refresh_background`]); empty: not running
+    background: Vec<LeAddr>,
+    /// LE keyboards and mice that refused pairing: left out of the
+    /// background connection until they are connected again on purpose
+    hid_blocked: Vec<[u8; 6]>,
+    /// The passive scan for bonded keyboards and mice with resolvable
+    /// private addresses runs (or would, beside a scan of LeCore's own)
+    hid_watch: bool,
+    /// The connect to a keyboard or mouse found by its resolvable private
+    /// address: the address connected to, and the timer that gives up
+    hid_direct: Option<(LeAddr, LeTimerId)>,
     /// Taken at stack init (the modules get it)
     config: Option<LeConfig>,
     initialized: bool,
@@ -499,6 +563,17 @@ impl<'a> LeCtx<'a> {
         }
     }
 
+    /// [`LeCtx::each_module`] for a device's hooks: a keyboard or mouse goes
+    /// to the HID module(s) only, every other device to the others
+    pub(crate) fn each_module_for(&mut self, dev: LeDeviceId, mut f: impl FnMut(&mut dyn LeModule, &mut LeCtx<'_>)) {
+        let hid = self.device(dev).is_some_and(|d| d.hid);
+        self.each_module(|m, ctx| {
+            if m.for_hid() == hid {
+                f(m, ctx)
+            }
+        });
+    }
+
     fn with_module<R>(&mut self, i: usize, f: impl FnOnce(&mut dyn LeModule, &mut LeCtx<'_>) -> R) -> Option<R> {
         let mut m = self.core.modules.get_mut(i)?.take()?;
         let r = f(m.as_mut(), self);
@@ -636,8 +711,13 @@ impl<'a> LeCtx<'a> {
     /// resolved with its IRK: they no longer stand for the device
     fn delete_bond(&mut self, identity: LeAddr) {
         self.stack.le_delete_bonding(identity.addr_type, &identity.addr);
-        self.core.rpa_cache.retain(|_, e| !(e.ok && e.identity.addr == identity.addr));
-        for r in self.core.scan_results.iter_mut().filter(|r| r.identity.is_some_and(|i| i.addr == identity.addr)) {
+        self.forget_identity(&identity.addr);
+    }
+
+    /// The RPAs resolved with the IRK of `identity`, whose bond is gone
+    fn forget_identity(&mut self, identity: &[u8; 6]) {
+        self.core.rpa_cache.retain(|_, e| !(e.ok && e.identity.addr == *identity));
+        for r in self.core.scan_results.iter_mut().filter(|r| r.identity.is_some_and(|i| i.addr == *identity)) {
             r.identity = None;
         }
     }
@@ -658,7 +738,15 @@ impl<'a> LeCtx<'a> {
             return None;
         }
         let id = LeDeviceId(self.core.devices.len() as u32);
-        tracing::debug!("LE Audio: new device {} for {addr} (identity {:?})", id.0, resolved.map(|r| r.to_string()));
+        if self.hid_listed(&key.addr) || self.hid_listed(&addr.addr) {
+            tracing::debug!("LE Audio: new device {} (a keyboard or mouse)", id.0);
+        } else {
+            tracing::debug!(
+                "LE Audio: new device {} for {addr} (identity {:?})",
+                id.0,
+                resolved.map(|r| r.to_string())
+            );
+        }
         let mut d = LeDevice::new(id, key);
         d.identity_known = resolved.is_some();
         d.peer_addr = addr;
@@ -672,11 +760,25 @@ impl<'a> LeCtx<'a> {
         if d.identity_known && d.addr == identity {
             return;
         }
+        // A keyboard or mouse listed with a private address: listed with
+        // its identity from now on (found again when its address changes)
+        if d.hid
+            && let Some(hid) = self.core.hid.clone()
+        {
+            let listed = [d.addr.addr, d.peer_addr.addr].into_iter().find_map(|a| hid.borrow().le_listed(&a));
+            if let Some(listed) = listed.filter(|l| l.addr != identity.addr) {
+                hid.borrow_mut().on_identity(listed, identity);
+                for a in self.core.hid_blocked.iter_mut().filter(|a| **a == listed.addr) {
+                    *a = identity.addr;
+                }
+            }
+        }
+        let Some(d) = self.device(dev) else { return };
         let other = self.core.devices.iter().find(|o| o.id != dev && o.addr.addr == identity.addr).map(|o| o.id);
         let other_connected = other.and_then(|o| self.device(o)).is_some_and(|o| o.connected());
         let Some(other) = other.filter(|_| !other_connected && !d.secured) else {
             let Some(d) = self.device_mut(dev) else { return };
-            if d.addr != identity {
+            if d.addr != identity && !d.hid {
                 tracing::info!(
                     "LE Audio: {} has the identity address {identity} (type {})",
                     d.addr,
@@ -692,11 +794,16 @@ impl<'a> LeCtx<'a> {
         // which CSIP and the worker hold, survives). Nothing but on_connected
         // has run for the link yet (security is not done).
         let from = d.clone();
-        tracing::info!("LE Audio: {} is {identity} (device {}): link moved to it", from.peer_addr, other);
+        if from.hid {
+            tracing::info!("LE Audio: a keyboard or mouse is device {other}: link moved to it");
+        } else {
+            tracing::info!("LE Audio: {} is {identity} (device {}): link moved to it", from.peer_addr, other);
+        }
         if let Some(o) = self.device_mut(other) {
             o.addr = identity;
             o.identity_known = true;
             o.peer_addr = from.peer_addr;
+            o.hid |= from.hid;
             o.acl = from.acl;
             o.encrypted = from.encrypted;
             o.pairing = from.pairing;
@@ -724,7 +831,7 @@ impl<'a> LeCtx<'a> {
             c.device = other;
             c.result.lock().unwrap_or_else(|e| e.into_inner()).id = Some(other.0);
         }
-        self.each_module(|m, ctx| m.on_connected(ctx, other));
+        self.each_module_for(other, |m, ctx| m.on_connected(ctx, other));
     }
 
     // ======================================================================
@@ -737,16 +844,36 @@ impl<'a> LeCtx<'a> {
             BTSTACK_EVENT_STATE => {
                 if p.get(2) == Some(&2) {
                     self.core.shared.hci_working.store(true, Ordering::Release);
-                    let (len, count) = self.iso_buffers();
-                    tracing::info!("LE Audio: ready (controller ISO buffers: {count} x {len} bytes)");
-                    if count == 0 || len == 0 {
-                        tracing::warn!(
-                            "LE Audio: the controller reports no ISO buffers: it does not support LE Audio streams \
-                             (CIS); streaming will be refused"
+                    let le = self.stack.le_supported();
+                    self.core.shared.le_supported.store(le, Ordering::Release);
+                    if self.core.audio {
+                        let (len, count) = self.iso_buffers();
+                        tracing::info!("LE Audio: ready (controller ISO buffers: {count} x {len} bytes)");
+                        if count == 0 || len == 0 {
+                            tracing::warn!(
+                                "LE Audio: the controller reports no ISO buffers: it does not support LE Audio streams \
+                                 (CIS); streaming will be refused"
+                            );
+                        }
+                    } else if le {
+                        tracing::info!(
+                            "LE: ready for keyboards and mice ({})",
+                            if self.stack.controller_address_resolution() == Some(true) {
+                                "the controller resolves private addresses, the PC does too"
+                            } else {
+                                "the PC resolves private addresses"
+                            }
                         );
                     }
+                    if self.core.hid.is_some() && !le {
+                        tracing::warn!("LE: the adapter has no Bluetooth LE: LE keyboards and mice cannot connect");
+                    }
+                    self.refresh_background();
                 } else {
                     self.core.shared.hci_working.store(false, Ordering::Release);
+                    self.core.background.clear();
+                    self.core.hid_watch = false;
+                    self.core.hid_direct = None;
                 }
             }
             HCI_EVENT_COMMAND_COMPLETE => {
@@ -773,7 +900,9 @@ impl<'a> LeCtx<'a> {
             }
             HCI_EVENT_META_GAP => {
                 if let Some(c) = events::le_connection_complete(p) {
-                    let addr = LeAddr { addr: c.peer_addr, addr_type: c.peer_addr_type };
+                    // 0x02 / 0x03: an identity the controller resolved
+                    // (its resolving list, keyboards and mice only)
+                    let addr = LeAddr { addr: c.peer_addr, addr_type: c.peer_addr_type & 0x01 };
                     self.on_le_connected(c.status, c.handle, addr, c.role);
                 } else if events::big_created(p).is_some() || events::big_terminated(p).is_some() {
                     self.on_big_event(p);
@@ -784,6 +913,12 @@ impl<'a> LeCtx<'a> {
                 } else if let Some(b) = events::bonding_deleted(p) {
                     tracing::debug!("LE Audio: bonding deleted (le_device_db index {})", b.index);
                     self.core.server.on_bonding_deleted(self.stack, b.index as usize);
+                    // A bond that made room for a new one (the warning is
+                    // logged there): as if the user had forgotten it
+                    for e in self.stack.take_evicted_le_bonds() {
+                        self.forget_identity(&e.addr);
+                        super::modules::csip::forget_stored(self, e.addr);
+                    }
                 }
             }
             HCI_EVENT_ENCRYPTION_CHANGE | HCI_EVENT_ENCRYPTION_CHANGE_V2 => {
@@ -844,16 +979,24 @@ impl<'a> LeCtx<'a> {
             self.core.scan_results.iter().filter(|r| r.le_audio).count()
         );
         self.core.scanning = false;
+        if self.core.hid_watch {
+            // The scan for keyboards and mice goes on (passive)
+            self.stack.le_set_scan_params(false, HID_WATCH_SCAN_INTERVAL, HID_WATCH_SCAN_WINDOW, 0);
+            self.stack.le_start_scan();
+        }
         self.core.scan_results.clone()
     }
 
     fn on_adv_report(&mut self, r: &events::AdvReport<'_>) {
-        if !self.core.scanning {
-            return;
-        }
         // 0x02 / 0x03: an identity the controller resolved (also in legacy
         // reports, which BTstack makes of extended ones with legacy PDUs)
         let addr = LeAddr { addr: r.addr, addr_type: r.addr_type & 0x01 };
+        if self.core.hid_watch {
+            self.hid_watch_seen(addr);
+        }
+        if !self.core.scanning {
+            return;
+        }
         let (idx, fresh) = match self.core.scan_results.iter().position(|e| e.addr == addr) {
             Some(i) => (i, false),
             None => {
@@ -893,9 +1036,15 @@ impl<'a> LeCtx<'a> {
     }
 
     /// le_find: a saved RPA of a bonded device is looked for by its identity
-    pub(crate) fn start_find(&mut self, want: LeAddr) {
-        self.lookup_rpa(want, false);
-        self.start_scan();
+    pub(crate) fn start_find(&mut self, wants: &[LeAddr], quiet: bool) {
+        for &want in wants {
+            self.lookup_rpa(want, false);
+        }
+        if quiet {
+            self.start_scan_with(QUIET_SCAN_INTERVAL, QUIET_SCAN_WINDOW);
+        } else {
+            self.start_scan();
+        }
     }
 
     /// le_find: an advertiser matching `want` (the address itself, one
@@ -939,7 +1088,9 @@ impl<'a> LeCtx<'a> {
         done: LeDone,
     ) {
         tracing::debug!("LE Audio: connect request {addr} (type {}) name “{name}”", addr.addr_type);
-        if self.core.connect.is_some() {
+        // BTstack has one LE connect at a time: also not while a keyboard or
+        // mouse found by its private address is being connected (seconds)
+        if self.core.connect.is_some() || self.core.hid_direct.is_some() {
             tracing::debug!("LE Audio: connect refused, another attempt is in progress");
             result.lock().unwrap_or_else(|e| e.into_inner()).error = "another LE connection is being set up".into();
             done(false);
@@ -988,6 +1139,9 @@ impl<'a> LeCtx<'a> {
             // Set up in progress: wait for it
             return;
         }
+        // One LE connection attempt at a time: the background connection to
+        // keyboards and mice waits until this one is done
+        self.stop_background();
         let status = self.stack.le_connect(&target.addr, target.addr_type);
         tracing::debug!("LE Audio: gap_connect {target} -> 0x{status:02X}");
         if status != ERROR_CODE_SUCCESS
@@ -996,6 +1150,7 @@ impl<'a> LeCtx<'a> {
             result.lock().unwrap_or_else(|e| e.into_inner()).error =
                 format!("LE connect could not start (0x{status:02x})");
             (c.done)(false);
+            self.refresh_background();
         }
     }
 
@@ -1009,6 +1164,7 @@ impl<'a> LeCtx<'a> {
         );
         let Some(id) = id.map(LeDeviceId) else {
             self.stack.le_connect_cancel();
+            self.refresh_background();
             return;
         };
         if self.core.connect.as_ref().is_some_and(|c| c.device == id) {
@@ -1022,15 +1178,52 @@ impl<'a> LeCtx<'a> {
                 self.stack.le_connect_cancel();
             }
         }
+        self.refresh_background();
     }
 
     fn on_le_connected(&mut self, status: u8, handle: u16, addr: LeAddr, role: u8) {
         let attempt = self.core.connect.as_ref().map(|c| (c.device, c.target));
+        let hid = self.hid_listed_link(&addr.addr);
         tracing::debug!(
-            "LE Audio: LE connection complete 0x{status:02X}: handle 0x{handle:04X}, {addr} (type {}), role {role}, attempt {:?}",
+            "LE Audio: LE connection complete 0x{status:02X}: handle 0x{handle:04X}, {} (type {}), role {role}, attempt {:?}",
+            if hid || self.core.hid_direct.is_some() { "a keyboard or mouse".to_string() } else { addr.to_string() },
             addr.addr_type,
-            attempt.map(|(d, t)| (d.0, t.to_string()))
+            attempt.map(|(d, t)| (d.0, if hid { String::new() } else { t.to_string() }))
         );
+        // Any outcome ends BTstack's background connection (it is started
+        // again below, for the devices still away)
+        self.core.background.clear();
+        // The connect to a keyboard or mouse found by its private address:
+        // its link (the address connected to, or the identity the
+        // controller resolved it to), or its end (LeCore's own connect never
+        // runs beside it)
+        let direct = self.core.hid_direct.filter(|(t, _)| {
+            status != ERROR_CODE_SUCCESS
+                || t.addr == addr.addr
+                || self.resolved_identity(&t.addr).is_some_and(|i| i.addr == addr.addr)
+        });
+        if role == 0
+            && attempt.is_none()
+            && let Some((_, timer)) = direct
+        {
+            self.core.hid_direct = None;
+            self.cancel_timer(timer);
+            if status == ERROR_CODE_SUCCESS {
+                self.adopt_background(handle, addr, true);
+            } else {
+                tracing::info!("LE: a keyboard or mouse found by its private address did not connect (0x{status:02x})");
+            }
+            self.refresh_background();
+            return;
+        }
+        // The controller connected a keyboard or mouse of its accept list
+        let background =
+            status == ERROR_CODE_SUCCESS && role == 0 && hid && attempt.is_none_or(|(_, t)| t.addr != addr.addr);
+        if background {
+            self.adopt_background(handle, addr, false);
+            self.refresh_background();
+            return;
+        }
         let stray = match attempt {
             None => true,
             Some((dev, target)) => {
@@ -1048,6 +1241,7 @@ impl<'a> LeCtx<'a> {
                 );
                 self.stack.disconnect(handle);
             }
+            self.refresh_background();
             return;
         }
         let Some((dev, _)) = attempt else { return };
@@ -1060,9 +1254,17 @@ impl<'a> LeCtx<'a> {
             self.fail_connect(dev, format!("{what} (0x{status:02x})"));
             return;
         }
+        self.link_up(dev, handle, addr);
+    }
+
+    /// The link of a device is up: secure it (pairing, or encryption with
+    /// the stored keys), then GATT
+    fn link_up(&mut self, dev: LeDeviceId, handle: u16, addr: LeAddr) {
+        let hid = self.hid_listed(&addr.addr);
         let Some(d) = self.device_mut(dev) else { return };
         d.acl = handle;
         d.peer_addr = addr;
+        d.hid |= hid;
         d.encrypted = false;
         d.pairing = false;
         d.secured = false;
@@ -1070,14 +1272,259 @@ impl<'a> LeCtx<'a> {
         d.services_kept = false;
         d.ready = false;
         d.services.clear();
-        tracing::info!("LE Audio: LE link to {} up (handle 0x{handle:04x}), securing it", d.addr);
+        tracing::info!("LE Audio: LE link to {} up (handle 0x{handle:04x}), securing it", d.shown());
         self.core.gatt.attach(handle);
         if !self.stack.gatt_listen(handle) {
             tracing::warn!("LE Audio: cannot listen for notifications on 0x{handle:04x} (all slots in use)");
         }
-        self.each_module(|m, ctx| m.on_connected(ctx, dev));
+        self.each_module_for(dev, |m, ctx| m.on_connected(ctx, dev));
         tracing::debug!("LE Audio: requesting security on 0x{handle:04X}");
+        self.hid_pairing_io(dev);
         self.stack.sm_request_pairing(handle);
+    }
+
+    /// Before a link is asked for security: SM offers a display only for
+    /// the keyboard the user is adding, "no input, no output" for every
+    /// other device (headphones pair exactly as before)
+    fn hid_pairing_io(&self, dev: LeDeviceId) {
+        let Some(hid) = self.core.hid.as_ref() else { return };
+        let addrs = self.device(dev).map(|d| [d.addr.addr, d.peer_addr.addr]).unwrap_or_default();
+        hid.borrow().pairing_io_for(self.stack, &addrs);
+    }
+
+    // ======================================================================
+    // Keyboards and mice (issue #413): the background connection
+    // ======================================================================
+
+    /// An LE keyboard or mouse on the HID list (its address as connected or
+    /// as listed)
+    pub(crate) fn hid_listed(&self, addr: &[u8; 6]) -> bool {
+        self.core.hid.as_ref().is_some_and(|h| h.borrow().le_listed(addr).is_some())
+    }
+
+    /// [`LeCtx::hid_listed`], or a resolvable private address SM resolved
+    /// to the identity of one on the list
+    pub(crate) fn hid_listed_link(&self, addr: &[u8; 6]) -> bool {
+        self.hid_listed(addr) || self.resolved_identity(addr).is_some_and(|i| self.hid_listed(&i.addr))
+    }
+
+    /// A link the controller made from its accept list (or the connect to
+    /// one `found` by its private address): a device of it
+    fn adopt_background(&mut self, handle: u16, addr: LeAddr, found: bool) {
+        let Some(dev) = self.device_for_addr(addr, true) else {
+            self.stack.disconnect(handle);
+            return;
+        };
+        if let Some(d) = self.device_mut(dev) {
+            d.hid = true;
+            d.pair_attempts = 0;
+            d.last_error = 0;
+        }
+        let n = self.core.devices.iter().filter(|d| d.hid && d.connected()).count() + 1;
+        if found {
+            tracing::info!("LE: a keyboard or mouse found by its private address connected ({n} connected)");
+        } else {
+            tracing::info!("LE: a keyboard or mouse connected by itself ({n} connected)");
+        }
+        self.link_up(dev, handle, addr);
+    }
+
+    /// Whether a device on the list has an LE bond with an IRK: one that may
+    /// advertise with resolvable private addresses, which only the IRK
+    /// tells apart
+    fn hid_has_irk(&self, addr: &[u8; 6]) -> bool {
+        (0..self.stack.le_device_db_max_count())
+            .filter_map(|i| self.stack.le_device_db_info(i))
+            .any(|e| e.addr == *addr && e.irk != [0u8; 16])
+    }
+
+    /// The passive scan for bonded keyboards and mice with private
+    /// addresses: on while one of them is away (the controller's accept list
+    /// matches an RPA only when the controller resolves it), off otherwise.
+    /// Beside a scan of LeCore's own, that scan's reports serve
+    /// ([`LeCtx::stop_scan`] starts this one again).
+    fn set_hid_watch(&mut self, on: bool) {
+        if on == self.core.hid_watch {
+            return;
+        }
+        self.core.hid_watch = on;
+        tracing::debug!("LE: scan for keyboards and mice with private addresses {}", if on { "on" } else { "off" });
+        if self.core.scanning {
+            return;
+        }
+        if on {
+            self.stack.le_set_scan_params(false, HID_WATCH_SCAN_INTERVAL, HID_WATCH_SCAN_WINDOW, 0);
+            self.stack.le_start_scan();
+        } else {
+            self.stack.le_stop_scan();
+        }
+    }
+
+    /// An advertiser the HID scan saw: an RPA is looked up with the IRKs of
+    /// the bonds (once, [`LeCtx::lookup_rpa`]); one that resolves to a
+    /// keyboard or mouse that is away is connected to
+    fn hid_watch_seen(&mut self, addr: LeAddr) {
+        if !addr.is_rpa() {
+            // An identity (or one the controller resolved): the accept list
+            // has it
+            return;
+        }
+        self.lookup_rpa(addr, true);
+        if let Some(identity) = self.resolved_identity(&addr.addr) {
+            self.hid_found(addr, identity);
+        }
+    }
+
+    /// `rpa` resolved to `identity`: connected to when that is a keyboard or
+    /// mouse on the list that is away
+    fn hid_found(&mut self, rpa: LeAddr, identity: LeAddr) {
+        if !self.core.hid_watch || self.core.hid_direct.is_some() || self.core.connect.is_some() {
+            return;
+        }
+        if !self.hid_away().iter().any(|a| a.addr == identity.addr) {
+            return;
+        }
+        // One LE connect at a time: the accept list pauses
+        self.stop_background();
+        let status = self.stack.le_connect(&rpa.addr, rpa.addr_type);
+        if status != ERROR_CODE_SUCCESS {
+            tracing::warn!("LE: a keyboard or mouse found by its private address cannot be connected (0x{status:02x})");
+            self.refresh_background();
+            return;
+        }
+        tracing::info!("LE: a keyboard or mouse advertises with a private address, connecting");
+        let timer = self.run_after(
+            HID_DIRECT_TIMEOUT_MS,
+            Box::new(|ctx| {
+                if ctx.core.hid_direct.take().is_some() {
+                    tracing::info!("LE: a keyboard or mouse found by its private address did not connect in time");
+                    ctx.stack.le_connect_cancel();
+                    ctx.refresh_background();
+                }
+            }),
+        );
+        self.core.hid_direct = Some((rpa, timer));
+        self.refresh_background();
+    }
+
+    /// The LE keyboards and mice on the list that are not connected, and
+    /// not left out for refusing pairing
+    fn hid_away(&self) -> Vec<LeAddr> {
+        let Some(hid) = self.core.hid.as_ref() else { return Vec::new() };
+        let listed = hid.borrow().le.clone();
+        listed
+            .into_iter()
+            .filter(|a| !self.core.hid_blocked.contains(&a.addr))
+            .filter(|a| {
+                !self
+                    .core
+                    .devices
+                    .iter()
+                    .any(|d| d.connected() && (d.addr.addr == a.addr || d.peer_addr.addr == a.addr))
+            })
+            .collect()
+    }
+
+    /// The controller connects by itself to every LE keyboard or mouse on
+    /// the list that is away, whenever it advertises: started, changed or
+    /// stopped as the list and the links change. Not while LeCore's own
+    /// connect runs (one LE connection attempt at a time). A device that
+    /// advertises with a resolvable private address matches the accept
+    /// list (its identity) only when the controller resolves addresses (its
+    /// resolving list, keyboards and mice without LE Audio); for every
+    /// other case the HID scan runs beside it ([`LeCtx::set_hid_watch`]).
+    pub(crate) fn refresh_background(&mut self) {
+        if self.core.hid.is_none() {
+            return;
+        }
+        let ready = self.core.initialized
+            && self.core.shared.hci_working.load(Ordering::Acquire)
+            && self.core.shared.le_supported.load(Ordering::Acquire);
+        let wanted = if ready && self.core.connect.is_none() && self.core.hid_direct.is_none() {
+            self.hid_away()
+        } else {
+            Vec::new()
+        };
+        let watch = wanted.iter().any(|a| self.hid_has_irk(&a.addr));
+        self.set_hid_watch(watch);
+        if wanted == self.core.background {
+            return;
+        }
+        if !ready {
+            self.core.background.clear();
+            return;
+        }
+        self.stack.le_auto_connect_stop_all();
+        if !wanted.is_empty() {
+            self.stack.le_connection_scan(BACKGROUND_SCAN_INTERVAL, BACKGROUND_SCAN_WINDOW);
+            for a in &wanted {
+                let status = self.stack.le_auto_connect_start(&a.addr, a.addr_type);
+                if status != ERROR_CODE_SUCCESS {
+                    tracing::warn!("LE: a keyboard or mouse cannot be waited for (0x{status:02x})");
+                }
+            }
+        }
+        tracing::debug!("LE: waiting in the background for {} keyboard(s) or mice", wanted.len());
+        self.core.background = wanted;
+    }
+
+    /// Before LeCore's own connect: the background connection pauses (it
+    /// restarts when the connect is done)
+    fn stop_background(&mut self) {
+        if self.core.hid.is_none() {
+            return;
+        }
+        if !self.core.background.is_empty() {
+            self.stack.le_auto_connect_stop_all();
+            self.core.background.clear();
+        }
+        self.stack.le_connection_scan(CONNECT_SCAN_INTERVAL, CONNECT_SCAN_WINDOW);
+    }
+
+    /// The LE keyboards and mice on the list from now on: the links of the
+    /// others are closed (their keys released at once)
+    pub(crate) fn hid_set_le(&mut self, devices: Vec<LeAddr>) {
+        let Some(hid) = self.core.hid.clone() else { return };
+        hid.borrow_mut().le = devices;
+        self.core.hid_blocked.retain(|a| hid.borrow().le_listed(a).is_some());
+        let gone: Vec<(LeDeviceId, u16)> = self
+            .core
+            .devices
+            .iter()
+            .filter(|d| d.hid && d.connected())
+            .filter(|d| {
+                hid.borrow().le_listed(&d.addr.addr).is_none() && hid.borrow().le_listed(&d.peer_addr.addr).is_none()
+            })
+            .map(|d| (d.id, d.acl))
+            .collect();
+        tracing::debug!("hid: {} LE device(s) allowed, closing {} link(s)", hid.borrow().le.len(), gone.len());
+        for (id, acl) in gone {
+            if let Some(m) = self.module_mut::<super::modules::hogp::HogpModule>() {
+                m.release(id);
+            }
+            self.stack.disconnect(acl);
+        }
+        for d in self.core.devices.iter_mut().filter(|d| !d.connected()) {
+            d.hid = hid.borrow().le_listed(&d.addr.addr).is_some();
+        }
+        self.refresh_background();
+    }
+
+    /// Connect an LE keyboard or mouse on the list: in the background (also
+    /// one that refused pairing before)
+    pub(crate) fn hid_le_connect(&mut self, addr: LeAddr) -> Result<(), u8> {
+        let Some(hid) = self.core.hid.clone() else { return Err(ERROR_CODE_COMMAND_DISALLOWED) };
+        if hid.borrow().le_listed(&addr.addr).is_none() {
+            return Err(ERROR_CODE_COMMAND_DISALLOWED);
+        }
+        if !self.core.shared.le_supported.load(Ordering::Acquire) {
+            return Err(0x11); // Unsupported Feature or Parameter Value
+        }
+        self.core.hid_blocked.retain(|a| *a != addr.addr);
+        // Started again even when unchanged (BTstack may have ended it)
+        self.core.background.clear();
+        self.refresh_background();
+        Ok(())
     }
 
     fn fail_connect(&mut self, dev: LeDeviceId, why: String) {
@@ -1085,7 +1532,7 @@ impl<'a> LeCtx<'a> {
             self.forget_kept_services(dev, "the setup with them failed");
         }
         if let Some(d) = self.device(dev) {
-            tracing::warn!("LE Audio: {}: {why}", d.addr);
+            tracing::warn!("LE Audio: {}: {why}", d.shown());
             if d.connected() {
                 self.stack.disconnect(d.acl);
             }
@@ -1101,6 +1548,7 @@ impl<'a> LeCtx<'a> {
             return;
         }
         let Some(c) = self.core.connect.take() else { return };
+        self.refresh_background();
         tracing::debug!("LE Audio: connect of device {} finished: ok {ok} {:?}", dev.0, c.error);
         {
             let mut r = c.result.lock().unwrap_or_else(|e| e.into_inner());
@@ -1118,7 +1566,7 @@ impl<'a> LeCtx<'a> {
             d.encrypted = status == ERROR_CODE_SUCCESS && enabled;
             tracing::info!(
                 "LE Audio: {} encryption {} (0x{status:02x})",
-                d.addr,
+                d.shown(),
                 if d.encrypted { "on" } else { "off" }
             );
         }
@@ -1141,10 +1589,13 @@ impl<'a> LeCtx<'a> {
         d.secured = true;
         let con = d.acl;
         tracing::debug!("LE Audio: device {} secured, GATT discovery on 0x{con:04X}", id.0);
-        self.each_module(|m, ctx| m.on_encrypted(ctx, id));
+        let hid = d.hid;
+        self.each_module_for(id, |m, ctx| m.on_encrypted(ctx, id));
         // Kept services, when the device's Database Hash says they are
-        // still its services (crate::le::gatt_cache)
-        let cached = self.core.gatt_cache_file.clone().zip(d_identity(self, id)).and_then(|(file, (addr, kind))| {
+        // still its services (crate::le::gatt_cache); not of a keyboard or
+        // mouse, whose address would be in that file
+        let cache_file = self.core.gatt_cache_file.clone().filter(|_| !hid);
+        let cached = cache_file.clone().zip(d_identity(self, id)).and_then(|(file, (addr, kind))| {
             let db = super::gatt_cache::load(&file, &addr)?;
             (db.address_type == kind
                 && (db.hash.is_some() || super::gatt_cache::service_changed(&db.services).is_some()))
@@ -1191,8 +1642,7 @@ impl<'a> LeCtx<'a> {
                 );
             }
             _ => {
-                let file = self.core.gatt_cache_file.clone();
-                self.discover(id, con, file);
+                self.discover(id, con, cache_file);
             }
         }
     }
@@ -1307,10 +1757,20 @@ impl<'a> LeCtx<'a> {
             }
         }
         self.watch_service_changed(id, con, &services);
+        let audio = self.core.audio;
         let Some(d) = self.device_on_mut(id, con) else { return };
         d.services = services;
         let chars: usize = d.services.iter().map(|s| s.chars.len()).sum();
-        tracing::info!("LE Audio: {}: {} services, {chars} characteristics", d.addr, d.services.len());
+        tracing::info!("LE Audio: {}: {} services, {chars} characteristics", d.shown(), d.services.len());
+        if d.hid || !audio {
+            // No PACS / ASCS: a keyboard or mouse goes to HID over GATT
+            d.gatt_ready = true;
+            self.each_module_for(id, |m, ctx| m.on_gatt_ready(ctx, id));
+            let Some(d) = self.device_on_mut(id, con) else { return };
+            d.ready = true;
+            self.finish_connect(id, true);
+            return;
+        }
         bap::read_device(
             self,
             id,
@@ -1326,7 +1786,7 @@ impl<'a> LeCtx<'a> {
                     d.sink_locations
                 );
                 d.gatt_ready = true;
-                ctx.each_module(|m, ctx| m.on_gatt_ready(ctx, id));
+                ctx.each_module_for(id, |m, ctx| m.on_gatt_ready(ctx, id));
                 let Some(d) = ctx.device_on_mut(id, con) else { return };
                 d.ready = true;
                 ctx.finish_connect(id, true);
@@ -1341,7 +1801,7 @@ impl<'a> LeCtx<'a> {
             self.core.sink_pacs_by_char.retain(|(c, _), _| *c != handle);
             self.core.source_pacs_by_char.retain(|(c, _), _| *c != handle);
             if let Some(d) = self.device_mut(id) {
-                tracing::info!("LE Audio: {} disconnected (0x{reason:02x})", d.addr);
+                tracing::info!("LE Audio: {} disconnected (0x{reason:02x})", d.shown());
                 d.acl = CON_HANDLE_INVALID;
                 d.encrypted = false;
                 d.pairing = false;
@@ -1353,7 +1813,7 @@ impl<'a> LeCtx<'a> {
                     a.state = le_audio::defs::AseState::Unknown;
                 }
             }
-            self.each_module(|m, ctx| m.on_disconnected(ctx, id, reason));
+            self.each_module_for(id, |m, ctx| m.on_disconnected(ctx, id, reason));
             if let Some(c) = self.core.connect.as_mut()
                 && c.device == id
             {
@@ -1362,6 +1822,8 @@ impl<'a> LeCtx<'a> {
                 }
                 self.finish_connect(id, false);
             }
+            // A keyboard or mouse that went away is waited for again
+            self.refresh_background();
         }
         self.with_unicast(|u, env| u.on_link_lost(env, handle));
     }
@@ -1405,9 +1867,10 @@ impl<'a> LeCtx<'a> {
                     // resolve now
                     self.core.rpa_cache.retain(|_, e| !(e.done && !e.ok));
                 }
+                let hid = self.hid_listed(&identity.addr);
                 if a.is_rpa() {
                     let e = self.core.rpa_cache.entry(a.addr).or_default();
-                    if !e.ok {
+                    if !e.ok && !hid {
                         tracing::info!("LE Audio: {a} resolves to {identity}");
                     }
                     e.done = true;
@@ -1421,6 +1884,9 @@ impl<'a> LeCtx<'a> {
                     && let Some(id) = self.device_by_handle(handle).map(|d| d.id)
                 {
                     self.on_identity(id, identity);
+                } else if handle == CON_HANDLE_INVALID && hid && a.is_rpa() {
+                    // A keyboard or mouse seen by the HID scan
+                    self.hid_found(a, identity);
                 }
                 return;
             }
@@ -1436,7 +1902,8 @@ impl<'a> LeCtx<'a> {
             _ => {}
         }
         let Some(id) = self.device_by_handle(handle).map(|d| d.id) else { return };
-        let addr = self.device(id).map(|d| d.addr).unwrap_or_default();
+        let addr = self.device(id).map(|d| d.shown()).unwrap_or_default();
+        let hid = self.device(id).is_some_and(|d| d.hid);
         match ty {
             SM_EVENT_JUST_WORKS_REQUEST => {
                 tracing::info!("LE Audio: {addr}: pairing (Just Works)");
@@ -1451,6 +1918,23 @@ impl<'a> LeCtx<'a> {
                 tracing::warn!("LE Audio: {addr} asks for a passkey, which BlueCaster cannot enter");
                 self.stack.sm_bonding_decline(handle);
             }
+            SM_EVENT_PASSKEY_DISPLAY_NUMBER => {
+                // Offered only to the keyboard being added (hid_pairing_io):
+                // the user types the number on it. Never logged.
+                let addrs = self.device(id).map(|d| [d.addr.addr, d.peer_addr.addr]).unwrap_or_default();
+                let passkey =
+                    p.get(12..16).map(|b| crate::hid::Passkey::new(u32::from_le_bytes([b[0], b[1], b[2], b[3]])));
+                let shown = hid
+                    && passkey.is_some_and(|k| {
+                        self.core.hid.as_ref().is_some_and(|h| h.borrow_mut().passkey_shown(&addrs, k))
+                    });
+                if !shown {
+                    tracing::warn!(
+                        "LE: a device wants a number shown, which BlueCaster only does for a keyboard being added"
+                    );
+                    self.stack.sm_bonding_decline(handle);
+                }
+            }
             SM_EVENT_PAIRING_STARTED => {
                 if let Some(d) = self.device_mut(id) {
                     d.pairing = true;
@@ -1458,6 +1942,17 @@ impl<'a> LeCtx<'a> {
             }
             SM_EVENT_PAIRING_COMPLETE => {
                 let Some(c) = events::sm_pairing_complete(p) else { return };
+                // The keyboard being added: its pairing window ends with
+                // this pairing (unless it is tried again below)
+                let addrs = self.device(id).map(|d| [d.addr.addr, d.peer_addr.addr]).unwrap_or_default();
+                let adding = hid && self.core.hid.as_ref().is_some_and(|h| h.borrow().pairing_with(&addrs));
+                let end_adding = |me: &mut Self| {
+                    if adding && let Some(h) = me.core.hid.clone() {
+                        for a in &addrs {
+                            h.borrow_mut().pairing_end(me.stack, Some(a), None);
+                        }
+                    }
+                };
                 let Some(d) = self.device_mut(id) else { return };
                 tracing::debug!(
                     "LE Audio: {addr}: pairing complete status 0x{:02X} reason 0x{:02X} (attempts {})",
@@ -1468,17 +1963,43 @@ impl<'a> LeCtx<'a> {
                 d.pairing = false;
                 if c.status == ERROR_CODE_SUCCESS {
                     tracing::info!("LE Audio: {addr} paired and bonded");
+                    end_adding(self);
                     self.maybe_secured(id);
                 } else {
                     d.pair_attempts += 1;
-                    if d.pair_attempts < 2 {
+                    if hid && SMP_NEEDS_MORE_THAN_JUST_WORKS.contains(&c.reason) {
+                        // A wrong number typed, a device that wants a
+                        // passkey while it is not being added (it lost its
+                        // bond), or more security than BlueCaster offers:
+                        // asking again would not change that. Not waited
+                        // for in the background until added or connected
+                        // anew.
+                        if adding {
+                            tracing::warn!("LE: the new keyboard or mouse refused pairing (reason 0x{:02x})", c.reason);
+                        } else {
+                            tracing::warn!(
+                                "LE: a keyboard or mouse refused pairing without a number (reason 0x{:02x}): add it again",
+                                c.reason
+                            );
+                        }
+                        let a = d.addr.addr;
+                        self.core.hid_blocked.push(a);
+                        end_adding(self);
+                        self.fail_connect(id, format!("pairing refused (reason 0x{:02x})", c.reason));
+                    } else if d.pair_attempts < 2 {
                         tracing::warn!(
                             "LE Audio: {addr}: pairing failed (0x{:02x}, reason 0x{:02x}), trying again",
                             c.status,
                             c.reason
                         );
+                        self.hid_pairing_io(id);
                         self.stack.sm_request_pairing(handle);
                     } else {
+                        if hid {
+                            let a = d.addr.addr;
+                            self.core.hid_blocked.push(a);
+                        }
+                        end_adding(self);
                         self.fail_connect(id, format!("pairing failed (0x{:02x})", c.status));
                     }
                 }
@@ -1529,13 +2050,26 @@ impl<'a> LeCtx<'a> {
     // Streaming
     // ======================================================================
 
-    /// The plan for these devices (connected and ready)
+    /// The plan for these devices (connected and ready). One that went
+    /// away since the group was put together (an earbud put back in its
+    /// case) is left out while another one is ready: the stream plays on
+    /// the others, as for a set member not found.
     pub(crate) fn plan_for(&self, ids: &[LeDeviceId], request: &LeStreamRequest) -> Result<StreamPlan, String> {
+        let ready: Vec<LeDeviceId> =
+            ids.iter().copied().filter(|&id| self.device(id).is_some_and(|d| d.ready)).collect();
+        if ready.is_empty() {
+            return Err("a device of the group is not connected".into());
+        }
+        if ready.len() < ids.len() {
+            let gone = ids.len() - ready.len();
+            tracing::warn!(
+                "LE Audio: {gone} device(s) of the group went away before the stream: streaming without them"
+            );
+            self.core.shared.set_members_missing.fetch_add(gone as u32, Ordering::AcqRel);
+        }
         let mut devs = Vec::new();
-        for &id in ids {
-            let Some(d) = self.device(id).filter(|d| d.ready) else {
-                return Err("a device of the group is not connected".into());
-            };
+        for &id in &ready {
+            let Some(d) = self.device(id) else { continue };
             devs.push(PlanDevice {
                 id: d.id.0,
                 name: if d.name.is_empty() { d.addr.to_string() } else { d.name.clone() },
@@ -1632,6 +2166,7 @@ impl<'a> LeCtx<'a> {
             .core
             .devices
             .iter()
+            .filter(|d| !d.hid)
             .map(|d| LeDeviceInfo {
                 id: d.id,
                 addr: d.addr,
@@ -1954,6 +2489,19 @@ impl UnicastEnv for LeCtx<'_> {
         self.core.rx = None;
     }
 
+    fn member_lost(&mut self, device: u32, why: &str) {
+        let addr = self.core.devices.get(device as usize).map(|d| d.addr.to_string()).unwrap_or_default();
+        tracing::warn!("LE Audio: {addr} left the stream ({why}), the others play on");
+        self.device_left(device);
+    }
+
+    fn device_left(&mut self, device: u32) {
+        let mut dropped = self.core.shared.stream_dropped.lock().unwrap_or_else(|e| e.into_inner());
+        if !dropped.contains(&LeDeviceId(device)) {
+            dropped.push(LeDeviceId(device));
+        }
+    }
+
     fn stream_state(&mut self, plan: &StreamPlan, streaming: bool) {
         tracing::debug!("LE Audio: stream state: streaming {streaming} ({})", plan.describe());
         let status = match self.core.status.as_mut() {
@@ -2022,6 +2570,7 @@ impl UnicastEnv for LeCtx<'_> {
 // ============================================================================
 
 impl LeCore {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         config: LeConfig,
         shared: Arc<LeShared>,
@@ -2030,11 +2579,19 @@ impl LeCore {
         events: std::sync::mpsc::Sender<crate::HostEvent>,
         battery: bool,
         local_name: String,
+        audio: bool,
+        hid: Option<SharedHid>,
     ) -> LeCore {
         LeCore {
             events,
             battery,
             local_name,
+            audio,
+            hid,
+            background: Vec::new(),
+            hid_blocked: Vec::new(),
+            hid_watch: false,
+            hid_direct: None,
             iso: IsoSender::new(shared.stats.clone()),
             shared,
             controls,
@@ -2098,7 +2655,11 @@ impl LeCore {
         if self.initialized {
             return;
         }
-        tracing::info!("LE Audio: initializing (SM, GATT client / server, ISO)");
+        if self.audio {
+            tracing::info!("LE Audio: initializing (SM, GATT client / server, ISO)");
+        } else {
+            tracing::info!("LE: initializing for keyboards and mice (SM, GATT client)");
+        }
         let path: PathBuf = self
             .config
             .as_ref()
@@ -2120,6 +2681,8 @@ impl LeCore {
                 poster: self.poster.clone(),
                 events: self.events.clone(),
                 battery: self.battery,
+                audio: self.audio,
+                hid: self.hid.clone(),
             };
             let mut hooks = Vec::new();
             let mut names = Vec::new();
@@ -2128,7 +2691,7 @@ impl LeCore {
                 self.modules.push(Some(e.module));
                 hooks.extend(e.hooks);
             }
-            tracing::debug!("LE Audio: modules {}", names.join(", "));
+            tracing::debug!("{}: modules {}", if self.audio { "LE Audio" } else { "LE" }, names.join(", "));
             *self.shared.hooks.lock().unwrap_or_else(|e| e.into_inner()) = hooks;
         }
 
@@ -2137,6 +2700,10 @@ impl LeCore {
         self.scanning = false;
         self.scan_started_ms = None;
         self.connect = None;
+        self.background.clear();
+        self.hid_blocked.clear();
+        self.hid_watch = false;
+        self.hid_direct = None;
         self.rpa_cache.clear();
         self.identity_seen.clear();
         self.gatt = GattClient::new();
@@ -2172,6 +2739,10 @@ impl LeCore {
         }
         self.shared.initialized.store(false, Ordering::Release);
         self.shared.hci_working.store(false, Ordering::Release);
+        self.shared.le_supported.store(false, Ordering::Release);
+        self.background.clear();
+        self.hid_watch = false;
+        self.hid_direct = None;
         tracing::debug!(
             "LE Audio: deinit ({} device(s), connect pending {}, {} timer(s))",
             self.devices.len(),
@@ -2205,7 +2776,7 @@ impl LeCore {
         self.identity_seen.clear();
         self.queue = None;
         self.status = None;
-        tracing::info!("LE Audio: stopped");
+        tracing::info!("{}: stopped", if self.audio { "LE Audio" } else { "LE" });
     }
 
     /// Changes when a scan lists another LE Audio advertiser

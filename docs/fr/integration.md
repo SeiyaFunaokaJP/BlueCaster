@@ -33,6 +33,20 @@ Le cœur (`bluecaster-core.exe`) s'exécute dès que BlueCaster fonctionne, avec
 - Pour savoir si le cœur s'exécute, vérifiez la présence du canal, et non le mutex du cœur : si le canal n'existe pas, le cœur ne s'exécute pas.
 - Les versions de développement lancées avec `BLUECASTER_INSTANCE=<name>` écoutent plutôt sur `\\.\pipe\bluecaster-<SID>-<name>`, afin de pouvoir s'exécuter à côté de la version installée.
 
+### Le canal du service {#the-service-pipe}
+
+Le service BlueCaster est un prototype du mode développeur. Il permet d'utiliser des claviers et souris Bluetooth sur l'écran de connexion. Sur un PC où le service est installé, le cœur s'exécute en tant que service Windows. Le canal propre à chaque utilisateur n'existe alors pas. À la place, le cœur sert un seul canal commun à tous les utilisateurs :
+
+```
+\\.\pipe\bluecaster-service
+```
+
+- Essayez d'abord `bluecaster-<user SID>`, puis `bluecaster-service`. Le service ne sert aucun canal sous l'ancien nom. Les trames, la poignée de main et les requêtes sont identiques sur les deux canaux.
+- Ouvrez le canal uniquement avec `GENERIC_READ | FILE_WRITE_DATA`. Pour changer le mode du canal, ajoutez `FILE_WRITE_ATTRIBUTES`. Le canal refuse les clients qui demandent `GENERIC_WRITE`, car ce droit inclut la création d'une autre instance du canal (`FILE_CREATE_PIPE_INSTANCE`). En Python, `open(..., "r+b")` demande `GENERIC_WRITE`. Utilisez plutôt `CreateFileW`, par exemple via `ctypes`.
+- Pour vérifier que le serveur est bien BlueCaster, comparez l'ID de processus du serveur du canal (`GetNamedPipeServerProcessId`) avec l'ID de processus du service `BlueCaster` (`QueryServiceStatusEx`). Tant que le service est arrêté, un autre programme peut créer un canal portant ce nom.
+- Les requêtes qui s'appliquent à tout le PC renvoient l'erreur `ipc.needs_admin`. C'est le cas du mode développeur, des pilotes d'adaptateur ou de l'ajout de claviers et souris. Un outil ne peut pas accorder l'autorisation d'administrateur. Demandez plutôt à l'utilisateur d'effectuer la modification dans la fenêtre de BlueCaster. La fenêtre demande alors l'autorisation à Windows.
+- Quand le cœur s'exécute en tant que service, certaines requêtes renvoient `ipc.not_in_service`. C'est le cas de `app.quit`, car le service doit continuer à s'exécuter pour les claviers et souris. Utilisez plutôt `app.close`. Cette méthode arrête la diffusion et ferme la fenêtre de BlueCaster ainsi que l'icône de la zone de notification.
+
 ### Trames {#frames}
 
 Chaque message, dans les deux sens, est une trame : la longueur du JSON en **u32 little-endian**, puis le JSON (UTF-8). Les trames de plus de 4 Mio sont refusées.
@@ -138,7 +152,11 @@ Méthodes destinées aux outils :
 | `stream.start` | `profile` | `null` ; arrête d'abord un flux en cours |
 | `stream.stop` | -- | `null` |
 | `stream.set_volume` | `volume` (volume absolu AVRCP 0-127) | `null` |
+| `stream.volume_step` | `delta` (de -127 à 127) | le nouveau volume ; voir [Commandes rapides](#quick-controls) |
 | `profile.set_active` | `name` | `null` |
+| `profile.set_headset_mic` | `name` (facultatif), `mode` (`off`, `auto`, `on`) | `null` ; voir [Commandes rapides](#quick-controls) |
+| `profile.set_mic_muted` | `name` (facultatif), `muted` (bool) | `null` ; voir [Commandes rapides](#quick-controls) |
+| `profile.set_media_eq` | `name` (facultatif), `enabled` (bool) | `null` ; voir [Commandes rapides](#quick-controls) |
 | `device.scan` | `seconds` (3-600) | `Device[]`, aussi sous forme d'événement `devices` |
 | `device.scan_stop` | -- | `null` ; le `device.scan` en cours se termine alors |
 | `audio.devices` | -- | `AudioDevice[]` (sources de capture) |
@@ -147,6 +165,8 @@ Méthodes destinées aux outils :
 | `rfcomm.open`, `rfcomm.send`, `rfcomm.close` | voir [Relais RFCOMM](#rfcomm-passthrough) | |
 
 Envoyez `logs` et `link` à chaque `diag.subscribe`. Chaque appel définit les deux valeurs : sans `logs`, les événements de journal sont désactivés.
+
+Pour modifier un seul réglage, utilisez les [commandes rapides](#quick-controls) plutôt que `profile.save` ou `settings.set`.
 
 Méthodes qu'utilise la fenêtre de BlueCaster et qu'un outil ne doit utiliser qu'avec précaution : `profile.save` / `profile.delete`, `settings.set` (remplace **tous** les paramètres : envoyez les derniers `settings` avec votre modification, jamais un objet partiel), `device.forget` / `device.rename`, `adapter.*` (`adapter.assign_winusb` et `adapter.restore_driver` affichent une invite UAC ; `adapter.probe` et `adapter.run_script`, les outils de puce du mode développeur, arrêtent la pile Bluetooth), `app.quit`. Les autres méthodes servent aux écrans de la fenêtre et peuvent changer sans préavis : `stream.start_custom`, les autres méthodes `device.*` (`device.import_windows_pairings` affiche une invite UAC), `audio.apps`, `audio.mixer` / `audio.mixer_set`, les `diag.*` autres que les deux ci-dessus, `receiver.*` et `app.*`. La liste complète, avec les paramètres et les résultats, se trouve dans l'enum `Method` de `protocol.rs`.
 
@@ -176,6 +196,21 @@ Disponible quand `welcome.features` contient `"media_button"`. Chaque fois qu'un
 - `le_audio` vaut `true` quand l'événement vient d'un casque LE Audio.
 - Les casques envoient `play` ou `pause` selon qu'ils pensent ou non qu'une lecture est en cours. Cette information peut être périmée. Pour basculer la lecture, traitez les deux de la même façon.
 - BlueCaster continue de transmettre lecture/pause, suivant, précédent et arrêt à Windows sous forme de touches multimédias. Si votre outil gère lui-même les boutons, demandez à l'utilisateur de désactiver **Périphériques audio > Contrôler la lecture avec les boutons de l'appareil audio**. Les événements arrivent aussi quand ce réglage est désactivé.
+
+## Commandes rapides {#quick-controls}
+
+Disponibles quand `welcome.features` contient `"tool_controls"`. Chaque méthode modifie un seul réglage : un outil n'a donc jamais besoin d'envoyer un profil complet.
+
+**Expérimental jusqu'à BlueCaster 3.1.** Les noms des méthodes et leurs paramètres peuvent encore changer selon les retours. Une modification incompatible remplacera `"tool_controls"` par un nouveau nom de fonctionnalité : un outil peut ainsi savoir quelle version le cœur prend en charge.
+
+- `name` est le nom d'un profil enregistré. Sans `name`, c'est le profil en cours de diffusion qui est utilisé, ou le profil actif si rien n'est diffusé. Un nom inconnu renvoie `profile.not_found`.
+- La modification est enregistrée dans le profil et appliquée au flux, comme une modification faite dans la fenêtre de BlueCaster. Tous les clients reçoivent un événement `profiles`.
+- Envoyer la valeur actuelle ne change rien.
+- `profile.set_headset_mic` fonctionne comme les boutons de mode du micro dans la fenêtre. `off` coupe le micro mais garde le mode actuel. `auto` et `on` passent à ce mode et réactivent le micro. Sans le mode développeur, `on` renvoie `developer.off`.
+- `profile.set_mic_muted` coupe ou réactive le micro du casque sans changer le mode.
+- Les deux méthodes du micro renvoient `profile.no_mic_output` tant que le micro du casque n'est pas configuré pour l'appareil. Pendant la connexion de l'appareil, elles renvoient `stream.busy`.
+- `profile.set_media_eq` active ou désactive l'égaliseur de lecture sans reconnecter le flux. Les points de l'égaliseur sont conservés.
+- `stream.volume_step` modifie le volume du casque de `delta` et renvoie le nouveau volume (0-127). Le pas part du dernier volume indiqué par le casque. Si rien n'est diffusé, ou si le casque n'a pas encore indiqué de volume, la méthode renvoie `stream.volume_unknown`. Un `delta` hors de la plage -127 à 127 renvoie `stream.bad_volume_step`.
 
 ## Compatibilité {#compatibility}
 

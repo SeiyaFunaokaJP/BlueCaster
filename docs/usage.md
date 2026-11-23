@@ -134,6 +134,7 @@ Shown while **Settings > Developer mode** is on; most users never need it. It is
 - **Bluetooth Chip** for the firmware, with **Download Firmware**, **Open Download Page** and **Open Firmware Folder** (see [Firmware](setup#firmware)). An adapter from another vendor instead shows where its firmware comes from, such as **From MediaTek's driver**, **From the firmware folder** or **Not needed**, and **Loaded** once BlueCaster has loaded it. A Realtek adapter whose firmware comes from Realtek's Windows driver shows **Use custom firmware** instead, and **Use the driver's firmware** switches back
 - **Avoid Wi-Fi channels**: Auto, Off or Manual, with the Wi-Fi channels beside it: the ones Auto currently avoids, none for Off (both read-only), or the ones you type for Manual (see [Link Quality and AFH](#link-quality))
 - **Bluetooth stack**: stopped (it starts with the first scan or connection), starting, ready or error, and **Restart Bluetooth**
+- **Use this adapter** (on each adapter card once two adapters have WinUSB): BlueCaster opens that adapter instead of the first one found. Bluetooth restarts on it, and a stream reconnects. **Choose automatically** on the chosen card goes back to the first one found. The adapter in use is marked **In use** and named beside **Bluetooth stack**; a chosen one not in use yet (Bluetooth opens it at its next start, or another program has it) is marked **Chosen**
 
 ### Settings
 

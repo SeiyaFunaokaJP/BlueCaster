@@ -481,6 +481,9 @@ export function Dialog(props: {
   /** A warning sign before the title: confirming loses something (issue #86) */
   warn?: boolean;
   busy?: boolean;
+  /** The confirm button cannot be pressed yet (something in the dialog
+   *  is still missing) */
+  confirmDisabled?: boolean;
   /** A second way to go on, before the confirm button and the one
    *  recommended: the confirm button then is a plain one */
   extra?: { label: string; icon?: IconName; onClick: () => void };
@@ -586,7 +589,7 @@ export function Dialog(props: {
                   kind={props.danger ? "danger" : props.extra ? "default" : "strong"}
                   icon={props.confirmIcon}
                   busy={props.busy && !props.extra}
-                  disabled={props.busy && !!props.extra}
+                  disabled={(props.busy && !!props.extra) || props.confirmDisabled}
                   onClick={() => props.onConfirm?.()}
                 >
                   {props.confirm}

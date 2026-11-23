@@ -184,4 +184,4 @@ Los adaptadores y auriculares que se han usado realmente con BlueCaster, con sus
 
 Por lo general, los adaptadores USB Bluetooth 5.0+ funcionan mejor con códecs de alta tasa de bits como LDAC.
 
-Si varios adaptadores tienen WinUSB, BlueCaster usa el primero que encuentra. Deje WinUSB solo en el adaptador que usa con BlueCaster.
+Si varios adaptadores tienen WinUSB, BlueCaster usa el primero que encuentra, salvo que pulse **Usar este adaptador** en la tarjeta de otro, en la pantalla **Adaptadores**. El adaptador que se usa aparece marcado como **En uso**.

@@ -14,6 +14,7 @@ mod commands;
 mod connection;
 mod logging;
 mod recovery;
+mod service;
 mod update;
 mod windows;
 
@@ -78,6 +79,8 @@ fn main() {
             commands::save_text_file,
             commands::update_status,
             commands::update_install,
+            commands::service_state,
+            commands::service_setup,
         ])
         .on_window_event(windows::on_window_event)
         .setup(move |app| {

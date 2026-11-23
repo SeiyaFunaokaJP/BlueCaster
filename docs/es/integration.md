@@ -33,6 +33,20 @@ El núcleo (`bluecaster-core.exe`) se ejecuta siempre que BlueCaster está en ej
 - Para saber si el núcleo está en ejecución, busque la canalización, no el mutex del núcleo: si la canalización no existe, el núcleo no está en ejecución.
 - Las compilaciones de desarrollo iniciadas con `BLUECASTER_INSTANCE=<name>` escuchan en `\\.\pipe\bluecaster-<SID>-<name>`, para poder ejecutarse junto a la versión instalada.
 
+### La canalización del servicio {#the-service-pipe}
+
+El servicio de BlueCaster es un prototipo del modo de desarrollador. Permite usar teclados y ratones Bluetooth en la pantalla de inicio de sesión. En un equipo con el servicio instalado, el núcleo se ejecuta como servicio de Windows. En ese caso no existe la canalización de cada usuario. En su lugar, el núcleo atiende una sola canalización común a todos los usuarios:
+
+```
+\\.\pipe\bluecaster-service
+```
+
+- Pruebe primero `bluecaster-<user SID>` y después `bluecaster-service`. El servicio no atiende ninguna canalización con el nombre antiguo. Las tramas, la negociación inicial y las solicitudes son iguales en ambas canalizaciones.
+- Abra la canalización solo con `GENERIC_READ | FILE_WRITE_DATA`. Para cambiar el modo de la canalización, agregue `FILE_WRITE_ATTRIBUTES`. La canalización rechaza a los clientes que piden `GENERIC_WRITE`, porque ese acceso incluye crear otra instancia de la canalización (`FILE_CREATE_PIPE_INSTANCE`). En Python, `open(..., "r+b")` pide `GENERIC_WRITE`. Use `CreateFileW` en su lugar, por ejemplo mediante `ctypes`.
+- Para comprobar que el servidor es realmente BlueCaster, compare el id. de proceso del servidor de la canalización (`GetNamedPipeServerProcessId`) con el id. de proceso del servicio `BlueCaster` (`QueryServiceStatusEx`). Mientras el servicio está detenido, otro programa podría crear una canalización con ese nombre.
+- Las solicitudes que cambian todo el equipo devuelven el error `ipc.needs_admin`. Por ejemplo, las que cambian el modo de desarrollador o los controladores del adaptador, o las que agregan teclados y ratones. Una herramienta no puede conceder la aprobación de administrador. Pida al usuario que haga el cambio en la ventana de BlueCaster. La ventana solicita la aprobación a Windows.
+- Cuando el núcleo se ejecuta como servicio, algunas solicitudes devuelven `ipc.not_in_service`. Una de ellas es `app.quit`, porque el servicio debe seguir en ejecución para los teclados y ratones. Use `app.close` en su lugar. Este método detiene la transmisión y cierra la ventana de BlueCaster y el icono de la bandeja.
+
 ### Tramas {#frames}
 
 Cada mensaje, en ambos sentidos, es una trama: la longitud del JSON como **u32 little-endian** y, a continuación, el JSON (UTF-8). Las tramas de más de 4 MiB se rechazan.
@@ -138,7 +152,11 @@ Métodos para herramientas:
 | `stream.start` | `profile` | `null`; primero detiene la transmisión en curso |
 | `stream.stop` | -- | `null` |
 | `stream.set_volume` | `volume` (volumen absoluto AVRCP 0-127) | `null` |
+| `stream.volume_step` | `delta` (de -127 a 127) | el nuevo volumen; consulte [Controles rápidos](#quick-controls) |
 | `profile.set_active` | `name` | `null` |
+| `profile.set_headset_mic` | `name` (opcional), `mode` (`off`, `auto`, `on`) | `null`; consulte [Controles rápidos](#quick-controls) |
+| `profile.set_mic_muted` | `name` (opcional), `muted` (bool) | `null`; consulte [Controles rápidos](#quick-controls) |
+| `profile.set_media_eq` | `name` (opcional), `enabled` (bool) | `null`; consulte [Controles rápidos](#quick-controls) |
 | `device.scan` | `seconds` (3-600) | `Device[]`, también como evento `devices` |
 | `device.scan_stop` | -- | `null`; el `device.scan` en curso devuelve entonces su resultado |
 | `audio.devices` | -- | `AudioDevice[]` (orígenes de captura) |
@@ -147,6 +165,8 @@ Métodos para herramientas:
 | `rfcomm.open`, `rfcomm.send`, `rfcomm.close` | consulte [Paso directo RFCOMM](#rfcomm-passthrough) | |
 
 Envíe `logs` y `link` en cada `diag.subscribe`. Cada llamada fija los dos valores, así que si falta `logs` se desactivan los eventos de registro.
+
+Para cambiar un solo ajuste, use los [controles rápidos](#quick-controls) en lugar de `profile.save` o `settings.set`.
 
 Métodos que usa la ventana de BlueCaster y que una herramienta debe usar con cuidado: `profile.save` / `profile.delete`, `settings.set` (reemplaza **toda** la configuración: envíe el `settings` más reciente con su cambio, nunca un objeto parcial), `device.forget` / `device.rename`, `adapter.*` (`adapter.assign_winusb` y `adapter.restore_driver` muestran una solicitud de UAC; `adapter.probe` y `adapter.run_script`, las herramientas de chip del modo de desarrollador, detienen la pila Bluetooth), `app.quit`. Los demás sirven a las pantallas propias de la ventana y pueden cambiar sin previo aviso: `stream.start_custom`, el resto de métodos `device.*` (`device.import_windows_pairings` muestra una solicitud de UAC), `audio.apps`, `audio.mixer` / `audio.mixer_set`, los `diag.*` aparte de los dos anteriores, `receiver.*` y `app.*`. La lista completa con parámetros y resultados es el enum `Method` de `protocol.rs`.
 
@@ -176,6 +196,21 @@ Disponible cuando `welcome.features` contiene `"media_button"`. Cada vez que se 
 - `le_audio` es `true` si el evento llegó de unos auriculares LE Audio.
 - Los auriculares envían `play` o `pause` según crean que hay algo en reproducción. Esa suposición puede estar desactualizada. Para alternar la reproducción, trate ambos igual.
 - BlueCaster sigue pasando a Windows reproducir/pausa, siguiente, anterior y detener como teclas multimedia. Si su herramienta gestiona los botones por su cuenta, pida al usuario que desactive **Dispositivos de audio > Controlar la reproducción con los botones del dispositivo de audio**. Los eventos siguen llegando con esa opción desactivada.
+
+## Controles rápidos {#quick-controls}
+
+Disponibles cuando `welcome.features` contiene `"tool_controls"`. Cada método cambia un solo ajuste, así que una herramienta nunca tiene que enviar un perfil completo.
+
+**Experimental hasta BlueCaster 3.1.** Los nombres de los métodos y sus parámetros aún pueden cambiar según los comentarios recibidos. Un cambio incompatible sustituirá `"tool_controls"` por un nombre de función nuevo, para que una herramienta pueda saber qué versión admite el núcleo.
+
+- `name` es el nombre de un perfil guardado. Si se omite, se usa el perfil que está transmitiendo, o el perfil activo cuando no se transmite nada. Un nombre desconocido devuelve `profile.not_found`.
+- El cambio se guarda en el perfil y se aplica a la transmisión, igual que un cambio hecho en la ventana de BlueCaster. Todos los clientes reciben un evento `profiles`.
+- Enviar el valor actual no cambia nada.
+- `profile.set_headset_mic` funciona como los botones de modo del micrófono en la ventana. `off` silencia el micrófono, pero conserva el modo actual. `auto` y `on` cambian a ese modo y activan el micrófono. Sin el modo de desarrollador, `on` devuelve `developer.off`.
+- `profile.set_mic_muted` silencia o activa el micrófono del auricular sin cambiar el modo.
+- Los dos métodos del micrófono devuelven `profile.no_mic_output` mientras el micrófono del auricular no esté configurado para el dispositivo. Mientras el dispositivo se conecta, devuelven `stream.busy`.
+- `profile.set_media_eq` activa o desactiva el ecualizador de reproducción sin volver a conectar la transmisión. Los puntos del ecualizador se conservan.
+- `stream.volume_step` cambia el volumen de los auriculares en `delta` y devuelve el nuevo volumen (0-127). El paso parte del último volumen que indicaron los auriculares. Si no se transmite nada, o los auriculares aún no han indicado un volumen, el método devuelve `stream.volume_unknown`. Un `delta` fuera del rango de -127 a 127 devuelve `stream.bad_volume_step`.
 
 ## Compatibilidad {#compatibility}
 

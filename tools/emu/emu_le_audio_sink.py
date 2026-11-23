@@ -24,9 +24,13 @@ Layouts (--layout):
            (--auracast), the sink scans, syncs to the periodic advertising
            and the BIG (--broadcast-code for an encrypted one) and receives
            every BIS; both controllers are le_audio/broadcast.py's
+           With --follow SUFFIX ... one sink per suffix, each following
+           the broadcast whose name ends with it (BlueCaster with
+           --auracast-layout: e.g. --follow " Front" " Rear" for pairs)
   auracast-split
            two broadcast sinks, one following "<name> L", the other
-           "<name> R" (BlueCaster with --auracast --auracast-split)
+           "<name> R" (BlueCaster with --auracast --auracast-split); the
+           same as --layout auracast --follow " L" " R"
 
 --privacy: the sinks use resolvable private addresses (a new one after each
 link went down); READY then lists their current RPAs, not the public
@@ -52,7 +56,8 @@ from le_audio.controller import LeEmuController, LeLocalLink
 from le_audio.sink import SinkContext, create_device, current_address, power_on_and_advertise
 
 BLUECASTER_ADDRESS = '00:A2:D0:00:00:11'
-SINK_ADDRESSES = ['00:A2:D0:00:00:12', '00:A2:D0:00:00:13']
+# Unicast layouts use the first two; a broadcast sink per --follow suffix
+SINK_ADDRESSES = ['00:A2:D0:00:00:12', '00:A2:D0:00:00:13', '00:A2:D0:00:00:14', '00:A2:D0:00:00:15']
 FL, FR = 0x1, 0x2
 
 LAYOUTS = {
@@ -85,15 +90,18 @@ async def main(args):
         link=link,
         public_address=BLUECASTER_ADDRESS,
     )
+    follow = [' L', ' R'] if args.layout == 'auracast-split' else args.follow
+    if args.layout.startswith('auracast') and follow:
+        if len(follow) > len(SINK_ADDRESSES):
+            raise SystemExit(f'--follow takes at most {len(SINK_ADDRESSES)} suffixes')
+        for index, suffix in enumerate(follow):
+            await broadcast_sink.start(link, SINK_ADDRESSES[index], capture_path(args.capture, index),
+                                       args.broadcast_code, suffix)
+        print(f'READY 127.0.0.1:{args.port} sinks={",".join(SINK_ADDRESSES[:len(follow)])}', flush=True)
+        await asyncio.get_running_loop().create_future()
     if args.layout == 'auracast':
         await broadcast_sink.start(link, SINK_ADDRESSES[0], args.capture, args.broadcast_code)
         print(f'READY 127.0.0.1:{args.port} sinks={SINK_ADDRESSES[0]}', flush=True)
-        await asyncio.get_running_loop().create_future()
-    if args.layout == 'auracast-split':
-        for index, suffix in enumerate([' L', ' R']):
-            await broadcast_sink.start(link, SINK_ADDRESSES[index], capture_path(args.capture, index),
-                                       args.broadcast_code, suffix)
-        print(f'READY 127.0.0.1:{args.port} sinks={",".join(SINK_ADDRESSES)}', flush=True)
         await asyncio.get_running_loop().create_future()
     sinks = []
     for index, (name, locations, ases, counts) in enumerate(LAYOUTS[args.layout]):
@@ -135,6 +143,8 @@ if __name__ == '__main__':
                              'and take a new one whenever a link went down')
     parser.add_argument('--broadcast-code', metavar='CODE',
                         help='auracast: the Broadcast_Code the sink syncs to the BIG with (UTF-8, at most 16 bytes)')
+    parser.add_argument('--follow', nargs='+', metavar='SUFFIX', default=[],
+                        help='auracast: one sink per suffix, each following the broadcast whose name ends with it')
     le_audio.add_arguments(parser)
     bumble.logging.setup_basic_logging(parser.parse_known_args()[0].log_level)
     logging.getLogger('emu_le_audio').setLevel(logging.INFO)

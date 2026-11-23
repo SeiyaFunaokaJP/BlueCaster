@@ -44,6 +44,12 @@ function fakeTransport() {
     },
     async updateInstall() {},
     onUpdatePhase() {},
+    async serviceState() {
+      return { state: "not_added" };
+    },
+    async serviceSetup() {
+      return { outcome: "done", service: { state: "not_added" } };
+    },
   };
   return {
     transport,

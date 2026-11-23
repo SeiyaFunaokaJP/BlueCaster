@@ -153,6 +153,8 @@ code; all other crates have `#![forbid(unsafe_code)]`.
 | 2. Parts | `aptx-adaptive` | The aptX Adaptive encoder in Rust (vendored from AKS-Logic/aptx-adaptive-linux, MIT) |
 | 2. Parts | `codec` | The `Encoder` trait, the SBC encoder (Rust port of Bluedroid's), safe wrappers of the C encoders, Codec Information parsing and the codec choice |
 | 2. Parts | `audio-capture` | WASAPI capture (`wasapi` crate): system loopback, virtual device, one application (process loopback); device and app lists, test tone, per-app volume (Volume Mixer) |
+| 2. Parts | `pcm-link` | PCM between two processes: a lock-free ring in shared memory and a wake event |
+| 3. Engine | `session-host` | The session-bound work (device lists, capture, playback) behind one facade, `SessionHost`: done in the core's process, or in the session agent (`--session-agent`) over a named pipe |
 | 2. Parts | `voice-link` | The headset microphone's audio (developer mode): mono PCM rendered to the chosen output device (WASAPI), the capture downmixed for the uplink, and the CVSD / mSBC / LC3-SWB voice codecs over SCO payloads |
 | 3. Engine | `bt-host` | Runs BTstack on its own thread, driven by commands and typed events: GAP, A2DP Source, AVRCP, SDP, RFCOMM channels for the passthrough (`rfcomm.*`), link keys, a device's SDP services, AFH, firmware loading and chip loaders (`bringup`), the chip probe and chip scripts, HCI capture (`.pklg`), LE Audio (`le/`) |
 | 2. Parts | `le-audio` | LE Audio: the logic without BTstack or Windows (assigned numbers, LTV, PACS / ASCS PDUs, presets, the CSIP / VCP / MCP / CCP models) |

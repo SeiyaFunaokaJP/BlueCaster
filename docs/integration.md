@@ -32,6 +32,20 @@ The core (`bluecaster-core.exe`) runs whenever BlueCaster runs, with or without 
 - To check whether the core is running, look for the pipe, not the core's mutex: if the pipe does not exist, the core is not running.
 - Development builds started with `BLUECASTER_INSTANCE=<name>` listen on `\\.\pipe\bluecaster-<SID>-<name>` instead, so they can run alongside the installed version.
 
+### The service pipe
+
+The BlueCaster service is a developer-mode prototype that lets Bluetooth keyboards and mice work on the sign-in screen. On a PC with the service installed, the core runs as a Windows service. The per-user pipe does not exist then; instead, the core serves one pipe for all users:
+
+```
+\\.\pipe\bluecaster-service
+```
+
+- Try `bluecaster-<user SID>` first, then `bluecaster-service`. The service serves no pipe under the old name. Frames, the handshake and requests are the same on both pipes.
+- Open the pipe with `GENERIC_READ | FILE_WRITE_DATA` only (add `FILE_WRITE_ATTRIBUTES` to change the pipe's mode). The pipe refuses clients that ask for `GENERIC_WRITE`, because that access includes creating another instance of the pipe (`FILE_CREATE_PIPE_INSTANCE`). Python's `open(..., "r+b")` asks for `GENERIC_WRITE`, so use `CreateFileW` instead (for example through `ctypes`).
+- To check that the server really is BlueCaster, compare the pipe's server process ID (`GetNamedPipeServerProcessId`) with the process ID of the `BlueCaster` service (`QueryServiceStatusEx`). While the service is stopped, another program could create a pipe with that name.
+- Requests that change the whole PC, such as developer mode, adapter drivers or adding keyboards and mice, return the error `ipc.needs_admin`. A tool cannot grant administrator approval. Ask the user to make the change in the BlueCaster window instead; the window asks Windows for approval.
+- Some requests return `ipc.not_in_service` when the core runs as a service. `app.quit` is one of them, because the service must keep running for keyboards and mice. Use `app.close` instead: it stops streaming and closes the BlueCaster window and tray icon.
+
 ### Frames
 
 Every message in both directions is one frame: the length of the JSON as a **u32 little-endian**, then the JSON (UTF-8). Frames over 4 MiB are refused.
@@ -137,7 +151,11 @@ Methods for tools:
 | `stream.start` | `profile` | `null`; stops any running stream first |
 | `stream.stop` | -- | `null` |
 | `stream.set_volume` | `volume` (AVRCP absolute volume 0-127) | `null` |
+| `stream.volume_step` | `delta` (-127 to 127) | the new volume; see [Quick controls](#quick-controls) |
 | `profile.set_active` | `name` | `null` |
+| `profile.set_headset_mic` | `name` (optional), `mode` (`off`, `auto`, `on`) | `null`; see [Quick controls](#quick-controls) |
+| `profile.set_mic_muted` | `name` (optional), `muted` (bool) | `null`; see [Quick controls](#quick-controls) |
+| `profile.set_media_eq` | `name` (optional), `enabled` (bool) | `null`; see [Quick controls](#quick-controls) |
 | `device.scan` | `seconds` (3-600) | `Device[]`, also as the `devices` event |
 | `device.scan_stop` | -- | `null`; the running `device.scan` then returns |
 | `audio.devices` | -- | `AudioDevice[]` (capture sources) |
@@ -146,6 +164,8 @@ Methods for tools:
 | `rfcomm.open`, `rfcomm.send`, `rfcomm.close` | see [RFCOMM passthrough](#rfcomm-passthrough) | |
 
 Send both `logs` and `link` with every `diag.subscribe`. Each call sets both, so leaving out `logs` turns log events off.
+
+To change a single setting, use the [quick controls](#quick-controls) instead of `profile.save` or `settings.set`.
 
 Methods the BlueCaster window uses that a tool should use only with care: `profile.save` / `profile.delete`, `settings.set` (replaces **all** settings: send the latest `settings` with your change, never a partial object), `device.forget` / `device.rename`, `adapter.*` (`adapter.assign_winusb` and `adapter.restore_driver` show a UAC prompt; `adapter.probe` and `adapter.run_script`, developer mode's chip tools, stop the Bluetooth stack), `app.quit`. The others serve the window's own screens and may change without notice: `stream.start_custom`, the other `device.*` methods (`device.import_windows_pairings` shows a UAC prompt), `audio.apps`, `audio.mixer` / `audio.mixer_set`, `diag.*` beyond the two above, `receiver.*` and `app.*`. The full list with parameters and results is the `Method` enum in `protocol.rs`.
 
@@ -175,6 +195,21 @@ Available when `welcome.features` contains `"media_button"`. Every client receiv
 - `le_audio` is `true` when the event came from LE Audio headphones.
 - Headphones send `play` or `pause` depending on whether they think audio is playing. That guess can be out of date. To toggle playback, treat both the same.
 - BlueCaster still passes play/pause, next, previous and stop to Windows as media keys. If your tool handles the buttons itself, ask the user to turn off **Audio Devices > Control playback with the audio device's buttons**. The events still arrive when that setting is off.
+
+## Quick controls
+
+Available when `welcome.features` contains `"tool_controls"`. Each method changes one setting, so a tool never has to send a whole profile.
+
+**Experimental until BlueCaster 3.1.** The method names and parameters may still change based on feedback. An incompatible change replaces `"tool_controls"` with a new feature name, so a tool can tell which version the core supports.
+
+- `name` is the name of a saved profile. Leave it out to use the profile that is streaming, or the active profile when nothing is streaming. An unknown name returns `profile.not_found`.
+- The change is saved to the profile and applied to the stream, just like a change made in the BlueCaster window. Every client receives a `profiles` event.
+- Sending the current value changes nothing.
+- `profile.set_headset_mic` works like the microphone mode buttons in the window. `off` mutes the microphone but keeps the current mode. `auto` and `on` switch to that mode and unmute the microphone. Without developer mode, `on` returns `developer.off`.
+- `profile.set_mic_muted` mutes or unmutes the headset microphone without changing the mode.
+- Both microphone methods return `profile.no_mic_output` until the headset microphone is set up for the device. While the device is connecting, they return `stream.busy`.
+- `profile.set_media_eq` turns the playback EQ on or off without reconnecting the stream. The EQ points are kept.
+- `stream.volume_step` changes the headphone volume by `delta` and returns the new volume (0-127). The step starts from the volume the headphones last reported. If nothing is streaming, or the headphones have not reported a volume yet, the method returns `stream.volume_unknown`. A `delta` outside -127 to 127 returns `stream.bad_volume_step`.
 
 ## Compatibility
 

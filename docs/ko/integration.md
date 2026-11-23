@@ -33,6 +33,20 @@ nav_order: 2.7
 - 코어가 실행 중인지 확인하려면 코어의 뮤텍스가 아니라 파이프를 보세요. 파이프가 없으면 코어가 실행되지 않은 것입니다.
 - `BLUECASTER_INSTANCE=<name>`으로 시작한 개발 빌드는 대신 `\\.\pipe\bluecaster-<SID>-<name>`에서 대기하므로, 설치된 버전과 나란히 실행할 수 있습니다.
 
+### 서비스 파이프 {#the-service-pipe}
+
+BlueCaster 서비스는 로그인 화면에서 Bluetooth 키보드와 마우스를 쓸 수 있게 해 주는 개발자 모드의 프로토타입입니다. 서비스를 설치한 PC에서는 코어가 Windows 서비스로 실행됩니다. 이때는 사용자별 파이프가 없습니다. 대신 코어는 모든 사용자가 함께 쓰는 파이프 하나를 제공합니다.
+
+```
+\\.\pipe\bluecaster-service
+```
+
+- 먼저 `bluecaster-<user SID>`에 연결해 보고, 실패하면 `bluecaster-service`에 연결하세요. 서비스는 이전 이름의 파이프를 제공하지 않습니다. 프레임, 핸드셰이크, 요청은 두 파이프에서 같습니다.
+- 파이프는 `GENERIC_READ | FILE_WRITE_DATA`로만 여세요. 파이프 모드를 바꾸려면 `FILE_WRITE_ATTRIBUTES`를 추가합니다. 파이프는 `GENERIC_WRITE`를 요청하는 클라이언트를 거부합니다. `GENERIC_WRITE`에는 파이프의 다른 인스턴스를 만드는 권한(`FILE_CREATE_PIPE_INSTANCE`)이 포함되기 때문입니다. Python의 `open(..., "r+b")`는 `GENERIC_WRITE`를 요청하므로, 대신 `CreateFileW`를 사용하세요(예: `ctypes` 사용).
+- 서버가 정말 BlueCaster인지 확인하려면, 파이프 서버의 프로세스 ID(`GetNamedPipeServerProcessId`)와 `BlueCaster` 서비스의 프로세스 ID(`QueryServiceStatusEx`)를 비교하세요. 서비스가 중지된 동안에는 다른 프로그램이 같은 이름의 파이프를 만들 수 있습니다.
+- 개발자 모드, 어댑터 드라이버, 키보드와 마우스 추가처럼 PC 전체를 바꾸는 요청은 `ipc.needs_admin` 오류를 반환합니다. 도구는 관리자 승인을 부여할 수 없습니다. BlueCaster 창에서 변경하도록 사용자에게 요청하세요. BlueCaster 창이 Windows에 승인을 요청합니다.
+- 코어가 서비스로 실행 중이면 일부 요청은 `ipc.not_in_service`를 반환합니다. `app.quit`도 그중 하나입니다. 키보드와 마우스를 위해 서비스가 계속 실행되어야 하기 때문입니다. 대신 `app.close`를 사용하세요. `app.close`는 스트리밍을 중지하고 BlueCaster 창과 트레이 아이콘을 닫습니다.
+
 ### 프레임 {#frames}
 
 메시지는 방향과 관계없이 모두 프레임 하나로 보냅니다. 프레임은 JSON 길이(**u32 little-endian**) 뒤에 JSON(UTF-8)이 이어지는 형식입니다. 4 MiB를 넘는 프레임은 거부됩니다.
@@ -138,7 +152,11 @@ sequenceDiagram
 | `stream.start` | `profile` | `null`. 실행 중인 스트림이 있으면 먼저 중지 |
 | `stream.stop` | -- | `null` |
 | `stream.set_volume` | `volume` (AVRCP 절대 볼륨 0-127) | `null` |
+| `stream.volume_step` | `delta` (-127~127) | 새 볼륨. [빠른 제어](#quick-controls) 참조 |
 | `profile.set_active` | `name` | `null` |
+| `profile.set_headset_mic` | `name` (선택), `mode` (`off`, `auto`, `on`) | `null`. [빠른 제어](#quick-controls) 참조 |
+| `profile.set_mic_muted` | `name` (선택), `muted` (bool) | `null`. [빠른 제어](#quick-controls) 참조 |
+| `profile.set_media_eq` | `name` (선택), `enabled` (bool) | `null`. [빠른 제어](#quick-controls) 참조 |
 | `device.scan` | `seconds` (3-600) | `Device[]`, `devices` 이벤트로도 전달 |
 | `device.scan_stop` | -- | `null`. 실행 중이던 `device.scan`이 이때 결과를 반환 |
 | `audio.devices` | -- | `AudioDevice[]` (캡처 소스) |
@@ -147,6 +165,8 @@ sequenceDiagram
 | `rfcomm.open`, `rfcomm.send`, `rfcomm.close` | [RFCOMM 패스스루](#rfcomm-passthrough) 참고 | |
 
 `diag.subscribe`에는 항상 `logs`와 `link`를 모두 넣으세요. 호출할 때마다 두 값이 함께 설정되므로, `logs`를 빼면 로그 이벤트가 꺼집니다.
+
+설정 하나만 바꾸려면 `profile.save`나 `settings.set` 대신 [빠른 제어](#quick-controls)를 사용하세요.
 
 BlueCaster 창이 쓰는 메서드 중 도구에서는 주의해서 써야 하는 것: `profile.save` / `profile.delete`, `settings.set`(설정을 **모두** 대체합니다. 일부만 담은 객체는 절대 보내지 말고, 최신 `settings`에 변경 사항을 반영해 보내세요), `device.forget` / `device.rename`, `adapter.*`(`adapter.assign_winusb`와 `adapter.restore_driver`는 UAC 프롬프트를 표시하고, 개발자 모드의 칩 도구인 `adapter.probe`와 `adapter.run_script`는 Bluetooth 스택을 중지합니다), `app.quit`. 나머지 메서드(`stream.start_custom`, 그 밖의 `device.*`(`device.import_windows_pairings`는 UAC 프롬프트를 표시), `audio.apps`, `audio.mixer` / `audio.mixer_set`, 위 두 가지 외의 `diag.*`, `receiver.*`, `app.*`)는 창의 화면 전용이며 예고 없이 바뀔 수 있습니다. 매개변수와 결과를 포함한 전체 목록은 `protocol.rs`의 `Method` enum에 있습니다.
 
@@ -176,6 +196,21 @@ BlueCaster 창이 쓰는 메서드 중 도구에서는 주의해서 써야 하�
 - `le_audio`는 LE Audio 헤드폰에서 온 이벤트일 때 `true`입니다.
 - 헤드폰은 지금 재생 중인지 스스로 판단해 `play` 또는 `pause`를 보냅니다. 이 판단은 최신이 아닐 수 있습니다. 재생과 일시 정지를 전환하기만 한다면 둘을 똑같이 처리하세요.
 - BlueCaster는 재생/일시 정지, 다음, 이전, 정지를 계속 미디어 키로 Windows에 전달합니다. 도구가 버튼을 직접 처리한다면 사용자에게 **오디오 장치 > 오디오 장치 버튼으로 재생 제어**를 끄도록 안내하세요. 이 설정을 꺼도 이벤트는 계속 전달됩니다.
+
+## 빠른 제어 {#quick-controls}
+
+`welcome.features`에 `"tool_controls"`가 있을 때 사용할 수 있습니다. 각 메서드는 설정 하나만 바꾸므로 도구가 프로필 전체를 보낼 필요가 없습니다.
+
+**BlueCaster 3.1까지는 실험적 기능입니다.** 피드백에 따라 메서드 이름과 매개변수가 바뀔 수 있습니다. 호환되지 않는 변경이 있으면 `"tool_controls"`가 새 기능 이름으로 바뀌므로, 도구는 코어가 지원하는 버전을 확인할 수 있습니다.
+
+- `name`은 저장된 프로필의 이름입니다. 생략하면 스트리밍 중인 프로필이 대상이 됩니다. 아무것도 스트리밍하지 않으면 활성 프로필이 대상입니다. 알 수 없는 이름에는 `profile.not_found`가 반환됩니다.
+- 변경 사항은 프로필에 저장되고, BlueCaster 창에서 바꿀 때와 똑같이 스트림에 적용됩니다. 모든 클라이언트가 `profiles` 이벤트를 받습니다.
+- 현재 값과 같은 값을 보내면 아무것도 바뀌지 않습니다.
+- `profile.set_headset_mic`은 창에 있는 마이크 모드 버튼과 같이 동작합니다. `off`는 현재 모드를 유지한 채 마이크를 음소거합니다. `auto`와 `on`은 해당 모드로 바꾸고 음소거를 해제합니다. 개발자 모드가 꺼져 있으면 `on`에는 `developer.off`가 반환됩니다.
+- `profile.set_mic_muted`는 모드를 바꾸지 않고 헤드셋 마이크를 음소거하거나 음소거를 해제합니다.
+- 두 마이크 메서드는 해당 장치의 헤드셋 마이크가 설정될 때까지 `profile.no_mic_output`을 반환합니다. 장치가 연결 중일 때는 `stream.busy`를 반환합니다.
+- `profile.set_media_eq`는 스트림을 다시 연결하지 않고 재생 이퀄라이저를 켜거나 끕니다. 이퀄라이저 포인트는 그대로 유지됩니다.
+- `stream.volume_step`은 헤드폰 볼륨을 `delta`만큼 바꾸고 새 볼륨(0-127)을 반환합니다. 기준은 헤드폰이 마지막으로 알려 준 볼륨입니다. 아무것도 스트리밍하지 않거나 헤드폰이 아직 볼륨을 알려 주지 않았으면 `stream.volume_unknown`이 반환됩니다. `delta`가 -127~127을 벗어나면 `stream.bad_volume_step`이 반환됩니다.
 
 ## 호환성 {#compatibility}
 

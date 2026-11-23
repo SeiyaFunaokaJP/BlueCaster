@@ -32,6 +32,7 @@
 #include "hci.h"
 #include "hci_cmd.h"
 #include "hci_dump.h"
+#include "hci_event.h"
 #include "hci_transport.h"
 #include "l2cap.h"
 #include "classic/a2dp_source.h"
@@ -44,6 +45,7 @@
 #include "classic/avrcp_target.h"
 #include "classic/btstack_link_key_db.h"
 #include "classic/hfp_ag.h"
+#include "classic/hid_host.h"
 #include "classic/rfcomm.h"
 #include "classic/btstack_link_key_db_memory.h"
 #include "classic/sdp_client.h"
@@ -95,6 +97,12 @@ void bluecaster_ctkd_from_le(int why, int addr_type, const unsigned char *addr, 
                              int key_type) {
     bluecaster_rs_ctkd_from_le(why, addr_type, addr, key, key_type);
 }
+/* Called by the patched le_device_db_tlv.c (patched_le_device_db) */
+void bluecaster_rs_le_bond_evicted(int index, int addr_type, const uint8_t *addr);
+int bluecaster_le_bond_in_use(int index);
+void bluecaster_le_bond_evicted(int index, int addr_type, const unsigned char *addr);
+/* Called by the patched att_server.c (patched_att_server) */
+uint32_t bluecaster_ccc_tag(uint32_t slot);
 
 static void cig_slot_release(uint8_t cig_id);
 
@@ -340,9 +348,25 @@ enum {
     SOURCE_SDP_CLIENT = 12,
     SOURCE_SDP_SERVICES = 13,
     SOURCE_SCO = 14,
+    SOURCE_HID = 15,
 };
 
-static void handler_hci(uint8_t t, uint16_t c, uint8_t *p, uint16_t s) { bluecaster_rs_on_packet(SOURCE_HCI, t, c, p, s); }
+/* A keyboard being added that may ask for a passkey (bluecaster_hid_pairing_target) */
+static int hid_pairing_armed;
+static bd_addr_t hid_pairing_addr;
+
+static void handler_hci(uint8_t t, uint16_t c, uint8_t *p, uint16_t s) {
+    /* BTstack answers the IO Capability Request in hci_run, after this
+     * handler: that device as a display (it shows the passkey to type),
+     * every other one as before (no input, no output) */
+    if (t == HCI_EVENT_PACKET && s >= 8 && p[0] == HCI_EVENT_IO_CAPABILITY_REQUEST) {
+        bd_addr_t a;
+        reverse_bd_addr(&p[2], a);
+        int display = hid_pairing_armed && bd_addr_cmp(a, hid_pairing_addr) == 0;
+        gap_ssp_set_io_capability(display ? SSP_IO_CAPABILITY_DISPLAY_ONLY : SSP_IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
+    }
+    bluecaster_rs_on_packet(SOURCE_HCI, t, c, p, s);
+}
 static void handler_a2dp(uint8_t t, uint16_t c, uint8_t *p, uint16_t s) { bluecaster_rs_on_packet(SOURCE_A2DP, t, c, p, s); }
 static void handler_avdtp_sink(uint8_t t, uint16_t c, uint8_t *p, uint16_t s) { bluecaster_rs_on_packet(SOURCE_AVDTP_SINK, t, c, p, s); }
 static void handler_avrcp(uint8_t t, uint16_t c, uint8_t *p, uint16_t s) { bluecaster_rs_on_packet(SOURCE_AVRCP, t, c, p, s); }
@@ -358,6 +382,9 @@ static void handler_sdp_client(uint8_t t, uint16_t c, uint8_t *p, uint16_t s) { 
 static void handler_sdp_services(uint8_t t, uint16_t c, uint8_t *p, uint16_t s) { bluecaster_rs_on_packet(SOURCE_SDP_SERVICES, t, c, p, s); }
 /* SCO data (HCI_SCO_DATA_PACKET) and HCI_EVENT_SCO_CAN_SEND_NOW */
 static void handler_sco(uint8_t t, uint16_t c, uint8_t *p, uint16_t s) { bluecaster_rs_on_packet(SOURCE_SCO, t, c, p, s); }
+
+/* HID host events (HCI_EVENT_HID_META), reports included */
+static void handler_hid(uint8_t t, uint16_t c, uint8_t *p, uint16_t s) { bluecaster_rs_on_packet(SOURCE_HID, t, c, p, s); }
 
 static btstack_packet_callback_registration_t hci_event_registration;
 
@@ -382,6 +409,101 @@ void bluecaster_avrcp_init(void) {
     avrcp_controller_register_packet_handler(&handler_avrcp_ct);
     avrcp_target_init();
     avrcp_target_register_packet_handler(&handler_avrcp_tg);
+}
+
+/* ======================================================================== */
+/* HID host (experimental, developer mode): keyboards and mice              */
+/* ======================================================================== */
+
+/* The report descriptors of the connected devices, read over SDP */
+static uint8_t hid_descriptor_storage[4096];
+
+/* Output reports (the keyboard lights): hid_host_send_report keeps the
+ * pointer until the interrupt channel can send, so each link has its own
+ * copy here. A report sent again before the last one went out replaces it. */
+#define BLUECASTER_HID_OUTPUT_LINKS 8
+#define BLUECASTER_HID_OUTPUT_MAX 64
+static struct {
+    uint16_t cid;
+    uint8_t data[BLUECASTER_HID_OUTPUT_MAX];
+} hid_output[BLUECASTER_HID_OUTPUT_LINKS];
+
+void bluecaster_hid_host_init(void) {
+    hid_host_init(hid_descriptor_storage, sizeof(hid_descriptor_storage));
+    hid_host_register_packet_handler(&handler_hid);
+}
+
+void bluecaster_hid_host_deinit(void) {
+    hid_host_deinit();
+    memset(hid_output, 0, sizeof(hid_output));
+}
+
+/* Classic: the device answered as a display in its pairing (see
+ * handler_hci); NULL: none, and the IO capability is the usual one again */
+void bluecaster_hid_pairing_target(const uint8_t *addr) {
+    hid_pairing_armed = addr != NULL;
+    if (addr) {
+        memcpy(hid_pairing_addr, addr, sizeof(bd_addr_t));
+    } else {
+        gap_ssp_set_io_capability(SSP_IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
+    }
+}
+
+/* LE: the next pairing SM starts offers a display (1) or no input, no
+ * output (0, the usual one). MITM stays as configured: a device that does
+ * not ask for it pairs with Just Works either way. */
+void bluecaster_sm_passkey_display(int display) {
+    sm_set_io_capabilities(display ? IO_CAPABILITY_DISPLAY_ONLY : IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
+}
+
+uint8_t bluecaster_hid_host_connect(const uint8_t *addr, uint16_t *out_cid) {
+    bd_addr_t a;
+    memcpy(a, addr, sizeof(a));
+    return hid_host_connect(a, HID_PROTOCOL_MODE_REPORT, out_cid);
+}
+
+uint8_t bluecaster_hid_host_accept(uint16_t hid_cid) {
+    return hid_host_accept_connection(hid_cid, HID_PROTOCOL_MODE_REPORT);
+}
+
+uint8_t bluecaster_hid_host_decline(uint16_t hid_cid) {
+    return hid_host_decline_connection(hid_cid);
+}
+
+void bluecaster_hid_host_disconnect(uint16_t hid_cid) {
+    hid_host_disconnect(hid_cid);
+}
+
+/* The device's report descriptor, copied to `out`; 0 when there is none or
+ * it does not fit */
+uint16_t bluecaster_hid_host_descriptor(uint16_t hid_cid, uint8_t *out, uint16_t max) {
+    const uint8_t *data = hid_descriptor_storage_get_descriptor_data(hid_cid);
+    uint16_t len = hid_descriptor_storage_get_descriptor_len(hid_cid);
+    if (data == NULL || len == 0 || len > max) return 0;
+    memcpy(out, data, len);
+    return len;
+}
+
+/* An output report on the interrupt channel; report_id 0xFFFF: the device
+ * has no report IDs */
+uint8_t bluecaster_hid_host_send_output(uint16_t hid_cid, uint16_t report_id, const uint8_t *data, uint16_t len) {
+    int slot = -1;
+    if (hid_cid == 0 || len > BLUECASTER_HID_OUTPUT_MAX) return ERROR_CODE_INVALID_HCI_COMMAND_PARAMETERS;
+    for (int i = 0; i < BLUECASTER_HID_OUTPUT_LINKS; i++) {
+        if (hid_output[i].cid == hid_cid) { slot = i; break; }
+        if (slot < 0 && hid_output[i].cid == 0) slot = i;
+    }
+    if (slot < 0) return ERROR_CODE_MEMORY_CAPACITY_EXCEEDED;
+    hid_output[slot].cid = hid_cid;
+    memcpy(hid_output[slot].data, data, len);
+    return hid_host_send_report(hid_cid, report_id, hid_output[slot].data, len);
+}
+
+/* The link is closed: its output copy is free again */
+void bluecaster_hid_host_output_closed(uint16_t hid_cid) {
+    for (int i = 0; i < BLUECASTER_HID_OUTPUT_LINKS; i++) {
+        if (hid_output[i].cid == hid_cid) hid_output[i].cid = 0;
+    }
 }
 
 /* ======================================================================== */
@@ -705,6 +827,7 @@ static char local_name[249];
 void bluecaster_gap_setup(uint32_t class_of_device, uint16_t page_timeout, const char *name) {
     /* SSP: Just Works (no display, no keyboard), General Bonding without MITM */
     gap_ssp_set_io_capability(SSP_IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
+    hid_pairing_armed = 0;
     gap_ssp_set_authentication_requirement(SSP_IO_AUTHREQ_MITM_PROTECTION_NOT_REQUIRED_GENERAL_BONDING);
     /* BTstack 1.8.2 changed these defaults (auto accept off, key size 16):
      * kept as they were, so that pairing and older sinks behave as before */
@@ -1210,6 +1333,30 @@ uint8_t bluecaster_gap_connect(const uint8_t *addr, uint8_t addr_type) {
     return gap_connect(a, (bd_addr_type_t)addr_type);
 }
 
+/* Keyboards and mice (issue #413): the controller connects by itself to a
+ * device of its accept list once that device advertises. One LE connection
+ * attempt at a time: gap_connect is refused while this runs. */
+uint8_t bluecaster_gap_auto_connection_start(uint8_t addr_type, const uint8_t *addr) {
+    bd_addr_t a;
+    memcpy(a, addr, 6);
+    return gap_auto_connection_start((bd_addr_type_t)addr_type, a);
+}
+
+uint8_t bluecaster_gap_auto_connection_stop_all(void) {
+    return gap_auto_connection_stop_all();
+}
+
+/* How much of the time a connection attempt listens for its device; the
+ * other parameters as bluecaster_le_init sets them */
+void bluecaster_gap_connection_scan(uint16_t interval, uint16_t window) {
+    gap_set_connection_parameters(interval, window, 0x0008, 0x0018, 0, 500, 0, 0);
+}
+
+/* The controller has LE (only meaningful while LE is not hidden) */
+int bluecaster_le_supported(void) {
+    return hci_le_supported() ? 1 : 0;
+}
+
 int bluecaster_gap_connection_type(uint16_t con) {
     return (int)gap_get_connection_type(con);
 }
@@ -1252,6 +1399,44 @@ void bluecaster_tlv_delete(uint32_t tag) {
     if (tlv != NULL) tlv->delete_tag(context, tag);
 }
 
+/* ---- LE bonds (le_device_db_tlv) and the CCC values of their clients ---- */
+
+/* The bond belongs to an LE link that is up */
+int bluecaster_le_bond_in_use(int index) {
+    btstack_linked_list_iterator_t it;
+    hci_connections_get_iterator(&it);
+    while (btstack_linked_list_iterator_has_next(&it)) {
+        hci_con_handle_t con = ((hci_connection_t *)btstack_linked_list_iterator_next(&it))->con_handle;
+        /* (a classic link's index is not set before key derivation) */
+        if (gap_get_connection_type(con) == GAP_CONNECTION_LE && sm_le_device_index(con) == index) return 1;
+    }
+    return 0;
+}
+
+/* le_device_db_add has no free entry and dropped the oldest bond: what was
+ * kept beside it goes too, and the rest of BTstack and the application learn
+ * of it as of any deleted bond (gap_delete_bonding) */
+void bluecaster_le_bond_evicted(int index, int addr_type, const unsigned char *addr) {
+    uint8_t buffer[20];
+    bd_addr_t a;
+    memcpy(a, addr, 6);
+    bluecaster_rs_le_bond_evicted(index, addr_type, a);
+    uint16_t size = hci_event_create_from_template_and_arguments(
+        buffer, sizeof(buffer), &gap_subevent_bonding_deleted, addr_type, a, index, HCI_CON_HANDLE_INVALID);
+    hci_emit_btstack_event(buffer, size, 1);
+}
+
+/* The TLV tag of a CCC value att_server keeps: 'BTC' + slot as in BTstack,
+ * slots from 256 on 'AW1' + slot .. 'AW9' + slot (the next letter, 'BTD', are
+ * the bonds) */
+uint32_t bluecaster_ccc_tag(uint32_t slot) {
+    uint32_t page = slot >> 8;
+    if (page == 0) return ((uint32_t)'B' << 24) | ((uint32_t)'T' << 16) | ((uint32_t)'C' << 8) | slot;
+    return ((uint32_t)'A' << 24) | ((uint32_t)'W' << 16) | (((uint32_t)'0' + page) << 8) | (slot & 0xFF);
+}
+
+uint32_t bluecaster_ccc_slots(void) { return NVN_NUM_GATT_SERVER_CCC; }
+
 /* ---- GATT client (events of queries and listeners: SOURCE_GATT_CLIENT) ---- */
 
 uint8_t bluecaster_gatt_discover_primary_services(uint16_t con) {
@@ -1278,6 +1463,13 @@ uint8_t bluecaster_gatt_discover_characteristics(uint16_t con, uint16_t start, u
 
 uint8_t bluecaster_gatt_read_long_value(uint16_t con, uint16_t value_handle) {
     return gatt_client_read_long_value_of_characteristic_using_value_handle(&handler_gatt_client, con, value_handle);
+}
+
+/* Every attribute of this type in the range (ATT Read By Type), each as
+ * GATT_EVENT_CHARACTERISTIC_VALUE_QUERY_RESULT with its handle: descriptors
+ * too (the Report Reference of each HID report) */
+uint8_t bluecaster_gatt_read_by_type(uint16_t con, uint16_t start, uint16_t end, uint16_t uuid16) {
+    return gatt_client_read_value_of_characteristics_by_uuid16(&handler_gatt_client, con, start, end, uuid16);
 }
 
 /* BTstack keeps the value pointer until the write is done: a copy in the

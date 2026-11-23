@@ -361,7 +361,8 @@ export function DevicePicker(props: {
         <Icon name={d.audio ? "headphones" : "bluetooth"} />
         <span class="device-row-text" id={nameId()}>
           <span class="device-row-name">{label()}</span>{" "}
-          <span class="mono muted">{d.address}</span>
+          {/* Every address of a set: both earbuds' */}
+          <span class="mono muted">{[d.address, ...d.set_addresses].join(", ")}</span>
         </span>
         <span class="tags">
           <Show when={d.saved && !props.savedOnly}>

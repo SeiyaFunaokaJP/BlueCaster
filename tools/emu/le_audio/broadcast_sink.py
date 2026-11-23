@@ -7,7 +7,8 @@ Announcement, periodic advertising sync, BASE and BIGInfo, LE BIG Create Sync
 advertises is parsed with Bumble's own parsers (bap.BroadcastAudioAnnouncement,
 pbp.PublicBroadcastAnnouncement, bap.BasicAudioAnnouncement) after a strict
 length walk of the AD and BASE structures, and logged for run_test.py
-(le_audio_tests/auracast.py):
+(le_audio_tests/auracast.py). With a name suffix the sink is "Auracast sink
+<suffix>" and follows only the broadcast whose name ends with it:
 
     Auracast sink: broadcast from <addr> SID <n>: Broadcast ID 0x<id>, Broadcast Name "<name>"
     Auracast sink: Public Broadcast Announcement: features 0x<f> (<flags>), metadata <entries>
@@ -17,7 +18,8 @@ length walk of the AD and BASE structures, and logged for run_test.py
     Auracast sink: BIGInfo: <n> BIS, ...
     Auracast sink: BIG sync established: BIS <i> -> 0x<handle>, ...
     Auracast sink: BIG sync failed: <reason> (0x<status>)
-    Auracast sink: BIG sync lost (reason 0x<r>): BIS <i>: <n> SDUs, ...
+    Auracast sink: BIG sync lost (reason 0x<r>): BIS <i>: <n> SDUs of <len> octets, ...
+    Auracast sink: BIS <i>: SDU <seq>: <digest>    (the SDU with sequence number DIGEST_SEQ)
     Auracast sink: problem: <text>         (malformed data, unexpected values)
 
 The sink's HCI traffic (ISO data included) goes to the PacketLogger capture
@@ -25,6 +27,7 @@ for bluecaster_decode --le-audio --received.
 """
 
 import asyncio
+import hashlib
 import logging
 import struct
 import warnings
@@ -49,6 +52,9 @@ PUBLIC_BROADCAST_ANNOUNCEMENT = 0x1856
 BASIC_AUDIO_ANNOUNCEMENT = 0x1851
 BROADCAST_NAME = 0x30
 LOCATIONS = {0x1: 'FL', 0x2: 'FR', 0x4: 'FC', 0x8: 'LFE', 0x10: 'BL', 0x20: 'BR'}
+# The SDU whose digest is logged per BIS (3 s into a broadcast): BIS that
+# carry the same audio at the same configuration log the same digest
+DIGEST_SEQ = 300
 STATUS_NAMES = {0x3D: 'MIC failure', 0x25: 'encryption mode not acceptable', 0x12: 'invalid parameters'}
 
 
@@ -175,6 +181,7 @@ class BroadcastSink:
         self.sdus = {}             # BIS index -> SDUs received
         self.seq = {}              # BIS index -> last sequence number
         self.gaps = {}
+        self.lengths = {}          # BIS index -> SDU lengths seen
 
     def problem(self, text):
         log.warning('%s: problem: %s', self.name, text)
@@ -322,6 +329,10 @@ class BroadcastSink:
     def on_sdu(self, index, packet):
         self.sdus[index] += 1
         seq = packet.packet_sequence_number
+        sdu = bytes(packet.iso_sdu_fragment)
+        self.lengths.setdefault(index, set()).add(len(sdu))
+        if seq == DIGEST_SEQ:
+            log.info('%s: BIS %d: SDU %d: %s', self.name, index, seq, hashlib.sha1(sdu).hexdigest()[:16])
         last = self.seq.get(index)
         if last is not None and seq != (last + 1) & 0xFFFF:
             self.gaps[index] = self.gaps.get(index, 0) + 1
@@ -329,7 +340,8 @@ class BroadcastSink:
 
     def on_big_sync_lost(self, reason):
         log.info('%s: BIG sync lost (reason 0x%02X): %s', self.name, reason,
-                 ', '.join(f'BIS {i}: {n} SDUs' + (f' ({self.gaps[i]} sequence gaps)' if self.gaps.get(i) else '')
+                 ', '.join(f'BIS {i}: {n} SDUs of {"/".join(str(x) for x in sorted(self.lengths.get(i, [])))} octets'
+                           + (f' ({self.gaps[i]} sequence gaps)' if self.gaps.get(i) else '')
                            for i, n in sorted(self.sdus.items())))
 
 

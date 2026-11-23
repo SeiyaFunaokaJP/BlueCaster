@@ -20,6 +20,7 @@ pub mod debug_command;
 mod driver_files;
 pub mod esco_watch;
 pub mod events;
+pub mod hid;
 pub mod intel;
 mod le;
 pub mod le_bond_file;
@@ -54,6 +55,8 @@ use app::{HostApp, Job, Setup};
 pub use btstack_sys::{CtkdOutcome, ImportedLeBond, LeBondAdded, LeKeys, expect_transport_loss, set_ctkd};
 pub use capture::HciCapture;
 pub use events::{addr_str, parse_addr};
+pub use hid::{HidConfig, HidCounters, HidEvent, Passkey};
+pub use le::api::LE_NO_LINK;
 pub use le::bap::{CigOverrides, set_cig_overrides};
 pub use le::gatt_cache as le_gatt_cache;
 pub use le::iso_recv::{
@@ -62,8 +65,8 @@ pub use le::iso_recv::{
 };
 pub use le::modules::csip::{forget_stored_file as le_forget_stored_sirk, stored_sets as le_stored_sets};
 pub use le::{
-    LeAddr, LeBroadcast, LeConfig, LeDeviceId, LeDeviceInfo, LeRequest, LeScanResult, LeSduSink, LeStreamRequest,
-    LeStreamStarted, LeStreamStats, LeStreamStatus,
+    BroadcastLayout, LeAddr, LeBroadcast, LeConfig, LeDeviceId, LeDeviceInfo, LeRequest, LeScanResult, LeSduSink,
+    LeStreamRequest, LeStreamStarted, LeStreamStats, LeStreamStatus,
 };
 pub use media::{MediaPacket, MediaSink};
 pub use rfcomm::{
@@ -204,6 +207,10 @@ pub struct HostConfig {
     /// nothing else of LE. Not used with `le_audio`, which sets up its own.
     /// Both None: LE stays off and hidden.
     pub le_keys: Option<LeKeysConfig>,
+    /// HID host (experimental, developer mode; issue #413): keyboards and
+    /// mice on the list may connect, and their input goes to Windows. None:
+    /// the stack has no HID at all.
+    pub hid: Option<HidConfig>,
     /// Headphone battery level: an HFP audio gateway that only makes the
     /// service level connection, where the headphones report it (and the LE
     /// Battery Service). Off: no HFP at all.
@@ -272,6 +279,7 @@ impl HostConfig {
             afh: None,
             le_audio: None,
             le_keys: None,
+            hid: None,
             battery: false,
             voice: false,
             on_loader: None,
@@ -381,6 +389,8 @@ pub enum HostEvent {
     /// The voice codecs the headphones listed on their HFP service level
     /// connection ("cvsd", "msbc", "lc3_swb")
     VoiceCodecs(Vec<&'static str>),
+    /// A keyboard or mouse of the HID host (experimental)
+    Hid(HidEvent),
 }
 
 /// Settings and readings shared with the BTstack thread without locks
@@ -474,8 +484,16 @@ pub struct BtHost {
     capture: HciCapture,
     /// LE Audio is configured (HostConfig::le_audio was Some)
     le_on: bool,
+    /// The LE core runs: LE Audio, or keyboards and mice (which may be LE
+    /// devices) without it
+    le_core_on: bool,
     /// HFP audio is offered (HostConfig::voice)
     voice_on: bool,
+    /// The HID host runs (HostConfig::hid was Some)
+    hid_on: bool,
+    hid_counters: Arc<HidCounters>,
+    /// Where the HID host's input goes (with hid_on)
+    hid_sink: Option<Arc<dyn hid_input::sink::InputSink>>,
     /// What the LE worker API reads without a round trip
     le: Arc<le::core::LeShared>,
 }
@@ -569,7 +587,7 @@ impl BtHost {
     /// loader first), or with `tool` that loader instead (the probe, a
     /// script), its report to the sender
     fn launch(
-        config: HostConfig,
+        mut config: HostConfig,
         stats: Arc<LinkStats>,
         tool: Option<(mpsc::Sender<probe::ProbeReport>, ToolLoader)>,
     ) -> Result<BtHost, InitFailure> {
@@ -596,6 +614,18 @@ impl BtHost {
         let capture = config.capture.clone();
         let le_on = config.le_audio.is_some();
         let voice_on = config.voice;
+        let hid_on = config.hid.is_some();
+        // The sink is chosen here, so that the core can ask it what reached
+        // Windows (hid_sink) while the engine passes input to it
+        let hid_sink = config.hid.as_mut().map(|h| {
+            let sink = hid::sink_for(h);
+            h.sink = Some(sink.clone());
+            sink
+        });
+        // Keyboards and mice over LE need the LE core, also without LE Audio
+        let le_core_on = le_on || hid_on;
+        let hid_counters = Arc::new(HidCounters::default());
+        let hid_counters_app = hid_counters.clone();
         let le_shared = Arc::new(le::core::LeShared::default());
         tracing::debug!(
             "host start: transport {:?}, realtek pid 0x{:04X} files {:?}, intel loader {}, mediatek loader {}, qualcomm loader {}, atheros loader {}, realtek driver chip {:04X?}, broadcom {:04X?}, payload limit {}, le audio {}, battery {}",
@@ -616,6 +646,7 @@ impl BtHost {
             let (shared, controls, stats) = (shared.clone(), controls.clone(), stats.clone());
             let (le_shared, le_jobs) = (le_shared.clone(), jobs_tx.clone());
             let le_events = events_tx.clone();
+            let hid_events = events_tx.clone();
             std::thread::Builder::new()
                 .name("bt-runloop".into())
                 .spawn(move || {
@@ -639,6 +670,7 @@ impl BtHost {
                         afh,
                         le_audio,
                         le_keys,
+                        hid,
                         battery,
                         voice,
                         on_loader,
@@ -646,18 +678,37 @@ impl BtHost {
                     } = config;
                     let failed_shared = shared.clone();
                     let result = btstack_sys::run(move |stack, remote| {
-                        // LE Audio, or the LE keys of classic devices (SM):
-                        // the controller's LE support visible to BTstack
-                        // (before hci_init / the transport)
-                        if le_audio.is_some() || le_keys.is_some() {
+                        // LE Audio, keyboards and mice, or the LE keys of
+                        // classic devices (SM): the controller's LE support
+                        // visible to BTstack (before hci_init / the transport)
+                        if le_audio.is_some() || le_keys.is_some() || hid.is_some() {
                             stack.set_le_hidden(false);
                         }
+                        // Keyboards and mice without LE Audio: the
+                        // controller resolves the private addresses of the
+                        // bonded ones (LE Audio's connection code works with
+                        // those addresses: never with LE Audio)
+                        if hid.is_some() && le_audio.is_none() {
+                            stack.set_address_resolution_hidden(false);
+                        }
+                        let hid_engine = hid::HidEngine::new(hid.as_ref(), hid_counters_app, hid_events);
                         // HFP audio: HCI init's SCO commands (flow control,
                         // erroneous data reporting) only for a stack with voice
                         if voice {
                             stack.set_sco_hidden(false);
                         }
-                        let le = le_audio.map(|cfg| {
+                        // LE Audio's profiles only with LE Audio; keyboards
+                        // and mice alone get the LE core with HID over GATT
+                        // and the bonds of le_keys
+                        let audio = le_audio.is_some();
+                        let le_config = le_audio.or_else(|| {
+                            hid.as_ref().map(|_| LeConfig {
+                                bonds_file: le_keys.as_ref().map(|k| k.bonds_file.clone()),
+                                imported_bonds_file: le_keys.as_ref().and_then(|k| k.imported_bonds_file.clone()),
+                                ..LeConfig::default()
+                            })
+                        });
+                        let le = le_config.map(|cfg| {
                             let poster = le::core::LePoster::new(le_jobs, remote);
                             le::core::LeCore::new(
                                 cfg,
@@ -667,6 +718,8 @@ impl BtHost {
                                 le_events,
                                 battery,
                                 local_name.clone(),
+                                audio,
+                                hid.as_ref().map(|_| hid_engine.clone()),
                             )
                         });
                         capture.reset_tracking();
@@ -694,6 +747,8 @@ impl BtHost {
                             probe,
                             local_name,
                             le_keys,
+                            hid,
+                            hid_engine,
                         };
                         let mut app = HostApp::new(
                             shared,
@@ -779,7 +834,11 @@ impl BtHost {
             last: Mutex::new(None),
             capture,
             le_on,
+            le_core_on,
             voice_on,
+            hid_on,
+            hid_counters,
+            hid_sink,
             le: le_shared,
         };
         Ok(host)
@@ -1713,6 +1772,95 @@ impl BtHost {
     /// The stack offers HFP audio ([`HostConfig::voice`])
     pub fn voice_enabled(&self) -> bool {
         self.voice_on
+    }
+
+    /// The stack runs the HID host ([`HostConfig::hid`])
+    pub fn hid_enabled(&self) -> bool {
+        self.hid_on
+    }
+
+    /// Where the HID host's input goes: what reached Windows from which
+    /// device, and the self-test. None without the HID host.
+    pub fn hid_sink(&self) -> Option<Arc<dyn hid_input::sink::InputSink>> {
+        self.hid_sink.clone()
+    }
+
+    /// What the HID host did so far (counts only)
+    pub fn hid_counters(&self) -> &Arc<HidCounters> {
+        &self.hid_counters
+    }
+
+    /// The keyboards and mice that may connect from now on, classic and LE;
+    /// the links of the others are closed (empty lists close all). LE ones
+    /// are connected in the background whenever they advertise.
+    pub fn hid_set_devices(&self, devices: Vec<[u8; 6]>, le_devices: Vec<LeAddr>) {
+        self.post(move |app, s| {
+            app.hid.set_devices(s, devices);
+            if let Some(le) = app.le.as_mut().filter(|le| le.initialized()) {
+                le.run(s, |ctx| ctx.hid_set_le(le_devices));
+            }
+        });
+    }
+
+    /// The stack can connect LE keyboards and mice: its LE core runs, HCI
+    /// works and the adapter has LE. False for a while after the start.
+    pub fn hid_le_ready(&self) -> bool {
+        self.hid_on && self.le_core_ready() && self.le.le_supported.load(Ordering::Acquire)
+    }
+
+    /// The adapter turned out to have no Bluetooth LE (known once HCI
+    /// works)
+    pub fn hid_le_unavailable(&self) -> bool {
+        self.hid_on && self.le_core_ready() && !self.le.le_supported.load(Ordering::Acquire)
+    }
+
+    /// Connects an LE keyboard or mouse on the list (pairing it first if
+    /// needed): in the background, as soon as it advertises; a device that
+    /// refused pairing before is tried again. [`HostEvent::Hid`] tells when
+    /// it is connected.
+    pub fn hid_le_connect(&self, addr: LeAddr) -> Result<(), u8> {
+        if !self.le_core_on {
+            return Err(btstack_sys::consts::ERROR_CODE_COMMAND_DISALLOWED);
+        }
+        self.call(JOB_TIMEOUT, move |app, s| match app.le.as_mut().filter(|le| le.initialized()) {
+            Some(le) => le.run(s, |ctx| ctx.hid_le_connect(addr)),
+            None => Err(btstack_sys::consts::ERROR_CODE_COMMAND_DISALLOWED),
+        })
+        .unwrap_or(Err(0xFF))
+    }
+
+    /// Opens the HID channels to a device on the list (pairing it first if
+    /// needed). [`HostEvent::Hid`] tells how it went.
+    pub fn hid_connect(&self, addr: [u8; 6]) -> Result<(), u8> {
+        self.call(JOB_TIMEOUT, move |app, s| app.hid.connect(s, addr)).unwrap_or(Err(0xFF))
+    }
+
+    pub fn hid_disconnect(&self, addr: [u8; 6]) {
+        self.post(move |app, s| app.hid.disconnect(s, addr));
+    }
+
+    /// The user adds the keyboard or mouse `addr`: until
+    /// [`BtHost::hid_pairing_end`], its pairing may show a number the user
+    /// types on it ([`HidEvent::Passkey`]). Every other device pairs as
+    /// before. Returns the window's generation for hid_pairing_end.
+    pub fn hid_pairing_begin(&self, addr: [u8; 6], le: bool) -> u32 {
+        let generation = hid::next_pairing_generation();
+        if self.hid_on {
+            self.post(move |app, s| app.setup.hid_engine.borrow_mut().pairing_begin(s, addr, le, generation));
+        }
+        generation
+    }
+
+    /// Ends the pairing window of `addr` (with `generation`: only that one)
+    pub fn hid_pairing_end(&self, addr: [u8; 6], generation: Option<u32>) {
+        if self.hid_on {
+            self.post(move |app, s| app.setup.hid_engine.borrow_mut().pairing_end(s, Some(&addr), generation));
+        }
+    }
+
+    /// The keyboards and mice connected now
+    pub fn hid_connected(&self) -> Vec<[u8; 6]> {
+        self.call(JOB_TIMEOUT, |app, _| app.hid.connected()).unwrap_or_default()
     }
 
     /// What [`BtHost::voice_start`] would answer now, without opening

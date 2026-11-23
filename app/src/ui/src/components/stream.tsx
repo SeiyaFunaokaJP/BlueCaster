@@ -928,6 +928,19 @@ export function openFirmwareFolder(app: AppContext) {
   return app.run(() => app.core.transport.openFolder(`${app.core.state.snap!.config_dir}\\firmware`));
 }
 
+/** The button that opens the firmware folder. None while the core runs as
+ *  a service: its folder is protected, and only the download fetches files. */
+export function FirmwareFolderButton(props: { kind?: "subtle" }) {
+  const app = useApp();
+  return (
+    <Show when={!app.core.state.snap?.service_mode}>
+      <Button icon="folder_open" kind={props.kind} onClick={() => void openFirmwareFolder(app)}>
+        {t("firmware.open_folder")}
+      </Button>
+    </Show>
+  );
+}
+
 /** Fetches an adapter's Realtek files from linux-firmware once the user
  *  has read where they come from and under which terms (issue #81) */
 export function FirmwareDownload(props: { files: string[]; kind?: "strong" }) {

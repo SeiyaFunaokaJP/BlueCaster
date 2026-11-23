@@ -31,14 +31,14 @@ for reference (`git show b819893:app/src/le_audio/<file>`).
 | `app/src/crates/le-audio/` | Pure logic, no BTstack, `#![forbid(unsafe_code)]`: `defs` (UUIDs, LTV types, contexts, locations, ASE states), `ltv`, `pacs_ascs` (PAC records, ASE values, Control Point PDUs), `presets` (BAP / GMAP configurations), `plan` (`plan_stream`: preset, ASEs, CIS, channels; the source direction of a conversational stream), `csip_crypto` (AES-128, AES-CMAC, s1 / k1 / sef / sdf / sih, RSI), `vcp_scale`, `ccp_model` (call model, simulation), `mcp_model` (media state, `SimulatedPlayer`), `db_hash` (Database Hash), `sdu_queue` (jitter buffer, send guard, counters and their log lines) |
 | `app/src/crates/lc3-sys/` | liblc3 (`extern/btstack/3rd-party/lc3-google`, Apache-2.0) built with `cc`; `Lc3Encoder` |
 | `app/src/crates/codec/src/lc3.rs` | LC3 behind the `codec` crate's `lc3` feature (not a `CodecKind`) |
-| `app/src/crates/btstack-sys/` | `btstack_config.h` LE block (`ENABLE_BLE`, LE central / peripheral, LE Secure Connections with micro-ecc, extended advertising, `ENABLE_LE_ISOCHRONOUS_STREAMS`, `MAX_NR_CIS 4`, `HCI_ISO_PAYLOAD_SIZE 400`, `NVN_NUM_GATT_SERVER_CCC 256`); `build.rs` adds `src/ble` and micro-ecc; `src/le.rs` (Stack's LE API: scan, connect, SM, LE device DB, TLV through a `TlvStore` (bt-host's `le_bond_file::TlvFile`, encrypted at rest), GATT client, att_db_util, att_server, CIG / CIS, ISO send), `src/att.rs` (ATT read / write callbacks, notification queue), `src/events.rs` (event readers), `src/transport.rs` (LE hidden, below), `src/timer_resolution.rs` (`HighTimerResolution`) |
+| `app/src/crates/btstack-sys/` | `btstack_config.h` LE block (`ENABLE_BLE`, LE central / peripheral, LE Secure Connections with micro-ecc, extended advertising, `ENABLE_LE_ISOCHRONOUS_STREAMS`, `MAX_NR_CIS 4`, `HCI_ISO_PAYLOAD_SIZE 400`, `NVM_NUM_DEVICE_DB_ENTRIES 64` LE bonds, `NVN_NUM_GATT_SERVER_CCC` for all 23 CCCs of each); `build.rs` adds `src/ble` and micro-ecc; `src/le.rs` (Stack's LE API: scan, connect, SM, LE device DB, TLV through a `TlvStore` (bt-host's `le_bond_file::TlvFile`, encrypted at rest), GATT client, att_db_util, att_server, CIG / CIS, ISO send), `src/le_bonds.rs` (what the TLV keeps beside a bond, and a full bond list: the oldest bond not in use goes, with a warning), `src/att.rs` (ATT read / write callbacks, notification queue), `src/events.rs` (event readers), `src/transport.rs` (LE hidden, below), `src/timer_resolution.rs` (`HighTimerResolution`) |
 | `app/src/crates/hci-transport/src/usb.rs` | HCI ISO data on the ACL bulk endpoints (OUT: the bulk ACL slot; IN: passed up as ACL, `hci.c` reclassifies by CIS handle), as in v1 and Linux btusb |
 | `app/src/crates/bt-host/src/le/` | The LE core: `mod.rs` (public types), `api.rs` (`BtHost::le_*`, worker side), `core.rs` (`LeCore`, `LeCtx`, scan / connect / SM / discovery, module dispatch), `gatt_client.rs` (per-connection queue), `gatt_server.rs` (the PC's GATT server), `bap.rs` (PACS / ASCS client, `Unicast` state machine), `iso_send.rs` (`IsoSender`), `iso_recv.rs` (ISO data of source ASEs: parser, `IsoRx`, `LeRxHandle`), `module.rs` (hook traits) |
 | `app/src/crates/bt-host/src/le/modules/` | The profiles: `csip.rs`, `vcp.rs`, `mcp.rs`, `ccp.rs`, `tmap_gmap.rs`, `bas.rs`; `mod.rs` registers them (v1's order: CSIP, VCP, MCP, CCP, TMAP / GMAP, then BAS) |
 | `app/src/crates/pipeline/src/le.rs` | The LE encode thread: capture -> stereo downmix -> linear resampling to the LC3 rate -> LC3 per channel -> SDU set per frame into the `LeSduSink` |
 | `app/src/crates/pipeline/src/le_rx.rs` | The headset microphone: the "le-decode" thread (jitter buffer by sequence number, LC3 decoding with PLC, mono mix) and its output trait `PcmOut` |
 | `app/src/crates/core/src/le_stream.rs` | The session of an LE Audio profile (v1 `a2dp_service_le_audio.cpp`): connect, start, VolumeSync, re-setup after a loss (3 times), the `error.le_audio_*` messages; the headset microphone (`LeMicPath`) into the output that `voice.rs` resolves |
-| `app/src/crates/core/src/le_media.rs` | MCP's Windows backend (System Media Transport Controls, media keys) |
+| `app/src/crates/session-host/src/host/media/smtc.rs` | MCP's Windows backend (System Media Transport Controls, media keys); `host/media.rs` runs it in the session agent with `--session-agent` |
 | `app/src/crates/core/src/service.rs` | `HostConfig.le_audio` from the setting or the CLI, the deferred toggle, `scan_devices` (classic + LE entries; also the CLI's `--scan` with `--le-audio`), `le_stream()` |
 | `app/src/crates/core/src/devices.rs` | `le_audio_devices.txt` (`load_le` / `save_le` / `remove_le`) |
 | `app/src/core/src/cli.rs` | `--le-audio`, `--le-device`, `--le-preset`, `--le-low-latency`, `--le-scan`, `--le-sim-volume`, `--mcp-dry-run`, `--ccp-sim`, `--ccp-console` (v1 `le_audio_cli.cpp`'s flow and lines); `--headset-mic`, `--mic-output` (the microphone) |
@@ -385,7 +385,8 @@ reach `IsoSender::on_hci_event` through `LeCore::on_hci`).
 - Watchdog: a CIS without a completion for 2 s while SDUs wait in the
   controller is stalled ("CIS 0x....: no SDU completed for 2 s"). All CIS
   stalled -> the stream is reported lost and set up again; some -> the
-  others play on, `LeStreamStats::cis_stalled` and `status.le_set_partial`.
+  others play on, `LeStreamStats::cis_stalled` and `status.le_no_audio`. A
+  CIS stalled from the start has the session set the stream up again once.
 - Logs: every LE CIS Established ("CIS 0x.... parameters: NSE, BN, FT, max
   PDU, ISO interval, transport latency, PHY"), every 10 s "LE stream health"
   (per CIS: SDUs/s, late, completion delay p50 / p90, queue peak), and at the
@@ -430,6 +431,7 @@ refuses the Nth CIS of LE Create CIS with 0x1E; the others come up, with
 BlueCaster's controller), `--completion-delay-ms MS` (Number Of Completed
 Packets MS after delivery, with the matching FT in LE CIS Established),
 `--withhold-completions N` (the Nth CIS never completes while up),
+`--reject-enable` (every Enable is rejected with 0x0E after the CIG is set),
 `--mic [SINKS]` / `--mic-rates` (a
 microphone: Source PAC 16 / 32 kHz 10 ms, a source ASE, a 1 kHz tone sent
 from pre-encoded LC3 frames in `le_audio/mic_frames.py` once BlueCaster has
@@ -481,7 +483,7 @@ contains
 
 | File | Cases |
 |------|-------|
-| `core.py` | `stereo`, `two-ase`, `earbuds`, `mono-16k`, `link-loss`, `release-cis`, `contexts-later`, `afh`, `no-iso-buffers`, `cis-refused`, `cis-refused-late` |
+| `core.py` | `stereo`, `two-ase`, `earbuds`, `mono-16k`, `link-loss`, `release-cis`, `contexts-later`, `afh`, `no-iso-buffers`, `cis-refused`, `cis-refused-late`, `enable-rejected`, `slow-completions`, `cis-stalled` |
 | `privacy.py` | `privacy-rpa` |
 | `csip.py` | `csip-set`, `csip-encrypted-sirk`, `csip-missing-member`, `csip-both-named`, `csip-link-loss`, `csip-lock-denied`, `csip-no-lock` |
 | `vcp.py` | `vcp-set`, `vcp-remote`, `vcp-change-counter`, `vcp-earbuds`, `vcp-press-during-write`, `vcp-press-before-write` |
@@ -535,12 +537,15 @@ it), button presses during BlueCaster's own write are applied afterwards, 0-127 
 so the profile's volume sync applies as for A2DP. `--le-sim-volume` runs
 VolumeSync against a simulated Windows volume in the CLI.
 
-**MCP (GMCS server, `mcp.rs`, Windows side in `core/src/le_media.rs`).**
+**MCP (GMCS server, `mcp.rs`, Windows side in `session-host/src/host/media/smtc.rs`).**
 GMCS with v1's 11 characteristics, CCID 1. The control point goes to the
 current SMTC session, otherwise to media keys; with "Control playback with the
 audio device's buttons" off, it answers Command Cannot Be Completed.
 `--mcp-dry-run` (always with `--hci-tcp`): a
-simulated player; commands are only logged ("MCP: dry run: PLAY ..."). Long
+simulated player; commands are only logged ("MCP: dry run: PLAY ...").
+With `--session-agent` the player (Windows' or the simulated one) runs in
+the session agent: the core answers reads from a copy that the agent's
+events update, and sends commands without blocking the BTstack thread. Long
 reads of changing text return 0x80; notifications are truncated to ATT_MTU - 3
 at a UTF-8 boundary.
 
@@ -602,9 +607,20 @@ it.
   BIG -> GAP_SUBEVENT_BIG_TERMINATED -> advertising removed ("Auracast:
   stopped"). A BIG the controller ends counts as a lost stream
   (error.auracast). `BtHost::le_start_broadcast` / `le_stop_broadcast`.
-- core `le_stream::run_broadcast`: no device; capture as for unicast.
+- core `le_stream::run_broadcast`: no device; capture as for unicast. An
+  adapter that stops working under the broadcast (reset, unplugged, sleep:
+  `BtHost::stalled`, a stale stack) ends no BIG the stack hears of, so the
+  session checks for it: with reconnecting on, the state goes to
+  Reconnecting and the broadcast is set up again on a new stack (up to 5
+  attempts, 3 s apart, same name, Broadcast_ID and source); otherwise, or
+  when the adapter does not come back, error.auracast.
+- Layouts (`le_audio::broadcast::BroadcastLayout`; `--auracast-layout`,
+  the Auracast tab's channel choice, `stream.start_broadcast`'s `layout`):
+  stereo, mono, split and `matrix_<front>_<rear>` (older names for some of
+  those: quad, front_rear, pairs, rear_subgroups, subgroups). Below: split
+  first, then the matrix layouts built on it.
 - Split (`--auracast-split`, the Auracast tab's "Left / right separately",
-  `stream.start_broadcast`'s `split`): left and right as two broadcasts of
+  layout `split`): left and right as two broadcasts of
   their own, "<name> L" and "<name> R" (Broadcast_ID + 1 for R), each an
   advertising set (SID 1 / 2) and a BIG (handle 0 / 1) of one mono BIS
   without a location, for a pair of speakers that each tune to one
@@ -629,6 +645,71 @@ it.
   `--auracast-split` is an argument error, and `stream.start_broadcast` with
   both `mono` and `split` true is refused as a bad request
   (`stream.bad_channels`).
+- Quad (layout `quad`, `matrix_separate_separate`): the four speakers of a
+  multichannel source, each a mono broadcast of its own, "<name> FL" /
+  "FR" / "RL" / "RR" (BIG 0-3, SID 1-4, all four shim slots). Front +
+  rear (`front_rear`): the front as one stereo broadcast "<name> Front"
+  (two BIS, Front Left / Right) and the rear as two mono ones. The plan
+  marks the rear BIS `ChannelSource::RearLeft` / `RearRight`. The encoder
+  then takes the source's speakers instead of the stereo downmix:
+  `audio_capture::Capture::channel_mask` (the mix format's dwChannelMask)
+  goes through `LePipelineConfig::channel_mask`, and the interleaved
+  channels are mapped by their mask bits to four lanes, front left / right
+  and rear left / right. A matrix layout gets the lanes from the matrix
+  mixer (below); `pipeline::le::speaker_matrix` is the fixed mapping of a
+  plan with rear channels and no mixer (the centre at -3 dB and the LFE at
+  -6 dB in both fronts, back and side in the rear, -3 dB each when a source
+  has both). No mask, or one that does not fit the channel count: the usual
+  mask of the count. A source without rear speakers (stereo) plays its
+  front on the rear too. The EQ runs on all four lanes. More than two BIS:
+  RTN 2 instead of the presets' 4 (`RTN_MANY_BIS`; four BIS at RTN 4 and
+  their advertising hardly fit a 10 ms interval). The rear may run at
+  another preset than the front (see "Matrix mixer"). Source: an output
+  device set to 5.1 / 7.1 (e.g. VB-Audio Hi-Fi Cable, its speaker setup in
+  the Windows sound settings) as the default output, captured as the
+  system audio (the tab's source), or chosen as the virtual / output device.
+  Tried on 2026-11-20 on the ASUS BT600: quad and front_rear do not start.
+  Two BIGs come up, the third LE Create BIG gets 0x0D (Connection Rejected,
+  Limited Resources) from the controller, at 24 and 48 kHz alike. Pairs
+  (layout `pairs`, "<name> Front" / "<name> Rear", two stereo broadcasts:
+  four BIS in two BIGs) tells whether the limit is two BIGs or two BIS.
+  It started at 24 and 48 kHz: the limit is two BIGs.
+- Rear subgroups (layout `rear_subgroups`):
+  the front in stereo, the rear as one broadcast "<name> Rear" whose BASE
+  has two subgroups of one mono BIS each, labelled by Program_Info (0x03)
+  "Rear left" / "Rear right", as multi-language broadcasts offer their
+  languages (`base_with`, `group_base_ad`). Three streams in two BIGs;
+  whether a receiver lets one pick the subgroup is what it tries. On
+  2026-11-20 (BT600, a phone and JBL GO 4): it starts, Front joins as
+  stereo, but the receiver shows "Rear left" or "Rear right" seemingly at
+  random, so a subgroup cannot be picked reliably. Layout `subgroups`
+  puts the front in subgroups too (mono BIS, "Front left" / "Front right").
+  It runs, but the receiver always takes the left (first) subgroup. Left
+  as it is for now: other receivers may let one pick.
+- Adapter (`Settings::auracast_adapter_id`, the Auracast tab's **Adapter**,
+  shown once two adapters have WinUSB): the adapter broadcasts go on.
+  Adapters differ here: some cannot broadcast (on the Intel AX211 the
+  broadcast setup timed out), and some only broadcast, with no classic
+  Bluetooth, but run more BIGs than the others (an nRF5340 DK: four; the
+  ASUS BT600: two). So the adapter for everything else and the one for
+  Auracast are chosen apart. Empty, **Use the current adapter**: the
+  adapter everything else uses. A process holds one BTstack, so the two
+  never run at once: `run_broadcast` holds `Inner::broadcast_wanted` while
+  it runs, `adapter::adapter_for` then names the Auracast adapter, and
+  `ensure_host` restarts the stack when the running one was started for
+  another adapter (`Inner::host_adapter`): on it for a broadcast, back on
+  `Settings::adapter_id` for the next scan or connection. When a broadcast
+  on its own adapter ends, BlueCaster shuts that stack down, which frees
+  the Auracast adapter. A broadcast does not start while the Auracast
+  adapter is missing (`Inner::auracast_adapter_missing`): the first other
+  adapter found might not support broadcasting. A broadcast set up again
+  after its adapter stopped working waits until that adapter is back
+  (`Inner::wanted_adapter_present`) and opens the same adapter, even when
+  none is chosen (`Inner::broadcast_adapter`): a stack started in the
+  meantime would open the first other adapter found. Developer mode off:
+  not used. The
+  list names each adapter with its MAC address, as two can share a name
+  ("Bluetooth Controller").
 
 BTstack 1.8.1 pitfalls found along the way:
 - `HCI_EVENT_BIS_CAN_SEND_NOW` is emitted only 4 bytes long, so the BIS handle
@@ -644,9 +725,15 @@ emulated controllers; `le_audio/broadcast_sink.py`: a Bumble host as the
 broadcast sink, parsing the announcements and the BASE with Bumble's own
 code). Checked by hand on 2026-11-05: open (all SDUs on both BIS, no late
 SDU), encrypted with the right code (synced) and a wrong one (MIC failure,
-no audio), mono 24_2_2. Not done yet: `run_test.py` cases and
-`bluecaster_decode` support for BIS (the decoder change in `tools/a2dp_decode`
-is unfinished).
+no audio), mono 24_2_2. `run_test.py --auracast` runs the cases in
+`le_audio_tests/auracast.py`: stereo, mono, encrypted, split, the matrix
+layouts, and a rear at its own rate (`--auracast-rear-preset`). Each
+broadcast gets its own sink (`--layout auracast --follow <suffix> ...`).
+The cases check BlueCaster's log and the sinks' log: names, Broadcast_IDs,
+BASE, the requested BIGs, and the SDUs of every BIS (count, length,
+sequence, left differs from right). Not done yet: `bluecaster_decode`
+support for BIS (the decoder change in `tools/a2dp_decode` is unfinished),
+so the cases do not decode the audio.
 `--layout auracast-split` starts two sinks, one following "<name> L" and
 one "<name> R" (for `--auracast-split`). Checked by hand on 2026-11-21: both
 BIGs up, each sink got every SDU of its BIS; a refused LE Create BIG for
@@ -654,6 +741,37 @@ either broadcast ends the other and removes both advertising sets. After a
 stop both sinks have received the same number of SDUs; before the stop
 let the last round finish, R ended one SDU short in 3 of 3 runs.
 Real hardware: not tried.
+
+### Matrix mixer
+
+A broadcast's outputs (FL FR RL RR) come from the source's speakers (FL FR
+FC LFE BL BR SL SR, by the capture's dwChannelMask) through a 4×8 matrix
+(`pipeline::mix`), then the EQ, then a per-output delay (0–500 ms, linear
+interpolation, so 0.01 ms steps work) and polarity. Automatic: fronts as
+they are, centre (-3 dB) and LFE (-6 dB) into both fronts, back/side into
+the rear (or folded into the fronts at -3 dB when the layout has no rear),
+with an optional row normalisation; or every gain by hand. The settings and
+named presets live in `auracast_mix.json`; the encode thread reads a
+versioned `MixHandle`, so changes from the Auracast tab (`auracast.mix_set`)
+are heard from the next block while broadcasting. Only the matrix layout
+(`matrix_<front>_<rear>`, each pair stereo / separate / subgroups / off;
+`BroadcastLayout::Matrix`) uses it: stereo, mono and split, and unicast
+streams, keep the fixed downmix. The BT600 runs two BIGs at most, which the
+Auracast tab warns about (stereo and subgroups take one BIG, separate two).
+
+The rear may run at another rate than the front (`rear_quality`,
+`BroadcastConfig::rear_preset`, same 10 ms frames): its BIS carry their own
+`CisPlan::preset`, each BIG and BASE is made from its group's
+(`group_plan`), and all broadcasts share one presentation delay. The encode
+thread works at the top rate (`StreamPlan::top_sampling_hz`); a 24 kHz
+channel next to 48 kHz ones goes through a 63-tap windowed-sinc decimator,
+and the 48 kHz channels through the same 31-sample (0.65 ms) delay, so front
+and rear stay in step.
+
+The source switches while broadcasting (`auracast.set_source`, tone or
+system audio): `Service::change_source` hands it to the broadcast loop,
+which stops the capture and starts the new one into the same queue; the
+BIGs stay (silence goes out for the moment in between).
 
 ## LE Audio off
 

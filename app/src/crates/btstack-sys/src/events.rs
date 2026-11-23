@@ -609,6 +609,17 @@ pub fn gatt_value_update(packet: &[u8]) -> Option<ValueUpdate<'_>> {
     })
 }
 
+/// GATT_EVENT_CHARACTERISTIC_VALUE_QUERY_RESULT (a result of
+/// [`crate::Stack::gatt_read_by_type`]): (connection, attribute handle,
+/// value)
+pub fn gatt_characteristic_value_query_result(packet: &[u8]) -> Option<(u16, u16, &[u8])> {
+    if !event_is(packet, GATT_EVENT_CHARACTERISTIC_VALUE_QUERY_RESULT) {
+        return None;
+    }
+    let len = u16_at(packet, 10)? as usize;
+    Some((u16_at(packet, 2)?, u16_at(packet, 8)?, packet.get(12..12 + len)?))
+}
+
 /// GATT_EVENT_QUERY_COMPLETE: (connection, ATT status)
 pub fn gatt_query_complete(packet: &[u8]) -> Option<(u16, u8)> {
     if !event_is(packet, GATT_EVENT_QUERY_COMPLETE) {
