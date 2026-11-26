@@ -80,6 +80,9 @@
 #define ENABLE_LE_SECURE_CONNECTIONS
 #define ENABLE_MICRO_ECC_P256              /* software P-256 (3rd-party/micro-ecc) */
 #define ENABLE_LE_DATA_LENGTH_EXTENSION
+/* LE credit based channels: the audio of ASHA hearing aids (bt-host's
+ * le/asha.rs opens one per hearing aid; nothing listens for incoming ones) */
+#define ENABLE_L2CAP_LE_CREDIT_BASED_FLOW_CONTROL_MODE
 #define ENABLE_LE_EXTENDED_ADVERTISING     /* extended scanning when the controller has it */
 #define ENABLE_LE_ISOCHRONOUS_STREAMS      /* CIG / CIS as central, BIG, HCI ISO data */
 #define ENABLE_LE_PERIODIC_ADVERTISING     /* the BASE of a broadcast (Auracast source) */
@@ -103,8 +106,8 @@
 #define MAX_NR_CIS                 4
 #define HCI_ISO_PAYLOAD_SIZE       400
 
-/* Broadcast (Auracast source): BIS of the one BIG (left and right) */
-#define MAX_NR_BIS                 2
+/* Broadcast (Auracast source): BIS per BIG (layout single: FL FR RL RR) */
+#define MAX_NR_BIS                 4
 
 /* CCC values of bonded GATT clients att_server keeps in the bond TLV, for
  * all clients together (default 20; the oldest go first, and that client is

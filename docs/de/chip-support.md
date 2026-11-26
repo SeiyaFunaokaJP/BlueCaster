@@ -232,7 +232,7 @@ Behalten Sie die Zeilenenden jeder Datei bei. Manche Quelldateien verwenden CRLF
 
 10. `app/src/core/src/state.rs`, `vendor_note()`: ein Zweig mit einem neuen Schlüssel `firmware.vendor_<vendor>`, herausgelöst aus dem Zweig `MediaTek | Qualcomm`, und sein Test. Für Chips, die `chip_supported` ablehnt, antwortet die Funktion vorher mit `firmware.vendor_unsupported`, sodass die anderen Chips des Herstellers diesen Hinweis behalten. Die Seite Adapter bietet WinUSB jedem Adapter an, dessen Hinweis nicht `firmware.vendor_unsupported` ist
 11. `app/lang/*.json` (alle 10 Sprachen, dieselbe Zeile in jeder): der neue Schlüssel, wie der von Intel („Intel adapter. …“). Wo er eine Schaltfläche oder einen Ordner nennt, verwenden Sie die Wörter der jeweiligen Sprache aus derselben Datei (die Schaltfläche des Firmware-Ordners ist `firmware.open_folder`). Ganzer Hersteller: seinen Namen aus `firmware.vendor_unsupported` entfernen. Einige Chips: dort stehen lassen, da die anderen Chips des Herstellers diesen Text weiterhin zeigen
-12. `app/src/ui/src/lib/links.ts`: die Firmware-Seite des Herstellers (in `LINKS`, `firmwareUrl()` und `vendorFirmwareUrl()`, wie Intels Ordner in linux-firmware), damit die Seite Adapter zeigt, woher die Dateien kommen; Tests in `app/src/ui/src/lib/chips.test.ts`. Die Seite Adapter zeigt den Link nur für Adapter, deren Hinweis nicht `firmware.vendor_unsupported` ist, sodass die anderen Chips des Herstellers ihn nicht bekommen
+12. `app/src/crates/ui-model/src/links.rs`: die Firmware-Seite des Herstellers (in `LINKS`, `firmware_url()` und `vendor_firmware_url()`, wie Intels Ordner in linux-firmware), damit die Seite Adapter zeigt, woher die Dateien kommen; Tests in derselben Datei. Die Seite Adapter zeigt den Link nur für Adapter, deren Hinweis nicht `firmware.vendor_unsupported` ist, sodass die anderen Chips des Herstellers ihn nicht bekommen
 
 **Dokumentation**:
 
@@ -256,16 +256,7 @@ Streamen Sie danach eine Weile über das Fenster an Kopfhörer und prüfen Sie, 
 
 ## Schritt 8: Den Pull Request eröffnen
 
-Führen Sie vorher Folgendes in dieser Reihenfolge aus (die Einrichtung steht unter [Bauen](building)). Zuerst die UI in `app\src\ui`. Sie prüft die Änderung aus Schritt 6 (Punkt 12), und der Rust-Workspace enthält die Crate des Fensters, die die gebaute UI braucht:
-
-```bat
-pnpm install
-pnpm build
-pnpm exec tsc --noEmit
-pnpm exec vitest run
-```
-
-Dann im Wurzelverzeichnis des Repositorys:
+Führen Sie vorher diese Prüfungen im Wurzelverzeichnis des Repositorys aus (die Einrichtung steht unter [Bauen](building)). `cargo test` prüft auch Ihre Änderung aus Schritt 6 (Punkt 12):
 
 ```bat
 cargo fmt --all
@@ -274,11 +265,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 python tools/check_lang.py
 ```
 
-Ohne Node.js führen Sie die Tests und Clippy stattdessen für die drei Crates oben aus (`-p bt-host -p bluecaster-core -p bluecaster-core-exe`), überlassen die UI-Prüfungen der CI des Pull Requests und vermerken das im Pull Request. `pwsh ./build.ps1 -Test` führt alles aus.
+`pwsh ./build.ps1 -Test` führt alles aus.
 
 Clippy prüft auch Namen: Eine `State`-Variante namens `PatchState` scheitert an `enum_variant_names`. Nennen Sie sie `Patch`. `check_lang.py` meldet eventuell „long hints left“, die schon vor Ihrer Änderung da waren. Beheben müssen Sie nur Fehler und fehlende Schlüssel.
 
-An einigen anderen Stellen werden MediaTek oder Qualcomm nebenbei als nicht unterstützt erwähnt (Mock-Daten und Tests der UI, Kommentare in `Adapter.tsx` und `probe.rs`, die Auswahl „Not Realtek“). Diese Stellen bleiben unverändert.
+An einigen anderen Stellen werden MediaTek oder Qualcomm nebenbei als nicht unterstützt erwähnt (Tests der UI, Kommentare in `view/adapter.rs` und `probe.rs`, die Auswahl „Not Realtek“). Diese Stellen bleiben unverändert.
 
 Im Pull Request:
 

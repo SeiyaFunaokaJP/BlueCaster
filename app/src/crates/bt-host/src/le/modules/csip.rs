@@ -17,7 +17,8 @@
 //!   addresses, as an IRK does a device's).
 //! - `on_scan_result`: an advertised RSI (AD 0x2E) is checked against every
 //!   known SIRK (sih, CSIS 4.7); a match sets `set_id` / `note` /
-//!   `le_audio`.
+//!   `le_audio`. So does an RPA that resolves to a bonded member whose SIRK
+//!   is kept: some earbuds (WF-1000XM6) advertise no RSI at all.
 //! - `prepare_group` (worker): waits for the CSIS reads of every connected
 //!   device, adds set members that are already connected, scans (up to
 //!   `SCAN_TIMEOUT_MS`, or the host's `le_set_member_wait`) for RSIs of the
@@ -370,6 +371,12 @@ impl State {
         self.sets.len() - 1
     }
 
+    /// The known set of a bonded member (its SIRK kept), by identity
+    fn stored_set(&self, identity: &[u8; 6]) -> Option<usize> {
+        let s = self.stored.iter().find(|s| s.addr.addr == *identity)?;
+        self.sets.iter().position(|k| k.sirk == s.sirk)
+    }
+
     /// The known set an RSI belongs to (cached)
     fn resolve_rsi(&mut self, rsi: &[u8; 6]) -> Option<usize> {
         if let Some(set) = self.rsi.get(rsi) {
@@ -672,7 +679,9 @@ impl LeModule for CsipModule {
     }
 
     fn on_scan_result(&mut self, ctx: &mut LeCtx<'_>, result: &mut LeScanResult, _ad: &[u8]) {
-        let Some(rsi) = result.rsi else { return };
+        if result.rsi.is_none() && result.identity.is_none() {
+            return;
+        }
         if !self.shared.crypto_ok.load(Ordering::Acquire) {
             return;
         }
@@ -681,10 +690,20 @@ impl LeModule for CsipModule {
             if st.sets.is_empty() {
                 return;
             }
-            let Some(set) = st.resolve_rsi(&rsi) else { return };
+            let by_rsi = result.rsi.and_then(|rsi| st.resolve_rsi(&rsi));
+            // No RSI (or none of a known set): a bonded member by its
+            // resolved identity
+            let set = by_rsi.or_else(|| result.identity.and_then(|id| st.stored_set(&id.addr)));
+            let Some(set) = set else { return };
+            if by_rsi.is_some() {
+                tracing::debug!("CSIP: {} RSI {:02X?} resolves to coordinated set {set}", result.addr, result.rsi);
+            } else if result.set_id != Some(set as u32) {
+                // Its address beside its identity would tie the two
+                // together in the log: neither is written
+                tracing::debug!("CSIP: an advertiser without an RSI is a bonded member of coordinated set {set}");
+            }
             (set, st.sets[set].size)
         };
-        tracing::debug!("CSIP: {} RSI {rsi:02X?} resolves to coordinated set {set}", result.addr);
         result.set_id = Some(set as u32);
         result.le_audio = true;
         result.note = if size > 0 {
@@ -960,9 +979,10 @@ impl CsipHooks {
                 }
                 shared.tried.lock().unwrap_or_else(|e| e.into_inner()).push(identity.addr);
                 tracing::info!(
-                    "CSIP: {} \"{}\" resolves to coordinated set {set} (RSI): connecting it",
+                    "CSIP: {} \"{}\" belongs to coordinated set {set} ({}): connecting it",
                     r.addr,
-                    r.name
+                    r.name,
+                    if r.rsi.is_some() { "RSI" } else { "bonded member" }
                 );
                 let id = match host.le_connect_within(
                     r.addr,
@@ -1338,6 +1358,21 @@ mod tests {
         sort_by_rank(&mut v);
         let order: Vec<(u32, u8)> = v.iter().map(|s| (s.id.0, s.rank)).collect();
         assert_eq!(order, vec![(2, 1), (0, 2), (1, 0), (3, 0)]);
+    }
+
+    #[test]
+    fn a_bonded_member_is_known_by_its_identity_without_an_rsi() {
+        let mut st = State::new(None);
+        let left = LeAddr { addr: [0xC0, 1, 2, 3, 4, 5], addr_type: 1 };
+        assert_eq!(st.stored_set(&left.addr), None);
+        st.add_set(&[1; 16], 2);
+        let set = st.add_set(&SAMPLE_SIRK, 2);
+        st.stored.push(Stored { addr: left, sirk: SAMPLE_SIRK, size: 2, rank: 1 });
+        assert_eq!(st.stored_set(&left.addr), Some(set));
+        // Another device, or a SIRK of no known set: none
+        assert_eq!(st.stored_set(&[0xC0, 9, 9, 9, 9, 9]), None);
+        st.stored.push(Stored { addr: LeAddr { addr: [0xC1; 6], addr_type: 1 }, sirk: [7; 16], size: 2, rank: 2 });
+        assert_eq!(st.stored_set(&[0xC1; 6]), None);
     }
 
     #[test]

@@ -1,0 +1,33 @@
+[package]
+name = "ui-host"
+description = "The window process' side without the window: the connection to bluecaster-core.exe, the service add-on, in-app updates, the log, the shell helpers and the single instance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ipc.workspace = true
+win-sys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# The host's own runtime: the window's toolkit has no tokio context
+tokio = { version = "1", features = ["net", "io-util", "time", "sync", "macros", "rt", "rt-multi-thread"] }
+# logging.rs: logs/<YYYY-MM-DD>/ui.log next to the core's (crates/core/src/paths.rs, compiled in)
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender = "0.2"
+# "parsing": the manifest's pub_date (RFC 3339), as the Tauri updater checks it
+time = { version = "0.3", features = ["local-offset", "parsing"] }
+# update.rs: what tauri-plugin-updater did (the same crates and features it
+# took: rustls with ring, Windows' certificate store, the system's proxy;
+# no zip, the updates are the signed setup.exe)
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+minisign-verify = "0.3"
+base64 = "0.22"
+semver = "1"
+tempfile = "3"
+
+[lints]
+workspace = true

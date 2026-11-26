@@ -61,12 +61,6 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      # bluecaster.exe embeds the built UI (app/src/ui/dist, frontendDist in
-      # tauri.conf.json); the ui job builds it, here an empty folder lets
-      # the Rust side compile
-      - name: Placeholder for the UI build
-        shell: pwsh
-        run: New-Item -ItemType Directory -Force app/src/ui/dist | Out-Null
       # opus-sys takes libopus's version from `git describe` of the
       # submodule; the shallow checkout has no tags
       - name: Tags of extern/opus
@@ -97,7 +91,7 @@ jobs:
           $allowedFiles = 'crates/pipeline/tests/le_no_alloc.rs'
           $src = (Resolve-Path app/src).Path
           $bad = Get-ChildItem $src -Recurse -Filter *.rs |
-            Where-Object { $_.FullName -notmatch '\\(node_modules|target)\\' } |
+            Where-Object { $_.FullName -notmatch '\\target\\' } |
             Where-Object { $allowedFiles -notcontains ([IO.Path]::GetRelativePath($src, $_.FullName) -replace '\\', '/') } |
             Where-Object {
               # app/src/crates/<crate>/... or app/src/<core|driver|ui>/...
@@ -130,26 +124,14 @@ jobs:
           manifest-path: Cargo.toml
           command: check advisories
 
-  ui:
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: app/src/ui
+  # The window (app/src/ui, GPUI) and its crates ui-model and ui-host are
+  # workspace members: the check job formats, lints and tests them
+  lang:
+    name: Language files
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # the pnpm version is packageManager in app/src/ui/package.json
-      - uses: pnpm/action-setup@v4
-        with:
-          package_json_file: app/src/ui/package.json
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: app/src/ui/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec tsc --noEmit
-      - run: pnpm exec vitest run
-      - run: python ../../../tools/check_lang.py
+      - run: python3 tools/check_lang.py
 
   emulator:
     name: Emulator end to end (all codecs, LE Audio)

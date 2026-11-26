@@ -50,6 +50,10 @@ pub const UUID_CHR_SOURCE_PAC: u16 = 0x2BCB;
 pub const UUID_CHR_SOURCE_AUDIO_LOCATIONS: u16 = 0x2BCC;
 pub const UUID_CHR_AVAILABLE_AUDIO_CONTEXTS: u16 = 0x2BCD;
 pub const UUID_CHR_SUPPORTED_AUDIO_CONTEXTS: u16 = 0x2BCE;
+/// BASS: the Broadcast Audio Scan Control Point and the Broadcast Receive
+/// State (one per source the receiver can keep)
+pub const UUID_CHR_BASS_CONTROL_POINT: u16 = 0x2BC7;
+pub const UUID_CHR_BROADCAST_RECEIVE_STATE: u16 = 0x2BC8;
 /// Content Control ID (MCS / TBS)
 pub const UUID_CHR_CCID: u16 = 0x2BBA;
 /// TMAS, uint16
@@ -76,6 +80,8 @@ pub const AD_RSI: u8 = 0x2E;
 pub const LOCATION_MONO: u32 = 0x0000_0000;
 pub const LOCATION_FRONT_LEFT: u32 = 0x0000_0001;
 pub const LOCATION_FRONT_RIGHT: u32 = 0x0000_0002;
+pub const LOCATION_BACK_LEFT: u32 = 0x0000_0010;
+pub const LOCATION_BACK_RIGHT: u32 = 0x0000_0020;
 
 // ---- Context types (Assigned Numbers 6.12.3) ----
 pub const CONTEXT_UNSPECIFIED: u16 = 0x0001;

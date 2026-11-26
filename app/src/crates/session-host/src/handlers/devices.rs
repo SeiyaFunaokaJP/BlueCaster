@@ -22,6 +22,13 @@ impl Handler for Devices {
                     Err(WireError::failed("render devices", &audio_capture::CaptureWireError::from(&e)))
                 }
             },
+            Request::CaptureDevices => match LocalHost.capture_devices() {
+                Ok(list) => reply(list),
+                Err(e) => {
+                    tracing::warn!("devices: the capture list failed (HRESULT {:08x?})", e.hresult());
+                    Err(WireError::failed("capture devices", &audio_capture::CaptureWireError::from(&e)))
+                }
+            },
             Request::MixFormat { device } => reply(LocalHost.mix_format(device.as_deref())),
             Request::DefaultRenderDevice => reply(LocalHost.default_render_device()),
         }

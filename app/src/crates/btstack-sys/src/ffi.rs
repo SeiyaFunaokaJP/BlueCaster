@@ -330,6 +330,13 @@ unsafe extern "C" {
     pub fn gap_cig_remove(cig_id: u8) -> u8;
     pub fn gap_cis_create(cig_id: u8, cis_con_handles: *mut u16, acl_con_handles: *mut u16) -> u8;
 
+    // ---- shim.c: LE credit based channels ----
+    pub fn bluecaster_cbm_connect(con_handle: u16, psm: u16, out_cid: *mut u16) -> u8;
+    pub fn bluecaster_cbm_send(cid: u16, sdu: *const u8, len: u16) -> u8;
+    pub fn bluecaster_cbm_reset();
+    pub fn bluecaster_le_update_connection(con_handle: u16, interval: u16, latency: u16, timeout: u16) -> u8;
+    pub fn l2cap_disconnect(local_cid: u16) -> u8;
+
     // ---- BTstack: HCI ISO ----
     pub fn hci_set_num_iso_packets_to_queue(num_packets: u8);
     pub fn hci_request_cis_can_send_now_events(cis_con_handle: u16) -> u8;

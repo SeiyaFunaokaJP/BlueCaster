@@ -400,6 +400,17 @@ impl LeCtx<'_> {
     pub(crate) fn broadcast_plan(&self) -> Option<StreamPlan> {
         self.core.broadcast.as_ref().map(|b| b.plan.clone())
     }
+
+    /// The broadcasts of the running one, streaming (none before its BIGs
+    /// are up or while it stops)
+    pub(crate) fn broadcast_groups(&self) -> Vec<BroadcastGroup> {
+        self.core
+            .broadcast
+            .as_ref()
+            .filter(|b| b.state == State::Streaming)
+            .map(|b| b.groups.clone())
+            .unwrap_or_default()
+    }
 }
 
 /// Max transport latency for every BIG from `BLUECASTER_AURACAST_LATENCY_MS`

@@ -64,7 +64,7 @@ See the [Setup guide](https://seiyafunaokajp.github.io/BlueCaster/setup) and the
 
 ## Building
 
-Requirements: **Rust** 1.90+, **Visual Studio 2022+** with the C++ desktop workload, **Node.js 22** with **pnpm** (`corepack enable`), **Git**, **PowerShell 7**.
+Requirements: **Rust** 1.90+, **Visual Studio 2022+** with the C++ desktop workload, **Git**, **PowerShell 7**.
 
 ```powershell
 git clone --recursive https://github.com/SeiyaFunaokaJP/BlueCaster.git
@@ -83,4 +83,4 @@ The BlueCaster source code is dual-licensed under the **Apache License 2.0** ([L
 
 > **Important:** The distributed programs include [BTstack](https://github.com/bluekitchen/btstack), whose license allows use and redistribution only for **personal, non-commercial purposes** ("solely for personal benefit and not for any commercial purpose or for monetary gain"). Commercial licenses are available from BlueKitchen GmbH.
 
-Third-party libraries (BTstack, libldac, libopenaptx, fdk-aac, the LHDC V5 encoder, libopus, Tauri, SolidJS and others) come under their own licenses; see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+Third-party libraries (BTstack, libldac, libopenaptx, fdk-aac, the LHDC V5 encoder, libopus, GPUI and others) come under their own licenses; see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

@@ -25,7 +25,6 @@ For detailed setup instructions, see the [GitHub Pages](https://seiyafunaokajp.g
 - Windows 10/11 (x64 or ARM64)
 - Rust (stable, 1.90 or later)
 - Visual Studio 2022 or later with C++ desktop workload (for the C libraries)
-- Node.js 22 and pnpm (for the UI)
 - Git
 - PowerShell 7 (for `build.ps1`) and Python 3.11 or later (for `tools/check_lang.py`)
 
@@ -34,12 +33,10 @@ For detailed setup instructions, see the [GitHub Pages](https://seiyafunaokajp.g
 ```bash
 git clone --recursive https://github.com/SeiyaFunaokaJP/BlueCaster.git
 cd BlueCaster
-cargo build --release -p bluecaster-core-exe -p bluecaster-driver
-cd app/src/ui && pnpm install && pnpm build && cd ../../..
-cargo build --release -p bluecaster-ui
+cargo build --release -p bluecaster-core-exe -p bluecaster-driver -p bluecaster-ui
 ```
 
-**Before a pull request:** `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and in `app/src/ui` `pnpm exec tsc --noEmit` and `pnpm exec vitest run`; `pwsh ./build.ps1 -Test` builds and runs them all (with `cargo fmt --check`), plus `python tools/check_lang.py`.
+**Before a pull request:** `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` (the window's tests included); `pwsh ./build.ps1 -Test` builds and runs them all (with `cargo fmt --check`), plus `python tools/check_lang.py`.
 
 ## Pull Requests
 

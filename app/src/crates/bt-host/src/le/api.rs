@@ -13,13 +13,14 @@
 //! false, empty results, errors).
 
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use le_audio::plan::StreamPlan;
 use le_audio::sdu_queue::{SduQueue, SduSet};
 
 use super::core::{ConnectResult, LeCtx, LeDone};
+use super::gatt_client::GattService;
 use super::iso_recv::{LeRxHandle, LeRxStats, LeRxStream, RX_RING_SDUS};
 use super::iso_send::queue_depth;
 use super::{
@@ -36,6 +37,9 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(8);
 const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// [`BtHost::le_connect_within`]: the link did not come up
 pub const LE_NO_LINK: &str = "no answer at that address";
+/// [`BtHost::le_read`]: the device is gone or gave no answer (not an ATT
+/// error)
+pub const LE_NO_ANSWER: u8 = 0xFF;
 /// Waits look at the cancel this often
 const POLL: Duration = Duration::from_millis(50);
 const FIND_POLL: Duration = Duration::from_millis(100);
@@ -201,6 +205,34 @@ impl BtHost {
         link: Duration,
         timeout: Duration,
     ) -> Result<LeDeviceId, String> {
+        self.le_connect_as(addr, name, link, timeout, false, false)
+    }
+
+    /// [`BtHost::le_connect`] without pairing or encryption: the GATT
+    /// services are discovered as soon as the link is up (the probe; a
+    /// receiver that pairs with its phone only). Reads that need security
+    /// fail with their ATT error.
+    pub fn le_connect_unsecured(&self, addr: LeAddr, name: &str, timeout: Duration) -> Result<LeDeviceId, String> {
+        self.le_connect_as(addr, name, timeout, timeout, true, false)
+    }
+
+    /// [`BtHost::le_connect`] that only secures the link (pairing if
+    /// needed) and discovers the services: no PACS / ASCS reads, and the
+    /// profile modules (VCP, CSIP, ...) leave the device alone. A few
+    /// seconds; for GATT work of its own (the Auracast assistant).
+    pub fn le_connect_bare(&self, addr: LeAddr, name: &str, timeout: Duration) -> Result<LeDeviceId, String> {
+        self.le_connect_as(addr, name, timeout, timeout, false, true)
+    }
+
+    fn le_connect_as(
+        &self,
+        addr: LeAddr,
+        name: &str,
+        link: Duration,
+        timeout: Duration,
+        open: bool,
+        bare: bool,
+    ) -> Result<LeDeviceId, String> {
         if !self.le_ready() {
             return Err("LE Audio is not running".into());
         }
@@ -219,7 +251,7 @@ impl BtHost {
         let ok = self.le_wait_link(
             timeout,
             true,
-            move |ctx, done| ctx.start_connect(addr, name, r, done),
+            move |ctx, done| ctx.start_connect(addr, name, r, done, open, bare),
             Some((link, &up, &mut no_link)),
         );
         let (id, error) = {
@@ -343,10 +375,11 @@ impl BtHost {
             "LE Audio: jitter buffer for {sending} CIS, controller queue depth {}",
             queue_depth(iso_count, sending).max(1)
         );
-        queue
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .configure(queue_depth(iso_count, sending).max(1), silence(&plan));
+        {
+            let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
+            q.set_prefill_extra(super::bap::buffer_margin());
+            q.configure(queue_depth(iso_count, sending).max(1), silence(&plan));
+        }
         // Those the plan streams to (one gone meanwhile is left out)
         devices.retain(|d| plan.cis.iter().any(|c| c.device_id == d.0));
         let status = LeStreamStatus { active: false, plan: plan.clone(), devices, summary: plan.describe() };
@@ -455,7 +488,11 @@ impl BtHost {
         let summary = le_audio::broadcast::describe(&plan);
         let depth = queue_depth(iso_count, plan.cis.len()).max(1);
         let queue = Arc::new(Mutex::new(SduQueue::new()));
-        queue.lock().unwrap_or_else(|e| e.into_inner()).configure(depth, silence(&plan));
+        {
+            let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
+            q.set_prefill_extra(super::bap::buffer_margin());
+            q.configure(depth, silence(&plan));
+        }
         let status =
             LeStreamStatus { active: false, plan: plan.clone(), devices: Vec::new(), summary: summary.clone() };
         let why = Arc::new(Mutex::new(String::new()));
@@ -546,6 +583,130 @@ impl BtHost {
     /// The devices the LE core knows
     pub fn le_devices(&self) -> Vec<LeDeviceInfo> {
         self.le_run(RUN_TIMEOUT, |ctx| ctx.device_infos()).unwrap_or_default()
+    }
+
+    /// The GATT services of a connected device, as found when it connected
+    /// (every characteristic, 128-bit UUIDs too); empty when it is not
+    /// connected
+    pub fn le_services(&self, device: LeDeviceId) -> Vec<GattService> {
+        self.le_run(RUN_TIMEOUT, move |ctx| {
+            ctx.device(device).filter(|d| d.connected()).map(|d| d.services.clone()).unwrap_or_default()
+        })
+        .unwrap_or_default()
+    }
+
+    /// The broadcasts of the running Auracast broadcast once its BIGs are up
+    /// (name, SID, Broadcast_ID, BIS); empty otherwise
+    pub fn le_broadcast_groups(&self) -> Vec<le_audio::broadcast::BroadcastGroup> {
+        self.le_run(RUN_TIMEOUT, |ctx| ctx.broadcast_groups()).unwrap_or_default()
+    }
+
+    /// Writes a characteristic value of a connected device (Write Request).
+    /// Err: the ATT error, or [`LE_NO_ANSWER`].
+    pub fn le_write(&self, device: LeDeviceId, value_handle: u16, value: Vec<u8>) -> Result<(), u8> {
+        let out = Arc::new(Mutex::new(None::<u8>));
+        let o = out.clone();
+        self.le_wait(RUN_TIMEOUT, false, move |ctx, done| {
+            let Some(con) = ctx.device(device).filter(|d| d.connected()).map(|d| d.acl) else {
+                return done(false);
+            };
+            ctx.gatt().write(
+                con,
+                value_handle,
+                value,
+                Some(Box::new(move |_, status| {
+                    *o.lock().unwrap_or_else(|e| e.into_inner()) = Some(status);
+                    done(status == 0);
+                })),
+            );
+        });
+        match out.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            Some(0) => Ok(()),
+            Some(status) => Err(status),
+            None => Err(LE_NO_ANSWER),
+        }
+    }
+
+    /// Writes a characteristic value of a connected device without asking
+    /// for an answer (Write Command). Err: BTstack's status, or
+    /// [`LE_NO_ANSWER`] when the device is gone.
+    pub fn le_write_command(&self, device: LeDeviceId, value_handle: u16, value: Vec<u8>) -> Result<(), u8> {
+        let status = self.le_run(RUN_TIMEOUT, move |ctx| {
+            let con = ctx.device(device).filter(|d| d.connected()).map(|d| d.acl)?;
+            Some(ctx.stack().gatt_write_without_response(con, value_handle, &value))
+        });
+        match status.flatten() {
+            Some(0) => Ok(()),
+            Some(status) => Err(status),
+            None => Err(LE_NO_ANSWER),
+        }
+    }
+
+    /// Turns on notifications of a characteristic of a connected device
+    /// (one of [`BtHost::le_services`]): each value comes on the receiver,
+    /// until the link goes. Err: the ATT error, [`LE_NO_ANSWER`], or 0x0A
+    /// when the device has no such characteristic.
+    pub fn le_watch(&self, device: LeDeviceId, value_handle: u16) -> Result<mpsc::Receiver<Vec<u8>>, u8> {
+        let (tx, rx) = mpsc::channel();
+        let out = Arc::new(Mutex::new(None::<u8>));
+        let o = out.clone();
+        self.le_wait(RUN_TIMEOUT, false, move |ctx, done| {
+            let Some((con, chr)) = ctx.device(device).filter(|d| d.connected()).and_then(|d| {
+                let chr = d.services.iter().flat_map(|s| s.chars.iter()).find(|c| c.value_handle == value_handle)?;
+                Some((d.acl, chr.clone()))
+            }) else {
+                *o.lock().unwrap_or_else(|e| e.into_inner()) = Some(0x0A);
+                return done(false);
+            };
+            ctx.gatt().listen(
+                con,
+                value_handle,
+                Box::new(move |_, value| {
+                    let _ = tx.send(value.to_vec());
+                }),
+            );
+            let o = o.clone();
+            ctx.gatt().subscribe(
+                con,
+                &chr,
+                false,
+                Some(Box::new(move |_, status| {
+                    *o.lock().unwrap_or_else(|e| e.into_inner()) = Some(status);
+                    done(status == 0);
+                })),
+            );
+        });
+        match out.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            Some(0) => Ok(rx),
+            Some(status) => Err(status),
+            None => Err(LE_NO_ANSWER),
+        }
+    }
+
+    /// Reads a characteristic value of a connected device (a long one
+    /// whole). Err: the ATT error, or [`LE_NO_ANSWER`] when the device is
+    /// gone or did not answer.
+    pub fn le_read(&self, device: LeDeviceId, value_handle: u16) -> Result<Vec<u8>, u8> {
+        let out = Arc::new(Mutex::new(None::<(u8, Vec<u8>)>));
+        let o = out.clone();
+        self.le_wait(RUN_TIMEOUT, false, move |ctx, done| {
+            let Some(con) = ctx.device(device).filter(|d| d.connected()).map(|d| d.acl) else {
+                return done(false);
+            };
+            ctx.gatt().read(
+                con,
+                value_handle,
+                Box::new(move |_, status, value| {
+                    *o.lock().unwrap_or_else(|e| e.into_inner()) = Some((status, value.to_vec()));
+                    done(status == 0);
+                }),
+            );
+        });
+        match out.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            Some((0, value)) => Ok(value),
+            Some((status, _)) => Err(status),
+            None => Err(LE_NO_ANSWER),
+        }
     }
 
     /// The coordinated sets the CSIP module knows: (the set's

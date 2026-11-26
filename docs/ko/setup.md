@@ -27,8 +27,8 @@ BlueCaster가 어댑터에 WinUSB 드라이버를 자동으로 할당하므로 [
 
 각 [릴리스](https://github.com/SeiyaFunaokaJP/BlueCaster/releases)는 같은 파일을 두 가지 형식으로 제공합니다.
 
-- **설치 프로그램** (`BlueCaster-<version>-win64-setup.exe`, ARM64는 `-arm64-setup.exe`): 관리자 권한 없이 현재 사용자용으로 설치합니다. 시작 메뉴 항목(**BlueCaster**)과 제거 프로그램을 추가하고, Microsoft Edge WebView2 Runtime이 없으면 함께 설치합니다(Windows 11에는 기본 포함). 업데이트는 앱 안에서 설치합니다(**설정 > 업데이트 > 지금 업데이트**). 프로그램은 `%LOCALAPPDATA%\BlueCaster\`에 설치됩니다(세 프로그램, 제거 프로그램, 라이선스 전문이 담긴 `licenses\` 폴더)
-- **포터블** (`BlueCaster-<version>-win64-portable.zip`, ARM64는 `-arm64-portable.zip`): 원하는 위치에 압축을 풀고 `bluecaster.exe`를 실행합니다. 세 프로그램(`bluecaster.exe`, `bluecaster-core.exe`, `bluecaster-driver.exe`)은 같은 폴더에 두세요. 포터블 버전은 업데이트를 알려 주기만 하며, WebView2 Runtime이 설치되어 있어야 합니다
+- **설치 프로그램** (`BlueCaster-<version>-win64-setup.exe`, ARM64는 `-arm64-setup.exe`): 관리자 권한 없이 현재 사용자용으로 설치합니다. 시작 메뉴 항목(**BlueCaster**)과 제거 프로그램을 추가합니다. 업데이트는 앱 안에서 설치합니다(**설정 > 업데이트 > 지금 업데이트**). 프로그램은 `%LOCALAPPDATA%\BlueCaster\`에 설치됩니다(세 프로그램, 제거 프로그램, 라이선스 전문이 담긴 `licenses\` 폴더)
+- **포터블** (`BlueCaster-<version>-win64-portable.zip`, ARM64는 `-arm64-portable.zip`): 원하는 위치에 압축을 풀고 `bluecaster.exe`를 실행합니다. 세 프로그램(`bluecaster.exe`, `bluecaster-core.exe`, `bluecaster-driver.exe`)은 같은 폴더에 두세요. 포터블 버전은 업데이트를 알려 주기만 합니다
 
 두 형식 모두 설정, 프로필, 링크 키, 펌웨어를 `%APPDATA%\BlueCaster`에 저장하므로 서로 바꿔 쓸 수 있습니다. 제거할 때 **사용자 데이터 삭제**를 끄지 않으면 이 폴더도 삭제됩니다(자동 제거에서는 유지됩니다).
 

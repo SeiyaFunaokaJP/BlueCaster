@@ -21,6 +21,8 @@
 
 use std::path::Path;
 
+use win_sys::pipe_peer::{ADMINISTRATORS_SID, SYSTEM_SID, ServerProcess};
+
 use crate::Method;
 
 /// The error code: the request needs an elevated client
@@ -74,12 +76,19 @@ pub fn access(m: &Method) -> Access {
             Open
         }
         // Developer mode only, as stream.start_broadcast: the mix of a
-        // broadcast and its source (the test tone or system audio)
+        // broadcast, its source and whether its volume follows Windows
         Method::AuracastMixGet { .. }
         | Method::AuracastMixSet { .. }
         | Method::AuracastMixPresetSave { .. }
         | Method::AuracastMixPresetDelete { .. }
-        | Method::AuracastSetSource { .. } => Open,
+        | Method::TwsMixGet { .. }
+        | Method::TwsMixSet { .. }
+        | Method::TwsMixPresetSave { .. }
+        | Method::TwsMixPresetDelete { .. }
+        | Method::AuracastSetSource { .. }
+        | Method::AuracastSetFollowVolume { .. }
+        | Method::AuracastFollowVolume
+        | Method::AuracastReceivers => Open,
         // Developer mode and what it sets, the chip and firmware settings
         Method::SettingsSet { .. } => Depends,
         Method::AdapterList
@@ -95,7 +104,11 @@ pub fn access(m: &Method) -> Access {
         // Raw commands to the chip
         | Method::AdapterProbe { .. }
         | Method::AdapterRunScript { .. } => Admin,
-        Method::AudioDevices | Method::AudioApps | Method::AudioMixer | Method::AudioMixerSet { .. } => Open,
+        Method::AudioDevices
+        | Method::AudioInputDevices
+        | Method::AudioApps
+        | Method::AudioMixer
+        | Method::AudioMixerSet { .. } => Open,
         // Installs or removes a driver
         Method::AudioInstallVbCable | Method::AudioUninstallCable { .. } => Admin,
         // Log lines hold counts and states only
@@ -229,24 +242,47 @@ pub fn service_program(command_line: &str) -> Option<&Path> {
     (!program.is_empty()).then(|| Path::new(program))
 }
 
-/// [`server_trusted`], and for the real service (not a test instance) the
-/// service control manager's word as well: the service is installed with
-/// the program `expected`, and the process serving the pipe (`server_pid`)
-/// is the service's running process. A process that only took the pipe's
-/// name, even one of our own program started by the user, is not the
-/// service's process.
+/// Whether the pipe a client opened is the service's.
+///
+/// A test instance has no service: [`server_trusted`] alone (the server's
+/// program must be readable and be `expected`).
+///
+/// The real service runs as LocalSystem, and a user who is not elevated
+/// may not open its process: neither its program nor its session can be
+/// read from the process. What every user can read is checked instead:
+///
+/// - The pipe's owner is SYSTEM or the Administrators. A process of a
+///   user who is not elevated cannot create a pipe with such an owner
+///   (`win_sys::pipe_peer::ServerProcess::owner_sid`), so a program that
+///   only took the pipe's name first is refused here.
+/// - The server's session, as the pipe reports it, is 0.
+/// - The service control manager's record: the service is installed with
+///   the program `expected` (only an administrator can change it) and its
+///   running process is the pipe's server.
+/// - The server's program, where it can be read (an elevated client), is
+///   `expected`.
 pub fn service_server_trusted(
-    image: Option<&Path>,
-    session: Option<u32>,
-    server_pid: u32,
+    server: &ServerProcess,
     service: &ServiceRecord,
     expected: &Path,
     test_instance: bool,
 ) -> Result<(), &'static str> {
-    server_trusted(image, session, expected, test_instance)?;
+    let image = server.image.as_deref();
     if test_instance {
-        return Ok(());
+        return server_trusted(image, server.session_id, expected, true);
     }
+    match server.owner_sid.as_deref() {
+        Some(SYSTEM_SID | ADMINISTRATORS_SID) => {}
+        Some(_) => return Err("the pipe is not owned by the system"),
+        None => return Err("the pipe's owner cannot be read"),
+    }
+    if server.session_id != Some(0) {
+        return Err("the pipe's server is not a service");
+    }
+    if image.is_some_and(|p| !p.as_os_str().eq_ignore_ascii_case(expected.as_os_str())) {
+        return Err("another program serves the pipe");
+    }
+    let server_pid = server.pid;
     match service {
         ServiceRecord::NotInstalled => Err("the service is not installed"),
         ServiceRecord::Unreadable => Err("the service's record cannot be read"),
@@ -292,7 +328,15 @@ mod tests {
             command_line: r#""C:\Program Files\BlueCaster\bluecaster-core.exe" --service"#.into(),
             pid,
         };
-        let ok = |svc: &ServiceRecord, pid: u32| service_server_trusted(Some(core), Some(0), pid, svc, core, false);
+        let server = |image: Option<&Path>, session: u32, pid: u32, owner: Option<&str>| ServerProcess {
+            pid,
+            session_id: Some(session),
+            image: image.map(Path::to_path_buf),
+            owner_sid: owner.map(str::to_owned),
+        };
+        let ok = |svc: &ServiceRecord, pid: u32| {
+            service_server_trusted(&server(Some(core), 0, pid, Some(SYSTEM_SID)), svc, core, false)
+        };
         assert_eq!(ok(&installed(Some(40)), 40), Ok(()));
         // Another process of the same program (session 0 by some other way)
         assert!(ok(&installed(Some(40)), 41).is_err());
@@ -303,9 +347,62 @@ mod tests {
         let other = ServiceRecord::Installed { command_line: r"C:\Temp\bluecaster-core.exe".into(), pid: Some(40) };
         assert!(ok(&other, 40).is_err());
         // The pipe's own checks still come first
-        assert!(service_server_trusted(Some(core), Some(1), 40, &installed(Some(40)), core, false).is_err());
+        let user_session = server(Some(core), 1, 40, Some(SYSTEM_SID));
+        assert_eq!(
+            service_server_trusted(&user_session, &installed(Some(40)), core, false),
+            Err("the pipe's server is not a service")
+        );
         // A test instance has no service
-        assert_eq!(service_server_trusted(Some(core), Some(1), 40, &ServiceRecord::NotInstalled, core, true), Ok(()));
+        let test = server(Some(core), 1, 40, Some("S-1-5-21-1-2-3-1001"));
+        assert_eq!(service_server_trusted(&test, &ServiceRecord::NotInstalled, core, true), Ok(()));
+        // ... and its server's program must be readable, as before
+        let unreadable = server(None, 1, 40, Some(SYSTEM_SID));
+        assert!(service_server_trusted(&unreadable, &ServiceRecord::NotInstalled, core, true).is_err());
+    }
+
+    /// A user who is not elevated cannot read the service's program: the
+    /// pipe's owner, the session and the manager's record decide
+    #[test]
+    fn the_service_is_trusted_without_its_program() {
+        let core = Path::new(r"C:\Program Files\BlueCaster Service\bluecaster-core.exe");
+        let installed = |pid: Option<u32>| ServiceRecord::Installed {
+            command_line: r#""C:\Program Files\BlueCaster Service\bluecaster-core.exe" --service"#.into(),
+            pid,
+        };
+        let server = |image: Option<&str>, session: Option<u32>, owner: Option<&str>| ServerProcess {
+            pid: 40,
+            session_id: session,
+            image: image.map(Into::into),
+            owner_sid: owner.map(str::to_owned),
+        };
+        let check = |s: &ServerProcess, svc: &ServiceRecord| service_server_trusted(s, svc, core, false);
+        let running = installed(Some(40));
+        for owner in [SYSTEM_SID, ADMINISTRATORS_SID] {
+            assert_eq!(check(&server(None, Some(0), Some(owner)), &running), Ok(()));
+        }
+        // A pipe a user created (who took the name first)
+        let user = "S-1-5-21-1-2-3-1001";
+        assert_eq!(check(&server(None, Some(0), Some(user)), &running), Err("the pipe is not owned by the system"));
+        // ... even with our program behind it
+        let ours = r"C:\Program Files\BlueCaster Service\bluecaster-core.exe";
+        assert!(check(&server(Some(ours), Some(0), Some(user)), &running).is_err());
+        assert_eq!(check(&server(None, Some(0), None), &running), Err("the pipe's owner cannot be read"));
+        // Not in the services' session, or the session is not known
+        assert!(check(&server(None, Some(1), Some(SYSTEM_SID)), &running).is_err());
+        assert!(check(&server(None, None, Some(SYSTEM_SID)), &running).is_err());
+        // The manager's record: another process, stopped, not installed,
+        // not readable, another program
+        let good = server(None, Some(0), Some(SYSTEM_SID));
+        assert_eq!(check(&good, &installed(Some(44))), Err("the pipe's server is not the service's process"));
+        assert_eq!(check(&good, &installed(None)), Err("the pipe's server is not the service's process"));
+        assert!(check(&good, &ServiceRecord::NotInstalled).is_err());
+        assert!(check(&good, &ServiceRecord::Unreadable).is_err());
+        let other = ServiceRecord::Installed { command_line: r"C:\Temp\bluecaster-core.exe".into(), pid: Some(40) };
+        assert_eq!(check(&good, &other), Err("the service runs another program"));
+        // A program that can be read must still be the expected one
+        let temp = server(Some(r"C:\Temp\bluecaster-core.exe"), Some(0), Some(ADMINISTRATORS_SID));
+        assert_eq!(check(&temp, &running), Err("another program serves the pipe"));
+        assert_eq!(check(&server(Some(&ours.to_uppercase()), Some(0), Some(SYSTEM_SID)), &running), Ok(()));
     }
 
     #[test]

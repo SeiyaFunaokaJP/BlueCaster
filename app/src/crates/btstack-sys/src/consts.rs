@@ -231,6 +231,14 @@ pub const HCI_EVENT_ENCRYPTION_CHANGE_V2: u8 = 0x59;
 pub const HCI_EVENT_CIS_CAN_SEND_NOW: u8 = 0x6C;
 pub const HCI_EVENT_BIS_CAN_SEND_NOW: u8 = 0x6B;
 
+/// To the channel's handler ([`crate::Source::L2capCbm`]): local cid
+pub const L2CAP_EVENT_CHANNEL_CLOSED: u8 = 0x71;
+/// The SDU given to [`crate::Stack::cbm_send`] went out: local cid
+pub const L2CAP_EVENT_PACKET_SENT: u8 = 0x7A;
+/// Status, address type, address, connection, incoming, PSM, local cid,
+/// remote cid, local MTU, remote MTU
+pub const L2CAP_EVENT_CBM_CHANNEL_OPENED: u8 = 0x7D;
+
 pub const GATT_EVENT_QUERY_COMPLETE: u8 = 0xA0;
 pub const GATT_EVENT_SERVICE_QUERY_RESULT: u8 = 0xA1;
 pub const GATT_EVENT_CHARACTERISTIC_QUERY_RESULT: u8 = 0xA2;

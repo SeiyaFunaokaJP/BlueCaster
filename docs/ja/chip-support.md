@@ -232,7 +232,7 @@ cargo test -p bt-host
 
 10. `app/src/core/src/state.rs` の `vendor_note()`: `MediaTek | Qualcomm` のアームから外して、新しいキー `firmware.vendor_<vendor>` のアームを作り、そのテストも追加します。この関数は、`chip_supported` が受け入れないチップにはそのアームより前で `firmware.vendor_unsupported` を返すので、ベンダーのほかのチップの表示は変わりません。アダプター画面は、説明が `firmware.vendor_unsupported` でないすべてのアダプターに WinUSB を勧めます
 11. `app/lang/*.json`（全 10 言語、それぞれ同じ行）: 新しいキーを追加します。Intel のキー（「Intel アダプター。…」）にならってください。ボタンやフォルダーの名前を書くときは、同じファイルにあるその言語の表記を使います（ファームウェアフォルダーを開くボタンは `firmware.open_folder`）。ベンダー全体の場合: `firmware.vendor_unsupported` からそのベンダー名を外します。一部のチップの場合: ベンダーのほかのチップがまだその文を表示するので、そのまま残します
-12. `app/src/ui/src/lib/links.ts`: ベンダーのファームウェアのページ（`LINKS`、`firmwareUrl()`、`vendorFirmwareUrl()` に。Intel の linux-firmware のフォルダーと同じように）。これで、アダプター画面にファイルの入手先が表示されます。テストは `app/src/ui/src/lib/chips.test.ts` に書きます。アダプター画面がこのページを示すのは、説明が `firmware.vendor_unsupported` でないアダプターだけなので、ベンダーのほかのチップには表示されません
+12. `app/src/crates/ui-model/src/links.rs`: ベンダーのファームウェアのページ（`LINKS`、`firmware_url()`、`vendor_firmware_url()` に。Intel の linux-firmware のフォルダーと同じように）。これで、アダプター画面にファイルの入手先が表示されます。テストは同じファイルに書きます。アダプター画面がこのページを示すのは、説明が `firmware.vendor_unsupported` でないアダプターだけなので、ベンダーのほかのチップには表示されません
 
 **ドキュメント**:
 
@@ -256,16 +256,7 @@ WinUSB のアダプターが複数あると、`-u` を指定しても Realtek �
 
 ## 手順 8: プルリクエストを出す
 
-プルリクエストを出す前に、次のチェックを順に実行します（環境は[ビルド](building)を参照）。まず `app\src\ui` で UI をチェックします。これは手順 6 の変更（項目 12）の確認です。また、Rust のワークスペースにはウィンドウのクレートが含まれていて、そのビルドにはビルド済みの UI が必要です。
-
-```bat
-pnpm install
-pnpm build
-pnpm exec tsc --noEmit
-pnpm exec vitest run
-```
-
-次に、リポジトリのルートで実行します。
+プルリクエストを出す前に、リポジトリのルートで次のチェックを実行します（環境は[ビルド](building)を参照）。手順 6 の変更（項目 12）も `cargo test` で確認されます。
 
 ```bat
 cargo fmt --all
@@ -274,11 +265,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 python tools/check_lang.py
 ```
 
-Node.js がない場合は、テストと clippy を上の 3 つのクレートだけで実行し（`-p bt-host -p bluecaster-core -p bluecaster-core-exe`）、UI のチェックはプルリクエストの CI に任せてください。その旨をプルリクエストに書いてください。`pwsh ./build.ps1 -Test` を使うと、すべてのチェックを実行できます。
+`pwsh ./build.ps1 -Test` を使うと、すべてのチェックを実行できます。
 
 Clippy は名前もチェックします。`State` のバリアントを `PatchState` にすると `enum_variant_names` で失敗するので、`Patch` にしてください。`check_lang.py` は、変更前からある "long hints left" を報告することがあります。直す必要があるのは、エラーと不足しているキーだけです。
 
-ほかにも、MediaTek や Qualcomm を未対応として簡単に触れている箇所があります（UI のモックデータとテスト、`Adapter.tsx` と `probe.rs` のコメント、"Not Realtek" の選択肢）。これらは変更しません。
+ほかにも、MediaTek や Qualcomm を未対応として簡単に触れている箇所があります（UI のテスト、`view/adapter.rs` と `probe.rs` のコメント、"Not Realtek" の選択肢）。これらは変更しません。
 
 プルリクエストの要件:
 

@@ -17,6 +17,7 @@
 pub mod abr;
 pub mod caps;
 pub mod dev;
+pub mod g722;
 pub mod sbc;
 
 #[cfg(feature = "aac")]

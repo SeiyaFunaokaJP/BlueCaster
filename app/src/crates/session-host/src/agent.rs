@@ -14,8 +14,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
 use std::time::{Duration, Instant};
 
+use ipc::access::ServiceRecord;
 use serde_json::Value;
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
+use win_sys::pipe_peer::ServerProcess;
 
 use crate::peer::{self, End, Incoming, Peer};
 use crate::wire::{ErrorCode, Frame, Hello, HostError, LOG_GROUP, LogLine, PROTOCOL_VERSION, RejectReason, WireError};
@@ -174,10 +176,10 @@ pub fn run_agent(options: &AgentOptions) -> i32 {
     rt.block_on(agent_loop(options))
 }
 
-/// Service mode: the pipe's server is the core's own program (the
-/// program this agent runs), in session 0 or this agent's own session (a
-/// core run as an ordinary process: the tests). A pipe served by anything
-/// else is not used.
+/// Service mode: the pipe's server is the real service (in session 0), or
+/// the core's own program (the program this agent runs) in this agent's
+/// own session or as a test instance (a core run as an ordinary process:
+/// the tests). A pipe served by anything else is not used.
 fn server_is_ours(pipe: &NamedPipeClient) -> Result<(), &'static str> {
     use std::os::windows::io::AsHandle;
     let server = win_sys::pipe_peer::server_process(pipe.as_handle()).map_err(|_| "the server is not known")?;
@@ -185,32 +187,44 @@ fn server_is_ours(pipe: &NamedPipeClient) -> Result<(), &'static str> {
     let own = std::env::current_exe().map_err(|_| "this program is not known")?;
     let service_core = win_sys::service_files::service_core().ok();
     let test_instance = !ipc::instance_suffix().is_empty();
-    server_check(server.session_id, server.image.as_deref(), own_session, &own, service_core.as_deref(), test_instance)
+    // Asked only for the real service (a read-only query)
+    let record = if server.session_id == Some(0) && !test_instance {
+        ipc::service_state::service_record()
+    } else {
+        ServiceRecord::NotInstalled
+    };
+    server_check(&server, &record, own_session, &own, service_core.as_deref(), test_instance)
 }
 
-/// [`server_is_ours`] from what the pipe says. A server in session 0 (the
-/// real service, unless this is a test instance) must also be the service
-/// folder's core: an agent started from the user's folder does not serve
-/// the service.
+/// [`server_is_ours`] from what the pipe and the service control manager
+/// say. A server in session 0 (the real service, unless this is a test
+/// instance) is checked as every client checks the service
+/// ([`ipc::access::service_server_trusted`]: this agent, in the user's
+/// session, may not read the service's program), and this agent must be
+/// the service folder's core too: an agent started from the user's folder
+/// does not serve the service.
 fn server_check(
-    server_session: Option<u32>,
-    server_image: Option<&std::path::Path>,
+    server: &ServerProcess,
+    record: &ServiceRecord,
     own_session: Option<u32>,
     own: &std::path::Path,
     service_core: Option<&std::path::Path>,
     test_instance: bool,
 ) -> Result<(), &'static str> {
     use win_sys::service_files::{required_core, same_path};
-    let in_session_0 = matches!(server_session, Some(0));
-    if !in_session_0 && server_session != own_session {
+    let in_session_0 = matches!(server.session_id, Some(0));
+    if in_session_0 && !test_instance {
+        let required = required_core(own, service_core, true)?;
+        if !same_path(required, own) {
+            return Err("the service does not run from the service folder");
+        }
+        return ipc::access::service_server_trusted(server, record, required, false);
+    }
+    if !in_session_0 && server.session_id != own_session {
         return Err("the server runs in another session");
     }
-    if !server_image.is_some_and(|p| same_path(p, own)) {
+    if !server.image.as_deref().is_some_and(|p| same_path(p, own)) {
         return Err("the server is another program");
-    }
-    let required = required_core(own, service_core, in_session_0 && !test_instance)?;
-    if !same_path(required, own) {
-        return Err("the service does not run from the service folder");
     }
     Ok(())
 }
@@ -385,18 +399,51 @@ mod tests {
         use std::path::Path;
         let svc = Path::new(r"C:\Program Files\BlueCaster Service\bluecaster-core.exe");
         let user = Path::new(r"C:\Users\u\AppData\Local\BlueCaster\bluecaster-core.exe");
+        use win_sys::pipe_peer::{ADMINISTRATORS_SID, SYSTEM_SID};
+        let someone = "S-1-5-21-1-2-3-1001";
+        let server = |session: u32, image: Option<&Path>, owner: &str| ServerProcess {
+            pid: 40,
+            session_id: Some(session),
+            image: image.map(Path::to_path_buf),
+            owner_sid: Some(owner.to_owned()),
+        };
+        let installed = |program: &Path, pid: Option<u32>| ServiceRecord::Installed {
+            command_line: format!(r#""{}" --service"#, program.display()),
+            pid,
+        };
+        let running = installed(svc, Some(40));
+        let none = ServiceRecord::NotInstalled;
         // The real service and its agent, both from the service folder
-        assert_eq!(server_check(Some(0), Some(svc), Some(1), svc, Some(svc), false), Ok(()));
+        assert_eq!(server_check(&server(0, Some(svc), SYSTEM_SID), &running, Some(1), svc, Some(svc), false), Ok(()));
+        // The agent runs as the user and cannot read the service's program
+        for owner in [SYSTEM_SID, ADMINISTRATORS_SID] {
+            assert_eq!(server_check(&server(0, None, owner), &running, Some(1), svc, Some(svc), false), Ok(()));
+        }
+        // A pipe a user created, another process, a stopped service, no
+        // service, a service registered with another program, another
+        // program behind the pipe
+        let check = |s: &ServerProcess, r: &ServiceRecord| server_check(s, r, Some(1), svc, Some(svc), false);
+        assert!(check(&server(0, None, someone), &running).is_err());
+        assert!(check(&server(0, None, SYSTEM_SID), &installed(svc, Some(44))).is_err());
+        assert!(check(&server(0, None, SYSTEM_SID), &installed(svc, None)).is_err());
+        assert!(check(&server(0, None, SYSTEM_SID), &none).is_err());
+        assert!(check(&server(0, None, SYSTEM_SID), &installed(user, Some(40))).is_err());
+        assert!(check(&server(0, Some(user), SYSTEM_SID), &running).is_err());
         // An agent from the user's folder, a server from the service folder
-        assert!(server_check(Some(0), Some(svc), Some(1), user, Some(svc), false).is_err());
+        assert!(server_check(&server(0, Some(svc), SYSTEM_SID), &running, Some(1), user, Some(svc), false).is_err());
         // Both from the user's folder (the stage 4 install): not the service
-        assert!(server_check(Some(0), Some(user), Some(1), user, Some(svc), false).is_err());
-        // A test instance in session 0 keeps its own program
-        assert_eq!(server_check(Some(0), Some(user), Some(1), user, Some(svc), true), Ok(()));
+        let stage4 = installed(user, Some(40));
+        assert!(server_check(&server(0, Some(user), SYSTEM_SID), &stage4, Some(1), user, Some(svc), false).is_err());
+        // The service folder is not known
+        assert!(server_check(&server(0, None, SYSTEM_SID), &running, Some(1), svc, None, false).is_err());
+        // A test instance in session 0 keeps its own program, which must
+        // be readable
+        assert_eq!(server_check(&server(0, Some(user), someone), &none, Some(1), user, Some(svc), true), Ok(()));
+        assert!(server_check(&server(0, None, SYSTEM_SID), &none, Some(1), user, Some(svc), true).is_err());
         // A core run by hand in the agent's own session
-        assert_eq!(server_check(Some(1), Some(user), Some(1), user, Some(svc), false), Ok(()));
-        assert!(server_check(Some(2), Some(user), Some(1), user, Some(svc), false).is_err());
-        assert!(server_check(Some(1), None, Some(1), user, Some(svc), false).is_err());
+        assert_eq!(server_check(&server(1, Some(user), someone), &none, Some(1), user, Some(svc), false), Ok(()));
+        assert!(server_check(&server(2, Some(user), someone), &none, Some(1), user, Some(svc), false).is_err());
+        assert!(server_check(&server(1, None, someone), &none, Some(1), user, Some(svc), false).is_err());
     }
 
     /// What the forward layer sends for lines logged in the agent (the only

@@ -37,7 +37,7 @@ BlueCaster läuft als bis zu drei Programme:
 | Programm | Läuft | Aufgabe |
 |:---------|:------|:--------|
 | `bluecaster-core.exe` | Solange BlueCaster läuft (gestartet vom Fenster, vom Startmenü oder über **Mit Windows starten**) | Bluetooth, Audioaufnahme und Kodierung, Profile und Einstellungen, das Symbol im Infobereich und sein Menü, der IPC-Server. `--cli` führt denselben Kern stattdessen in einer Konsole aus |
-| `bluecaster.exe` | Nur solange ein Fenster offen ist (beendet sich 3 Minuten nach dem Schließen des letzten Fensters) | Das Hauptfenster und das Flyout im Infobereich (Tauri 2, SolidJS + TypeScript). Hat keinen eigenen Zustand |
+| `bluecaster.exe` | Nur solange ein Fenster offen ist (beendet sich 3 Minuten nach dem Schließen des letzten Fensters) | Das Hauptfenster und das Flyout im Infobereich (Rust, GPUI). Hat keinen eigenen Zustand |
 | `bluecaster-driver.exe` | Für eine einzelne Treiberänderung oder einen Schlüsselimport, mit Administratorrechten (UAC) | Weist einem Adapter WinUSB zu, stellt seinen vorherigen Treiber wieder her oder liest die Link Keys, die das Windows-Bluetooth für einen Adapter gespeichert hat (`windows-keys`). Beendet sich danach |
 
 ```mermaid
@@ -48,7 +48,7 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    ui["bluecaster.exe:<br>Fenster und Flyout<br>im Infobereich<br>(Tauri + SolidJS)"]
+    ui["bluecaster.exe:<br>Fenster und Flyout<br>im Infobereich<br>(GPUI)"]
     src["Windows-Audio:<br>System-Loopback /<br>virtuelles Gerät / eine App"]
     subgraph core["bluecaster-core.exe"]
         ctl["Menü im Infobereich /<br>IPC-Server / CLI (--cli)"] --> svc["Kerndienst:<br>Verbindungszustandsautomat,<br>Codec-Auswahl, Profile,<br>Neuverbindung"]
@@ -160,8 +160,10 @@ enthalten. Alle anderen Crates haben `#![forbid(unsafe_code)]`.
 | 3. Engine | `pipeline` | PCM-Ringpuffer, Formatumwandlung, Downmix, Kodierung, Mediennutzdaten, Taktung, ABR |
 | 4. Kern | `bluecaster-core` (Verzeichnis `core`) | Der Zustandsautomat, Neuverbindungen, Energiesparmodus / Fortsetzen, Profile, Einstellungen und die Migration von v1, Lautstärke-Sync, die Stummschaltung der Ausgabe, Updateprüfung, Download der Realtek-Firmware, der Client für den Empfängertest, Statistik, Herstellerprotokolle (`vendor/`) |
 | 4. Kern | `ipc` | Die Protokolltypen, die Kern und Fenster gemeinsam nutzen (serde; TypeScript-Typen mit `ts-rs` generiert), und die Rahmung auf der Pipe |
+| 4. Kern | `ui-model` | Die Logik des Fensters ohne das Fenster: der Zustand des Kerns aus Sicht des Fensters, Übersetzungen, Formatierung und die Regeln der Seiten. Ein einfaches `cargo test` deckt alles davon ab |
+| 4. Kern | `ui-host` | Die Aufgaben des Fensterprozesses ohne Oberfläche: die Verbindung zum Kern, In-App-Updates (Signaturen mit `minisign-verify` geprüft), das Dienst-Add-on, die Einzelinstanz-Prüfung und das Protokoll |
 | 5. Programme | `bluecaster-core-exe` (`app/src/core`) | `bluecaster-core.exe`: Kern, Infobereich (`tray-icon` auf einer `tao`-Ereignisschleife), IPC-Server, `--cli` |
-| 5. Programme | `bluecaster-ui` (`app/src/ui`) | `bluecaster.exe`: Tauri 2; die Rust-Seite ist ein IPC-Client, die Seite ist SolidJS + TypeScript + Vite |
+| 5. Programme | `bluecaster-ui` (`app/src/ui`) | `bluecaster.exe`: die Seiten, Steuerelemente und das Design, gebaut auf GPUI (`gpui-kit`), sowie das Fenster des Flyouts im Infobereich |
 | 5. Programme | `bluecaster-driver` (`app/src/driver`) | `bluecaster-driver.exe`: das Hilfsprogramm mit Administratorrechten |
 
 ## Audiopfad und Threads
@@ -528,6 +530,7 @@ unten genannten Ordner):
 | Pfad | Inhalt |
 |:-----|:-------|
 | `settings.json` | App-Einstellungen, mit einer `schema_version`; unbekannte Schlüssel bleiben erhalten |
+| `ui-state.json` | Fensterzustand, der zwischen Starts erhalten bleibt: das mit **Später** aufgeschobene Update, die Wahl bei **Nur unterstützte Codecs anzeigen** und ein ausgeblendeter Hinweis |
 | `profiles.json` | Profile |
 | `devices\devices.txt` | Bekannte Geräte |
 | `devices\le_audio_devices.txt` | LE Audio: die LE-Audio-Einträge der Geräteliste |
@@ -557,10 +560,11 @@ Deinstallationsprogramm und `licenses\` (`licenses\README.txt`, `licenses\blueca
 - **Cargo** baut die Programme, CMake ist dafür nicht nötig. Jedes `-sys`-Crate
   kompiliert in `build.rs` seine C-Bibliothek aus dem Git-Submodul in `extern/` mit MSVC.
   Nur das Entwicklerwerkzeug `tools/a2dp_decode` wird mit CMake gebaut
-- Die Seite des Fensters wird mit **Vite** gebaut (`pnpm build` in `app/src/ui`) und
-  von Tauri in `bluecaster.exe` eingebettet
-- Die TypeScript-Typen des IPC-Protokolls werden aus den Rust-Typen generiert
-  (`cargo test -p ipc export_bindings`)
+- Das Fenster ist wie der Rest in Rust geschrieben. Cargo allein baut daher
+  `bluecaster.exe`
+- Für Werkzeuge von Drittanbietern generiert `cargo test -p ipc export_bindings`
+  TypeScript-Typen des IPC-Protokolls aus den Rust-Typen nach
+  `app/src/crates/ipc/bindings`
 - Das Fenster und das Menü des Kerns im Infobereich verwenden die
   Sprachdateien (`app/lang/*.json`)
 - `installer/build-release.ps1` erstellt das Installationsprogramm (Inno Setup, `installer/BlueCaster.iss`),

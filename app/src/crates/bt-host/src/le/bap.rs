@@ -415,6 +415,35 @@ static CIG_OVERRIDES: std::sync::Mutex<CigOverrides> = std::sync::Mutex::new(Cig
     interleaved: false,
 });
 
+/// Developer > Debug's jitter buffer margin (sets over the controller
+/// queue at the start); u8::MAX: the default
+static BUFFER_MARGIN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
+
+/// Sets the jitter buffer margin of the next LE Audio stream (unicast and
+/// broadcast; frames, capped at 7); None: the default (3)
+pub fn set_buffer_margin(margin: Option<u8>) {
+    BUFFER_MARGIN.store(margin.unwrap_or(u8::MAX), std::sync::atomic::Ordering::Release);
+}
+
+/// [`set_buffer_margin`]'s value
+pub(crate) fn buffer_margin() -> Option<u8> {
+    Some(BUFFER_MARGIN.load(std::sync::atomic::Ordering::Acquire)).filter(|&m| m != u8::MAX)
+}
+
+/// Developer > Debug: a CIS a frame behind the others is left as it is
+static REALIGN_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turns the realignment of a CIS that plays a frame behind the others off
+/// (true) or on again (the default); followed while a stream runs
+pub fn set_realign_off(off: bool) {
+    REALIGN_OFF.store(off, std::sync::atomic::Ordering::Release);
+}
+
+/// [`set_realign_off`]'s value
+pub(crate) fn realign_off() -> bool {
+    REALIGN_OFF.load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// Sets the overrides the next CIG is created with (default: none)
 pub fn set_cig_overrides(o: CigOverrides) {
     *CIG_OVERRIDES.lock().unwrap_or_else(|e| e.into_inner()) = o;

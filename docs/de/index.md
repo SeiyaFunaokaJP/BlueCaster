@@ -89,7 +89,7 @@ BlueCaster macht aus Ihrem Bluetooth-Adapter einen Hi-Fi-Audiosender. Damit stre
 | Komponente | Windows 10 (x64 / ARM64) | Windows 11 (x64 / ARM64) | Linux (Ubuntu) |
 |:-----------|:----------------:|:----------------:|:--------------:|
 | **BlueCaster** (Fenster, Infobereich, CLI) | ✅ (noch nicht auf echter Hardware getestet) | ✅ | ❌ |
-| [Aus dem Quellcode bauen](building) (Rust, Visual Studio 2022+, Node.js) | ✅ | ✅ | ❌ |
+| [Aus dem Quellcode bauen](building) (Rust, Visual Studio 2022+) | ✅ | ✅ | ❌ |
 | `bluecaster_decode` (Stream-Prüfung) | ✅ | ✅ | ❌ |
 | End-to-End-Test `tools/emu/run_test.py` | ✅ | ✅ | ❌ |
 | Virtueller Adapter `tools/emu/emu_vhci.py` | ❌ | ❌ | ✅ |

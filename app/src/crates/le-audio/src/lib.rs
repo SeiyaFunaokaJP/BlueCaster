@@ -21,12 +21,16 @@
 //!   (v1 le_audio_stream.cpp)
 //! - [`broadcast`]: the broadcast source (Auracast): announcements, BASE,
 //!   presets, the plan of the BIS
+//! - [`bass`]: the Broadcast Receive State of a receiver (BASS)
+//! - [`ad`]: advertising data and UUIDs as text (the probes)
 //!
 //! The BTstack side (scan, connect, GATT, BAP state machine, ISO sending,
 //! the profile modules) is in bt-host's `le` module; LC3 is in lc3-sys.
 
 #![forbid(unsafe_code)]
 
+pub mod ad;
+pub mod bass;
 pub mod broadcast;
 pub mod ccp_model;
 pub mod csip_crypto;

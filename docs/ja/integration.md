@@ -11,7 +11,7 @@ nav_order: 2.7
 サードパーティのツールが BlueCaster のコアと通信する方法を説明します。ツールは、ストリームの状態の表示、プロファイルの開始と停止、音量の設定を行えるほか、BlueCaster の Bluetooth リンクを通してヘッドホン自身のサービスも利用できます。こうしたツールは[連携するツール](works-with)に載せています。
 
 {: .warning }
-> 2.0.2 のベータ期間中は、プロトコルが変わる可能性があります。仕様の正となるのは [`app/src/crates/ipc/src/protocol.rs`](https://github.com/SeiyaFunaokaJP/BlueCaster/blob/main/app/src/crates/ipc/src/protocol.rs) と、そこから生成した [`app/src/ui/src/ipc/bindings`](https://github.com/SeiyaFunaokaJP/BlueCaster/tree/main/app/src/ui/src/ipc/bindings) の TypeScript の型です。このページではその使い方を説明しており、すべてのフィールドは挙げていません。
+> 2.0.2 のベータ期間中は、プロトコルが変わる可能性があります。仕様の正となるのは [`app/src/crates/ipc/src/protocol.rs`](https://github.com/SeiyaFunaokaJP/BlueCaster/blob/main/app/src/crates/ipc/src/protocol.rs) と、そこから生成した [`app/src/crates/ipc/bindings`](https://github.com/SeiyaFunaokaJP/BlueCaster/tree/main/app/src/crates/ipc/bindings) の TypeScript の型です。このページではその使い方を説明しており、すべてのフィールドは挙げていません。
 
 ## 目次
 {: .no_toc .text-delta }
@@ -168,7 +168,7 @@ sequenceDiagram
 
 設定を 1 つだけ変えるときは、`profile.save` や `settings.set` ではなく[簡易操作](#quick-controls)を使ってください。
 
-BlueCaster のウィンドウが使うメソッドのうち、ツールでは注意して使うべきもの: `profile.save` / `profile.delete`、`settings.set`（設定を **すべて** 置き換えます。最新の `settings` に変更を加えて送ってください。一部だけのオブジェクトは決して送らないでください）、`device.forget` / `device.rename`、`adapter.*`（`adapter.assign_winusb` と `adapter.restore_driver` は UAC の確認を出します。開発者モードのチップのツールである `adapter.probe` と `adapter.run_script` は Bluetooth スタックを止めます）、`app.quit`。それ以外のメソッドはウィンドウ自身の画面のためのもので、予告なく変わることがあります: `stream.start_custom`、ほかの `device.*`（`device.import_windows_pairings` は UAC の確認を出します）、`audio.apps`、`audio.mixer` / `audio.mixer_set`、上の 2 つ以外の `diag.*`、`receiver.*`、`app.*`。パラメーターと結果を含む全一覧は、`protocol.rs` の `Method` 列挙型にあります。
+BlueCaster のウィンドウが使うメソッドのうち、ツールでは注意して使うべきもの: `profile.save` / `profile.delete`、`settings.set`（設定を **すべて** 置き換えます。最新の `settings` に変更を加えて送ってください。一部だけのオブジェクトは決して送らないでください）、`device.forget` / `device.rename`、`adapter.*`（`adapter.assign_winusb` と `adapter.restore_driver` は UAC の確認を出します。開発者モードのチップのツールである `adapter.probe` と `adapter.run_script` は Bluetooth スタックを止めます）、`app.quit`。それ以外のメソッドはウィンドウ自身の画面のためのもので、予告なく変わることがあります: `stream.start_custom`、ほかの `device.*`（`device.import_windows_pairings` は UAC の確認を出します）、`audio.apps`、`audio.input_devices`、`audio.mixer` / `audio.mixer_set`、上の 2 つ以外の `diag.*`、`receiver.*`、`app.*`。パラメーターと結果を含む全一覧は、`protocol.rs` の `Method` 列挙型にあります。
 
 ## RFCOMM パススルー {#rfcomm-passthrough}
 

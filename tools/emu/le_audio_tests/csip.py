@@ -104,7 +104,7 @@ def check(case, ctx):
         failures.append(f'the sinks did not serve a {sirk_type} SIRK')
     failures += _check_lock(case, log, sink_log)
 
-    found = re.search(re.escape(second) + r' "[^"]*" resolves to coordinated set 0 \(RSI\)', log)
+    found = re.search(re.escape(second) + r' "[^"]*" belongs to coordinated set 0 \(RSI\)', log)
     if case.first_address_only and case.name != 'csip-missing-member' and not found:
         failures.append(f'CSIP did not find {second} by its RSI')
     if case.name == 'csip-both-named' and found:

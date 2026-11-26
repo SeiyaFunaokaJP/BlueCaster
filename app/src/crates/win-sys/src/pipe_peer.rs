@@ -1,10 +1,10 @@
 //! Who is on the other end of a named pipe, from the pipe and the
 //! process itself, never from what the peer says: the client's token (by
 //! impersonating it for a moment), its process and image; the server's
-//! process, session and image. Also the service-mode pipe: one name for
-//! every user, a DACL that lets interactive users connect but not create
-//! instances of their own, and a client open that asks only for what a
-//! client needs.
+//! process, session and image, and the pipe's owner. Also the
+//! service-mode pipe: one name for every user, a DACL that lets
+//! interactive users connect but not create instances of their own, and a
+//! client open that asks only for what a client needs.
 
 use std::ffi::c_void;
 use std::os::windows::io::{AsRawHandle, BorrowedHandle, RawHandle};
@@ -13,12 +13,13 @@ use std::path::PathBuf;
 use tokio::net::windows::named_pipe::{NamedPipeClient, NamedPipeServer, ServerOptions};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
 use windows::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
+    SE_KERNEL_OBJECT,
 };
 use windows::Win32::Security::{
-    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, RevertToSelf,
-    SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_INFORMATION_CLASS, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER,
-    TokenElevation, TokenIntegrityLevel, TokenSessionId, TokenUser,
+    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    PSID, RevertToSelf, SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_INFORMATION_CLASS, TOKEN_MANDATORY_LABEL,
+    TOKEN_QUERY, TOKEN_USER, TokenElevation, TokenIntegrityLevel, TokenSessionId, TokenUser,
 };
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_OVERLAPPED, FILE_GENERIC_READ, FILE_SHARE_NONE, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA,
@@ -37,6 +38,8 @@ pub const INTEGRITY_SYSTEM: u32 = 0x4000;
 
 /// The SID of LocalSystem
 pub const SYSTEM_SID: &str = "S-1-5-18";
+/// The SID of the local Administrators group
+pub const ADMINISTRATORS_SID: &str = "S-1-5-32-544";
 
 /// The process that connected to a pipe server, as Windows knows it
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,10 +64,19 @@ pub struct ClientIdentity {
 pub struct ServerProcess {
     /// GetNamedPipeServerProcessId
     pub pid: u32,
-    /// The server process's session (0: a service's)
+    /// The server's session (0: a service's), from the pipe, or else from
+    /// the process
     pub session_id: Option<u32>,
-    /// Its program (None: no access)
+    /// Its program (None: no access; a user who is not elevated may not
+    /// open a process of LocalSystem)
     pub image: Option<PathBuf>,
+    /// The owner of the pipe object, "S-1-5-..." (None: not readable). The
+    /// pipe keeps the owner its first instance got from the token that
+    /// created it, and Windows lets a process name only itself or a group
+    /// its token may own for (an elevated administrator's Administrators)
+    /// as an owner: a process of a user who is not elevated cannot serve a
+    /// pipe that SYSTEM or the Administrators own.
+    pub owner_sid: Option<String>,
 }
 
 fn io_err(e: windows::core::Error) -> std::io::Error {
@@ -206,7 +218,55 @@ pub fn server_process(pipe: BorrowedHandle<'_>) -> std::io::Result<ServerProcess
     // SAFETY: a pipe handle borrowed for the call; valid out pointer.
     unsafe { windows::Win32::System::Pipes::GetNamedPipeServerProcessId(HANDLE(pipe.as_raw_handle()), &mut pid) }
         .map_err(io_err)?;
-    Ok(ServerProcess { pid, session_id: crate::pipe::process_session_id(pid).ok(), image: process_image(pid).ok() })
+    Ok(ServerProcess {
+        pid,
+        session_id: server_session_id(pipe).or_else(|| crate::pipe::process_session_id(pid).ok()),
+        image: process_image(pid).ok(),
+        owner_sid: pipe_owner_sid(pipe).ok(),
+    })
+}
+
+/// The session of the pipe's server as the pipe recorded it
+/// (GetNamedPipeServerSessionId): readable where the server's process is not
+fn server_session_id(pipe: BorrowedHandle<'_>) -> Option<u32> {
+    let mut session = 0u32;
+    // SAFETY: a pipe handle borrowed for the call; valid out pointer.
+    unsafe { windows::Win32::System::Pipes::GetNamedPipeServerSessionId(HANDLE(pipe.as_raw_handle()), &mut session) }
+        .ok()
+        .map(|()| session)
+}
+
+/// The owner of the pipe object behind `pipe`, from its security
+/// descriptor. Needs READ_CONTROL, which [`open_client`] asks for.
+pub fn pipe_owner_sid(pipe: BorrowedHandle<'_>) -> std::io::Result<String> {
+    let mut owner = PSID::default();
+    let mut sd = PSECURITY_DESCRIPTOR::default();
+    // SAFETY: a pipe handle borrowed for the call; `owner` receives a
+    // pointer into `sd`, a LocalAlloc'ed descriptor freed below.
+    let status = unsafe {
+        GetSecurityInfo(
+            HANDLE(pipe.as_raw_handle()),
+            SE_KERNEL_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            Some(&mut owner),
+            None,
+            None,
+            None,
+            Some(&mut sd),
+        )
+    };
+    if status.is_err() {
+        return Err(std::io::Error::from_raw_os_error(status.0 as i32));
+    }
+    let out = if owner.is_invalid() {
+        Err(std::io::Error::other("the pipe has no owner"))
+    } else {
+        // `owner` points into `sd`, alive until the LocalFree below
+        sid_string(owner)
+    };
+    // SAFETY: allocated by GetSecurityInfo with LocalAlloc.
+    unsafe { LocalFree(Some(HLOCAL(sd.0))) };
+    out
 }
 
 /// Read and write for the pipe's clients, but not FILE_APPEND_DATA, which
@@ -320,6 +380,36 @@ mod tests {
             let srv = server_process(client.as_handle()).unwrap();
             assert_eq!((srv.pid, srv.session_id), (std::process::id(), Some(id.session_id)));
             assert!(srv.image.is_some());
+            // The session the pipe itself reports is this process's
+            assert_eq!(server_session_id(client.as_handle()), Some(id.session_id));
+            assert!(owned_by_this_process(srv.owner_sid.as_deref().unwrap()));
+        });
+    }
+
+    /// The owner Windows gives what this process creates: its user (or,
+    /// when the tests run elevated and the policy says so, the
+    /// Administrators)
+    fn owned_by_this_process(owner: &str) -> bool {
+        owner == crate::pipe::current_user_sid().unwrap()
+            || (current_process_elevated().unwrap() && owner == ADMINISTRATORS_SID)
+    }
+
+    /// The service-mode pipe served by this process is owned by this
+    /// user, not by SYSTEM or the Administrators: a client of the real
+    /// service would not take it for the service's
+    #[test]
+    fn a_pipe_served_by_a_user_is_owned_by_that_user() {
+        let name = format!(r"\\.\pipe\bluecaster-test-owner-{}", std::process::id());
+        rt().block_on(async {
+            let _server = create_service_server(&name, true).unwrap();
+            let client = open_client(&name).unwrap();
+            use std::os::windows::io::AsHandle;
+            let owner = pipe_owner_sid(client.as_handle()).unwrap();
+            assert!(owned_by_this_process(&owner), "the owner is someone else");
+            assert_ne!(owner, SYSTEM_SID);
+            if !current_process_elevated().unwrap() {
+                assert_ne!(owner, ADMINISTRATORS_SID);
+            }
         });
     }
 

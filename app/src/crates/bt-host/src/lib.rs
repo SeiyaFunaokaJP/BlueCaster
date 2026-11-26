@@ -56,17 +56,24 @@ pub use btstack_sys::{CtkdOutcome, ImportedLeBond, LeBondAdded, LeKeys, expect_t
 pub use capture::HciCapture;
 pub use events::{addr_str, parse_addr};
 pub use hid::{HidConfig, HidCounters, HidEvent, Passkey};
-pub use le::api::LE_NO_LINK;
-pub use le::bap::{CigOverrides, set_cig_overrides};
+pub use le::api::{LE_NO_ANSWER, LE_NO_LINK};
+pub use le::bap::{CigOverrides, set_buffer_margin, set_cig_overrides, set_realign_off};
 pub use le::gatt_cache as le_gatt_cache;
+pub use le::gatt_client::{GattChar as LeGattChar, GattService as LeGattService};
 pub use le::iso_recv::{
     ISO_STATUS_LOST, ISO_STATUS_POSSIBLY_INVALID, ISO_STATUS_VALID, LeRxHandle, LeRxStats, LeRxStream, MAX_RX_SDU,
     RxSdu,
 };
+pub use le::modules::asha::{
+    AshaSink, SDU_BYTES as ASHA_SDU_BYTES, UUID_AUDIO_CONTROL_POINT as ASHA_AUDIO_CONTROL_POINT,
+    UUID_AUDIO_STATUS as ASHA_AUDIO_STATUS, UUID_LE_PSM_OUT as ASHA_LE_PSM_OUT,
+    UUID_READ_ONLY_PROPERTIES as ASHA_READ_ONLY_PROPERTIES, UUID_SERVICE_ASHA as ASHA_SERVICE,
+    UUID_VOLUME as ASHA_VOLUME,
+};
 pub use le::modules::csip::{forget_stored_file as le_forget_stored_sirk, stored_sets as le_stored_sets};
 pub use le::{
     BroadcastLayout, LeAddr, LeBroadcast, LeConfig, LeDeviceId, LeDeviceInfo, LeRequest, LeScanResult, LeSduSink,
-    LeStreamRequest, LeStreamStarted, LeStreamStats, LeStreamStatus,
+    LeStreamRequest, LeStreamStarted, LeStreamStats, LeStreamStatus, SingleMode,
 };
 pub use media::{MediaPacket, MediaSink};
 pub use rfcomm::{
@@ -136,6 +143,9 @@ const THREAD_END_STEP: Duration = Duration::from_millis(20);
 const THREAD_END_STEPS: u32 = 500;
 /// connect_retrying: attempts in all
 pub const CONNECT_ATTEMPTS: u32 = 3;
+/// How long the link a device opens itself may take to come up after the
+/// controller refused our page for it
+const CROSSED_LINK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How to reach the controller
 #[derive(Debug, Clone)]
@@ -316,6 +326,9 @@ pub enum ConnectFailure {
     Refused,
     /// Authentication / security refused, e.g. a stale link key
     AuthFailed,
+    /// The device was connecting to us at that moment: the controller
+    /// refused our own page (ACL Connection Already Exists)
+    Crossed,
     /// The adapter or BTstack stopped working: only a new stack helps
     Stalled,
     /// Cancelled by the user
@@ -1530,6 +1543,7 @@ impl BtHost {
         };
         let mut repaired = false;
         let mut collided = false;
+        let mut crossed = false;
         let mut attempt = 1;
         loop {
             let err = match self.connect(addr) {
@@ -1583,7 +1597,27 @@ impl BtHost {
                 self.drop_acl_link(Duration::from_secs(5));
                 continue;
             }
-            let transient = matches!(err, ConnectFailure::NoAnswer | ConnectFailure::LinkLost);
+            if err == ConnectFailure::Crossed && !crossed {
+                // Headphones that were just turned on page the PC they used
+                // last. The controller then refuses our page, and the link
+                // of theirs comes up a moment later: connect over that one.
+                crossed = true;
+                let up = self.shared.wait(CROSSED_LINK_TIMEOUT, true, |s| s.acl_link_to(&addr).is_some());
+                if up == Wait::Cancelled || cancelled() {
+                    return Err(ConnectFailure::Cancelled);
+                }
+                tracing::info!(
+                    "the device was connecting at the same moment: {}",
+                    if up == Wait::Done {
+                        "connecting over its link"
+                    } else {
+                        "its link did not come up, trying again"
+                    }
+                );
+                continue;
+            }
+            let transient =
+                matches!(err, ConnectFailure::NoAnswer | ConnectFailure::LinkLost | ConnectFailure::Crossed);
             if !transient || attempt >= CONNECT_ATTEMPTS {
                 return Err(err);
             }

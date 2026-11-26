@@ -242,6 +242,7 @@ fn signaling_failure(status: u8) -> ConnectFailure {
         | L2CAP_CONNECTION_BASEBAND_DISCONNECT
         | SDP_QUERY_INCOMPLETE
         | ERROR_CODE_UNSPECIFIED_ERROR => ConnectFailure::LinkLost,
+        ERROR_CODE_ACL_CONNECTION_ALREADY_EXISTS => ConnectFailure::Crossed,
         _ => ConnectFailure::Other,
     }
 }
@@ -2832,6 +2833,13 @@ impl App for HostApp {
         if packet_type != HCI_EVENT_PACKET {
             return;
         }
+        // The audio channels of hearing aids (ASHA)
+        if source == Source::L2capCbm {
+            if let Some(le) = self.le.as_mut() {
+                le.on_l2cap_cbm(stack, packet);
+            }
+            return;
+        }
         match source {
             Source::Hci => {
                 self.handle_hci(stack, packet);
@@ -2859,7 +2867,7 @@ impl App for HostApp {
                     self.hid.on_event(stack, packet)
                 }
             }
-            Source::Rfcomm | Source::Sco => {}
+            Source::Rfcomm | Source::Sco | Source::L2capCbm => {}
             Source::Avrcp | Source::AvrcpController | Source::AvrcpTarget => {
                 if event_type(packet) == Some(HCI_EVENT_AVRCP_META) {
                     self.handle_avrcp(stack, packet)
@@ -3148,6 +3156,12 @@ mod tests {
         assert_eq!(signaling_failure(0x81), ConnectFailure::LinkLost);
         assert_eq!(signaling_failure(0x05), ConnectFailure::AuthFailed);
         assert_eq!(signaling_failure(0x66), ConnectFailure::AuthFailed);
+    }
+
+    #[test]
+    fn a_page_refused_for_the_devices_own_is_tried_again() {
+        // Headphones that were just turned on page the PC while it pages them
+        assert_eq!(signaling_failure(0x0B), ConnectFailure::Crossed);
     }
 
     #[test]

@@ -1,0 +1,17 @@
+[package]
+name = "ui-model"
+description = "What the window shows, without the window: translations, formatting and the rules of the screens (codecs, profiles, link statistics), tested on their own"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ipc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# The log's local time of day (logview.rs)
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[lints]
+workspace = true

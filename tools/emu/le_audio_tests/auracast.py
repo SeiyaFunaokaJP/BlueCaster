@@ -18,6 +18,7 @@ import re
 
 NAME = 'BlueCaster test'
 FL, FR = 0x1, 0x2
+BL, BR = 0x10, 0x20
 
 
 @dataclasses.dataclass
@@ -65,6 +66,14 @@ CASES = [
     # source, so the mixer plays the front on the rear outputs too.
     # Front and rear as two stereo broadcasts
     AuracastCase('matrix-pairs', [stereo(' Front'), stereo(' Rear')], rtn=2, bluecaster_args=layout('pairs')),
+    # The four outputs as one broadcast of four BIS (one BIG), for an
+    # assistant to give each receiver its BIS
+    AuracastCase('matrix-single', [Broadcast(None, 48000, 120, ((FL, 'L'), (FR, 'R'), (0, 'L'), (0, 'R')))], rtn=2,
+                 bluecaster_args=layout('single')),
+    # The same with the rear located Back Left / Back Right
+    AuracastCase('matrix-single-located',
+                 [Broadcast(None, 48000, 120, ((FL, 'L'), (FR, 'R'), (BL, 'L'), (BR, 'R')))], rtn=2,
+                 bluecaster_args=layout('single-located')),
     # Each speaker a mono broadcast of its own: four BIGs
     AuracastCase('matrix-quad', [one(' FL', 'L'), one(' FR', 'R'), one(' RL', 'L'), one(' RR', 'R')], rtn=2,
                  bluecaster_args=layout('quad')),

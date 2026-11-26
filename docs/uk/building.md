@@ -20,7 +20,6 @@ nav_order: 3
 
 - **Rust** (stable, 1.90 або новіший) через [rustup](https://rustup.rs/)
 - **Visual Studio 2022 або новіша** (або її Build Tools) з робочим навантаженням «Desktop development with C++», бо бібліотеки C (BTstack, кодеки) компілює MSVC
-- **Node.js** 22 і **pnpm** для інтерфейсу (`corepack enable` надає pnpm)
 - **Git** (для підмодулів)
 - **PowerShell 7** (`pwsh`) для `build.ps1` / `build.bat` (`winget install Microsoft.PowerShell`)
 - **Python 3.11 або новіший** для перевірок (`tools/check_lang.py`) і [тесту з емулятором](#emu)
@@ -34,19 +33,14 @@ cd BlueCaster
 pwsh ./build.ps1
 ```
 
-Або двічі клацніть `build.bat` у Провіднику: він запускає `build.ps1` і наприкінці чекає натискання клавіші (`build.bat -Test` передає ключі далі). `build.ps1` спершу перевіряє, чи є Rust, Node.js, pnpm і підмодулі, запускає `pnpm install`, якщо немає `node_modules`, а потім збирає сторінку вікна й три програми в `target/release/`: `bluecaster-core.exe` (резидентне ядро: Bluetooth, звук, область сповіщень), `bluecaster.exe` (вікно) і `bluecaster-driver.exe` (допоміжна програма з правами адміністратора, яка встановлює й відновлює драйвер WinUSB). Тримайте всі три в одній папці; `bluecaster-core.exe --cli` передає звук без вікна.
+Або двічі клацніть `build.bat` у Провіднику: він запускає `build.ps1` і наприкінці чекає натискання клавіші (`build.bat -Test` передає ключі далі). `build.ps1` спершу перевіряє, чи є Rust і підмодулі, а потім збирає три програми в `target/release/`: `bluecaster-core.exe` (резидентне ядро: Bluetooth, звук, область сповіщень), `bluecaster.exe` (вікно) і `bluecaster-driver.exe` (допоміжна програма з правами адміністратора, яка встановлює й відновлює драйвер WinUSB). Тримайте всі три в одній папці; `bluecaster-core.exe --cli` передає звук без вікна.
 
 Ключі: `-Debug` (профіль dev, `target/debug/`), `-Test` (додатково запускає перевірки з розділу «Тести»), `-Decoder` (додатково збирає інструмент декодування), `-Emu` (додатково запускає [тест з емулятором](#emu); `-Emu -Codecs sbc,ldac` перевіряє лише ці кодеки), `-Release -Arch x64|arm64` (запускає лише скрипт випуску, див. «Пакети випуску»).
 
-**Покроково** (що робить `build.ps1`; сторінку вікна потрібно зібрати раніше за `bluecaster.exe`, бо він її вбудовує):
+**Без скрипту** (що запускає `build.ps1`):
 
 ```bash
-cargo build --release -p bluecaster-core-exe -p bluecaster-driver
-cd app/src/ui
-pnpm install --frozen-lockfile
-pnpm build
-cd ../../..
-cargo build --release -p bluecaster-ui
+cargo build --release -p bluecaster-core-exe -p bluecaster-driver -p bluecaster-ui
 ```
 
 ## Якщо ви вже клонували без `--recursive`
@@ -64,11 +58,11 @@ BlueCaster/
 ├── app/
 │   ├── src/
 │   │   ├── core/           bluecaster-core.exe: resident core, tray, IPC server, --cli
-│   │   ├── ui/             bluecaster.exe: Tauri 2 + SolidJS (pnpm dev runs it in a browser with a mock core)
+│   │   ├── ui/             bluecaster.exe: the window and the tray flyout (GPUI)
 │   │   ├── driver/         bluecaster-driver.exe: WinUSB assign / restore (elevated)
 │   │   └── crates/         Libraries: btstack-sys, hci-transport, bt-host, codec, the codec -sys crates,
 │   │                       pipeline, audio-capture, win-sys, core (bluecaster-core), ipc, le-audio, lc3-sys,
-│   │                       aptx-adaptive (aptX Adaptive encoder)
+│   │                       aptx-adaptive (aptX Adaptive encoder), ui-model and ui-host (the window's logic)
 │   ├── lang/               Localization (en.json is the source; tools/check_lang.py checks the others)
 │   └── resources/          Icon and manifest
 ├── Cargo.toml              Cargo workspace
@@ -94,9 +88,12 @@ BlueCaster/
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cd app/src/ui && pnpm exec tsc --noEmit && pnpm exec vitest run
 python tools/check_lang.py
 ```
+
+`cargo test --workspace` перевіряє й вікно: `ui-model` містить правила екранів, переклади й форматування, і для його тестів вікно не потрібне.
+
+Щоб переглянути екрани без ядра й адаптера, запустіть `bluecaster.exe`, указавши в `BLUECASTER_UI_DEMO` шлях до JSON-файлу зі знімком стану ядра. `BLUECASTER_UI_ROUTE` відкриває один екран, а `BLUECASTER_UI_SIZE` задає розмір вікна. Формат файлу описано в `app/src/ui/src/demo.rs`.
 
 ## Пакети випуску {#release-packages}
 
@@ -155,7 +152,7 @@ python tools/emu/run_test.py                        # every codec and negotiatio
 
 ## Залежності {#dependencies}
 
-Бібліотеки C підключено як підмодулі git; Rust-крейти й npm-пакети інтерфейсу завантажують Cargo і pnpm (версії зафіксовано в `Cargo.lock` і `app/src/ui/pnpm-lock.yaml`; `cargo deny check` перевіряє їхні ліцензії).
+Бібліотеки C підключено як підмодулі git; Rust-крейти завантажує Cargo (версії зафіксовано в `Cargo.lock`; `cargo deny check` перевіряє їхні ліцензії).
 
 | Бібліотека | Спосіб | Зафіксована версія | Ліцензія |
 |:--------|:-------|:---------------|:--------|
@@ -169,7 +166,7 @@ python tools/emu/run_test.py                        # every codec and negotiatio
 | fdk-aac | підмодуль git | v3.0.0 | FDK AAC License |
 | Кодувальник LHDC V5 | підмодуль git | як зафіксовано | Apache-2.0 |
 | libopus | підмодуль git | v1.6.1 | BSD-3-Clause |
-| Tauri, SolidJS, Rust-крейти | Cargo / pnpm | `Cargo.lock`, `pnpm-lock.yaml` | MIT / Apache-2.0 та інші (`licenses/third-party/rust-crates.txt` у випуску) |
+| GPUI, Rust-крейти | Cargo | `Cargo.lock` | MIT / Apache-2.0 та інші (`licenses/third-party/rust-crates.txt` у випуску) |
 
 {: .warning }
 Оскільки BTstack скомпоновано з програмою, будь-яку зібрану вами копію BlueCaster можна використовувати й поширювати лише в особистих некомерційних цілях, хоча сам вихідний код BlueCaster поширюється за подвійною ліцензією Apache-2.0 або MIT.

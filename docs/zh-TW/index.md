@@ -89,7 +89,7 @@ BlueCaster 能把您的藍牙介面卡變成 Hi-Fi 音訊發射器，透過 **LD
 | 元件 | Windows 10 (x64 / ARM64) | Windows 11 (x64 / ARM64) | Linux (Ubuntu) |
 |:----------|:----------------:|:----------------:|:--------------:|
 | **BlueCaster**（視窗、系統匣、CLI） | ✅（尚未在實機上試過） | ✅ | ❌ |
-| [從原始碼建置](building)（Rust、Visual Studio 2022 以上、Node.js） | ✅ | ✅ | ❌ |
+| [從原始碼建置](building)（Rust、Visual Studio 2022 以上） | ✅ | ✅ | ❌ |
 | `bluecaster_decode`（串流檢查工具） | ✅ | ✅ | ❌ |
 | 端對端測試 `tools/emu/run_test.py` | ✅ | ✅ | ❌ |
 | 虛擬介面卡 `tools/emu/emu_vhci.py` | ❌ | ❌ | ✅ |

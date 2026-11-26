@@ -31,7 +31,7 @@ BlueCaster は、最大 3 つのプログラムで構成されます。
 | プログラム | 動いている間 | 役割 |
 |:--------|:-----|:-----|
 | `bluecaster-core.exe` | BlueCaster の実行中（ウィンドウ、スタートメニュー、**Windows 起動時に開始** から起動） | Bluetooth、音声の取り込みとエンコード、プロファイルと設定、トレイのアイコンとそのメニュー、IPC サーバー。`--cli` を付けると、同じコアをコンソールで動かします |
-| `bluecaster.exe` | ウィンドウを開いている間だけ（最後のウィンドウを閉じてから 3 分で終了） | メインウィンドウとトレイのフライアウト（Tauri 2、SolidJS + TypeScript）。独自の状態は持ちません |
+| `bluecaster.exe` | ウィンドウを開いている間だけ（最後のウィンドウを閉じてから 3 分で終了） | メインウィンドウとトレイのフライアウト（Rust、GPUI）。独自の状態は持ちません |
 | `bluecaster-driver.exe` | ドライバーの変更 1 回、またはキーの取り込み 1 回の間だけ、管理者権限（UAC）で | アダプターへの WinUSB の割り当て、元のドライバーへの復元、または Windows の Bluetooth がそのアダプター用に保持しているリンクキーの読み取り（`windows-keys`）を行い、終了します |
 
 ```mermaid
@@ -42,7 +42,7 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    ui["bluecaster.exe:<br>ウィンドウと<br>トレイのフライアウト<br>（Tauri + SolidJS）"]
+    ui["bluecaster.exe:<br>ウィンドウと<br>トレイのフライアウト<br>（GPUI）"]
     src["Windows の音声:<br>システムループバック /<br>仮想デバイス / アプリ単位"]
     subgraph core["bluecaster-core.exe"]
         ctl["トレイのメニュー /<br>IPC サーバー / CLI (--cli)"] --> svc["コアサービス:<br>接続の状態機械、コーデック選択、<br>プロファイル、再接続"]
@@ -127,8 +127,10 @@ USB トランスポートには、v1 で実機のアダプターに必要だっ�
 | 3. エンジン | `pipeline` | PCM のリング、形式変換、ダウンミックス、エンコード、メディアペイロード、送信ペース、ABR |
 | 4. コア | `bluecaster-core`（ディレクトリ `core`） | 状態機械、再接続、スリープと復帰、プロファイル、設定と v1 からの移行、音量の連動、出力のミュート、更新チェック、Realtek のファームウェアのダウンロード、受信機テストのクライアント、統計、ベンダーのプロトコル（`vendor/`） |
 | 4. コア | `ipc` | コアとウィンドウで共有するプロトコルの型（serde。TypeScript の型は `ts-rs` で生成）とパイプのフレーム |
+| 4. コア | `ui-model` | ウィンドウ本体から切り離した、ウィンドウのロジック: ウィンドウから見たコアの状態、翻訳、表示の書式、各画面のルール。すべて通常の `cargo test` でテストできます |
+| 4. コア | `ui-host` | ウィンドウのプロセスの、UI 以外の処理: コアとの接続、アプリ内の更新（署名は `minisign-verify` で確認）、サービスのアドオン、多重起動の防止、ログ |
 | 5. プログラム | `bluecaster-core-exe`（`app/src/core`） | `bluecaster-core.exe`: コア、トレイ（`tao` のイベントループ上の `tray-icon`）、IPC サーバー、`--cli` |
-| 5. プログラム | `bluecaster-ui`（`app/src/ui`） | `bluecaster.exe`: Tauri 2。Rust 側は IPC クライアントで、ページは SolidJS + TypeScript + Vite |
+| 5. プログラム | `bluecaster-ui`（`app/src/ui`） | `bluecaster.exe`: GPUI（`gpui-kit`）で作った画面、コントロール、テーマと、トレイのフライアウトのウィンドウ |
 | 5. プログラム | `bluecaster-driver`（`app/src/driver`） | `bluecaster-driver.exe`: 昇格ヘルパー |
 
 ## 音声の経路とスレッド {#audio-path-and-threads}
@@ -336,6 +338,7 @@ AAC と SBC は、A2DP の仕様で定義された標準のコーデック ID �
 | パス | 内容 |
 |:-----|:---------|
 | `settings.json` | アプリの設定。`schema_version` 付き。不明なキーも削除せずに残す |
+| `ui-state.json` | 起動をまたいで残すウィンドウの状態: **後で** で先送りした更新、**対応しているコーデックのみ表示** の選択、閉じたお知らせ |
 | `profiles.json` | プロファイル |
 | `devices\devices.txt` | 既知のデバイス |
 | `devices\le_audio_devices.txt` | LE Audio: デバイス一覧の LE Audio の項目 |
@@ -361,8 +364,8 @@ AAC と SBC は、A2DP の仕様で定義された標準のコーデック ID �
 ## ビルドシステム {#build-system}
 
 - プログラムは **Cargo** でビルドし、CMake は不要です。各 `-sys` クレートが、`build.rs` で `extern/` の git サブモジュールにある C ライブラリを MSVC でコンパイルします。CMake でビルドするのは、開発者向けツールの `tools/a2dp_decode` だけです
-- ウィンドウのページは **Vite** でビルドし（`app/src/ui` で `pnpm build`）、Tauri が `bluecaster.exe` に埋め込みます
-- IPC プロトコルの TypeScript の型は、Rust の型から生成します（`cargo test -p ipc export_bindings`）
+- ウィンドウもほかの部分と同じく Rust で書かれているので、`bluecaster.exe` は Cargo だけでビルドできます
+- サードパーティのツール向けに、`cargo test -p ipc export_bindings` が Rust の型から IPC プロトコルの TypeScript の型を生成し、`app/src/crates/ipc/bindings` に出力します
 - 言語ファイル（`app/lang/*.json`）は、ウィンドウとコアのトレイメニューの両方で使います
 - `installer/build-release.ps1` が、インストーラー（Inno Setup、`installer/BlueCaster.iss`）、ポータブル zip、更新用のマニフェストを作成します。[ビルド](building)を参照してください
 

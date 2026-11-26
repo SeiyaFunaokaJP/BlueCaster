@@ -20,7 +20,6 @@ nav_order: 3
 
 - **Rust**（stable，1.90 或更高版本），通过 [rustup](https://rustup.rs/) 安装
 - **Visual Studio 2022 或更高版本**（或其生成工具），并安装“使用 C++ 的桌面开发”工作负载，因为 C 库（BTstack、各编解码器）由 MSVC 编译
-- 用于 UI 的 **Node.js** 22 和 **pnpm**（`corepack enable` 即可提供 pnpm）
 - **Git**（用于子模块）
 - 用于 `build.ps1` / `build.bat` 的 **PowerShell 7**（`pwsh`，`winget install Microsoft.PowerShell`）
 - 用于检查（`tools/check_lang.py`）和[模拟器测试](#emu)的 **Python 3.11 或更高版本**
@@ -34,19 +33,14 @@ cd BlueCaster
 pwsh ./build.ps1
 ```
 
-也可以在资源管理器中双击 `build.bat`：它会运行 `build.ps1`，并在结束时等待按键（`build.bat -Test` 会把开关传给脚本）。`build.ps1` 先检查 Rust、Node.js、pnpm 和子模块是否齐全，在缺少 `node_modules` 时运行 `pnpm install`，然后构建窗口的页面，并把三个程序输出到 `target/release/`：`bluecaster-core.exe`（常驻核心：蓝牙、音频、托盘）、`bluecaster.exe`（窗口）和 `bluecaster-driver.exe`（以提升权限运行、负责分配 / 恢复 WinUSB 驱动程序的辅助程序）。请将这三个程序放在同一个文件夹中；`bluecaster-core.exe --cli` 可在不打开窗口的情况下串流。
+也可以在资源管理器中双击 `build.bat`：它会运行 `build.ps1`，并在结束时等待按键（`build.bat -Test` 会把开关传给脚本）。`build.ps1` 先检查 Rust 和子模块是否齐全，然后把三个程序构建到 `target/release/`：`bluecaster-core.exe`（常驻核心：蓝牙、音频、托盘）、`bluecaster.exe`（窗口）和 `bluecaster-driver.exe`（以提升权限运行、负责分配 / 恢复 WinUSB 驱动程序的辅助程序）。请将这三个程序放在同一个文件夹中；`bluecaster-core.exe --cli` 可在不打开窗口的情况下串流。
 
 开关：`-Debug`（开发配置，`target/debug/`）、`-Test`（同时运行“测试”中的检查）、`-Decoder`（同时构建解码工具）、`-Emu`（同时运行[模拟器测试](#emu)；`-Emu -Codecs sbc,ldac` 只测试这些编解码器）、`-Release -Arch x64|arm64`（仅运行发布脚本，见“发布包”）。
 
-**分步构建**（即 `build.ps1` 所做的事；`bluecaster.exe` 会嵌入窗口的页面，因此必须先构建页面）：
+**不使用脚本构建**（即 `build.ps1` 运行的命令）：
 
 ```bash
-cargo build --release -p bluecaster-core-exe -p bluecaster-driver
-cd app/src/ui
-pnpm install --frozen-lockfile
-pnpm build
-cd ../../..
-cargo build --release -p bluecaster-ui
+cargo build --release -p bluecaster-core-exe -p bluecaster-driver -p bluecaster-ui
 ```
 
 ## 如果克隆时没有使用 `--recursive`
@@ -64,11 +58,11 @@ BlueCaster/
 ├── app/
 │   ├── src/
 │   │   ├── core/           bluecaster-core.exe: resident core, tray, IPC server, --cli
-│   │   ├── ui/             bluecaster.exe: Tauri 2 + SolidJS (pnpm dev runs it in a browser with a mock core)
+│   │   ├── ui/             bluecaster.exe: the window and the tray flyout (GPUI)
 │   │   ├── driver/         bluecaster-driver.exe: WinUSB assign / restore (elevated)
 │   │   └── crates/         Libraries: btstack-sys, hci-transport, bt-host, codec, the codec -sys crates,
 │   │                       pipeline, audio-capture, win-sys, core (bluecaster-core), ipc, le-audio, lc3-sys,
-│   │                       aptx-adaptive (aptX Adaptive encoder)
+│   │                       aptx-adaptive (aptX Adaptive encoder), ui-model and ui-host (the window's logic)
 │   ├── lang/               Localization (en.json is the source; tools/check_lang.py checks the others)
 │   └── resources/          Icon and manifest
 ├── Cargo.toml              Cargo workspace
@@ -94,9 +88,12 @@ BlueCaster/
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cd app/src/ui && pnpm exec tsc --noEmit && pnpm exec vitest run
 python tools/check_lang.py
 ```
+
+`cargo test --workspace` 也会测试窗口：各页面的规则、翻译和格式化都在 `ui-model` 中，无需打开窗口即可运行。
+
+如需在没有核心和适配器的情况下查看各页面，请将 `BLUECASTER_UI_DEMO` 设为一个 JSON 文件的路径，再启动 `bluecaster.exe`。该文件包含核心状态的快照。`BLUECASTER_UI_ROUTE` 用于打开某个页面，`BLUECASTER_UI_SIZE` 用于设置窗口大小。文件格式见 `app/src/ui/src/demo.rs`。
 
 ## 发布包 {#release-packages}
 
@@ -155,7 +152,7 @@ python tools/emu/run_test.py                        # every codec and negotiatio
 
 ## 依赖项 {#dependencies}
 
-C 库以 git 子模块形式引入；Rust crate 和 UI 的 npm 软件包由 Cargo 和 pnpm 获取（版本固定在 `Cargo.lock` 和 `app/src/ui/pnpm-lock.yaml` 中；`cargo deny check` 会检查它们的许可证）。
+C 库以 git 子模块形式引入；Rust crate 由 Cargo 获取（版本固定在 `Cargo.lock` 中；`cargo deny check` 会检查它们的许可证）。
 
 | 库 | 方式 | 固定版本 | 许可证 |
 |:--------|:-------|:---------------|:--------|
@@ -169,7 +166,7 @@ C 库以 git 子模块形式引入；Rust crate 和 UI 的 npm 软件包由 Carg
 | fdk-aac | git 子模块 | v3.0.0 | FDK AAC License |
 | LHDC V5 编码器 | git 子模块 | 以子模块固定的版本为准 | Apache-2.0 |
 | libopus | git 子模块 | v1.6.1 | BSD-3-Clause |
-| Tauri、SolidJS、Rust crate | Cargo / pnpm | `Cargo.lock`、`pnpm-lock.yaml` | MIT / Apache-2.0 等（见发布包中的 `licenses/third-party/rust-crates.txt`） |
+| GPUI、Rust crate | Cargo | `Cargo.lock` | MIT / Apache-2.0 等（见发布包中的 `licenses/third-party/rust-crates.txt`） |
 
 {: .warning }
 由于链接了 BTstack，你自行构建的任何 BlueCaster 都只能出于个人、非商业目的使用和再分发，即使 BlueCaster 源代码本身采用 Apache-2.0 或 MIT 双重许可。

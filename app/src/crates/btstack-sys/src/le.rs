@@ -79,7 +79,7 @@ pub struct BigParams {
     /// Also the broadcast slot (0..[`BROADCAST_SLOTS`]) whose advertising
     /// set the BIG goes on
     pub big_handle: u8,
-    /// 1..=2 (MAX_NR_BIS)
+    /// 1..=4 (MAX_NR_BIS)
     pub num_bis: u8,
     pub sdu_interval_us: u32,
     pub max_sdu: u16,
@@ -100,9 +100,14 @@ thread_local! {
     static ATT_DB_LENT: Cell<bool> = const { Cell::new(false) };
 }
 
+/// The longest SDU of [`Stack::cbm_send`] (shim.c BLUECASTER_CBM_SDU_MAX)
+pub const CBM_SDU_MAX: usize = 512;
+
 pub(crate) fn reset() {
     ATT_DB.with(|d| d.set(false));
     ATT_DB_LENT.with(|d| d.set(false));
+    // SAFETY: the stack is down; the shim's channel slots are plain data.
+    unsafe { ffi::bluecaster_cbm_reset() };
 }
 
 fn len16(data: &[u8]) -> Option<u16> {
@@ -881,6 +886,57 @@ impl Stack {
         let status = unsafe { ffi::bluecaster_iso_send(cis_handle, sequence_number, sdu.as_ptr(), sdu.len() as u16) };
         tracing::trace!(target: "le", "ISO send 0x{cis_handle:04X} seq {sequence_number}, {} bytes: 0x{status:02X}", sdu.len());
         status
+    }
+
+    // ---- LE credit based channels (after le_init) ----
+
+    /// Opens an LE credit based channel to `psm` on the LE link `con` (ASHA:
+    /// the PSM a hearing aid names). Ok: its local cid;
+    /// L2CAP_EVENT_CBM_CHANNEL_OPENED follows ([`crate::Source::L2capCbm`]).
+    pub fn cbm_connect(&self, con: u16, psm: u16) -> Result<u16, u8> {
+        if !self.le_initialized() {
+            return Err(ERROR_CODE_COMMAND_DISALLOWED);
+        }
+        let mut cid = 0u16;
+        // SAFETY: on the BTstack thread after le_init; `cid` outlives the call.
+        let status = unsafe { ffi::bluecaster_cbm_connect(con, psm, &mut cid) };
+        tracing::debug!(target: "le", "LE channel to PSM 0x{psm:04X} on 0x{con:04X}: 0x{status:02X}, cid 0x{cid:04X}");
+        if status == 0 { Ok(cid) } else { Err(status) }
+    }
+
+    /// One SDU on the channel `cid` (at most [`CBM_SDU_MAX`] bytes and the
+    /// peer's MTU). [`crate::consts::BTSTACK_ACL_BUFFERS_FULL`]: the SDU
+    /// before it is still going out (L2CAP_EVENT_PACKET_SENT tells when it
+    /// did), nothing was taken.
+    pub fn cbm_send(&self, cid: u16, sdu: &[u8]) -> u8 {
+        if !self.le_initialized() {
+            return ERROR_CODE_COMMAND_DISALLOWED;
+        }
+        if sdu.len() > CBM_SDU_MAX {
+            return ERROR_CODE_INVALID_HCI_COMMAND_PARAMETERS;
+        }
+        // SAFETY: on the BTstack thread after le_init; the shim copies the SDU.
+        unsafe { ffi::bluecaster_cbm_send(cid, sdu.as_ptr(), sdu.len() as u16) }
+    }
+
+    /// Closes the channel (L2CAP_EVENT_CHANNEL_CLOSED follows)
+    pub fn cbm_disconnect(&self, cid: u16) -> u8 {
+        if !self.le_initialized() {
+            return ERROR_CODE_COMMAND_DISALLOWED;
+        }
+        // SAFETY: on the BTstack thread after le_init.
+        unsafe { ffi::l2cap_disconnect(cid) }
+    }
+
+    /// Asks for new connection parameters on the LE link `con`: the interval
+    /// in 1.25 ms units, the latency in connection events, the supervision
+    /// timeout in 10 ms units
+    pub fn le_update_connection(&self, con: u16, interval: u16, latency: u16, timeout: u16) -> u8 {
+        if !self.le_initialized() {
+            return ERROR_CODE_COMMAND_DISALLOWED;
+        }
+        // SAFETY: on the BTstack thread after le_init.
+        unsafe { ffi::bluecaster_le_update_connection(con, interval, latency, timeout) }
     }
 
     // ---- Broadcast: advertising and BIG (after le_init) ----

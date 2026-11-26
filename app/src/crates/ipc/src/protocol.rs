@@ -503,6 +503,14 @@ pub struct LeStreamInfo {
     /// English, v1's StreamPlan::describe ("LC3 48 kHz 10 ms 120 octets (96
     /// kbps/ch), 2 ch over 2 CIS, 48_4_2")
     pub summary: String,
+    /// The presentation delay set up: the device's time from receiving an
+    /// SDU to playing it, decoding included, us; 0 from an older core
+    #[serde(default)]
+    pub presentation_delay_us: u32,
+    /// LC3's algorithmic delay (a frame and its look-ahead), us; 0 from an
+    /// older core
+    #[serde(default)]
+    pub codec_delay_us: u32,
 }
 
 /// The audio source of a stream
@@ -568,6 +576,11 @@ pub struct StreamStatus {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub slow_link: Option<u32>,
+    /// The stream is an Auracast broadcast of this name (developer mode,
+    /// stream.start_broadcast), from its start until it is Idle again
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub broadcast: Option<String>,
 }
 
 /// Why the stream stopped over its codec (StreamStatus.codec_stop)
@@ -704,6 +717,53 @@ pub struct AuracastMixPreset {
     pub builtin: bool,
 }
 
+/// A receiver an Auracast assistant tells to play a broadcast (BASS Add
+/// Source), stream.start_broadcast's `receivers`
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct BroadcastReceiver {
+    /// "XX:XX:XX:XX:XX:XX"
+    pub address: String,
+    #[serde(default)]
+    pub name: String,
+    /// The outputs it plays, all in one broadcast of the layout: "FL",
+    /// "FR", "RL", "RR", or "M" (layout mono); "L" / "R" are FL / FR
+    pub channels: Vec<String>,
+}
+
+/// A saved LE Audio device an assistant can tell
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct AuracastReceiverCandidate {
+    pub address: String,
+    pub name: String,
+    /// It has BASS (a connection found it), not (found none), or None:
+    /// not known yet (never connected)
+    pub bass: Option<bool>,
+}
+
+/// A receiver of the broadcast running (or of the last one) and what it
+/// does
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct AuracastReceiverStatus {
+    pub address: String,
+    pub name: String,
+    /// The BIS asked for (1-based, in its broadcast)
+    pub asked: Vec<u8>,
+    /// "waiting", "looking", "connecting", "ready", "added", "synced",
+    /// "playing", "done", "not_found", "no_bass" or "failed"
+    pub phase: String,
+    /// The BIS it reports synchronized to
+    pub bis: Vec<u8>,
+    /// Why it failed, or what else it reports
+    pub detail: String,
+}
+
+/// auracast.receivers
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+pub struct AuracastReceivers {
+    pub candidates: Vec<AuracastReceiverCandidate>,
+    pub live: Vec<AuracastReceiverStatus>,
+}
+
 /// The mixer as the Auracast tab shows it
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
 pub struct AuracastMixState {
@@ -719,6 +779,10 @@ pub struct AuracastMixState {
     pub rear: bool,
     /// The matrix that plays (auto computed), 4 rows of 8
     pub effective: Vec<Vec<f32>>,
+    /// The mixer is used: Auracast always; TWS once turned on, from the
+    /// next connection
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 /// A connection profile, as in profiles.json
@@ -773,6 +837,15 @@ pub struct Profile {
     /// by default: LC3); other headsets get the media configuration either way
     #[serde(default)]
     pub le_low_latency: bool,
+    /// LE Audio: left and right swapped; a change takes effect while it
+    /// streams
+    #[serde(default)]
+    pub le_swap_channels: bool,
+    /// LE Audio: what an earbud alone plays while the other one of its set
+    /// is gone: "auto" (its own side) | "left" | "right" | "mono" ("" =
+    /// mono); a change takes effect while it streams
+    #[serde(default)]
+    pub le_alone_channel: String,
     /// Headset mode: the headphones' microphone is
     /// rendered to mic_device_id. "off" (the default) | "on" | "auto";
     /// anything else reads as off. "on": classic devices switch playback to
@@ -1081,6 +1154,15 @@ pub struct DevDebug {
     pub le_rtn_p_to_c: Option<u8>,
     /// LE Audio CIG: interleaved packing
     pub le_interleaved: bool,
+    /// LE Audio jitter buffer: frames over the controller queue at the
+    /// start (0..=7); None: the default (3)
+    #[ts(optional = nullable)]
+    #[serde(default)]
+    pub le_buffer_margin: Option<u8>,
+    /// LE Audio: a CIS that plays a frame behind the others is not
+    /// realigned
+    #[serde(default)]
+    pub le_realign_off: bool,
     /// The LE Audio microphone's preset, taken as it is; empty: as planned
     pub le_mic_preset: String,
     /// A stream with the microphone that failed is retried without it on
@@ -1744,6 +1826,11 @@ pub struct IsoCounters {
     /// The jitter buffer's prefill (frames buffered before sending starts;
     /// 3, growing to 7 after underruns)
     pub prefill: u32,
+    /// The largest transport latency of the stream's CIS (to the device),
+    /// us; None while not known, for a broadcast and from an older core
+    #[ts(optional = nullable)]
+    #[serde(default)]
+    pub transport_latency_us: Option<u32>,
 }
 
 /// An ACL packet type and the slots one media packet takes in it
@@ -2010,10 +2097,17 @@ pub enum Method {
     /// "separate", "subgroups" or "off"; older names quad, front_rear,
     /// pairs, rear_subgroups, subgroups), unknown: error stream.bad_layout;
     /// `split`: true is layout "split" (when no `layout` is given);
-    /// `source` / `source_id` / `source_name` as for stream.start_custom
-    /// ("app" fails with error.le_audio_capture). Error developer.off while
-    /// developer mode is off; a name or code out of range fails the stream
-    /// (error.auracast).
+    /// `source`: "tone", "loopback" (system audio), "output" (the loopback
+    /// of the output device `source_id`, "virtual" as well) or "input" (the
+    /// recording device `source_id`, audio.input_devices), with its name in
+    /// `source_name` ("app" fails with error.le_audio_capture, another or a
+    /// device without its id with stream.bad_source); `volume`: the
+    /// broadcast's level 0..127 (absent: the last one, at first 127), then
+    /// the stream's volume (stream.set_volume moves it); `follow_volume`:
+    /// the level and the Windows volume of the device the audio comes from
+    /// act as one (auracast.set_follow_volume; absent: as before, at first
+    /// off). Error developer.off while developer mode is off; a name or
+    /// code out of range fails the stream (error.auracast).
     #[serde(rename = "stream.start_broadcast")]
     StreamStartBroadcast {
         name: String,
@@ -2041,8 +2135,23 @@ pub enum Method {
         #[ts(optional = nullable)]
         #[serde(default)]
         source_name: Option<String>,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        volume: Option<u8>,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        follow_volume: Option<bool>,
+        /// Receivers with BASS an Auracast assistant tells to play it, each
+        /// its channels (all in one broadcast of the layout), found and
+        /// connected in turn, then told together; taken off again at the
+        /// stop (auracast.receivers shows what each does). A channel the
+        /// layout has not: error stream.bad_receiver.
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        receivers: Option<Vec<BroadcastReceiver>>,
     },
-    /// AVRCP absolute volume 0..127
+    /// AVRCP absolute volume 0..127; while broadcasting, the broadcast's
+    /// level
     #[serde(rename = "stream.set_volume")]
     StreamSetVolume { volume: u8 },
     /// Moves the headphone volume by `delta` (-127..127, within 0..127)
@@ -2168,10 +2277,65 @@ pub enum Method {
     /// -> AuracastMixState
     #[serde(rename = "auracast.mix_preset_delete")]
     AuracastMixPresetDelete { name: String },
-    /// -> bool: the running broadcast takes "tone" or "loopback" (system
-    /// audio) in place, its broadcasts staying up; false: none runs
+    /// The tws.* methods: the matrix mixer of an LE Audio stream to a
+    /// device (outputs FL FR; developer.off while developer mode is off).
+    /// -> AuracastMixState: for the stream running with it, else a source
+    /// of `channels` (default 8)
+    #[serde(rename = "tws.mix")]
+    TwsMixGet {
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        channels: Option<u32>,
+    },
+    /// -> AuracastMixState: saved, and heard at once while a stream runs
+    /// with it; `enabled` turns it on or off from the next connection
+    #[serde(rename = "tws.mix_set")]
+    TwsMixSet {
+        mix: AuracastMix,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        enabled: Option<bool>,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        channels: Option<u32>,
+    },
+    /// -> AuracastMixState; a built-in preset's name is refused
+    /// (tws.mix_save_failed)
+    #[serde(rename = "tws.mix_preset_save")]
+    TwsMixPresetSave { name: String, mix: AuracastMix },
+    /// -> AuracastMixState
+    #[serde(rename = "tws.mix_preset_delete")]
+    TwsMixPresetDelete { name: String },
+    /// -> bool: the running broadcast takes the source in place (`source`,
+    /// `source_id`, `source_name` as for stream.start_broadcast), its
+    /// broadcasts staying up; false: none runs. Error stream.bad_source.
     #[serde(rename = "auracast.set_source")]
-    AuracastSetSource { source: String },
+    AuracastSetSource {
+        source: String,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        source_id: Option<String>,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        source_name: Option<String>,
+    },
+    /// -> bool: the broadcast's level follows the Windows volume of the
+    /// device its audio comes from, and moves it (`follow`), or no longer
+    /// does; kept for the next broadcast. True: a broadcast runs and can
+    /// follow (not the test tone or a recording device).
+    #[serde(rename = "auracast.set_follow_volume")]
+    AuracastSetFollowVolume { follow: bool },
+    /// -> bool: whether a broadcast's level follows the Windows volume
+    /// (auracast.set_follow_volume, stream.start_broadcast's
+    /// `follow_volume`), as kept for the next broadcast
+    #[serde(rename = "auracast.follow_volume")]
+    AuracastFollowVolume,
+    /// -> AuracastReceivers: the saved LE Audio devices an assistant can
+    /// tell (`bass` as their GATT services were kept at the last
+    /// connection), and what the receivers of the broadcast running (or of
+    /// the last one) do
+    #[serde(rename = "auracast.receivers")]
+    AuracastReceivers,
     /// For tools: the headset mode of the profile `name` (absent: the one
     /// streaming, else the active one), saved as the window's mode buttons
     /// save it: "off" mutes the microphone while the mode saved is Auto or
@@ -2255,6 +2419,11 @@ pub enum Method {
     /// -> AudioDevice[]
     #[serde(rename = "audio.devices")]
     AudioDevices,
+    /// -> AudioDevice[]: Windows' recording devices (microphones, line
+    /// in, the recording sides of cables); `is_default`: the default
+    /// recording device, no `capture_name`
+    #[serde(rename = "audio.input_devices")]
+    AudioInputDevices,
     /// -> AudioApp[]
     #[serde(rename = "audio.apps")]
     AudioApps,
@@ -3054,6 +3223,9 @@ pub struct HidCode {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
+// A request lives from its line read to its answer: the size of its
+// largest method (stream.start_broadcast) costs nothing worth a box
+#[allow(clippy::large_enum_variant)]
 pub enum ClientMessage {
     Hello {
         protocol: u32,
@@ -3350,6 +3522,8 @@ mod tests {
                 devices: 1,
                 low_latency: false,
                 summary: "LC3 48 kHz 10 ms 120 octets (96 kbps/ch), 2 ch over 2 CIS, 48_4_2".into(),
+                presentation_delay_us: 40000,
+                codec_delay_us: 12500,
             }),
             ..info
         };
@@ -3362,7 +3536,15 @@ mod tests {
         .unwrap();
         assert!(sample.iso.is_none());
         let iso = LinkSample {
-            iso: Some(IsoCounters { cis: 2, sdu_sets: 1000, silence: 3, underruns: 1, dropped: 0, prefill: 4 }),
+            iso: Some(IsoCounters {
+                cis: 2,
+                sdu_sets: 1000,
+                silence: 3,
+                underruns: 1,
+                dropped: 0,
+                prefill: 4,
+                transport_latency_us: Some(4200),
+            }),
             ..sample
         };
         assert_eq!(serde_json::from_value::<LinkSample>(serde_json::to_value(&iso).unwrap()).unwrap(), iso);

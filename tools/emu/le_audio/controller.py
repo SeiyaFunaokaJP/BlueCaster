@@ -61,35 +61,14 @@ from bumble.snoop import Snooper
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from emu_sink import EmuController  # noqa: E402  (classic HCI additions, ACL buffers)
+from emu_timing import precise_event_loop_timing  # noqa: E402
 
 log = logging.getLogger('emu_le_audio')
 
 
-def _precise_event_loop_timing():
-    """On Windows, asyncio's clock is time.monotonic() = GetTickCount64(),
-    which moves in 15.6 ms steps, and a timer fires when it is due within
-    that resolution: SDU deliveries (and their Number Of Completed Packets)
-    came up to ~16 ms early or late, in bursts. Use the performance counter
-    for the loop's clock and 1 ms system timer resolution for its waits, so
-    the emulated controller keeps its SDU intervals to about a millisecond.
-    Called on import, before emu_le_audio_sink.py starts its event loop."""
-    if sys.platform != 'win32':
-        return
-    import ctypes
-    asyncio.BaseEventLoop.time = lambda self: time.perf_counter()
-    original_init = asyncio.BaseEventLoop.__init__
-
-    def init(self, *args, **kwargs):
-        original_init(self, *args, **kwargs)
-        self._clock_resolution = 1e-4
-    asyncio.BaseEventLoop.__init__ = init
-    try:
-        ctypes.windll.winmm.timeBeginPeriod(1)
-    except OSError:
-        pass
-
-
-_precise_event_loop_timing()
+# SDU intervals kept to about a millisecond (emu_timing.py); on import,
+# before emu_le_audio_sink.py starts its event loop
+precise_event_loop_timing()
 
 # CIG parameters set by the central, by (cig_id, cis_id): the peripheral's
 # controller reports them in its LE CIS Established too (one central here)
@@ -104,6 +83,10 @@ LATE_US = 30000      # the same tolerance in time for shorter SDU intervals
 HOST_LATE_MS = 2.0
 HEARTBEAT_S = 0.002
 STALL_S = 0.003      # heartbeat later than this: the event loop stalled (timer jitter is ~1.5 ms)
+# The first SDU interval begins this long after the first SDU, so the first
+# SDUs of every CIS or BIS, which the host sends together, share it (as on a
+# controller, whose CIG and BIG events do not begin with the host's SDUs)
+ISO_LEAD_S = 0.002
 LATE_LOG_MAX = 20    # late SDU lines per CIS (then every 100th)
 # Names of the controllers that report no ISO buffers (--no-iso-buffers)
 NO_ISO_BUFFERS = set()
@@ -400,7 +383,7 @@ class LeEmuController(EmuController):
         interval = interval_us / 1e6
         now = loop.time()
         if self.iso_t0 is None:
-            self.iso_t0 = now
+            self.iso_t0 = now + ISO_LEAD_S
         if self.heartbeat is None:
             self.heartbeat_due = now + HEARTBEAT_S
             self.heartbeat = loop.call_at(self.heartbeat_due, self._heartbeat, self.heartbeat_due)

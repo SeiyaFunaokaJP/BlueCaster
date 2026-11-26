@@ -111,28 +111,22 @@ pub fn expected_core(beside: &Path) -> Result<PathBuf, &'static str> {
 }
 
 /// Every check a client makes of the service pipe it opened, before it
-/// trusts anything the server sends: the server's program is
-/// [`expected_core`] (`beside`: the core next to the client's own
-/// program, used only by a test instance), and for the real service it
+/// trusts anything the server sends. A test instance: the server's
+/// program is the core next to the client's own program (`beside`). The
+/// real service: SYSTEM or the Administrators own the pipe, its server
 /// runs in session 0 and is the process the service control manager runs
-/// as the service, configured with that same program
+/// as the service, configured with [`expected_core`]; the server's program
+/// is checked too where the client may read it
 /// ([`crate::access::service_server_trusted`]). The UI, the elevated
-/// helper and anyone else use this one function.
+/// helper and anyone else use this one function; the session agent applies
+/// the same rule.
 pub fn check_service_pipe(pipe: std::os::windows::io::BorrowedHandle<'_>, beside: &Path) -> Result<(), String> {
     let server = win_sys::pipe_peer::server_process(pipe).map_err(|e| e.to_string())?;
     let test = test_instance();
     let expected = expected_core(beside)?;
     // A test instance has no service: not asked
     let record = if test { ServiceRecord::NotInstalled } else { service_record() };
-    crate::access::service_server_trusted(
-        server.image.as_deref(),
-        server.session_id,
-        server.pid,
-        &record,
-        &expected,
-        test,
-    )
-    .map_err(str::to_owned)
+    crate::access::service_server_trusted(&server, &record, &expected, test).map_err(str::to_owned)
 }
 
 // ---- The version rule ----------------------------------------------------

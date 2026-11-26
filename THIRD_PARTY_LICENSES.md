@@ -15,8 +15,7 @@ along with their license information and compliance obligations.
 ## Summary
 
 The C libraries are git submodules under `extern/`, at the commits pinned in this
-repository. The Rust crates are pinned in `Cargo.lock`, the JavaScript packages in
-`app/src/ui/pnpm-lock.yaml`.
+repository. The Rust crates are pinned in `Cargo.lock`.
 
 | Component | Pinned version | License (SPDX) | Copyright | Usage | In |
 |-----------|----------------|----------------|-----------|-------|----|
@@ -35,11 +34,10 @@ repository. The Rust crates are pinned in `Cargo.lock`, the JavaScript packages 
 | aptx-adaptive (AKS-Logic/aptx-adaptive-linux, vendored) | upstream commit `25099004b2d3` (2026-10-22), crate 0.1.0 | MIT | Prateek Mittal (AKS-Logic) | aptX Adaptive encoding (experimental), §19 | `bluecaster-core.exe` |
 | HFreebuds (protocol description, packet cutting and test vectors) | commit `dab1f7e` | MIT | N2K02 | Huawei earbuds' sound quality mode (`app/src/crates/core/src/vendor/huawei.rs`), §20 | `bluecaster-core.exe` |
 | LHDC-Switch (protocol use, packet cutting and test vector) | commit `b33a758` | MIT | LHDC Switch contributors | OPPO earbuds' Hi-Res mode (`app/src/crates/core/src/vendor/oppo.rs`), §21 | `bluecaster-core.exe` |
-| Rust crates (Tauri 2.12, tokio, serde, windows, nusb, wasapi, tray-icon, ...) | `Cargo.lock` | Apache-2.0, MIT and other permissive licenses; MPL-2.0 for a few (§9) | their authors | Everything written in Rust that is not BlueCaster's own | all three programs |
-| SolidJS (`solid-js`) | 1.9.17 | MIT | Ryan Carniato | UI library of the window | `bluecaster.exe` |
-| `@tauri-apps/api` | 2.12.4 | Apache-2.0 OR MIT | Tauri Apps Contributors | JavaScript side of Tauri | `bluecaster.exe` |
-| Fluent UI System Icons | as copied into `app/src/ui/src/components/icons.ts` | MIT | Microsoft Corporation | Icons of the window | `bluecaster.exe` |
-| Microsoft Edge WebView2 Runtime | the one installed on the PC | Microsoft Software License Terms | Microsoft Corporation | Renders the window (not part of BlueCaster, §11) | — |
+| SpanDSP G.722 encoder, ported to Rust | `g722_encode.c` 1.14 (2006) | Public domain | Steve Underwood; CMU (Chengxiang Lu, Alex Hauptmann) | G.722 encoding for ASHA hearing aids (proof of concept, `app/src/crates/codec/src/g722.rs`), §23 | `bluecaster-core.exe` |
+| Rust crates (GPUI, tokio, serde, windows, nusb, wasapi, tray-icon, ...) | `Cargo.lock` | Apache-2.0, MIT and other permissive licenses; MPL-2.0 for one (§9) | their authors | Everything written in Rust that is not BlueCaster's own | all three programs |
+| Fluent UI System Icons | as copied into `app/src/ui/src/ui/icons.rs` | MIT | Microsoft Corporation | Icons of the window | `bluecaster.exe` |
+| Lucide icons (bundled in the `gpui-kit-assets` crate) | Lucide 1.43.0, as in `gpui-kit-assets` 0.11.0 | ISC; the icons derived from Feather also MIT | Lucide Icons and Contributors; Cole Bemis (Feather) | Icons of the window's standard controls (§10) | `bluecaster.exe` |
 | Windows SDK / Windows APIs | (build machine) | Microsoft EULA | Microsoft Corporation | System APIs (WASAPI, WinUSB, SetupAPI, ...) | all three programs |
 
 `bluecaster-driver.exe` contains only Rust code (BlueCaster's own and the crates of §9).
@@ -54,7 +52,7 @@ The installer (`BlueCaster-<version>-win64-setup.exe`) installs, and the portabl
 
 | File | Contents |
 |------|----------|
-| `bluecaster.exe` | The window (Tauri; SolidJS, `@tauri-apps/api` and the icons in its embedded page) |
+| `bluecaster.exe` | The window (GPUI, with the Fluent UI System Icons and the Lucide icons it draws) |
 | `bluecaster-core.exe` | The resident core (BTstack and all codec libraries statically linked) |
 | `bluecaster-driver.exe` | The elevated WinUSB assignment helper |
 | `licenses/README.txt` | What is in the `licenses` folder, and where to get the complete corresponding source: the BlueCaster commit and the exact commits of every submodule |
@@ -74,16 +72,14 @@ The installer (`BlueCaster-<version>-win64-setup.exe`) installs, and the portabl
 | `licenses/third-party/opus-COPYING.txt` | libopus license (BSD-3-Clause, `extern/opus/COPYING`) |
 | `licenses/third-party/aptx-adaptive-LICENSE.txt` | aptX Adaptive encoder MIT license (`app/src/crates/aptx-adaptive/LICENSE`) |
 | `licenses/third-party/fluentui-system-icons.txt` | Fluent UI System Icons MIT license (`app/src/ui/LICENSES/fluentui-system-icons.txt`) |
-| `licenses/third-party/solid-js-LICENSE.txt` | SolidJS MIT license (from the `solid-js` package) |
-| `licenses/third-party/tauri-apps-api-LICENSE-MIT.txt` | `@tauri-apps/api` MIT license (from the package; it is also available under Apache-2.0, `licenses/third-party/Apache-2.0.txt`) |
+| `licenses/third-party/lucide-LICENSE.txt` | Lucide ISC license, with the MIT license of the icons derived from Feather (`LICENSE-LUCIDE` of the `gpui-kit-assets` crate) |
 | `licenses/third-party/rust-crates.txt` | The license texts of all Rust crates in the programs, each followed by the crates it covers (generated by `cargo-about` from `Cargo.lock`) |
 
 The tinydir (§7) and KISS FFT (§8) notices have no file of their own; their
 license texts are reproduced in this document.
 
-The installer itself is made by Tauri's NSIS bundler (NSIS, zlib/libpng-style
-license) and embeds Microsoft's WebView2 bootstrapper, which it runs when the
-WebView2 Runtime is missing (§11). Its uninstaller removes the files above.
+The installer itself is built with Inno Setup (`installer/BlueCaster.iss`,
+Inno Setup License, permissive). Its uninstaller removes the files above.
 
 Not distributed:
 
@@ -101,8 +97,6 @@ Not distributed:
 - **Microsoft Visual C++ runtime** — the programs link the MSVC runtime
   statically (§11), so no runtime DLL is shipped and the Visual C++
   Redistributable is not needed.
-- **WebView2 Runtime** — installed by Windows or by the bootstrapper, not copied
-  into BlueCaster's folder.
 
 ---
 
@@ -472,7 +466,7 @@ interoperability feature.
 
 - **Where**: all three programs. The crates and their exact versions are in
   `Cargo.lock`; BlueCaster's own crates (`app/src/crates/*`, `app/src/core`,
-  `app/src/ui/src-tauri`, `app/src/driver`) are `Apache-2.0 OR MIT` (§13),
+  `app/src/ui`, `app/src/driver`) are `Apache-2.0 OR MIT` (§13),
   except the vendored `app/src/crates/aptx-adaptive` (§19) and
   `app/src/crates/nusb` (below)
 - **License texts**: `licenses/third-party/rust-crates.txt`, generated for each release by
@@ -484,14 +478,15 @@ interoperability feature.
 - **Accepted licenses** (`about.toml`, the same list as `deny.toml`; the build
   fails on any other): Apache-2.0, Apache-2.0 WITH LLVM-exception, MIT,
   BSD-2-Clause, BSD-3-Clause, ISC, Zlib, Unicode-3.0, MPL-2.0, BSL-1.0, CC0-1.0,
-  CDLA-Permissive-2.0, Unlicense
+  CDLA-Permissive-2.0, Unlicense, 0BSD
 
-Most crates are Apache-2.0 and / or MIT: among them Tauri 2.12 and its plugins
-(single instance, updater, opener), tao, wry and webview2-com (the window),
+Most crates are Apache-2.0 and / or MIT: among them GPUI (`gpui-pre`, Zed
+Industries) and GPUI Kit (`gpui-kit`, `gpui-base`, `gpui-component`,
+`gpui-kit-assets`; Longbridge), both Apache-2.0, for the window; tao,
 tray-icon and muda (the tray), tokio, serde and serde_json, tracing, the
 `windows` crates (Microsoft's Win32 bindings), `nusb` (USB), `wasapi` (audio
-capture), rtrb (lock-free rings), ureq and rustls (the update check), semver,
-ts-rs. `nusb` 0.2.8 (Apache-2.0 OR MIT, Kevin Mehall) is built from a vendored copy,
+capture), rtrb (lock-free rings), ureq and rustls (the update check), reqwest
+and minisign-verify (in-app updates), semver, ts-rs. `nusb` 0.2.8 (Apache-2.0 OR MIT, Kevin Mehall) is built from a vendored copy,
 `app/src/crates/nusb`, with one added accessor (the WinUSB interface handle, for the
 isochronous SCO pipes); `app/src/crates/nusb/SOURCE.txt` says what was changed, and its
 license files are unchanged. Crates under other licenses:
@@ -500,10 +495,13 @@ license files are unchanged. Crates under other licenses:
 |---------|----------------------------------|------|
 | Unicode-3.0 | `unicode-ident`, the ICU4X crates (`icu_*`, `zerovec`, ...) used by `idna` | Unicode data files license; notice in `rust-crates.txt` |
 | ISC | `ring` (also Apache-2.0 parts), `untrusted`, `rustls-webpki` | Permissive |
-| BSD-3-Clause | `brotli` (with MIT), `alloc-no-stdlib`, `alloc-stdlib`, `subtle`, `nnnoiseless` (RNNoise in Rust, with its model, for the microphone's noise suppression) | Permissive |
-| Zlib | `foldhash` | Permissive |
+| BSD-3-Clause | `subtle`, `nnnoiseless` (RNNoise in Rust, with its model, for the microphone's noise suppression), `tiny-skia` and the image crates GPUI uses (`exr`, `ravif`, ...) | Permissive |
+| BSD-2-Clause | `arrayref`, `rav1e`, `v_frame`, `av1-grain` (image crates GPUI uses) | Permissive |
+| Zlib | `foldhash`, `slotmap` | Permissive |
+| 0BSD | `enum-iterator` (via the GPUI component library) | Permissive |
+| CC0-1.0 | `notify` (via GPUI) | Public domain dedication |
 | CDLA-Permissive-2.0 | `webpki-roots` (Mozilla's list of root certificates, as data) | Permissive data license; the notice is in `rust-crates.txt` |
-| MPL-2.0 | `cssparser`, `cssparser-macros`, `selectors`, `dtoa-short` (Tauri's HTML handling), `option-ext` (via `dirs`) | File-level copyleft, see below |
+| MPL-2.0 | `option-ext` (via `dirs`) | File-level copyleft, see below |
 
 The table changes with `Cargo.lock`; `rust-crates.txt` of a release is the
 authoritative list for that release.
@@ -521,33 +519,30 @@ authoritative list for that release.
 
 ---
 
-## 10. The Window's Page: SolidJS, @tauri-apps/api, Fluent UI System Icons
+## 10. The Window's Icons: Fluent UI System Icons, Lucide
 
-The window's page (`app/src/ui/src`, TypeScript, built by Vite into
-`bluecaster.exe`) bundles two npm packages and one icon set. The other packages in
-`app/src/ui/package.json` (TypeScript, Vite, Vitest, the Tauri CLI, testing
-libraries) are build and test tools and are not part of the programs.
+The window (`app/src/ui`, Rust on GPUI) draws two icon sets. Their licenses
+are separate from the license of the crate that carries them, so they ship as
+files of their own.
 
 | Component | Version | License | Copyright | Shipped as |
 |-----------|---------|---------|-----------|------------|
-| [SolidJS](https://github.com/solidjs/solid) (`solid-js`) | 1.9.17 | MIT | Copyright (c) 2016-2025 Ryan Carniato | `licenses/third-party/solid-js-LICENSE.txt` |
-| [`@tauri-apps/api`](https://github.com/tauri-apps/tauri) | 2.12.4 | Apache-2.0 OR MIT (BlueCaster uses it under MIT) | Copyright (c) 2017 - Present Tauri Apps Contributors | `licenses/third-party/tauri-apps-api-LICENSE-MIT.txt` |
-| [Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons) | the icons copied into `src/components/icons.ts` | MIT | Copyright (c) 2020 Microsoft Corporation | `licenses/third-party/fluentui-system-icons.txt`; also named in **Settings > About BlueCaster** |
+| [Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons) | the icons copied into `app/src/ui/src/ui/icons.rs` (`@fluentui/svg-icons` 1.1.344) | MIT | Copyright (c) 2020 Microsoft Corporation | `licenses/third-party/fluentui-system-icons.txt`; also named in **Settings > About BlueCaster** |
+| [Lucide](https://github.com/lucide-icons/lucide) | 1.43.0, the default component icons that `gpui-kit-assets` 0.11.0 embeds | ISC; the icons derived from [Feather](https://github.com/feathericons/feather) also MIT | Copyright (c) 2026 Lucide Icons and Contributors; Copyright (c) 2013-present Cole Bemis | `licenses/third-party/lucide-LICENSE.txt` |
 
 ### Obligations
 
-- Include the MIT license and copyright notice with the binaries (shipped as
-  listed above)
+- Include the license texts and copyright notices with the binaries (shipped
+  as listed above)
 
 The application icon is BlueCaster's own (the v1 icon).
 
 ---
 
-## 11. Microsoft Components: Windows APIs and WebView2
+## 11. Microsoft Components: Windows APIs
 
 - **Provider**: Microsoft Corporation
-- **License**: Microsoft Software License Terms (Windows SDK); the WebView2
-  Runtime under its own Microsoft terms
+- **License**: Microsoft Software License Terms (Windows SDK)
 
 The programs call Windows APIs through Microsoft's `windows` crates (§9) and
 the MSVC toolchain's import libraries:
@@ -565,19 +560,12 @@ the MSVC toolchain's import libraries:
 | SendInput | Headphone buttons as media keys |
 | Named pipes, security (DACL), ShellExecuteEx | IPC with the window; elevation of the driver helper |
 | Winsock | H4 over TCP to the emulator (development), the peer receiver test |
-| WebView2 | Rendering the window (Tauri) |
-
-The **Microsoft Edge WebView2 Runtime** renders the window. It is part of
-Windows 11 and of most Windows 10 installations; BlueCaster does not ship it. The
-installer embeds Microsoft's WebView2 bootstrapper
-(`MicrosoftEdgeWebview2Setup.exe`, redistributable under Microsoft's WebView2
-distribution terms) and runs it only when the runtime is missing.
+| Direct3D 11, DXGI, DirectComposition, DirectWrite | Drawing the window and its text (GPUI) |
 
 All three programs link the Visual C++ runtime statically (`+crt-static` in
 `.cargo/config.toml`; the C libraries are compiled with `/MT`), so they do not
-need `VCRUNTIME140.dll` or the Visual C++ Redistributable. `bluecaster-core.exe` and
-`bluecaster-driver.exe` also contain the Universal CRT; `bluecaster.exe` uses Tauri's
-static VC runtime with the Universal CRT that is part of Windows 10 and later.
+need `VCRUNTIME140.dll` or the Visual C++ Redistributable. They also contain the
+Universal CRT.
 
 ### Obligations
 
@@ -1000,6 +988,23 @@ where the original has one, and `src/bt_hci_iso.c` states what was changed
 
 ---
 
+## 23. SpanDSP G.722 encoder (ported to Rust)
+
+- **Source**: `g722_encode.c` of SpanDSP (revision 1.14, 2006), ported to Rust in
+  `app/src/crates/codec/src/g722.rs`. `tools/emu/g722.py` is a decoder written
+  after the same code, for the emulator checks only.
+- **License**: Public domain. The file's header says: "I place my own
+  contributions to this code in the public domain for the benefit of all
+  mankind". It is based on a G.722 codec of Carnegie Mellon University
+  (Computer Science, Speech Group; Chengxiang Lu and Alex Hauptmann, 1993).
+- **Authors**: Steve Underwood; Chengxiang Lu and Alex Hauptmann
+- **Usage**: G.722 at 64 kbit/s for ASHA hearing aids (proof of concept,
+  command line only)
+
+No obligations. The authors are named here and in the source file.
+
+---
+
 ## License Compatibility Matrix
 
 | Component | License | Compatible with Apache-2.0 / MIT? | Notes |
@@ -1019,9 +1024,9 @@ where the original has one, and `src/bt_hci_iso.c` states what was changed
 | liblc3 | Apache-2.0 | Yes | Permissive (§17) |
 | Zephyr sources in `tools/nrf5340-hci` | Apache-2.0 | Yes | Source only, not in the release; those files stay Apache-2.0 (§22) |
 | micro-ecc | BSD-2-Clause | Yes | Permissive; notice shipped as `licenses/third-party/micro-ecc-LICENSE.txt` (§18) |
-| Rust crates | Apache-2.0, MIT, BSD, ISC, Zlib, Unicode-3.0, CDLA-Permissive-2.0, MPL-2.0 | Yes | Texts in `licenses/third-party/rust-crates.txt`; MPL-2.0 files stay under MPL (§9) |
-| SolidJS, @tauri-apps/api, Fluent UI System Icons | MIT (Apache-2.0 OR MIT) | Yes | Permissive |
-| Windows SDK, WebView2 | Proprietary | Yes (system components) | Platform dependency |
+| Rust crates | Apache-2.0, MIT, BSD, ISC, Zlib, 0BSD, CC0-1.0, Unicode-3.0, CDLA-Permissive-2.0, MPL-2.0 | Yes | Texts in `licenses/third-party/rust-crates.txt`; MPL-2.0 files stay under MPL (§9) |
+| Fluent UI System Icons, Lucide | MIT; ISC (Lucide, partly also MIT) | Yes | Permissive (§10) |
+| Windows SDK | Proprietary | Yes (system components) | Platform dependency |
 
 ### LGPL Compliance Notes
 

@@ -314,6 +314,12 @@ pub struct DevDebug {
     pub le_rtn_p_to_c: Option<u8>,
     /// Interleaved CIS packing instead of sequential
     pub le_interleaved: bool,
+    /// LE Audio jitter buffer: frames buffered over the controller queue
+    /// at the start (0..=7); None: the default (3)
+    pub le_buffer_margin: Option<u8>,
+    /// LE Audio: a CIS that plays a frame behind the others is left as it
+    /// is (bt-host's iso_send realigns it otherwise)
+    pub le_realign_off: bool,
     /// The LE Audio microphone's preset ("32_2_1"), taken as it is; empty:
     /// as planned
     pub le_mic_preset: String,

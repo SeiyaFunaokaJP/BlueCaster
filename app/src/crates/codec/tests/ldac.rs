@@ -344,6 +344,39 @@ fn abr_lowers_the_bitrate_under_a_deep_queue_and_raises_it_back() {
     assert!(steps > 20, "{steps}");
 }
 
+/// #575: the encode thread reads the queue right after its round, so a
+/// good link shows the packets just encoded (0 to 2), never a run of zeros
+#[test]
+fn abr_raises_the_bitrate_back_while_the_last_round_still_waits() {
+    let cfg = EncoderConfig { abr: true, ..config(48000, 2, Quality::Standard, 16, MTUS[1]) };
+    let mut enc = LdacEncoder::new(&cfg).unwrap();
+    assert_eq!(enc.bitrate_kbps(), 660);
+    let mut tone = Tone::new(48000, 2, PcmFormat::I16, 128);
+    let mut out = vec![0u8; enc.max_output_bytes()];
+    for _ in 0..10 {
+        enc.abr_adjust(20);
+        encode_packets(&mut enc, &mut tone, &mut out);
+    }
+    assert_eq!(enc.bitrate_kbps(), 330);
+
+    // A queue that keeps more than the last round does not count as drained
+    for _ in 0..600 {
+        enc.abr_adjust(3);
+        encode_packets(&mut enc, &mut tone, &mut out);
+    }
+    assert_eq!(enc.bitrate_kbps(), 330);
+
+    let mut steps = 0;
+    while enc.bitrate_kbps() != 660 {
+        enc.abr_adjust([1, 0, 2, 1][steps % 4]);
+        encode_packets(&mut enc, &mut tone, &mut out);
+        steps += 1;
+        assert!(steps < 3000, "still at {} kbps after {steps} ABR steps", enc.bitrate_kbps());
+    }
+    // Not instantly: libldac waits seconds of a drained queue per step
+    assert!(steps > 20, "{steps}");
+}
+
 #[test]
 fn abr_adjust_is_a_no_op_without_abr() {
     let cfg = config(48000, 2, Quality::Standard, 16, MTUS[0]);

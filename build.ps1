@@ -1,8 +1,8 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-One-step build of BlueCaster: the UI, then bluecaster-core.exe, bluecaster-driver.exe
-and bluecaster.exe; optionally the checks, the decoder tool, the emulator test or
+One-step build of BlueCaster: bluecaster-core.exe, bluecaster-driver.exe and
+bluecaster.exe; optionally the checks, the decoder tool, the emulator test or
 the release files.
 
 .DESCRIPTION
@@ -19,11 +19,10 @@ Run from any folder (PowerShell 7):
 Switches combine (e.g. -Debug -Test -Emu); -Release takes only -Test and -Arch.
 
 Steps:
-  - The UI (app/src/ui): `pnpm install --frozen-lockfile` when node_modules
-    is missing, then `pnpm build` (bluecaster.exe embeds app/src/ui/dist).
-  - `cargo build [--release] -p bluecaster-core-exe -p bluecaster-driver -p bluecaster-ui`.
+  - `cargo build [--release] -p bluecaster-core-exe -p bluecaster-driver -p bluecaster-ui`
+    (bluecaster-ui is the window, app/src/ui).
   - -Test: cargo fmt --check, clippy -D warnings, cargo test --workspace,
-    tsc --noEmit and vitest run in app/src/ui, python tools/check_lang.py.
+    python tools/check_lang.py.
   - -Decoder (also -Emu): configures and builds tools/a2dp_decode (Release)
     in build/a2dp_decode with cmake from PATH, or else the CMake bundled with
     Visual Studio (found with vswhere).
@@ -34,8 +33,8 @@ Steps:
     everything itself; with -Test the checks run first).
 
 Needs: Rust (rustup), Visual Studio 2022 or later with the C++ desktop
-workload, Node.js 22 and pnpm, the submodules under extern/; Python for
--Test and -Emu. See docs/building.md.
+workload, the submodules under extern/; Python for -Test and -Emu. See
+docs/building.md.
 #>
 # No [CmdletBinding()]: it would add the common parameter -Debug
 param(
@@ -59,16 +58,10 @@ if ($Release -and ($Debug -or $Decoder -or $Emu)) {
 if ($Codecs -and -not $Emu) { throw '-Codecs is an option of -Emu' }
 
 $repo = $PSScriptRoot
-$ui = Join-Path $repo 'app/src/ui'
 
 function Invoke-Checked([string]$what, [scriptblock]$cmd) {
     & $cmd
     if ($LASTEXITCODE -ne 0) { throw "$what failed (exit code $LASTEXITCODE)" }
-}
-
-function Invoke-InUi([string]$what, [scriptblock]$cmd) {
-    Push-Location $ui
-    try { Invoke-Checked $what $cmd } finally { Pop-Location }
 }
 
 function Write-Step([string]$text) {
@@ -80,18 +73,6 @@ function Write-Step([string]$text) {
 $missing = @()
 if (-not (Get-Command cargo -ErrorAction Ignore)) {
     $missing += 'Rust (cargo) is not on PATH: install it with rustup (https://rustup.rs), then open a new terminal'
-}
-$node = Get-Command node -ErrorAction Ignore
-if (-not $node) {
-    $missing += 'Node.js is not on PATH: install Node.js 22 or later (https://nodejs.org)'
-} else {
-    $nodeVersion = (& node --version).Trim()
-    if ($nodeVersion -match '^v(\d+)\.' -and [int]$Matches[1] -lt 22) {
-        Write-Warning "Node.js $nodeVersion found; the UI is built and tested with Node.js 22 or later"
-    }
-}
-if (-not (Get-Command pnpm -ErrorAction Ignore)) {
-    $missing += 'pnpm is not on PATH: run "corepack enable" (comes with Node.js) or "npm install -g pnpm"'
 }
 $submodules = Select-String -Path (Join-Path $repo '.gitmodules') -Pattern '^\s*path\s*=\s*(.+?)\s*$' |
     ForEach-Object { $_.Matches[0].Groups[1].Value }
@@ -130,19 +111,10 @@ if ($Decoder -or $Emu) {
     }
 }
 
-# --- The UI's packages (the release script and the UI build need them) ---
-if (-not (Test-Path -LiteralPath (Join-Path $ui 'node_modules'))) {
-    Write-Step 'UI packages: pnpm install --frozen-lockfile'
-    Invoke-InUi 'pnpm install' { pnpm install --frozen-lockfile }
-}
-
 $profileDir = if ($Debug) { 'debug' } else { 'release' }
 $targetDir = $null
 if (-not $Release) {
-    # --- The UI, then the three programs ---
-    Write-Step 'UI: pnpm build'
-    Invoke-InUi 'pnpm build' { pnpm build }
-
+    # --- The three programs ---
     Write-Step "Programs: cargo build ($profileDir)"
     $cargoArgs = @('build', '--manifest-path', (Join-Path $repo 'Cargo.toml'),
         '-p', 'bluecaster-core-exe', '-p', 'bluecaster-driver', '-p', 'bluecaster-ui')
@@ -165,22 +137,12 @@ if ($Decoder -or $Emu) {
 # --- Checks (as CI and CONTRIBUTING.md) ---
 if ($Test) {
     $manifest = Join-Path $repo 'Cargo.toml'
-    if ($Release) {
-        # The release script builds the UI later; clippy and the tests of
-        # bluecaster-ui need app/src/ui/dist now
-        Write-Step 'UI: pnpm build'
-        Invoke-InUi 'pnpm build' { pnpm build }
-    }
     Write-Step 'cargo fmt --check'
     Invoke-Checked 'cargo fmt' { cargo fmt --all --check --manifest-path $manifest }
     Write-Step 'cargo clippy -D warnings'
     Invoke-Checked 'cargo clippy' { cargo clippy --workspace --all-targets --manifest-path $manifest -- -D warnings }
     Write-Step 'cargo test --workspace'
     Invoke-Checked 'cargo test' { cargo test --workspace --manifest-path $manifest }
-    Write-Step 'UI: tsc --noEmit'
-    Invoke-InUi 'tsc' { pnpm exec tsc --noEmit }
-    Write-Step 'UI: vitest run'
-    Invoke-InUi 'vitest' { pnpm exec vitest run }
     Write-Step 'Language files: tools/check_lang.py'
     Invoke-Checked 'check_lang.py' { python (Join-Path $repo 'tools/check_lang.py') }
 }

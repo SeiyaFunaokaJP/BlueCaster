@@ -27,8 +27,8 @@ BlueCaster 會自動為介面卡指派 WinUSB 驅動程式，因此不再需要 
 
 每個 [發行版本](https://github.com/SeiyaFunaokaJP/BlueCaster/releases) 都提供兩種形式，內含的檔案相同：
 
-- **安裝程式**（`BlueCaster-<version>-win64-setup.exe`，ARM64 版為 `-arm64-setup.exe`）：不需系統管理員權限，即可為目前的使用者安裝。安裝程式會新增「開始」功能表項目（**BlueCaster**）與解除安裝程式，若缺少 Microsoft Edge WebView2 執行階段也會一併安裝（Windows 11 已內建）。更新可直接在應用程式中安裝（**設定 > 更新 > 立即更新**）。程式會安裝到 `%LOCALAPPDATA%\BlueCaster\`（三個程式、解除安裝程式，以及收錄授權條文的 `licenses\` 資料夾）
-- **免安裝版**（`BlueCaster-<version>-win64-portable.zip`，ARM64 版為 `-arm64-portable.zip`）：解壓縮到任意位置，然後執行 `bluecaster.exe`。請將三個程式（`bluecaster.exe`、`bluecaster-core.exe`、`bluecaster-driver.exe`）放在同一個資料夾。免安裝版只會通知您有更新，且需要已安裝 WebView2 執行階段
+- **安裝程式**（`BlueCaster-<version>-win64-setup.exe`，ARM64 版為 `-arm64-setup.exe`）：不需系統管理員權限，即可為目前的使用者安裝。安裝程式會新增「開始」功能表項目（**BlueCaster**）與解除安裝程式。更新可直接在應用程式中安裝（**設定 > 更新 > 立即更新**）。程式會安裝到 `%LOCALAPPDATA%\BlueCaster\`（三個程式、解除安裝程式，以及收錄授權條文的 `licenses\` 資料夾）
+- **免安裝版**（`BlueCaster-<version>-win64-portable.zip`，ARM64 版為 `-arm64-portable.zip`）：解壓縮到任意位置，然後執行 `bluecaster.exe`。請將三個程式（`bluecaster.exe`、`bluecaster-core.exe`、`bluecaster-driver.exe`）放在同一個資料夾。免安裝版只會通知您有更新
 
 兩者都會把設定、設定檔、連結金鑰與韌體儲存在 `%APPDATA%\BlueCaster`，因此可以互相切換。解除安裝時會刪除這個資料夾，除非您關閉 **刪除使用者資料**（無訊息解除安裝會保留資料夾）。
 

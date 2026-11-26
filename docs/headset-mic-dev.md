@@ -175,7 +175,7 @@ in the profile but is not used (as with the A2DP codec). Profile fields, both
   `StreamStatus.mic_rates` (`ServiceEvent::MicRates`). A change sets up the
   stream again (`HeadsetChange::Restart`), as does toggling Auto-select while
   a rate is chosen. The microphone is always mono; there is no channel choice.
-- UI (`Codecs.tsx`): the call codec cards (shown while the call link is open)
+- UI (`screens/codecs.rs`): the call codec cards (shown while the call link is open)
   work like the A2DP cards: with Auto-select off the user picks one, and with
   it on they offer to turn Auto-select off; the card marked as chosen is the
   codec in use. An LE Audio device with an active microphone gets a
@@ -938,7 +938,7 @@ UI:
   (`SettingsSet`). LE Audio takes Auto as On anyway; the CLI's
   `--headset-mic on` is not gated.
 
-- Audio Devices, each device's Input Source (`components/InputSource.tsx`,
+- Audio Devices, each device's Input Source (`ui/input_source.rs`,
   issue #86 round 35; previously on Codecs): a `Segmented` Off / Auto / On on
   the right of its label saves `headset_mic` (and `mic_muted: false`); the
   picker below is always shown (disabled for Off), so switching does not shift
@@ -948,8 +948,8 @@ UI:
   cable outside developer mode), and disables the output source's own device
   (to prevent a loop). A classic device without a profile shows Auto with
   VB-CABLE, which is what the core's `default_mic_output` assigns to a new profile.
-- Home's device card and the flyout's state line (`HeadsetChip` in
-  `screens/Home.tsx`): a mute toggle for a profile with `mic_device_id` and
+- Home's device card and the flyout's state line (`headset_chip` in
+  `ui/stream.rs`): a mute toggle for a profile with `mic_device_id` and
   Auto / On, shown as an icon only, at a fixed size (round 35: its text made
   the card jump). Accent outline, or `mic_off` while muted; a click saves
   `mic_muted`. Dashed while Auto has no voice link (`waiting`), `linked`
@@ -959,9 +959,8 @@ UI:
   output failed) shows as `warn` with the text as tooltip, and
   `statusText` keeps the card's status plain. Muting closes the voice link (a classic device goes back
   to A2DP quality) through the same `headset_change` path as Off.
-- Both save through `saveHeadsetMic` (`screens/Codecs.tsx`), i.e.
-  `profile.save` of the device's profile. The mock opens no voice link for
-  Auto (no app records from the cable in the mock).
+- Both save through `save_headset_mic` (`screens/codecs.rs`), i.e.
+  `profile.save` of the device's profile.
 - Keys: `capture.input_source`, `ui.headset_mic_off` / `_auto` / `_on`,
   `ui.mic_output` (the picker's name),
   `ui.headset_mic_mute` / `_unmute` (the chip's name and tooltip).
@@ -1036,11 +1035,10 @@ microphone and plays it back to the headphones.
   replace the uplink's samples after the capture's own pop (its queue stays
   primed). The playback is mono at the voice rate, so it plays at call
   quality, just as a call would sound on the headphones.
-- **UI** (`screens/diagnostics/MicPanel.tsx`): Record / Stop, Play / Stop,
+- **UI** (`screens/diagnostics/mic_panel.rs`): Record / Stop, Play / Stop,
   a 48-segment bar on a dB scale (floor -54 dBFS, peak hold), accent while
   recording, green while playing; without a stream, `quality.not_streaming`
-  shows and Record is disabled. The mock simulates the phases
-  (`MockCore.micState`).
+  shows and Record is disabled.
 - **Not covered**: LE Audio entries (their microphone path would need its
   own tap and a playback into the LC3 encoder); the emulator run of the
   test (only unit tests and the UI test); hardware.
@@ -1087,7 +1085,7 @@ not touched (no float conversion, bit-identical; unit tested).
   look-ahead: 22 ms at 16 kHz (352 samples), 24 ms at 8 kHz, 20 ms at 48 kHz.
   Turning noise suppression on or off shifts the timing once (a short
   click), turning the strength does not.
-- **UI**: `components/MicProcessing.tsx` under Input Source while it is not
+- **UI**: `ui/mic_processing.rs` under Input Source while it is not
   Off: Gain, Noise suppression (+ Strength), Noise gate (left end: Off);
   sliders save when let go.
 - **Emulator**: `run_test.py --voice msbc-gain` (`--mic-gain 6`: mic.wav's

@@ -140,19 +140,24 @@ impl StreamRequest {
     }
 
     /// Whether a session capturing `source` mutes the default output device
+    /// (not for the test tone or a recording device: nothing it plays is
+    /// the stream's)
     pub fn mutes_output(&self, source: &SourceRequest) -> bool {
-        self.mute_output && *source != SourceRequest::TestTone
+        self.mute_output && !matches!(source, SourceRequest::TestTone | SourceRequest::InputDevice { .. })
     }
 }
 
 /// Where a stream's audio comes from. OutputDevice: loopback of that output
 /// device (issue #193). A virtual or output device with auto_switch is made
 /// the Windows default output while the session runs (issue #86).
+/// InputDevice: a recording device (microphone, line in), recorded as it is
+/// (developer mode, the Auracast tab).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceRequest {
     SystemLoopback,
     VirtualDevice { id: String, name: String, auto_switch: bool },
     OutputDevice { id: String, name: String, auto_switch: bool },
+    InputDevice { id: String, name: String },
     Application { exe: String },
     TestTone,
 }
@@ -183,6 +188,7 @@ impl SourceRequest {
             SourceRequest::SystemLoopback => ("loopback", String::new()),
             SourceRequest::VirtualDevice { name, .. } => ("virtual", name.clone()),
             SourceRequest::OutputDevice { name, .. } => ("output", name.clone()),
+            SourceRequest::InputDevice { name, .. } => ("input", name.clone()),
             SourceRequest::Application { exe } => ("app", exe.clone()),
             SourceRequest::TestTone => ("tone", String::new()),
         };
@@ -196,6 +202,7 @@ impl std::fmt::Display for SourceRequest {
             SourceRequest::SystemLoopback => f.write_str("system output"),
             SourceRequest::VirtualDevice { name, .. } => write!(f, "virtual device {}", crate::diag::quoted(name)),
             SourceRequest::OutputDevice { name, .. } => write!(f, "output device {}", crate::diag::quoted(name)),
+            SourceRequest::InputDevice { name, .. } => write!(f, "recording device {}", crate::diag::quoted(name)),
             SourceRequest::Application { exe } => write!(f, "app {exe}"),
             SourceRequest::TestTone => f.write_str("test tone"),
         }
@@ -515,16 +522,19 @@ pub enum StreamState {
 struct SharedInput(Arc<Mutex<CaptureInput>>);
 
 impl Sink for SharedInput {
-    fn audio(&mut self, data: &[u8], _frames: usize, _format: Format) {
+    fn audio(&mut self, data: &[u8], _frames: usize, format: Format) {
         if let Ok(mut input) = self.0.try_lock() {
             input.push(data);
         }
+        // Hearing aids beside this stream (bimodal, a proof of concept)
+        crate::asha::tap_audio(data, format);
     }
 
-    fn silence(&mut self, frames: usize, _format: Format) {
+    fn silence(&mut self, frames: usize, format: Format) {
         if let Ok(mut input) = self.0.try_lock() {
             input.push_silence(frames);
         }
+        crate::asha::tap_silence(frames, format);
     }
 
     fn discontinuity(&mut self, lost_frames: Option<u64>) {
@@ -705,6 +715,8 @@ fn open_source(request: &SourceRequest, rate: u32) -> Result<Option<(DeviceSourc
         // Loopback for an output device profile without one)
         SourceRequest::OutputDevice { id, .. } if id.is_empty() => return Err(Msg::new("error.wasapi_init")),
         SourceRequest::OutputDevice { id, .. } => Source::RenderDevice { id: id.clone() },
+        SourceRequest::InputDevice { id, .. } if id.is_empty() => return Err(Msg::new("error.wasapi_init")),
+        SourceRequest::InputDevice { id, .. } => Source::CaptureDevice { id: id.clone() },
         SourceRequest::Application { exe } => {
             let build = audio_capture::windows_build();
             if build < audio_capture::APP_CAPTURE_MIN_BUILD {
@@ -1362,7 +1374,11 @@ fn sbc_abr(req: &StreamRequest, kind: CodecKind) -> bool {
 fn source_mix(source: &SourceRequest) -> Option<audio_capture::MixFormat> {
     match source {
         SourceRequest::SystemLoopback | SourceRequest::Application { .. } => session_host::devices::mix_format(None),
-        SourceRequest::VirtualDevice { id, .. } | SourceRequest::OutputDevice { id, .. } if !id.is_empty() => {
+        SourceRequest::VirtualDevice { id, .. }
+        | SourceRequest::OutputDevice { id, .. }
+        | SourceRequest::InputDevice { id, .. }
+            if !id.is_empty() =>
+        {
             session_host::devices::mix_format(Some(id))
         }
         _ => None,

@@ -300,6 +300,12 @@ pub fn auracast_mix_file(config: &Path) -> PathBuf {
     config.join("auracast_mix.json")
 }
 
+/// The TWS matrix mixer (LE Audio to a device), whether it is on, and its
+/// presets (developer mode)
+pub fn tws_mix_file(config: &Path) -> PathBuf {
+    config.join("tws_mix.json")
+}
+
 /// A capture started by hand (diagnostics): `hci_<stamp>.pklg` at the top
 /// of the folder (it keeps the pairing keys, so it is never in a bundle)
 pub fn capture_file(config: &Path, stamp: &str) -> PathBuf {

@@ -10,7 +10,7 @@ nav_order: 3.7
 How a third-party tool talks to the BlueCaster core: show the stream state, start and stop profiles, set the volume, or reach the headphones' own services over BlueCaster's Bluetooth link. Tools that do this are listed on [Works With](works-with).
 
 {: .warning }
-> The protocol may still change during the 2.0.2 betas. The source of truth is [`app/src/crates/ipc/src/protocol.rs`](https://github.com/SeiyaFunaokaJP/BlueCaster/blob/main/app/src/crates/ipc/src/protocol.rs) and the TypeScript types generated from it in [`app/src/ui/src/ipc/bindings`](https://github.com/SeiyaFunaokaJP/BlueCaster/tree/main/app/src/ui/src/ipc/bindings). This page explains how to use them; it does not list every field.
+> The protocol may still change during the 2.0.2 betas. The source of truth is [`app/src/crates/ipc/src/protocol.rs`](https://github.com/SeiyaFunaokaJP/BlueCaster/blob/main/app/src/crates/ipc/src/protocol.rs) and the TypeScript types generated from it in [`app/src/crates/ipc/bindings`](https://github.com/SeiyaFunaokaJP/BlueCaster/tree/main/app/src/crates/ipc/bindings). This page explains how to use them; it does not list every field.
 
 ## Table of contents
 {: .no_toc .text-delta }
@@ -167,7 +167,7 @@ Send both `logs` and `link` with every `diag.subscribe`. Each call sets both, so
 
 To change a single setting, use the [quick controls](#quick-controls) instead of `profile.save` or `settings.set`.
 
-Methods the BlueCaster window uses that a tool should use only with care: `profile.save` / `profile.delete`, `settings.set` (replaces **all** settings: send the latest `settings` with your change, never a partial object), `device.forget` / `device.rename`, `adapter.*` (`adapter.assign_winusb` and `adapter.restore_driver` show a UAC prompt; `adapter.probe` and `adapter.run_script`, developer mode's chip tools, stop the Bluetooth stack), `app.quit`. The others serve the window's own screens and may change without notice: `stream.start_custom`, the other `device.*` methods (`device.import_windows_pairings` shows a UAC prompt), `audio.apps`, `audio.mixer` / `audio.mixer_set`, `diag.*` beyond the two above, `receiver.*` and `app.*`. The full list with parameters and results is the `Method` enum in `protocol.rs`.
+Methods the BlueCaster window uses that a tool should use only with care: `profile.save` / `profile.delete`, `settings.set` (replaces **all** settings: send the latest `settings` with your change, never a partial object), `device.forget` / `device.rename`, `adapter.*` (`adapter.assign_winusb` and `adapter.restore_driver` show a UAC prompt; `adapter.probe` and `adapter.run_script`, developer mode's chip tools, stop the Bluetooth stack), `app.quit`. The others serve the window's own screens and may change without notice: `stream.start_custom`, the other `device.*` methods (`device.import_windows_pairings` shows a UAC prompt), `audio.apps`, `audio.input_devices`, `audio.mixer` / `audio.mixer_set`, `diag.*` beyond the two above, `receiver.*` and `app.*`. The full list with parameters and results is the `Method` enum in `protocol.rs`.
 
 ## RFCOMM passthrough
 

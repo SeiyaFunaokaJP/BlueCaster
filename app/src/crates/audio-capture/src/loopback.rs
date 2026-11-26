@@ -1,5 +1,6 @@
-//! WASAPI loopback capture: a render device (the default one or a chosen
-//! one) or one application's process tree.
+//! WASAPI capture: loopback of a render device (the default one or a
+//! chosen one) or of one application's process tree, or a recording device
+//! (a microphone or line in) as it is.
 //!
 //! Every COM object of a stream lives on the capture thread. The thread is
 //! started by `open` (which waits for it to report the format), parks until
@@ -51,6 +52,8 @@ pub(crate) enum Target {
     Device(Option<String>),
     /// Process loopback of this process and its children
     Process(u32),
+    /// A capture endpoint (microphone, line in), recorded as it is
+    Input(String),
 }
 
 /// HRESULTs that mean the source went away rather than a fault of ours
@@ -228,27 +231,34 @@ fn thread_main(
 
 fn open_stream(target: &Target, options: &CaptureOptions) -> Result<Stream, CaptureError> {
     match target {
-        Target::Device(id) => open_device(id.as_deref(), options),
+        Target::Device(id) => open_device(id.as_deref(), Direction::Render, options),
+        Target::Input(id) => open_device(Some(id), Direction::Capture, options),
         Target::Process(pid) => open_process(*pid, options),
     }
 }
 
-/// v1 WasapiCapture::init
-fn open_device(id: Option<&str>, options: &CaptureOptions) -> Result<Stream, CaptureError> {
+/// v1 WasapiCapture::init. `flow`: Render for the loopback of an output
+/// device, Capture for a recording device (recorded as it is, no loopback)
+fn open_device(id: Option<&str>, flow: Direction, options: &CaptureOptions) -> Result<Stream, CaptureError> {
     let enumerator = DeviceEnumerator::new().map_err(|e| CaptureError::from_wasapi("device enumerator", e))?;
     let device = match id {
         Some(id) => enumerator.get_device(id).map_err(|_| CaptureError::DeviceNotFound(id.to_owned()))?,
-        None => enumerator.get_default_device(&Direction::Render).map_err(|_| CaptureError::NoDevice)?,
+        None => enumerator.get_default_device(&flow).map_err(|_| CaptureError::NoDevice)?,
     };
-    if device.get_direction() != Direction::Render {
-        // A microphone's ID: loopback needs an output device
+    if device.get_direction() != flow {
+        // A microphone's ID for loopback, or an output's for recording
         return Err(CaptureError::DeviceNotFound(id.unwrap_or_default().to_owned()));
     }
+    let input = flow == Direction::Capture;
     let name = device.get_friendlyname().unwrap_or_default();
     tracing::debug!(
         "audio capture: device \"{name}\" id {} ({}), state {:?}",
         device.get_id().unwrap_or_default(),
-        if id.is_some() { "chosen" } else { "default render, console role" },
+        match (input, id.is_some()) {
+            (true, _) => "recording device",
+            (false, true) => "chosen",
+            (false, false) => "default render, console role",
+        },
         device.get_state().ok()
     );
 
@@ -277,7 +287,8 @@ fn open_device(id: Option<&str>, options: &CaptureOptions) -> Result<Stream, Cap
         BUFFER_HNS / 10_000
     );
     tracing::info!(
-        "audio capture: loopback of \u{201C}{name}\u{201D}: mix {} Hz {} ch {} bit, capturing {} Hz {:?}{}",
+        "audio capture: {} \u{201C}{name}\u{201D}: mix {} Hz {} ch {} bit, capturing {} Hz {:?}{}",
+        if input { "recording from" } else { "loopback of" },
         mix.get_samplespersec(),
         mix.get_nchannels(),
         mix.get_bitspersample(),

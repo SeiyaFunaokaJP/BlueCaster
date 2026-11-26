@@ -11,8 +11,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod asha;
+pub mod channels;
 pub mod convert;
 pub mod eq;
+pub mod gain;
 pub mod le;
 pub mod le_rx;
 pub mod mix;

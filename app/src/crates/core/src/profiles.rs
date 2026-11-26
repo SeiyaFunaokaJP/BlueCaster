@@ -173,6 +173,16 @@ pub struct Profile {
     /// that had LC3 LL now has LC3.
     #[serde(default, skip_serializing_if = "is_false")]
     pub le_low_latency: bool,
+    /// LE Audio: left and right swapped (written only when on); a change
+    /// takes effect while it streams
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub le_swap_channels: bool,
+    /// LE Audio: what an earbud alone plays while the other one of its set
+    /// is gone: "auto" (its own side) | "left" | "right" | "mono" (""
+    /// = mono, written only when chosen); a change takes effect while it
+    /// streams
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub le_alone_channel: String,
     /// Headset mode: "off" | "on" | "auto" ([`HeadsetMic`]; written only
     /// when not off). The headphones' microphone is rendered to
     /// `mic_device_id`; classic devices play over the voice link meanwhile
@@ -264,6 +274,8 @@ impl Default for Profile {
             sbc_channel_mode: String::new(),
             le_audio: false,
             le_low_latency: false,
+            le_swap_channels: false,
+            le_alone_channel: String::new(),
             headset_mic: headset_off(),
             mic_device_id: String::new(),
             mic_device_name: String::new(),
@@ -567,10 +579,24 @@ impl Profile {
     }
 
     /// `new` differs only in what a running stream takes in place: the
-    /// playback EQ, the microphone processing, or both
+    /// playback EQ, the microphone processing, the LE Audio channels
     pub fn only_live_processing_differs(&self, new: &Profile) -> bool {
         *self != *new
-            && Profile { media_eq: new.media_eq.clone(), mic_processing: new.mic_processing, ..self.clone() } == *new
+            && Profile {
+                media_eq: new.media_eq.clone(),
+                mic_processing: new.mic_processing,
+                le_swap_channels: new.le_swap_channels,
+                le_alone_channel: new.le_alone_channel.clone(),
+                ..self.clone()
+            } == *new
+    }
+
+    /// LE Audio: the channel settings the stream plays with
+    pub fn le_channels(&self) -> pipeline::channels::Channels {
+        pipeline::channels::Channels {
+            swap: self.le_swap_channels,
+            alone: pipeline::channels::AloneChannel::from_key(&self.le_alone_channel),
+        }
     }
 
     /// `new` is this profile with "Set as Windows default input while
@@ -2150,6 +2176,25 @@ mod tests {
         assert_eq!(consolidate(&mut list, "Buds | AAC"), ["B"]);
         assert_eq!(names(&list), ["A"]);
         assert!(list[0].codec_settings.contains_key("ldac"));
+    }
+
+    #[test]
+    fn le_channels_are_written_only_when_chosen_and_taken_in_place() {
+        let p = Profile { name: "Buds".into(), le_audio: true, ..Default::default() };
+        let out = serde_json::to_value(&p).unwrap();
+        assert!(out.get("le_swap_channels").is_none() && out.get("le_alone_channel").is_none());
+        assert_eq!(p.le_channels(), pipeline::channels::Channels::default());
+        let set = Profile { le_swap_channels: true, le_alone_channel: "left".into(), ..p.clone() };
+        let out = serde_json::to_value(&set).unwrap();
+        assert_eq!((&out["le_swap_channels"], &out["le_alone_channel"]), (&true.into(), &"left".into()));
+        assert_eq!(serde_json::from_value::<Profile>(out).unwrap(), set);
+        assert_eq!(
+            set.le_channels(),
+            pipeline::channels::Channels { swap: true, alone: pipeline::channels::AloneChannel::Left }
+        );
+        // A running stream takes them without starting again
+        assert!(p.only_live_processing_differs(&set));
+        assert!(!p.only_live_processing_differs(&Profile { le_low_latency: true, ..set }));
     }
 
     #[test]

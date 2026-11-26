@@ -1,0 +1,3 @@
+// bluecaster.exe resources: the icon (title bar, taskbar and file). The
+// manifest is the one GPUI embeds (per-monitor DPI awareness, Windows 10/11).
+101 ICON "../../../../app/resources/app.ico"

@@ -1587,6 +1587,8 @@ fn apply_dev_overrides(settings: &Settings) {
         rtn_p_to_c: debug.le_rtn_p_to_c,
         interleaved: debug.le_interleaved,
     });
+    bt_host::set_buffer_margin(debug.le_buffer_margin);
+    bt_host::set_realign_off(debug.le_realign_off);
     crate::le_stream::set_debug(crate::le_stream::LeDebug {
         mic_preset: debug.le_mic_preset.clone(),
         retry_same_link: debug.le_mic_retry_same_link,
@@ -1846,6 +1848,19 @@ impl Service {
         if let Some(h) = self.host() {
             h.drop_acl_link(LINK_RELEASE_WAIT);
         }
+    }
+
+    /// A broadcast runs whose source has a Windows volume to follow (not
+    /// the test tone or a recording device)
+    pub fn broadcast_follows(&self) -> bool {
+        crate::broadcast_volume::live()
+            && self
+                .last_request
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .filter(|r| r.le.as_ref().is_some_and(|l| l.broadcast.is_some()))
+                .is_some_and(|r| crate::broadcast_volume::endpoint_for(&r.source).is_some())
     }
 
     /// Changes the source of the running A2DP stream or Auracast broadcast:

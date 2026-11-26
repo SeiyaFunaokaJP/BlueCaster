@@ -37,7 +37,7 @@ BlueCaster s'exécute sous la forme de trois programmes au plus :
 | Programme | S'exécute | Rôle |
 |:--------|:-----|:-----|
 | `bluecaster-core.exe` | Tant que BlueCaster fonctionne (démarré par la fenêtre, le menu Démarrer ou **Démarrer avec Windows**) | Bluetooth, capture et encodage audio, profils et paramètres, icône de la zone de notification et son menu, serveur IPC. `--cli` exécute ce même cœur depuis une console |
-| `bluecaster.exe` | Uniquement tant qu'une fenêtre est ouverte (se termine 3 minutes après la fermeture de la dernière) | La fenêtre principale et le volet de la zone de notification (Tauri 2, SolidJS + TypeScript). Ne conserve aucun état propre |
+| `bluecaster.exe` | Uniquement tant qu'une fenêtre est ouverte (se termine 3 minutes après la fermeture de la dernière) | La fenêtre principale et le volet de la zone de notification (Rust, GPUI). Ne conserve aucun état propre |
 | `bluecaster-driver.exe` | Le temps d'un changement de pilote ou d'une importation de clés, avec les droits administrateur (UAC) | Attribue WinUSB à un adaptateur ou restaure son pilote précédent, ou lit les clés de liaison que le Bluetooth de Windows conserve pour un adaptateur (`windows-keys`), puis se termine |
 
 ```mermaid
@@ -48,7 +48,7 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    ui["bluecaster.exe :<br>fenêtre et volet de la<br>zone de notification<br>(Tauri + SolidJS)"]
+    ui["bluecaster.exe :<br>fenêtre et volet de la<br>zone de notification<br>(GPUI)"]
     src["Audio Windows :<br>bouclage système /<br>périphérique virtuel /<br>une application"]
     subgraph core["bluecaster-core.exe"]
         ctl["Menu de la zone de notification /<br>serveur IPC / CLI (--cli)"] --> svc["Service du cœur :<br>machine à états de la connexion,<br>choix du codec, profils,<br>reconnexion"]
@@ -160,8 +160,10 @@ chaque couche ne dépend que des couches inférieures. Les bibliothèques se tro
 | 3. Moteur | `pipeline` | Anneaux PCM, conversion de format, downmix, encodage, charges utiles média, cadencement, ABR |
 | 4. Cœur | `bluecaster-core` (répertoire `core`) | La machine à états, les reconnexions, la veille / reprise, les profils, les paramètres et la migration depuis la v1, la synchro du volume, la coupure de la sortie, la recherche de mises à jour, le téléchargement du firmware Realtek, le client du test avec récepteur, les statistiques, les protocoles des fabricants (`vendor/`) |
 | 4. Cœur | `ipc` | Les types du protocole partagés par le cœur et la fenêtre (serde ; types TypeScript générés avec `ts-rs`) et le découpage en trames sur le canal nommé |
+| 4. Cœur | `ui-model` | La logique de la fenêtre sans la fenêtre : l'état du cœur tel que la fenêtre le voit, les traductions, la mise en forme et les règles des écrans. Un simple `cargo test` couvre l'ensemble |
+| 4. Cœur | `ui-host` | Le travail du processus de la fenêtre hors interface : la connexion au cœur, les mises à jour depuis l'application (signatures vérifiées avec `minisign-verify`), le module complémentaire de service, la gestion de l'instance unique et le journal |
 | 5. Programmes | `bluecaster-core-exe` (`app/src/core`) | `bluecaster-core.exe` : cœur, zone de notification (`tray-icon` sur une boucle d'événements `tao`), serveur IPC, `--cli` |
-| 5. Programmes | `bluecaster-ui` (`app/src/ui`) | `bluecaster.exe` : Tauri 2 ; le côté Rust est un client IPC, la page est en SolidJS + TypeScript + Vite |
+| 5. Programmes | `bluecaster-ui` (`app/src/ui`) | `bluecaster.exe` : les écrans, les contrôles et le thème, construits sur GPUI (`gpui-kit`), et la fenêtre du volet de la zone de notification |
 | 5. Programmes | `bluecaster-driver` (`app/src/driver`) | `bluecaster-driver.exe` : le programme d'aide exécuté avec élévation |
 
 ## Trajet audio et threads
@@ -527,6 +529,7 @@ ci-dessous :
 | Chemin | Contenu |
 |:-----|:---------|
 | `settings.json` | Paramètres de l'application, avec un `schema_version` ; les clés inconnues sont conservées |
+| `ui-state.json` | État de la fenêtre conservé d'un démarrage à l'autre : la mise à jour reportée avec **Plus tard**, le choix **Afficher uniquement les codecs pris en charge** et un avis masqué |
 | `profiles.json` | Profils |
 | `devices\devices.txt` | Appareils connus |
 | `devices\le_audio_devices.txt` | LE Audio : les entrées LE Audio de la liste des appareils |
@@ -556,10 +559,11 @@ programme de désinstallation et `licenses\` (`licenses\README.txt`, `licenses\b
 - **Cargo** compile les programmes ; ils n'ont pas besoin de CMake. Chaque crate `-sys`
   compile sa bibliothèque C depuis le sous-module git dans `extern/` avec MSVC dans
   `build.rs`. Seul l'outil de développement `tools/a2dp_decode` est compilé avec CMake
-- La page de la fenêtre est construite avec **Vite** (`pnpm build` dans `app/src/ui`) et
-  intégrée à `bluecaster.exe` par Tauri
-- Les types TypeScript du protocole IPC sont générés à partir des types Rust
-  (`cargo test -p ipc export_bindings`)
+- La fenêtre est écrite en Rust comme le reste. Cargo suffit donc à compiler
+  `bluecaster.exe`
+- Pour les outils tiers, `cargo test -p ipc export_bindings` génère les types
+  TypeScript du protocole IPC à partir des types Rust dans
+  `app/src/crates/ipc/bindings`
 - Les fichiers de langue (`app/lang/*.json`) sont utilisés par la fenêtre et par le menu
   de la zone de notification du cœur
 - `installer/build-release.ps1` produit le programme d'installation (Inno Setup, `installer/BlueCaster.iss`),

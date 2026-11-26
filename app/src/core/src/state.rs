@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use bluecaster_core::default_input::{DefaultInput, Want as InputWant};
 use bluecaster_core::diag::AudioRates;
+use bluecaster_core::matrix_mix::{self, Target};
 use bluecaster_core::media_eq::{self, MediaEq};
 use bluecaster_core::paths;
 use bluecaster_core::profiles::{self, Profile as CoreProfile};
@@ -127,6 +128,12 @@ pub struct CoreState {
     /// The profile the last stream.start asked for: the session stopped for
     /// it reports Idle after it, which clears the snapshot's profile
     starting_profile: Mutex<Option<String>>,
+    /// The broadcast's name of the session starting (StreamStatus.broadcast)
+    starting_broadcast: Mutex<Option<String>>,
+    /// auracast.receivers' devices as read last, and when
+    receiver_candidates: Mutex<Option<(Instant, Vec<ipc::AuracastReceiverCandidate>)>>,
+    /// The Auracast assistants of the broadcast running (its receivers)
+    assistants: Mutex<Option<bluecaster_core::auracast_assist::Assistants>>,
     /// The message a microphone note replaced (a codec's fallback reason),
     /// back once the note is out of date
     mic_note_over: Mutex<Option<Msg>>,
@@ -207,6 +214,8 @@ fn to_ipc_profile(p: &CoreProfile, legacy: u16) -> Profile {
         max_media_payload: p.max_media_payload.unwrap_or(legacy),
         le_audio: p.le_audio,
         le_low_latency: p.le_low_latency,
+        le_swap_channels: p.le_swap_channels,
+        le_alone_channel: p.le_alone_channel.clone(),
         headset_mic: p.headset_mic.clone(),
         mic_device_id: p.mic_device_id.clone(),
         mic_device_name: p.mic_device_name.clone(),
@@ -305,6 +314,8 @@ fn merge_profile(base: Option<&CoreProfile>, p: &Profile) -> CoreProfile {
     c.max_media_payload = Some(bt_host::media::clamp_media_payload_limit(p.max_media_payload as u32));
     c.le_audio = p.le_audio;
     c.le_low_latency = p.le_low_latency;
+    c.le_swap_channels = p.le_swap_channels;
+    c.le_alone_channel = bluecaster_core::le_channels::saved_key(&p.le_alone_channel);
     // Normalized: anything but "on" / "auto" is "off"
     c.headset_mic = HeadsetMic::parse(&p.headset_mic).as_str().into();
     c.mic_device_id = p.mic_device_id.clone();
@@ -430,6 +441,8 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
             le_rtn_c_to_p: s.dev_debug.le_rtn_c_to_p,
             le_rtn_p_to_c: s.dev_debug.le_rtn_p_to_c,
             le_interleaved: s.dev_debug.le_interleaved,
+            le_buffer_margin: s.dev_debug.le_buffer_margin,
+            le_realign_off: s.dev_debug.le_realign_off,
             le_mic_preset: s.dev_debug.le_mic_preset.clone(),
             le_mic_retry_same_link: s.dev_debug.le_mic_retry_same_link,
         },
@@ -572,6 +585,8 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
         le_rtn_c_to_p: s.dev_debug.le_rtn_c_to_p.map(|r| r.min(15)),
         le_rtn_p_to_c: s.dev_debug.le_rtn_p_to_c.map(|r| r.min(15)),
         le_interleaved: s.dev_debug.le_interleaved,
+        le_buffer_margin: s.dev_debug.le_buffer_margin.map(|m| m.min(7)),
+        le_realign_off: s.dev_debug.le_realign_off,
         le_mic_preset: s.dev_debug.le_mic_preset.trim().to_string(),
         le_mic_retry_same_link: s.dev_debug.le_mic_retry_same_link,
     };
@@ -1113,6 +1128,8 @@ fn to_ipc_le_stream(d: &LeStreamDetails) -> LeStreamInfo {
         devices: d.devices,
         low_latency: d.low_latency,
         summary: d.summary.clone(),
+        presentation_delay_us: d.presentation_delay_us,
+        codec_delay_us: d.codec_delay_us,
     }
 }
 
@@ -1269,6 +1286,48 @@ pub struct BroadcastStream {
     pub source: String,
     pub source_id: Option<String>,
     pub source_name: Option<String>,
+    /// The broadcast's level 0..127; None: the last one
+    pub volume: Option<u8>,
+    /// The level follows the Windows volume; None: as before
+    pub follow_volume: Option<bool>,
+    /// Receivers an Auracast assistant tells to play it
+    pub receivers: Vec<ipc::BroadcastReceiver>,
+}
+
+/// The source of a broadcast (stream.start_broadcast, auracast.set_source):
+/// "tone", "loopback" (also empty), "output" / "virtual" (the loopback of
+/// the output device `id`) or "input" (the recording device `id`). None:
+/// "app", which the broadcast refuses itself (error.le_audio_capture).
+pub fn broadcast_source(
+    kind: &str,
+    id: Option<&str>,
+    name: Option<&str>,
+    method: &str,
+) -> Result<Option<SourceRequest>, ErrorInfo> {
+    let kind = kind.trim().to_ascii_lowercase();
+    let id = id.map(str::trim).unwrap_or_default().to_string();
+    let name = name.map(str::trim).filter(|n| !n.is_empty()).map_or_else(|| id.clone(), str::to_string);
+    let device = |what: &str| {
+        if id.is_empty() {
+            Err(bad_request("stream.bad_source", method, format!("source \"{kind}\" needs the {what}'s source_id")))
+        } else {
+            Ok(())
+        }
+    };
+    Ok(Some(match kind.as_str() {
+        "tone" => SourceRequest::TestTone,
+        "" | "loopback" => SourceRequest::SystemLoopback,
+        "output" | "virtual" => {
+            device("output device")?;
+            SourceRequest::OutputDevice { id, name, auto_switch: false }
+        }
+        "input" => {
+            device("recording device")?;
+            SourceRequest::InputDevice { id, name }
+        }
+        "app" => return Ok(None),
+        other => return Err(bad_request("stream.bad_source", method, format!("unknown source \"{other}\""))),
+    }))
 }
 
 /// What to broadcast for stream.start_broadcast: the source as for
@@ -1277,6 +1336,7 @@ pub fn broadcast_request(b: &BroadcastStream, legacy_max_media_payload: u16) -> 
     const METHOD: &str = "stream.start_broadcast";
     let preset_of = |q: &str| match q.trim().to_ascii_lowercase().as_str() {
         "" | "hq" => Ok(bluecaster_core::BROADCAST_PRESET_HQ),
+        "mq" => Ok(bluecaster_core::BROADCAST_PRESET_MQ),
         "sq" => Ok(bluecaster_core::BROADCAST_PRESET_SQ),
         other => Err(bad_request("stream.bad_quality", METHOD, format!("unknown quality \"{other}\""))),
     };
@@ -1299,17 +1359,22 @@ pub fn broadcast_request(b: &BroadcastStream, legacy_max_media_payload: u16) -> 
     if b.mono == Some(true) && !one_channel {
         return Err(bad_request("stream.bad_channels", METHOD, "mono and split cannot be used together".into()));
     }
+    let source = broadcast_source(&b.source, b.source_id.as_deref(), b.source_name.as_deref(), METHOD)?;
     let c = CustomStream {
         device: "00:00:00:00:00:00".into(),
         device_name: Some(b.name.clone()),
         codec: "auto".into(),
         quality: "hq".into(),
-        source: b.source.clone(),
+        // "app" as the stream refuses it, the others set below
+        source: if source.is_some() { "loopback".into() } else { b.source.clone() },
         source_id: b.source_id.clone(),
         source_name: b.source_name.clone(),
         ..CustomStream::default()
     };
     let mut req = custom_request(&c, legacy_max_media_payload)?;
+    if let Some(source) = source {
+        req.source = source;
+    }
     req.le = Some(bt_host::LeRequest {
         preset: Some(preset.into()),
         broadcast: Some(bt_host::LeBroadcast {
@@ -1322,6 +1387,89 @@ pub fn broadcast_request(b: &BroadcastStream, legacy_max_media_payload: u16) -> 
         ..bt_host::LeRequest::default()
     });
     Ok(req)
+}
+
+/// How long a stop waits for the receivers to be told (one still looking
+/// for its receiver goes on its own)
+const ASSISTANT_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The assistants' jobs of stream.start_broadcast's receivers, for the
+/// layout `req` broadcasts; error stream.bad_receiver for a channel it has
+/// not (or channels in two of its broadcasts), for an address that is none
+/// and for a receiver listed twice (it can be told one source)
+fn assistant_jobs(
+    b: &BroadcastStream,
+    req: &StreamRequest,
+) -> Result<Vec<bluecaster_core::auracast_assist::Job>, ErrorInfo> {
+    let layout = req.le.as_ref().and_then(|l| l.broadcast.as_ref()).map(|b| b.layout).unwrap_or_default();
+    let bad = |r: &ipc::BroadcastReceiver, why: &str| {
+        bad_request("stream.bad_receiver", "stream.start_broadcast", format!("{}: {why}", r.address))
+    };
+    let mut jobs: Vec<bluecaster_core::auracast_assist::Job> = Vec::with_capacity(b.receivers.len());
+    for r in &b.receivers {
+        if bt_host::parse_addr(r.address.trim()).is_none() {
+            return Err(bad(r, "not an address"));
+        }
+        let job = bluecaster_core::auracast_assist::job_for(layout, &r.address, &r.name, &r.channels, b.code.clone())
+            .map_err(|why| bad(r, &why))?;
+        if jobs.iter().any(|j| j.address == job.address) {
+            return Err(bad(r, "listed twice"));
+        }
+        jobs.push(job);
+    }
+    Ok(jobs)
+}
+
+/// A line of an Auracast assistant for the log: each receiver's address
+/// (`receivers`, in their order) as its number ("#1"), and no other address
+/// (the broadcast's own in a Broadcast Receive State)
+fn assistant_log_line(line: &str, receivers: &[String]) -> String {
+    let mut line = line.to_string();
+    for (n, address) in receivers.iter().enumerate() {
+        line = line.replace(address.as_str(), &format!("#{}", n + 1));
+    }
+    let b = line.as_bytes();
+    let address_at = |i: usize| {
+        b.get(i..i + 17).is_some_and(|a| {
+            a.iter().enumerate().all(|(k, c)| if k % 3 == 2 { *c == b':' } else { c.is_ascii_hexdigit() })
+        }) && (i == 0 || !b[i - 1].is_ascii_hexdigit())
+            && b.get(i + 17).is_none_or(|c| !c.is_ascii_hexdigit())
+    };
+    let mut out = String::with_capacity(line.len());
+    let mut i = 0;
+    while let Some(c) = line[i..].chars().next() {
+        if address_at(i) {
+            out.push_str("(address)");
+            i += 17;
+        } else {
+            out.push(c);
+            i += c.len_utf8();
+        }
+    }
+    out
+}
+
+/// How long auracast.receivers answers with the devices it read last: the
+/// Auracast tab asks every second, and they come from two files
+const RECEIVER_CANDIDATES_KEPT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// auracast.receivers; `candidates` as read from the saved devices
+fn auracast_receivers(candidates: Vec<ipc::AuracastReceiverCandidate>) -> ipc::AuracastReceivers {
+    use bluecaster_core::auracast_assist as assist;
+    ipc::AuracastReceivers {
+        candidates,
+        live: assist::receivers()
+            .into_iter()
+            .map(|r| ipc::AuracastReceiverStatus {
+                address: r.address,
+                name: r.name,
+                asked: r.asked,
+                phase: r.phase.as_str().to_string(),
+                bis: r.bis,
+                detail: r.detail,
+            })
+            .collect(),
+    }
 }
 
 /// What to stream for stream.start_custom: built as a profile is (same
@@ -1714,7 +1862,7 @@ fn tool_profile<'a>(s: &'a Snapshot, name: Option<&str>) -> Result<&'a Profile, 
 }
 
 /// profile.set_headset_mic: `p` with the headset mode `mode` as the window's
-/// mode buttons set it (InputSource.tsx): Off mutes a profile whose mode is
+/// mode buttons set it (the window's ui/input_source.rs): Off mutes a profile whose mode is
 /// Auto or On, the others set the mode and unmute. None: the mode shown is
 /// `mode` already (Off while muted; On outside developer mode shows as Auto).
 fn tool_headset_mic(p: &Profile, mode: ipc::HeadsetMicMode, developer: bool) -> Result<Option<Profile>, ErrorInfo> {
@@ -1751,7 +1899,7 @@ fn tool_mic_muted(p: &Profile, muted: bool) -> Result<Option<Profile>, ErrorInfo
     }
 }
 
-/// The points the window's playback EQ starts with (lib/eq.ts
+/// The points the window's playback EQ starts with (ui-model's eq.rs
 /// DEFAULT_POINTS): flat, so turning it on changes nothing yet
 const FLAT_EQ_HZ: [f32; 10] = [31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0];
 
@@ -1865,6 +2013,26 @@ fn default_mic_output(p: &mut CoreProfile, stream: &StreamStatus, list: &[CorePr
     let default_output = default_output_for_cables(&devices, stream, list);
     if profiles::fill_mic_outputs(std::slice::from_mut(p), &cables(&devices), default_output) > 0 {
         tracing::info!("profile \"{}\": microphone output {} by default", p.name, p.mic_device_name);
+    }
+}
+
+/// A Windows device as audio.devices and audio.input_devices give it, with
+/// its mix format
+fn audio_device(d: audio_capture::DeviceInfo) -> AudioDevice {
+    let mix = session_host::devices::mix_format(Some(&d.id));
+    AudioDevice {
+        mix_rate: mix.map(|m| m.rate),
+        mix_channels: mix.map(|m| m.channels),
+        mix_bits: mix.map(|m| m.bits),
+        id: d.id,
+        name: d.name,
+        short_name: d.short_name,
+        adapter_name: d.adapter_name,
+        is_default: d.is_default,
+        is_virtual: d.is_virtual,
+        is_display: d.is_display,
+        capture_name: d.capture_name,
+        capture_rate: d.capture_rate,
     }
 }
 
@@ -2220,6 +2388,9 @@ impl CoreState {
             started: Instant::now(),
             rates: Mutex::new(None),
             starting_profile: Mutex::new(None),
+            starting_broadcast: Mutex::new(None),
+            receiver_candidates: Mutex::new(None),
+            assistants: Mutex::new(None),
             mic_note_over: Mutex::new(None),
             battery_warned: AtomicBool::new(false),
             connect_announce: AtomicBool::new(false),
@@ -2527,12 +2698,14 @@ impl CoreState {
                     stream.mic_rates.clear();
                     if state == CoreStreamState::Idle {
                         stream.profile = None;
+                        stream.broadcast = None;
                     }
                 }
                 // The new session starts (after the old one's Idle when
                 // switching profiles): its profile is the one asked for
                 if state == CoreStreamState::Connecting {
                     stream.profile = self.starting_profile.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    stream.broadcast = self.starting_broadcast.lock().unwrap_or_else(|e| e.into_inner()).clone();
                 }
                 // The stack runs once anything connected
                 let adapter_status = match state {
@@ -3157,10 +3330,54 @@ impl CoreState {
         self.developer_only()?;
         let settings = self.service.settings();
         let mut req = broadcast_request(b, settings.legacy_max_media_payload())?;
+        let jobs = assistant_jobs(b, &req)?;
         req.mute_output = settings.mutes_output();
+        if let Some(level) = b.volume {
+            bluecaster_core::broadcast_volume::set_level(level);
+        }
+        if let Some(follow) = b.follow_volume {
+            bluecaster_core::broadcast_volume::set_follow(follow);
+        }
         tracing::info!("broadcast \"{}\": quality {}, source {}", b.name, b.quality, req.source);
         self.begin_stream(req, None);
+        self.start_assistants(jobs);
         Ok(())
+    }
+
+    /// The saved LE Audio devices an assistant can tell, read again once
+    /// those read last are [`RECEIVER_CANDIDATES_KEPT`] old
+    fn receiver_candidates(&self) -> Vec<ipc::AuracastReceiverCandidate> {
+        let mut kept = self.receiver_candidates.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, list)) = kept.as_ref()
+            && at.elapsed() < RECEIVER_CANDIDATES_KEPT
+        {
+            return list.clone();
+        }
+        let list: Vec<_> = bluecaster_core::auracast_assist::candidates(&self.config_dir())
+            .into_iter()
+            .map(|c| ipc::AuracastReceiverCandidate { address: c.address, name: c.name, bass: c.bass })
+            .collect();
+        *kept = Some((Instant::now(), list.clone()));
+        list
+    }
+
+    /// The assistants of a new broadcast (none: the receivers listed are
+    /// cleared); those of one before are told to stop
+    fn start_assistants(&self, jobs: Vec<bluecaster_core::auracast_assist::Job>) {
+        use bluecaster_core::auracast_assist::Assistants;
+        let mut slot = self.assistants.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(old) = slot.take() {
+            old.signal_stop();
+        }
+        if !jobs.is_empty() {
+            tracing::info!("Auracast assistant: {} receiver(s)", jobs.len());
+        }
+        let service = self.service.clone();
+        // The log names the receivers by number, not by address
+        let addresses: Vec<String> = jobs.iter().map(|j| j.address.clone()).collect();
+        let out: bluecaster_core::auracast_assist::Out =
+            Arc::new(move |line: &str| tracing::info!("{}", assistant_log_line(line, &addresses)));
+        *slot = Some(Assistants::start(move || service.host(), jobs, out));
     }
 
     /// The stream running goes on under its profile's new name (a save that
@@ -3175,12 +3392,20 @@ impl CoreState {
 
     fn begin_stream(&self, req: StreamRequest, profile: Option<String>) {
         *self.starting_profile.lock().unwrap_or_else(|e| e.into_inner()) = profile.clone();
-        // The profile's playback EQ (none for a stream without one)
-        let eq = profile
-            .as_deref()
-            .and_then(|name| profiles::load(&self.config_dir()).into_iter().find(|p| p.name == name))
-            .map(|p| p.media_eq);
-        media_eq::apply(eq.as_ref());
+        let broadcast = req.le.as_ref().and_then(|l| l.broadcast.as_ref()).map(|b| b.name.clone());
+        *self.starting_broadcast.lock().unwrap_or_else(|e| e.into_inner()) = broadcast.clone();
+        // The stream before may be a broadcast with receivers: its
+        // assistants take the source off them and let go of their links (a
+        // new broadcast starts its own after this)
+        if let Some(old) = self.assistants.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            old.signal_stop();
+        }
+        // The profile's playback EQ and LE Audio channels (none for a
+        // stream without one)
+        let saved =
+            profile.as_deref().and_then(|name| profiles::load(&self.config_dir()).into_iter().find(|p| p.name == name));
+        media_eq::apply(saved.as_ref().map(|p| &p.media_eq));
+        bluecaster_core::le_channels::apply(saved.as_ref().map(CoreProfile::le_channels).unwrap_or_default());
         self.publish(Event::Stream(StreamStatus {
             state: StreamState::Connecting,
             message: Msg::new("status.initializing"),
@@ -3194,6 +3419,7 @@ impl CoreState {
             voice: None,
             codec_stop: None,
             slow_link: None,
+            broadcast,
         }));
         let service = self.service.clone();
         // A restart for a save waits a moment: a request right behind it
@@ -3304,6 +3530,7 @@ impl CoreState {
         // on (also when it starts again below)
         if restart_after_save(&s.stream, &key) {
             media_eq::apply(Some(&in_order.media_eq));
+            bluecaster_core::le_channels::apply(in_order.le_channels());
         }
         // The profile in use starts again with what was saved (v1),
         // but for another source, which needs nothing of the link
@@ -3398,6 +3625,11 @@ impl CoreState {
     /// Asks the headphones for this volume (0..127): AVRCP, or VCP for LE
     /// Audio. Nothing without a stream.
     fn request_volume(&self, volume: u8) {
+        // A broadcast's level: its receivers have no volume of ours
+        if bluecaster_core::broadcast_volume::live() {
+            bluecaster_core::broadcast_volume::set_level(volume);
+            return;
+        }
         if let Some(h) = self.service.host() {
             // LE Audio: through VCP, not AVRCP (issue #86)
             if self.service.le_stream().is_none() || !h.le_request_volume(volume.min(127)) {
@@ -3438,7 +3670,14 @@ impl CoreState {
     pub fn stop(&self) {
         let service = self.service.clone();
         let ticket = service.ticket();
-        std::thread::spawn(move || service.disconnect_for(ticket));
+        // The receivers are told first, while the broadcast is still up
+        let assistants = self.assistants.lock().unwrap_or_else(|e| e.into_inner()).take();
+        std::thread::spawn(move || {
+            if let Some(a) = assistants {
+                a.stop_within(ASSISTANT_STOP_WAIT);
+            }
+            service.disconnect_for(ticket);
+        });
     }
 
     /// Settings > the flyout above Quick Settings
@@ -3831,6 +4070,9 @@ impl CoreState {
                 source,
                 source_id,
                 source_name,
+                volume,
+                follow_volume,
+                receivers,
             } => {
                 let b = BroadcastStream {
                     name,
@@ -3843,6 +4085,9 @@ impl CoreState {
                     source,
                     source_id,
                     source_name,
+                    volume,
+                    follow_volume,
+                    receivers: receivers.unwrap_or_default(),
                 };
                 self.start_broadcast(&b).map(|()| Value::Null)
             }
@@ -3970,51 +4215,95 @@ impl CoreState {
                 Ok(Value::Null)
             }
             Method::ProfileSave { profile, original_name } => self.save_profile(&profile, original_name),
-            Method::AuracastSetSource { source } => {
+            Method::AuracastSetSource { source, source_id, source_name } => {
                 self.developer_only()?;
-                let source = match source.trim().to_ascii_lowercase().as_str() {
-                    "tone" => bluecaster_core::stream::SourceRequest::TestTone,
-                    "" | "loopback" => bluecaster_core::stream::SourceRequest::SystemLoopback,
-                    other => {
-                        return Err(bad_request(
+                const METHOD: &str = "auracast.set_source";
+                let source = broadcast_source(&source, source_id.as_deref(), source_name.as_deref(), METHOD)?
+                    .ok_or_else(|| {
+                        bad_request(
                             "stream.bad_source",
-                            "auracast.set_source",
-                            format!("unknown source \"{other}\""),
-                        ));
-                    }
-                };
+                            METHOD,
+                            "application capture is not supported with LE Audio".into(),
+                        )
+                    })?;
                 Ok(Value::Bool(self.service.change_source(source)))
+            }
+            Method::AuracastSetFollowVolume { follow } => {
+                self.developer_only()?;
+                bluecaster_core::broadcast_volume::set_follow(follow);
+                Ok(Value::Bool(follow && self.service.broadcast_follows()))
+            }
+            Method::AuracastFollowVolume => {
+                self.developer_only()?;
+                Ok(Value::Bool(bluecaster_core::broadcast_volume::follows()))
+            }
+            Method::AuracastReceivers => {
+                self.developer_only()?;
+                Ok(json(&auracast_receivers(self.receiver_candidates())))
             }
             Method::AuracastMixGet { channels, rear } => {
                 self.developer_only()?;
-                Ok(json(&bluecaster_core::auracast_mix::state(&self.config_dir(), channels, rear)))
+                Ok(json(&matrix_mix::state(Target::Auracast, &self.config_dir(), channels, rear)))
             }
             Method::AuracastMixSet { mix, channels, rear } => {
                 self.developer_only()?;
                 let dir = self.config_dir();
-                bluecaster_core::auracast_mix::set(&dir, &mix).map_err(|e| {
+                matrix_mix::set(Target::Auracast, &dir, &mix).map_err(|e| {
                     tracing::warn!("Auracast mixer: not saved: {e}");
                     err("auracast.mix_save_failed", "error.settings_save")
                 })?;
-                Ok(json(&bluecaster_core::auracast_mix::state(&dir, channels, rear)))
+                Ok(json(&matrix_mix::state(Target::Auracast, &dir, channels, rear)))
             }
             Method::AuracastMixPresetSave { name, mix } => {
                 self.developer_only()?;
                 let dir = self.config_dir();
-                bluecaster_core::auracast_mix::save_preset(&dir, &name, &mix).map_err(|e| {
+                matrix_mix::save_preset(Target::Auracast, &dir, &name, &mix).map_err(|e| {
                     tracing::warn!("Auracast mixer: preset not saved: {e}");
                     err("auracast.mix_save_failed", "error.settings_save")
                 })?;
-                Ok(json(&bluecaster_core::auracast_mix::state(&dir, None, None)))
+                Ok(json(&matrix_mix::state(Target::Auracast, &dir, None, None)))
             }
             Method::AuracastMixPresetDelete { name } => {
                 self.developer_only()?;
                 let dir = self.config_dir();
-                bluecaster_core::auracast_mix::delete_preset(&dir, &name).map_err(|e| {
+                matrix_mix::delete_preset(Target::Auracast, &dir, &name).map_err(|e| {
                     tracing::warn!("Auracast mixer: preset not deleted: {e}");
                     err("auracast.mix_save_failed", "error.settings_save")
                 })?;
-                Ok(json(&bluecaster_core::auracast_mix::state(&dir, None, None)))
+                Ok(json(&matrix_mix::state(Target::Auracast, &dir, None, None)))
+            }
+            Method::TwsMixGet { channels } => {
+                self.developer_only()?;
+                Ok(json(&matrix_mix::state(Target::Tws, &self.config_dir(), channels, None)))
+            }
+            Method::TwsMixSet { mix, enabled, channels } => {
+                self.developer_only()?;
+                let dir = self.config_dir();
+                let saved = matrix_mix::set(Target::Tws, &dir, &mix)
+                    .and_then(|()| enabled.map_or(Ok(()), |on| matrix_mix::set_tws_enabled(&dir, on)));
+                saved.map_err(|e| {
+                    tracing::warn!("TWS mixer: not saved: {e}");
+                    err("tws.mix_save_failed", "error.settings_save")
+                })?;
+                Ok(json(&matrix_mix::state(Target::Tws, &dir, channels, None)))
+            }
+            Method::TwsMixPresetSave { name, mix } => {
+                self.developer_only()?;
+                let dir = self.config_dir();
+                matrix_mix::save_preset(Target::Tws, &dir, &name, &mix).map_err(|e| {
+                    tracing::warn!("TWS mixer: preset not saved: {e}");
+                    err("tws.mix_save_failed", "error.settings_save")
+                })?;
+                Ok(json(&matrix_mix::state(Target::Tws, &dir, None, None)))
+            }
+            Method::TwsMixPresetDelete { name } => {
+                self.developer_only()?;
+                let dir = self.config_dir();
+                matrix_mix::delete_preset(Target::Tws, &dir, &name).map_err(|e| {
+                    tracing::warn!("TWS mixer: preset not deleted: {e}");
+                    err("tws.mix_save_failed", "error.settings_save")
+                })?;
+                Ok(json(&matrix_mix::state(Target::Tws, &dir, None, None)))
             }
             Method::MediaEqPreview { name, eq } => {
                 let (_, s) = self.snapshot();
@@ -4408,27 +4697,18 @@ impl CoreState {
                     if let Ok(d) = &devices {
                         me.watch_cables(d);
                     }
-                    let list: Vec<AudioDevice> = devices
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|d| {
-                            let mix = session_host::devices::mix_format(Some(&d.id));
-                            AudioDevice {
-                                mix_rate: mix.map(|m| m.rate),
-                                mix_channels: mix.map(|m| m.channels),
-                                mix_bits: mix.map(|m| m.bits),
-                                id: d.id,
-                                name: d.name,
-                                short_name: d.short_name,
-                                adapter_name: d.adapter_name,
-                                is_default: d.is_default,
-                                is_virtual: d.is_virtual,
-                                is_display: d.is_display,
-                                capture_name: d.capture_name,
-                                capture_rate: d.capture_rate,
-                            }
-                        })
-                        .collect();
+                    let list: Vec<AudioDevice> = devices.unwrap_or_default().into_iter().map(audio_device).collect();
+                    Ok(json(&list))
+                }))
+                .await
+            }
+            Method::AudioInputDevices => {
+                blocking(Box::new(|_| {
+                    let devices = session_host::devices::capture_devices().unwrap_or_else(|e| {
+                        tracing::warn!("IPC: audio.input_devices: {e}");
+                        Vec::new()
+                    });
+                    let list: Vec<AudioDevice> = devices.into_iter().map(audio_device).collect();
                     Ok(json(&list))
                 }))
                 .await
@@ -4819,6 +5099,25 @@ fn local_stamp() -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn an_assistants_log_line_has_no_address() {
+        let receivers = ["AA:BB:CC:DD:EE:FF".to_string(), "11:22:33:44:55:66".to_string()];
+        assert_eq!(
+            assistant_log_line("Assistant 11:22:33:44:55:66: looking for it...", &receivers),
+            "Assistant #2: looking for it..."
+        );
+        assert_eq!(
+            assistant_log_line(
+                "Receiver AA:BB:CC:DD:EE:FF 0x0021: source 1: Broadcast_ID 0x123456 at C1:22:33:44:55:66 (random)",
+                &receivers
+            ),
+            "Receiver #1 0x0021: source 1: Broadcast_ID 0x123456 at (address) (random)"
+        );
+        // Not an address: BIS_Sync masks, a time, text past ASCII
+        let plain = "Assistant #1: Add Source “Café” (BIS_Sync [00000003]) at 12:34:56";
+        assert_eq!(assistant_log_line(plain, &receivers), plain);
+    }
+
     fn custom(source: &str) -> CustomStream {
         CustomStream {
             device: "aa:bb:cc:dd:ee:ff".into(),
@@ -4876,6 +5175,42 @@ mod tests {
                 if split == Some(true) { bt_host::BroadcastLayout::Split } else { bt_host::BroadcastLayout::Stereo };
             assert_eq!((le.mono, le.layout), (mono.unwrap_or(false), layout));
         }
+    }
+
+    #[test]
+    fn a_broadcast_takes_an_output_or_a_recording_device() {
+        let b = |source: &str, id: Option<&str>, name: Option<&str>| BroadcastStream {
+            name: "Speakers".into(),
+            quality: "hq".into(),
+            source: source.into(),
+            source_id: id.map(Into::into),
+            source_name: name.map(Into::into),
+            ..BroadcastStream::default()
+        };
+        let source = |s, id, name| broadcast_request(&b(s, id, name), 0).map(|r| r.source);
+        assert_eq!(source("tone", None, None).unwrap(), SourceRequest::TestTone);
+        assert_eq!(source("loopback", None, None).unwrap(), SourceRequest::SystemLoopback);
+        assert_eq!(source("", None, None).unwrap(), SourceRequest::SystemLoopback);
+        let output = SourceRequest::OutputDevice { id: "{spk}".into(), name: "Speakers".into(), auto_switch: false };
+        assert_eq!(source("output", Some("{spk}"), Some("Speakers")).unwrap(), output);
+        // An older client's virtual device: the same loopback, the default output left alone
+        assert_eq!(source("Virtual", Some("{spk}"), Some("Speakers")).unwrap(), output);
+        assert_eq!(
+            source("input", Some("{mic}"), Some("Microphone")).unwrap(),
+            SourceRequest::InputDevice { id: "{mic}".into(), name: "Microphone".into() }
+        );
+        // No name: its id stands in
+        assert_eq!(
+            source("input", Some("{mic}"), None).unwrap(),
+            SourceRequest::InputDevice { id: "{mic}".into(), name: "{mic}".into() }
+        );
+        // Application capture as before: the broadcast refuses it
+        assert_eq!(source("app", Some("x.exe"), None).unwrap(), SourceRequest::Application { exe: "x.exe".into() });
+        for (kind, id) in [("input", None), ("output", Some(" ")), ("mic", Some("{mic}"))] {
+            let e = source(kind, id, None).expect_err(kind);
+            assert_eq!(e.code, "stream.bad_source", "{kind}");
+        }
+        assert!(broadcast_source("app", None, None, "auracast.set_source").unwrap().is_none());
     }
 
     #[test]
@@ -6997,8 +7332,11 @@ mod tests {
             devices: 2,
             low_latency: true,
             summary: "LC3 48 kHz 7.5 ms 75 octets (80 kbps/ch), 2 ch over 2 CIS, 48_3_gr".into(),
+            presentation_delay_us: 10000,
+            codec_delay_us: 11500,
         };
         let le = to_ipc_le_stream(&d);
+        assert_eq!((le.presentation_delay_us, le.codec_delay_us), (10000, 11500));
         assert_eq!((le.preset.as_str(), le.frame_us, le.octets, le.cis, le.devices), ("48_3_gr", 7500, 75, 2, 2));
         assert!(le.low_latency);
         assert_eq!(le.summary, d.summary);

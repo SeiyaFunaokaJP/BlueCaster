@@ -232,7 +232,7 @@ cargo test -p bt-host
 
 10. `app/src/core/src/state.rs` 的 `vendor_note()`：从 `MediaTek | Qualcomm` 分支中拆出一个使用新键 `firmware.vendor_<vendor>` 的分支，并添加测试。对于 `chip_supported` 拒绝的芯片，该函数会先返回 `firmware.vendor_unsupported`，因此该厂商的其他芯片仍保留该说明。适配器页面会为说明不是 `firmware.vendor_unsupported` 的所有适配器提供 WinUSB
 11. `app/lang/*.json`（全部 10 种语言，每个文件中位于同一行）：新键，写法参照 Intel 的那条（“Intel 适配器。…”）。其中提到按钮或文件夹时，使用同一文件中该语言自己的措辞（固件文件夹的按钮是 `firmware.open_folder`）。整个厂商：把它的名称从 `firmware.vendor_unsupported` 中去掉。部分芯片：保留在那里，因为该厂商的其他芯片仍会显示这段文字
-12. `app/src/ui/src/lib/links.ts`：该厂商的固件页面（在 `LINKS`、`firmwareUrl()` 和 `vendorFirmwareUrl()` 中，参照 Intel 的 linux-firmware 文件夹），让适配器页面显示从哪里获取文件；测试位于 `app/src/ui/src/lib/chips.test.ts`。适配器页面只为说明不是 `firmware.vendor_unsupported` 的适配器显示该页面，因此该厂商的其他芯片不会显示
+12. `app/src/crates/ui-model/src/links.rs`：该厂商的固件页面（在 `LINKS`、`firmware_url()` 和 `vendor_firmware_url()` 中，参照 Intel 的 linux-firmware 文件夹），让适配器页面显示从哪里获取文件；测试位于同一文件中。适配器页面只为说明不是 `firmware.vendor_unsupported` 的适配器显示该页面，因此该厂商的其他芯片不会显示
 
 **文档**：
 
@@ -256,16 +256,7 @@ target\release\bluecaster-core.exe --cli -u 0e8d:7961 --scan 5 --hci-capture loa
 
 ## 第 8 步：创建 pull request
 
-创建之前，按顺序运行以下命令（环境准备请参阅[构建](building)）。首先在 `app\src\ui` 中检查 UI：这会检查你在第 6 步（第 12 项）中的修改，而且 Rust 工作区包含窗口的 crate，它需要先构建好 UI：
-
-```bat
-pnpm install
-pnpm build
-pnpm exec tsc --noEmit
-pnpm exec vitest run
-```
-
-然后在仓库根目录中运行：
+创建之前，在仓库根目录中运行以下检查（环境准备请参阅[构建](building)）。`cargo test` 也会检查你在第 6 步（第 12 项）中的修改：
 
 ```bat
 cargo fmt --all
@@ -274,11 +265,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 python tools/check_lang.py
 ```
 
-如果没有 Node.js，就改为只对上面三个 crate 运行测试和 clippy（`-p bt-host -p bluecaster-core -p bluecaster-core-exe`），把 UI 检查留给 pull request 的 CI，并在 pull request 中说明。`pwsh ./build.ps1 -Test` 会运行全部检查。
+`pwsh ./build.ps1 -Test` 会运行全部检查。
 
 Clippy 也会检查命名：名为 `PatchState` 的 `State` 变体会触发 `enum_variant_names` 而失败，请命名为 `Patch`。`check_lang.py` 可能会报告你修改之前就已存在的“long hints left”；你只需修复错误和缺失的键。
 
-其他地方顺带提到 MediaTek 或 Qualcomm 不受支持（UI 的模拟数据和测试、`Adapter.tsx` 和 `probe.rs` 中的注释、“非 Realtek”选项）：这些保持原样即可。
+其他地方顺带提到 MediaTek 或 Qualcomm 不受支持（UI 的测试、`view/adapter.rs` 和 `probe.rs` 中的注释、“非 Realtek”选项）：这些保持原样即可。
 
 在 pull request 中：
 

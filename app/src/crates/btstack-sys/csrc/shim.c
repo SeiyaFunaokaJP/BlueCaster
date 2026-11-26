@@ -349,6 +349,7 @@ enum {
     SOURCE_SDP_SERVICES = 13,
     SOURCE_SCO = 14,
     SOURCE_HID = 15,
+    SOURCE_L2CAP_CBM = 16,
 };
 
 /* A keyboard being added that may ask for a passkey (bluecaster_hid_pairing_target) */
@@ -1746,4 +1747,85 @@ uint8_t bluecaster_big_terminate(uint8_t big_handle) {
     bc_slot_t *s = bc_slot(big_handle);
     if (s == NULL || !s->big_in_use) return ERROR_CODE_COMMAND_DISALLOWED;
     return gap_big_terminate(big_handle);
+}
+
+/* ---- LE credit based channels (ASHA: the audio of a hearing aid) ---- */
+
+/* One channel per hearing aid. BTstack keeps a pointer to the SDU it sends
+ * until L2CAP_EVENT_PACKET_SENT, and to the buffer incoming SDUs are put
+ * together in: both live here. A hearing aid sends nothing on its channel,
+ * so the receive buffer is small. */
+#define BLUECASTER_CBM_CHANNELS 4
+#define BLUECASTER_CBM_SDU_MAX  512
+#define BLUECASTER_CBM_RX_MTU   64
+
+typedef struct {
+    uint16_t cid; /* 0: free */
+    uint8_t tx[BLUECASTER_CBM_SDU_MAX];
+    uint8_t rx[BLUECASTER_CBM_RX_MTU];
+} cbm_slot_t;
+
+static cbm_slot_t cbm_slots[BLUECASTER_CBM_CHANNELS];
+
+static cbm_slot_t *cbm_slot(uint16_t cid) {
+    for (int i = 0; i < BLUECASTER_CBM_CHANNELS; i++) {
+        if (cbm_slots[i].cid == cid) return &cbm_slots[i];
+    }
+    return NULL;
+}
+
+/* The channel's events (L2CAP_EVENT_CBM_CHANNEL_OPENED, _PACKET_SENT,
+ * _CHANNEL_CLOSED) go to SOURCE_L2CAP_CBM; a channel that did not open or
+ * was closed gives its slot back first */
+static void handler_l2cap_cbm(uint8_t t, uint16_t c, uint8_t *p, uint16_t s) {
+    if (t == HCI_EVENT_PACKET && s >= 4) {
+        uint16_t closed = 0;
+        if (p[0] == L2CAP_EVENT_CHANNEL_CLOSED) closed = little_endian_read_16(p, 2);
+        if (p[0] == L2CAP_EVENT_CBM_CHANNEL_OPENED && s >= 17 && p[2] != 0) closed = little_endian_read_16(p, 15);
+        cbm_slot_t *slot = closed != 0 ? cbm_slot(closed) : NULL;
+        if (slot != NULL) slot->cid = 0;
+    }
+    bluecaster_rs_on_packet(SOURCE_L2CAP_CBM, t, c, p, s);
+}
+
+/* Opens a channel to `psm` on the LE link `con_handle` (which the caller has
+ * encrypted if the device wants that); L2CAP_EVENT_CBM_CHANNEL_OPENED
+ * follows. The peer gets credits as it uses them up. */
+uint8_t bluecaster_cbm_connect(uint16_t con_handle, uint16_t psm, uint16_t *out_cid) {
+    cbm_slot_t *slot = cbm_slot(0);
+    if (slot == NULL) return BTSTACK_MEMORY_ALLOC_FAILED;
+    uint16_t cid = 0;
+    uint8_t status = l2cap_cbm_create_channel(&handler_l2cap_cbm, con_handle, psm, slot->rx, BLUECASTER_CBM_RX_MTU,
+                                              L2CAP_LE_AUTOMATIC_CREDITS, LEVEL_0, &cid);
+    if (status == ERROR_CODE_SUCCESS) {
+        slot->cid = cid;
+        *out_cid = cid;
+    }
+    return status;
+}
+
+/* One SDU. BTSTACK_ACL_BUFFERS_FULL while the SDU before it is not sent yet
+ * (L2CAP_EVENT_PACKET_SENT tells): nothing taken. BTstack waits for the
+ * peer's credits by itself. */
+uint8_t bluecaster_cbm_send(uint16_t cid, const uint8_t *sdu, uint16_t len) {
+    cbm_slot_t *slot = cid != 0 ? cbm_slot(cid) : NULL;
+    if (slot == NULL) return L2CAP_LOCAL_CID_DOES_NOT_EXIST;
+    if (len > BLUECASTER_CBM_SDU_MAX) return L2CAP_DATA_LEN_EXCEEDS_REMOTE_MTU;
+    /* The buffer still holds the SDU being sent: ask BTstack before the copy */
+    if (!l2cap_can_send_packet_now(cid)) return BTSTACK_ACL_BUFFERS_FULL;
+    memcpy(slot->tx, sdu, len);
+    return l2cap_send(cid, slot->tx, len);
+}
+
+/* All slots free (the stack was shut down: its channels are gone) */
+void bluecaster_cbm_reset(void) {
+    memset(cbm_slots, 0, sizeof(cbm_slots));
+}
+
+/* LE Connection Update with one interval (1.25 ms units), the latency in
+ * connection events and the supervision timeout (10 ms units) */
+uint8_t bluecaster_le_update_connection(uint16_t con_handle, uint16_t interval, uint16_t latency, uint16_t timeout) {
+    return gap_update_connection_parameters(con_handle, interval, interval, latency, timeout) == 0
+               ? ERROR_CODE_SUCCESS
+               : ERROR_CODE_COMMAND_DISALLOWED;
 }

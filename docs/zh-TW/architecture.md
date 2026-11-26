@@ -31,7 +31,7 @@ BlueCaster 最多以三個程式執行：
 | 程式 | 執行時機 | 工作內容 |
 |:--------|:-----|:-----|
 | `bluecaster-core.exe` | BlueCaster 執行期間（由視窗、「開始」功能表或 **隨 Windows 啟動** 啟動） | 藍牙、音訊擷取與編碼、設定檔與設定、系統匣圖示及其選單、IPC 伺服器。`--cli` 則改從主控台執行同一個核心 |
-| `bluecaster.exe` | 只在視窗開啟期間執行（最後一個視窗關閉 3 分鐘後結束） | 主視窗與系統匣視窗（Tauri 2、SolidJS + TypeScript）。本身不保存任何狀態 |
+| `bluecaster.exe` | 只在視窗開啟期間執行（最後一個視窗關閉 3 分鐘後結束） | 主視窗與系統匣視窗（Rust、GPUI）。本身不保存任何狀態 |
 | `bluecaster-driver.exe` | 變更驅動程式或匯入金鑰時，以系統管理員權限（UAC）短暫執行 | 為介面卡指派 WinUSB、還原介面卡先前的驅動程式，或讀取 Windows 藍牙為介面卡保存的連結金鑰（`windows-keys`），然後結束 |
 
 ```mermaid
@@ -42,7 +42,7 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    ui["bluecaster.exe:<br>視窗與系統匣視窗<br>(Tauri + SolidJS)"]
+    ui["bluecaster.exe:<br>視窗與系統匣視窗<br>(GPUI)"]
     src["Windows 音訊:<br>系統回送 / 虛擬裝置 /<br>單一應用程式"]
     subgraph core["bluecaster-core.exe"]
         ctl["系統匣選單 / IPC 伺服器 /<br>CLI (--cli)"] --> svc["核心服務:<br>連線狀態機、編解碼器選擇、<br>設定檔、重新連線"]
@@ -127,8 +127,10 @@ USB 傳輸層保留了 v1 時實際介面卡所需的復原步驟：開啟介面
 | 3. 引擎 | `pipeline` | PCM 環形緩衝區、格式轉換、降混、編碼、媒體酬載、送出節奏控制、ABR |
 | 4. 核心 | `bluecaster-core`（目錄 `core`） | 狀態機、重新連線、睡眠 / 恢復、設定檔、設定與 v1 移轉、音量同步、輸出靜音、更新檢查、Realtek 韌體下載、接收器測試用戶端、統計資料、廠商協定（`vendor/`） |
 | 4. 核心 | `ipc` | 核心與視窗共用的通訊協定型別（serde；TypeScript 型別以 `ts-rs` 產生）與管道的訊框處理 |
+| 4. 核心 | `ui-model` | 不含視窗本身的視窗邏輯：視窗所見的核心狀態、翻譯、格式化與各畫面的規則；全部都能以一般的 `cargo test` 測試 |
+| 4. 核心 | `ui-host` | 視窗處理程序中與 UI 無關的工作：與核心的連線、應用程式內更新（以 `minisign-verify` 驗證簽章）、服務附加元件、單一執行個體處理與記錄 |
 | 5. 程式 | `bluecaster-core-exe`（`app/src/core`） | `bluecaster-core.exe`：核心、系統匣（在 `tao` 事件迴圈上使用 `tray-icon`）、IPC 伺服器、`--cli` |
-| 5. 程式 | `bluecaster-ui`（`app/src/ui`） | `bluecaster.exe`：Tauri 2；Rust 端是 IPC 用戶端，頁面為 SolidJS + TypeScript + Vite |
+| 5. 程式 | `bluecaster-ui`（`app/src/ui`） | `bluecaster.exe`：以 GPUI（`gpui-kit`）建構的畫面、控制項與佈景主題，以及系統匣視窗 |
 | 5. 程式 | `bluecaster-driver`（`app/src/driver`） | `bluecaster-driver.exe`：提高權限的輔助程式 |
 
 ## 音訊路徑與執行緒 {#audio-path-and-threads}
@@ -336,6 +338,7 @@ AAC 與 SBC 使用 A2DP 規格中定義的標準 Codec ID。
 | 路徑 | 內容 |
 |:-----|:---------|
 | `settings.json` | 應用程式設定，附 `schema_version`；未知的鍵會保留 |
+| `ui-state.json` | 跨啟動保留的視窗狀態：按 **稍後** 延後的更新、**僅顯示支援的編解碼器** 的選擇，以及已關閉的通知 |
 | `profiles.json` | 設定檔 |
 | `devices\devices.txt` | 已知裝置 |
 | `devices\le_audio_devices.txt` | LE Audio：裝置清單中的 LE Audio 項目 |
@@ -361,8 +364,8 @@ AAC 與 SBC 使用 A2DP 規格中定義的標準 Codec ID。
 ## 建置系統 {#build-system}
 
 - 程式由 **Cargo** 建置，不需要 CMake。每個 `-sys` crate 會在 `build.rs` 中以 MSVC 編譯 `extern/` 內 git 子模組的 C 程式庫。只有開發者工具 `tools/a2dp_decode` 以 CMake 建置
-- 視窗的頁面以 **Vite** 建置（在 `app/src/ui` 中執行 `pnpm build`），並由 Tauri 內嵌到 `bluecaster.exe` 中
-- IPC 通訊協定的 TypeScript 型別由 Rust 型別產生（`cargo test -p ipc export_bindings`）
+- 視窗與其他部分一樣以 Rust 撰寫，因此只靠 Cargo 就能建置 `bluecaster.exe`
+- 供第三方工具使用：`cargo test -p ipc export_bindings` 會從 Rust 型別產生 IPC 通訊協定的 TypeScript 型別，輸出到 `app/src/crates/ipc/bindings`
 - 語言檔（`app/lang/*.json`）由視窗與核心的系統匣選單共同使用
 - `installer/build-release.ps1` 會產生安裝程式（Inno Setup，`installer/BlueCaster.iss`）、免安裝版 zip 與更新程式資訊清單。請參閱 [建置](building)
 

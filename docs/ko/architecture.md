@@ -37,7 +37,7 @@ BlueCaster는 최대 세 개의 프로그램으로 실행됩니다.
 | 프로그램 | 실행 시점 | 역할 |
 |:---------|:----------|:-----|
 | `bluecaster-core.exe` | BlueCaster가 실행 중인 동안 (창, 시작 메뉴 또는 **Windows 시작 시 실행**으로 시작) | Bluetooth, 오디오 캡처와 인코딩, 프로필과 설정, 트레이 아이콘과 그 메뉴, IPC 서버. `--cli`를 지정하면 같은 코어를 콘솔에서 실행 |
-| `bluecaster.exe` | 창이 열려 있는 동안만 (마지막 창을 닫고 3분 후 종료) | 기본 창과 트레이 플라이아웃 (Tauri 2, SolidJS + TypeScript). 자체 상태를 갖지 않음 |
+| `bluecaster.exe` | 창이 열려 있는 동안만 (마지막 창을 닫고 3분 후 종료) | 기본 창과 트레이 플라이아웃 (Rust, GPUI). 자체 상태를 갖지 않음 |
 | `bluecaster-driver.exe` | 드라이버 변경이나 키 가져오기 때 잠깐, 관리자 권한(UAC)으로 | 어댑터에 WinUSB를 할당하거나, 이전 드라이버를 복원하거나, Windows의 Bluetooth가 어댑터용으로 저장한 링크 키를 읽고(`windows-keys`) 종료 |
 
 ```mermaid
@@ -48,7 +48,7 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    ui["bluecaster.exe:<br>창과 트레이 플라이아웃<br>(Tauri + SolidJS)"]
+    ui["bluecaster.exe:<br>창과 트레이 플라이아웃<br>(GPUI)"]
     src["Windows 오디오:<br>시스템 루프백 / 가상 장치 /<br>한 응용 프로그램"]
     subgraph core["bluecaster-core.exe"]
         ctl["트레이 메뉴 / IPC 서버 /<br>CLI (--cli)"] --> svc["코어 서비스:<br>연결 상태 머신, 코덱 선택,<br>프로필, 다시 연결"]
@@ -155,8 +155,10 @@ USB 전송 계층에는 v1에서 실제 어댑터 때문에 필요했던 복구 
 | 3. 엔진 | `pipeline` | PCM 링 버퍼, 형식 변환, 다운믹스, 인코딩, 미디어 페이로드, 전송 속도 조절, ABR |
 | 4. 코어 | `bluecaster-core` (디렉터리 `core`) | 상태 머신, 다시 연결, 절전 / 복귀, 프로필, 설정과 v1 마이그레이션, 볼륨 동기화, 출력 음소거, 업데이트 확인, Realtek 펌웨어 다운로드, 수신기 테스트 클라이언트, 통계, 제조사 프로토콜(`vendor/`) |
 | 4. 코어 | `ipc` | 코어와 창이 공유하는 프로토콜 타입(serde, `ts-rs`로 TypeScript 타입 생성)과 파이프 프레이밍 |
+| 4. 코어 | `ui-model` | 창 없이 동작하는 창의 로직: 창이 보는 코어 상태, 번역, 서식, 각 화면의 규칙. 모두 일반 `cargo test`로 테스트됨 |
+| 4. 코어 | `ui-host` | 창 프로세스의 UI 외 작업: 코어 연결, 앱 내 업데이트(`minisign-verify`로 서명 확인), 서비스 추가 기능, 단일 인스턴스 처리, 로그 |
 | 5. 프로그램 | `bluecaster-core-exe` (`app/src/core`) | `bluecaster-core.exe`: 코어, 트레이(`tao` 이벤트 루프 위의 `tray-icon`), IPC 서버, `--cli` |
-| 5. 프로그램 | `bluecaster-ui` (`app/src/ui`) | `bluecaster.exe`: Tauri 2. Rust 쪽은 IPC 클라이언트이고, 페이지는 SolidJS + TypeScript + Vite |
+| 5. 프로그램 | `bluecaster-ui` (`app/src/ui`) | `bluecaster.exe`: GPUI(`gpui-kit`)로 만든 화면, 컨트롤, 테마와 트레이 플라이아웃 창 |
 | 5. 프로그램 | `bluecaster-driver` (`app/src/driver`) | `bluecaster-driver.exe`: 관리자 권한으로 실행되는 도우미 |
 
 ## 오디오 경로와 스레드
@@ -499,6 +501,7 @@ LHDC V5와 LDAC보다는 뒤입니다(issue #86의 순서).
 | 경로 | 내용 |
 |:-----|:-----|
 | `settings.json` | 앱 설정 (`schema_version` 포함). 알 수 없는 키는 유지됨 |
+| `ui-state.json` | 다음 실행 때도 유지되는 창 상태: **나중에**로 미룬 업데이트, **지원되는 코덱만 표시** 선택, 닫은 알림 |
 | `profiles.json` | 프로필 |
 | `devices\devices.txt` | 알려진 장치 |
 | `devices\le_audio_devices.txt` | LE Audio: 장치 목록의 LE Audio 항목 |
@@ -528,10 +531,10 @@ LHDC V5와 LDAC보다는 뒤입니다(issue #86의 순서).
 - 프로그램은 **Cargo**로 빌드하며 CMake가 필요 없습니다. 각 `-sys` 크레이트는
   `build.rs`에서 `extern/`의 git 서브모듈에 있는 C 라이브러리를 MSVC로 컴파일합니다.
   CMake로 빌드하는 것은 개발자 도구 `tools/a2dp_decode`뿐입니다
-- 창의 페이지는 **Vite**로 빌드하고(`app/src/ui`에서 `pnpm build`), Tauri가
-  `bluecaster.exe`에 포함합니다
-- IPC 프로토콜의 TypeScript 타입은 Rust 타입에서 생성됩니다
-  (`cargo test -p ipc export_bindings`)
+- 창도 다른 부분처럼 Rust로 작성되어 있어, Cargo만으로 `bluecaster.exe`를
+  빌드합니다
+- 타사 도구용으로 `cargo test -p ipc export_bindings`가 Rust 타입에서
+  IPC 프로토콜의 TypeScript 타입을 생성해 `app/src/crates/ipc/bindings`에 둡니다
 - 언어 파일(`app/lang/*.json`)은 창과 코어의 트레이 메뉴가 함께 씁니다
 - `installer/build-release.ps1`이 설치 프로그램(Inno Setup, `installer/BlueCaster.iss`),
   포터블 zip, 업데이터 매니페스트를 만듭니다. [빌드](building)를 참고하세요

@@ -160,6 +160,9 @@ pub struct LeDevice {
     /// acts on it, LE Audio's profiles leave it alone, and its address is
     /// not logged
     pub hid: bool,
+    /// Connected bare (`BtHost::le_connect_bare`): the modules leave it
+    /// alone, no PACS / ASCS are read
+    pub bare: bool,
 
     // ---- link ----
     /// ACL handle, CON_HANDLE_INVALID when down
@@ -210,6 +213,7 @@ impl LeDevice {
             peer_addr: addr,
             name: String::new(),
             hid: false,
+            bare: false,
             acl: CON_HANDLE_INVALID,
             encrypted: false,
             pairing: false,
@@ -358,6 +362,12 @@ struct ConnectAttempt {
     result: Arc<Mutex<ConnectResult>>,
     done: LeDone,
     error: String,
+    /// No pairing or encryption: GATT discovery as soon as the link is up
+    /// (the probe, for a receiver that pairs with its phone only)
+    open: bool,
+    /// Secured and its services discovered, nothing more: no PACS / ASCS
+    /// reads, no profile modules (VCP, CSIP, ...) on it
+    bare: bool,
 }
 
 struct Timer {
@@ -566,7 +576,10 @@ impl<'a> LeCtx<'a> {
     /// [`LeCtx::each_module`] for a device's hooks: a keyboard or mouse goes
     /// to the HID module(s) only, every other device to the others
     pub(crate) fn each_module_for(&mut self, dev: LeDeviceId, mut f: impl FnMut(&mut dyn LeModule, &mut LeCtx<'_>)) {
-        let hid = self.device(dev).is_some_and(|d| d.hid);
+        let Some((hid, bare)) = self.device(dev).map(|d| (d.hid, d.bare)) else { return };
+        if bare {
+            return;
+        }
         self.each_module(|m, ctx| {
             if m.for_hid() == hid {
                 f(m, ctx)
@@ -804,6 +817,8 @@ impl<'a> LeCtx<'a> {
             o.identity_known = true;
             o.peer_addr = from.peer_addr;
             o.hid |= from.hid;
+            // As this link was asked for, not as the device's last one was
+            o.bare = from.bare;
             o.acl = from.acl;
             o.encrypted = from.encrypted;
             o.pairing = from.pairing;
@@ -1086,6 +1101,8 @@ impl<'a> LeCtx<'a> {
         name: String,
         result: Arc<Mutex<ConnectResult>>,
         done: LeDone,
+        open: bool,
+        bare: bool,
     ) {
         tracing::debug!("LE Audio: connect request {addr} (type {}) name “{name}”", addr.addr_type);
         // BTstack has one LE connect at a time: also not while a keyboard or
@@ -1134,7 +1151,7 @@ impl<'a> LeCtx<'a> {
             }
         }
         self.core.connect =
-            Some(ConnectAttempt { device: id, target, result: result.clone(), done, error: String::new() });
+            Some(ConnectAttempt { device: id, target, result: result.clone(), done, error: String::new(), open, bare });
         if in_progress {
             // Set up in progress: wait for it
             return;
@@ -1261,7 +1278,9 @@ impl<'a> LeCtx<'a> {
     /// the stored keys), then GATT
     fn link_up(&mut self, dev: LeDeviceId, handle: u16, addr: LeAddr) {
         let hid = self.hid_listed(&addr.addr);
+        let bare = self.core.connect.as_ref().is_some_and(|c| c.device == dev && c.bare);
         let Some(d) = self.device_mut(dev) else { return };
+        d.bare = bare;
         d.acl = handle;
         d.peer_addr = addr;
         d.hid |= hid;
@@ -1278,6 +1297,14 @@ impl<'a> LeCtx<'a> {
             tracing::warn!("LE Audio: cannot listen for notifications on 0x{handle:04x} (all slots in use)");
         }
         self.each_module_for(dev, |m, ctx| m.on_connected(ctx, dev));
+        if self.core.connect.as_ref().is_some_and(|c| c.device == dev && c.open) {
+            tracing::info!("LE Audio: device {}: not secured (asked so), discovering the services", dev.0);
+            if let Some(d) = self.device_mut(dev) {
+                d.secured = true;
+            }
+            self.discover(dev, handle, None);
+            return;
+        }
         tracing::debug!("LE Audio: requesting security on 0x{handle:04X}");
         self.hid_pairing_io(dev);
         self.stack.sm_request_pairing(handle);
@@ -1762,6 +1789,12 @@ impl<'a> LeCtx<'a> {
         d.services = services;
         let chars: usize = d.services.iter().map(|s| s.chars.len()).sum();
         tracing::info!("LE Audio: {}: {} services, {chars} characteristics", d.shown(), d.services.len());
+        if d.bare {
+            d.gatt_ready = true;
+            d.ready = true;
+            self.finish_connect(id, true);
+            return;
+        }
         if d.hid || !audio {
             // No PACS / ASCS: a keyboard or mouse goes to HID over GATT
             d.gatt_ready = true;
@@ -2790,6 +2823,13 @@ impl LeCore {
             self.iso.on_hci_event(stack, packet);
             self.after_last_round(stack);
             self.run(stack, |ctx| ctx.on_hci(packet));
+        }
+    }
+
+    /// Events of the LE credit based channels (ASHA)
+    pub(crate) fn on_l2cap_cbm(&mut self, stack: &Stack, packet: &[u8]) {
+        if self.initialized {
+            self.run(stack, |ctx| super::modules::asha::AshaModule::on_packet(ctx, packet));
         }
     }
 

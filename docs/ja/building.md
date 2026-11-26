@@ -20,7 +20,6 @@ nav_order: 3
 
 - **Rust**（stable、1.90 以降）。[rustup](https://rustup.rs/) で入れます
 - **Visual Studio 2022 以降**（Build Tools でも可）と「C++ によるデスクトップ開発」ワークロード。C のライブラリ（BTstack、コーデック）を MSVC でコンパイルするために必要です
-- UI 用に **Node.js** 22 と **pnpm**（`corepack enable` で pnpm が使えます）
 - **Git**（サブモジュールの取得）
 - `build.ps1` / `build.bat` 用に **PowerShell 7**（`pwsh`。`winget install Microsoft.PowerShell`）
 - チェック（`tools/check_lang.py`）と[エミュレーターテスト](#emu)用に **Python 3.11 以降**
@@ -34,19 +33,14 @@ cd BlueCaster
 pwsh ./build.ps1
 ```
 
-エクスプローラーで `build.bat` をダブルクリックしても同じです。`build.bat` は `build.ps1` を実行し、最後にキー入力を待ちます（`build.bat -Test` のようにスイッチも渡せます）。`build.ps1` は、まず Rust、Node.js、pnpm、サブモジュールがそろっているかを確認し、`node_modules` がなければ `pnpm install` を実行します。続いてウィンドウのページをビルドし、3 つのプログラムを `target/release/` に作成します。`bluecaster-core.exe`（常駐するコア: Bluetooth、音声、トレイ）、`bluecaster.exe`（ウィンドウ）、`bluecaster-driver.exe`（WinUSB ドライバーの割り当てと復元を行う、管理者権限のヘルパー）です。3 つは同じフォルダーに置いてください。`bluecaster-core.exe --cli` を使うと、ウィンドウなしで配信できます。
+エクスプローラーで `build.bat` をダブルクリックしても同じです。`build.bat` は `build.ps1` を実行し、最後にキー入力を待ちます（`build.bat -Test` のようにスイッチも渡せます）。`build.ps1` は、まず Rust とサブモジュールがそろっているかを確認し、続いて 3 つのプログラムを `target/release/` に作成します。`bluecaster-core.exe`（常駐するコア: Bluetooth、音声、トレイ）、`bluecaster.exe`（ウィンドウ）、`bluecaster-driver.exe`（WinUSB ドライバーの割り当てと復元を行う、管理者権限のヘルパー）です。3 つは同じフォルダーに置いてください。`bluecaster-core.exe --cli` を使うと、ウィンドウなしで配信できます。
 
 スイッチ: `-Debug`（開発プロファイル、`target/debug/`）、`-Test`（「テスト」のチェックも実行）、`-Decoder`（デコーダーツールもビルド）、`-Emu`（[エミュレーターテスト](#emu)も実行。`-Emu -Codecs sbc,ldac` で指定したコーデックだけをテスト）、`-Release -Arch x64|arm64`（リリーススクリプトだけを実行。「リリースパッケージ」を参照）。
 
-**手順を分けて行う場合**（`build.ps1` が行う処理。`bluecaster.exe` はウィンドウのページを埋め込むので、ページを先にビルドする必要があります）:
+**スクリプトを使わない場合**（`build.ps1` が実行するコマンド）:
 
 ```bash
-cargo build --release -p bluecaster-core-exe -p bluecaster-driver
-cd app/src/ui
-pnpm install --frozen-lockfile
-pnpm build
-cd ../../..
-cargo build --release -p bluecaster-ui
+cargo build --release -p bluecaster-core-exe -p bluecaster-driver -p bluecaster-ui
 ```
 
 ## `--recursive` なしでクローン済みの場合 {#if-you-already-cloned-without---recursive}
@@ -64,11 +58,11 @@ BlueCaster/
 ├── app/
 │   ├── src/
 │   │   ├── core/           bluecaster-core.exe: resident core, tray, IPC server, --cli
-│   │   ├── ui/             bluecaster.exe: Tauri 2 + SolidJS (pnpm dev runs it in a browser with a mock core)
+│   │   ├── ui/             bluecaster.exe: the window and the tray flyout (GPUI)
 │   │   ├── driver/         bluecaster-driver.exe: WinUSB assign / restore (elevated)
 │   │   └── crates/         Libraries: btstack-sys, hci-transport, bt-host, codec, the codec -sys crates,
 │   │                       pipeline, audio-capture, win-sys, core (bluecaster-core), ipc, le-audio, lc3-sys,
-│   │                       aptx-adaptive (aptX Adaptive encoder)
+│   │                       aptx-adaptive (aptX Adaptive encoder), ui-model and ui-host (the window's logic)
 │   ├── lang/               Localization (en.json is the source; tools/check_lang.py checks the others)
 │   └── resources/          Icon and manifest
 ├── Cargo.toml              Cargo workspace
@@ -94,9 +88,12 @@ BlueCaster/
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cd app/src/ui && pnpm exec tsc --noEmit && pnpm exec vitest run
 python tools/check_lang.py
 ```
+
+`cargo test --workspace` はウィンドウもテストします。各画面のルール、翻訳、表示の書式は `ui-model` にあり、ウィンドウを開かずにテストできます。
+
+コアやアダプターなしで画面を確認するには、`BLUECASTER_UI_DEMO` にコアの状態のスナップショットを入れた JSON ファイルのパスを設定して、`bluecaster.exe` を起動します。`BLUECASTER_UI_ROUTE` を設定すると特定の画面を開き、`BLUECASTER_UI_SIZE` でウィンドウのサイズを指定できます。ファイルの形式は `app/src/ui/src/demo.rs` に説明があります。
 
 ## リリースパッケージ {#release-packages}
 
@@ -155,7 +152,7 @@ python tools/emu/run_test.py                        # every codec and negotiatio
 
 ## 依存関係 {#dependencies}
 
-C のライブラリは git サブモジュールです。Rust のクレートと UI の npm パッケージは、Cargo と pnpm が取得します（バージョンは `Cargo.lock` と `app/src/ui/pnpm-lock.yaml` で固定。ライセンスは `cargo deny check` で確認します）。
+C のライブラリは git サブモジュールです。Rust のクレートは Cargo が取得します（バージョンは `Cargo.lock` で固定。ライセンスは `cargo deny check` で確認します）。
 
 | ライブラリ | 取得方法 | 固定バージョン | ライセンス |
 |:--------|:-------|:---------------|:--------|
@@ -169,7 +166,7 @@ C のライブラリは git サブモジュールです。Rust のクレート�
 | fdk-aac | git サブモジュール | v3.0.0 | FDK AAC License |
 | LHDC V5 エンコーダー | git サブモジュール | 固定したコミット | Apache-2.0 |
 | libopus | git サブモジュール | v1.6.1 | BSD-3-Clause |
-| Tauri、SolidJS、Rust のクレート | Cargo / pnpm | `Cargo.lock`、`pnpm-lock.yaml` | MIT / Apache-2.0 など（リリースの `licenses/third-party/rust-crates.txt`） |
+| GPUI、Rust のクレート | Cargo | `Cargo.lock` | MIT / Apache-2.0 など（リリースの `licenses/third-party/rust-crates.txt`） |
 
 {: .warning }
 BTstack をリンクしているため、自分でビルドした BlueCaster も、個人的かつ非商用の目的でのみ使用・再配布できます。BlueCaster のソースコード自体が Apache-2.0 / MIT のデュアルライセンスであっても同じです。

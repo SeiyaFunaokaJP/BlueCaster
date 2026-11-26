@@ -68,7 +68,7 @@ shows a warning banner, and BlueCaster asks before turning the feature off.
 | Where input goes (this process, the input helper, or counted only) | `hid-input/src/sink.rs`, `crates/input-helper`, `win-sys/src/input_desktop.rs` |
 | Setting, device list, confirmation, keeping the stack up | `crates/core/src/hid.rs` |
 | IPC (`hid.*`), settings rules | `crates/ipc/src/protocol.rs`, `core/src/state.rs` |
-| UI | `ui/src/components/HidHost.tsx`, `HidEnableDialog.tsx` |
+| UI | `ui/src/screens/hid_host.rs`, `hid_enable_dialog.rs` |
 
 The code follows these rules:
 
@@ -477,7 +477,7 @@ The signed-in user cannot open the service's folder, so in service mode:
 - **Verbose logging.** The UI cannot read the core's `verbose.json` and
   `settings.json`. While the UI is connected to the service, its log
   level follows the snapshot's `verbose` and developer mode's
-  `dev_log.always_verbose` (`ui/src-tauri/src/logging.rs`).
+  `dev_log.always_verbose` (`crates/ui-host/src/logging.rs`).
 - **Exit.** `app.quit` is refused. The tray's Exit, the Quit button and
   closing the window without "Minimize to System Tray" send `app.close`.
   Streaming stops, the UI closes (event `ui_close`) and the tray icon
@@ -490,10 +490,13 @@ The signed-in user cannot open the service's folder, so in service mode:
   an administrator, so the prompt appears only after the user ticks both
   check boxes, types the code and waits ten seconds. The core still checks
   developer mode, both check boxes and the code.
-- **Is the pipe's server the service?** The UI and the elevated helper
-  ask the service control manager (read-only, `win_sys::service_query`)
-  for the service's program and process. The pipe server must be that process,
-  run that program and run in session 0.
+- **Is the pipe's server the service?** The UI, the agent and the elevated
+  helper ask the service control manager (read-only, `win_sys::service_query`)
+  for the service's program and process. The pipe server must be that
+  process and run in session 0, and SYSTEM or the Administrators must own
+  the pipe. A user who is not elevated cannot create a pipe with that owner.
+  The same user cannot read the service's program from its process either,
+  so the program is compared only where it can be read (an elevated client).
 
 ### The input helper (stage 4)
 
@@ -566,7 +569,7 @@ gives the program checks of stages 3 and 4 their value.
 - **The set-up tool.** `bluecaster-core.exe --service-setup
   <install|update|remove> [--remove-data]` (`core/src/service_setup.rs`)
   runs elevated from the per-user folder. The window starts the tool
-  (`ui/src-tauri/src/service.rs`), so Windows shows its own prompt. For
+  (`crates/ui-host/src/service.rs`), so Windows shows its own prompt. For
   install and update, the tool copies the files from its own folder into
   the service folder, then registers or updates the service and starts it.
   Each copy is read back and compared before it replaces the old file, and
@@ -604,9 +607,10 @@ gives the program checks of stages 3 and 4 their value.
   too.
 - **What the trust checks compare.** For the real service, every check
   requires the service folder's core, never "the core beside me"
-  (`ipc::service_state::expected_core`). The window and the elevated
-  helper check that the pipe's server is the process the service control
-  manager runs, in session 0, from that program
+  (`ipc::service_state::expected_core`). The window, the agent and the
+  elevated helper check that the pipe's server is the process the service
+  control manager runs, in session 0, registered with that program, and
+  that SYSTEM or the Administrators own the pipe
   (`ipc::service_state::check_service_pipe`). The service starts an agent
   only when the service itself runs from the service folder
   (`core/src/agent.rs`, `agent_program`). An elevated caller counts as
@@ -618,7 +622,7 @@ gives the program checks of stages 3 and 4 their value.
 - **Per-user core or service.** While the service is not added, the window
   starts and uses the per-user core as before. Once the service is added,
   the window uses only the service pipe and never starts a core of its own
-  beside the service (`ui/src-tauri/src/connection.rs`). If the service is
+  beside the service (`crates/ui-host/src/connection.rs`). If the service is
   stopped or has another version, the window shows a status instead. While
   the tool adds or removes the service, the window waits for the new core
   instead of closing when the old core sends Bye.
@@ -697,9 +701,8 @@ folder is not affected.
 This is the shortest sequence that covers everything not yet run. Each
 step says what to look at and how to undo it. Step 9 needs two builds with
 different versions: install the older one in step 1, and run the newer
-one's setup in step 9. The version comes from `Cargo.toml` and
-`app/src/ui/package.json`, so two local builds with different numbers work
-too.
+one's setup in step 9. The version comes from `Cargo.toml`, so two local
+builds with different numbers work too.
 
 1. **Install the per-user app** (the older build). Look at: nothing asks
    for administrator rights, `sc query BlueCaster` reports that the

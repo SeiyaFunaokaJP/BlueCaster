@@ -11,7 +11,7 @@ nav_order: 2.7
 타사 도구가 BlueCaster 코어와 통신하는 방법입니다. 스트림 상태를 표시하고, 프로필을 시작·중지하고, 볼륨을 설정하거나, BlueCaster의 Bluetooth 링크를 통해 헤드폰 자체의 서비스에 접근할 수 있습니다. 이런 기능을 쓰는 도구는 [함께 쓰는 도구](works-with)에 정리되어 있습니다.
 
 {: .warning }
-> 2.0.2 베타 기간에는 프로토콜이 아직 바뀔 수 있습니다. 정확한 정의는 [`app/src/crates/ipc/src/protocol.rs`](https://github.com/SeiyaFunaokaJP/BlueCaster/blob/main/app/src/crates/ipc/src/protocol.rs)와, 여기서 생성한 [`app/src/ui/src/ipc/bindings`](https://github.com/SeiyaFunaokaJP/BlueCaster/tree/main/app/src/ui/src/ipc/bindings)의 TypeScript 타입을 기준으로 합니다. 이 페이지는 사용법을 설명할 뿐, 모든 필드를 나열하지는 않습니다.
+> 2.0.2 베타 기간에는 프로토콜이 아직 바뀔 수 있습니다. 정확한 정의는 [`app/src/crates/ipc/src/protocol.rs`](https://github.com/SeiyaFunaokaJP/BlueCaster/blob/main/app/src/crates/ipc/src/protocol.rs)와, 여기서 생성한 [`app/src/crates/ipc/bindings`](https://github.com/SeiyaFunaokaJP/BlueCaster/tree/main/app/src/crates/ipc/bindings)의 TypeScript 타입을 기준으로 합니다. 이 페이지는 사용법을 설명할 뿐, 모든 필드를 나열하지는 않습니다.
 
 ## 목차
 {: .no_toc .text-delta }
@@ -168,7 +168,7 @@ sequenceDiagram
 
 설정 하나만 바꾸려면 `profile.save`나 `settings.set` 대신 [빠른 제어](#quick-controls)를 사용하세요.
 
-BlueCaster 창이 쓰는 메서드 중 도구에서는 주의해서 써야 하는 것: `profile.save` / `profile.delete`, `settings.set`(설정을 **모두** 대체합니다. 일부만 담은 객체는 절대 보내지 말고, 최신 `settings`에 변경 사항을 반영해 보내세요), `device.forget` / `device.rename`, `adapter.*`(`adapter.assign_winusb`와 `adapter.restore_driver`는 UAC 프롬프트를 표시하고, 개발자 모드의 칩 도구인 `adapter.probe`와 `adapter.run_script`는 Bluetooth 스택을 중지합니다), `app.quit`. 나머지 메서드(`stream.start_custom`, 그 밖의 `device.*`(`device.import_windows_pairings`는 UAC 프롬프트를 표시), `audio.apps`, `audio.mixer` / `audio.mixer_set`, 위 두 가지 외의 `diag.*`, `receiver.*`, `app.*`)는 창의 화면 전용이며 예고 없이 바뀔 수 있습니다. 매개변수와 결과를 포함한 전체 목록은 `protocol.rs`의 `Method` enum에 있습니다.
+BlueCaster 창이 쓰는 메서드 중 도구에서는 주의해서 써야 하는 것: `profile.save` / `profile.delete`, `settings.set`(설정을 **모두** 대체합니다. 일부만 담은 객체는 절대 보내지 말고, 최신 `settings`에 변경 사항을 반영해 보내세요), `device.forget` / `device.rename`, `adapter.*`(`adapter.assign_winusb`와 `adapter.restore_driver`는 UAC 프롬프트를 표시하고, 개발자 모드의 칩 도구인 `adapter.probe`와 `adapter.run_script`는 Bluetooth 스택을 중지합니다), `app.quit`. 나머지 메서드(`stream.start_custom`, 그 밖의 `device.*`(`device.import_windows_pairings`는 UAC 프롬프트를 표시), `audio.apps`, `audio.input_devices`, `audio.mixer` / `audio.mixer_set`, 위 두 가지 외의 `diag.*`, `receiver.*`, `app.*`)는 창의 화면 전용이며 예고 없이 바뀔 수 있습니다. 매개변수와 결과를 포함한 전체 목록은 `protocol.rs`의 `Method` enum에 있습니다.
 
 ## RFCOMM 패스스루 {#rfcomm-passthrough}
 

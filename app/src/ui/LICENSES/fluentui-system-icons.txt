@@ -1,5 +1,5 @@
 Fluent UI System Icons (https://github.com/microsoft/fluentui-system-icons)
-used by src/components/icons.ts
+used by src/ui/icons.rs
 
 MIT License
 

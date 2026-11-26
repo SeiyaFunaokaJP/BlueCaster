@@ -295,6 +295,46 @@ pub fn le_read_buffer_size_v2(packet: &[u8]) -> Option<LeBufferSizeV2> {
     })
 }
 
+/// L2CAP_EVENT_CBM_CHANNEL_OPENED (to the channel's handler)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CbmChannelOpened {
+    pub status: u8,
+    pub con: u16,
+    pub psm: u16,
+    pub local_cid: u16,
+    /// The longest SDU the peer takes
+    pub remote_mtu: u16,
+}
+
+pub fn cbm_channel_opened(packet: &[u8]) -> Option<CbmChannelOpened> {
+    if !event_is(packet, L2CAP_EVENT_CBM_CHANNEL_OPENED) {
+        return None;
+    }
+    Some(CbmChannelOpened {
+        status: *packet.get(2)?,
+        con: u16_at(packet, 10)?,
+        psm: u16_at(packet, 13)?,
+        local_cid: u16_at(packet, 15)?,
+        remote_mtu: u16_at(packet, 21)?,
+    })
+}
+
+/// L2CAP_EVENT_PACKET_SENT: the local cid
+pub fn l2cap_packet_sent(packet: &[u8]) -> Option<u16> {
+    if !event_is(packet, L2CAP_EVENT_PACKET_SENT) {
+        return None;
+    }
+    u16_at(packet, 2)
+}
+
+/// L2CAP_EVENT_CHANNEL_CLOSED: the local cid
+pub fn l2cap_channel_closed(packet: &[u8]) -> Option<u16> {
+    if !event_is(packet, L2CAP_EVENT_CHANNEL_CLOSED) {
+        return None;
+    }
+    u16_at(packet, 2)
+}
+
 /// HCI_EVENT_CIS_CAN_SEND_NOW (to the ISO handler)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CisCanSendNow {
@@ -324,6 +364,11 @@ pub fn cis_can_send_now(packet: &[u8]) -> Option<CisCanSendNow> {
 pub struct LeCisEstablished {
     pub status: u8,
     pub cis_handle: u16,
+    /// The longest time the PDUs of a CIG event take over all its CIS, and
+    /// over this CIS (both end at the same point, so their difference is
+    /// how long after the CIG event's start this CIS's events begin), us
+    pub cig_sync_delay: u32,
+    pub cis_sync_delay: u32,
     /// Microseconds
     pub transport_latency_c_to_p: u32,
     pub transport_latency_p_to_c: u32,
@@ -359,6 +404,8 @@ pub fn le_cis_established(packet: &[u8]) -> Option<LeCisEstablished> {
     Some(LeCisEstablished {
         status: *packet.get(3)?,
         cis_handle: u16_at(packet, 4)? & 0x0FFF,
+        cig_sync_delay: u24(6)?,
+        cis_sync_delay: u24(9)?,
         transport_latency_c_to_p: u24(12)?,
         transport_latency_p_to_c: u24(15)?,
         phy_c_to_p: *packet.get(18)?,

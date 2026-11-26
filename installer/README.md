@@ -19,8 +19,8 @@ Output (`target/dist`):
 | `latest.json` | Updater manifest of this release (both architectures) |
 
 Attach all of them to the GitHub release `v<ver>` (`gh release create v<ver> ... --prerelease` for a
-pre-release). The version comes from `version` in `Cargo.toml` (`[workspace.package]`);
-`app/src/ui/package.json` must have the same one, and the tag must be `v` + that version.
+pre-release). The version comes from `version` in `Cargo.toml` (`[workspace.package]`), and
+the tag must be `v` + that version.
 
 ### Alphas
 
@@ -40,27 +40,40 @@ The beta channel reads the newest 100 releases (3.0.0-beta.2 and older: 20). Del
 (`gh release delete <tag> --cleanup-tag`) before they push the betas out of the newest 20, or old
 beta copies stop finding the next beta.
 
-Prerequisites: Rust with the target (`rustup target add aarch64-pc-windows-msvc`), pnpm and
-`pnpm install` in `app/src/ui`, the submodules (`git submodule update --init --recursive`),
-`cargo install cargo-about`, and Inno Setup 7.1.0 (`winget install JRSoftware.InnoSetup.7 --version 7.1.0`;
-the script looks in its default folders, on PATH and in `$env:ISCC`). The WebView2 bootstrapper
-is downloaded once into `target/installer-cache` and must carry Microsoft's signature. Build from
-a clean checkout of
-the release commit: `licenses\README.txt` in the package names the commit and says so if the
-tree had local changes.
+Prerequisites:
+
+- Rust with the target (`rustup target add aarch64-pc-windows-msvc`).
+- The submodules (`git submodule update --init --recursive`).
+- cargo-about (`cargo install cargo-about`).
+- Inno Setup 7.1.0 (`winget install JRSoftware.InnoSetup.7 --version 7.1.0`). The script looks
+  for Inno Setup in its default folders, on PATH and in `$env:ISCC`.
+
+Node.js, pnpm and WebView2 are no longer needed. The window (`bluecaster.exe`, package
+`bluecaster-ui`) is a Rust program, built by the same `cargo build` as the core and the driver
+helper.
+
+Build from a clean checkout of the release commit. `licenses\README.txt` in the package names the
+commit and notes any local changes.
 
 ## Updater signing keys
 
-The installer is signed with a minisign key pair of the updater (`tauri signer sign
---app-version <ver>`: the version is part of what is signed, `requireSignedVersion`). The
-app has the public key built in and installs only updates signed with the private key. **The
-keys are not in the repository.** On the release machine:
+The installer is signed with the updater's minisign key pair. The app has the public key built
+in and installs only updates signed with the private key. The version is part of what is
+signed, and the app rejects a signature made for a version other than the one in the manifest.
+**The keys are not in the repository.**
 
-1. Once: `pnpm tauri signer generate -w %USERPROFILE%\.tauri\a2dpwb-updater.key` (in `app/src/ui`),
-   with a password. Keep a backup of the `.key` file and the password offline: without them no
-   installed copy can be updated any more (a new key means a manual reinstall for everyone).
-   The key pair was made before the rename and keeps its file name: BlueCaster is signed with the
-   same key, so that A2DP Windows Bridge 2.0.x updates itself to BlueCaster.
+`tools/sign-update` signs the installer. It writes the same files as `tauri signer sign
+--app-version <ver>` did: the same key format, the same signature and the same `.sig` file. So
+the existing key keeps working, and copies that still have the Tauri window (3.0.4 and earlier)
+accept the new installers. The tool reads the same environment variables as the Tauri CLI.
+
+On the release machine:
+
+1. Use the existing key pair, `%USERPROFILE%\.tauri\a2dpwb-updater.key` and its `.pub` file.
+   The pair was created with `tauri signer generate` before the rename and keeps its old file name.
+   BlueCaster is signed with the same key, so that A2DP Windows Bridge 2.0.x updates itself to
+   BlueCaster. Keep a backup of the `.key` file and its password offline. Without them,
+   installed copies can no longer be updated. A new key means everyone must reinstall manually.
 2. Before each build, in the same PowerShell:
 
    ```powershell
@@ -69,11 +82,39 @@ keys are not in the repository.** On the release machine:
    $env:BLUECASTER_UPDATER_PUBKEY = "$env:USERPROFILE\.tauri\a2dpwb-updater.key.pub"  # path or content
    ```
 
-`build-release.ps1` passes the public key to the build in a generated configuration
-(`stage-<arch>/tauri.release.conf.json`, merged with `tauri build --no-bundle --config`). The public key is
-not secret; once it is final it may also be committed as `plugins.updater.pubkey` in
-`tauri.conf.json`. Without `TAURI_SIGNING_PRIVATE_KEY` the build still works, but writes no
-`.sig` and no `latest.json`, and its in-app update stays off.
+   `TAURI_SIGNING_PRIVATE_KEY_PATH` also works in place of `TAURI_SIGNING_PRIVATE_KEY`. Without
+   a password variable, the tool asks for the password in the console.
+
+`build-release.ps1` passes the public key to the build in `BLUECASTER_UPDATER_PUBKEY`, which
+`app/src/crates/ui-host/build.rs` builds into `bluecaster.exe`. After signing, the script checks
+the signature with that public key, the same check the app runs before it installs an update. If the
+private key does not match the public key, the build stops.
+
+Without `TAURI_SIGNING_PRIVATE_KEY` the build still works. It writes no `.sig` and no
+`latest.json`, and the built app has in-app updates turned off. The script then removes `BLUECASTER_UPDATER_PUBKEY`
+from the build's environment, so that a key left in the shell cannot turn on updates in an
+unsigned build.
+
+To sign or verify a file by hand, run these from the repository root:
+
+```powershell
+cargo run -p sign-update -- sign --app-version 3.0.5 target\dist\BlueCaster-3.0.5-win64-setup.exe
+cargo run -p sign-update -- verify --app-version 3.0.5 target\dist\BlueCaster-3.0.5-win64-setup.exe
+```
+
+`verify` takes the public key from `BLUECASTER_UPDATER_PUBKEY`, or from `--pubkey <path or
+content>`.
+
+A new key pair is only needed if the old one is lost. Every installed copy then needs a manual
+reinstall. To make one:
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = '<new password>'
+cargo run -p sign-update -- generate --write-keys "$env:USERPROFILE\.tauri\bluecaster-updater.key"
+```
+
+This writes the `.key` file and its `.pub` file in the same format as `tauri signer generate`.
+Without the password variable, the tool asks for the password.
 
 ## Code signing (Authenticode)
 
@@ -152,13 +193,15 @@ keyboard and a USB mouse. The detailed steps are in [docs/hid-host-dev.md](../do
   same manifest (`windows-x86_64`, `windows-aarch64`), which is why both builds write into the same
   output folder.
 - "Update now" (Settings) in an installed copy downloads the installer from the manifest
-  (`app/src/ui/src-tauri/src/update.rs`) and checks its signature. While something streams it
-  waits; then it asks the core to exit (`app.quit_for_update`, refused while streaming), runs the
+  (`app/src/crates/ui-host/src/update.rs`) and checks its signature. While something streams, the
+  window waits. Then it asks the core to exit (`app.quit_for_update`, refused while streaming), runs the
   installer with `/UPDATE /SILENT /NORESTART` (progress only) and exits. The installer starts
-  the UI again, which starts the core.
-- The plugin treats every `.exe` as an NSIS installer. The updater of 2.0.2-beta.5 and earlier
-  passes NSIS's `/P /UPDATE /R /ARGS`; with `/P` the installer skips its pages and shows only
-  the progress (as NSIS's passive mode), so those copies update as before.
+  the window again, which starts the core.
+- Copies with the Tauri window (3.0.4 and earlier) do the same through tauri-plugin-updater. It
+  reads the same manifest, runs the same signature check and starts the installer with the
+  same arguments. The window of 2.0.2-beta.5 and earlier passes NSIS's `/P /UPDATE /R /ARGS`.
+  With `/P`, the installer skips its pages and shows only a progress bar, like NSIS's passive
+  mode, so those copies update as before.
 - The portable copy (no `unins000.exe` next to `bluecaster.exe`) and builds without a key only
   open the release page.
 
@@ -169,8 +212,9 @@ Inno Setup AppId (`{C7A109ED-…}`), a new folder and a new Apps entry; the setu
 earlier versions first, and the app takes their settings over at its first start.
 
 - Installs for the current user (no administrator rights), in 10 languages, into
-  `%LOCALAPPDATA%\BlueCaster`, with the WebView2 bootstrapper embedded (it runs only
-  where WebView2 is missing). Every run writes a log, `%TEMP%\Setup Log <date> #<n>.txt`.
+  `%LOCALAPPDATA%\BlueCaster`. Every run writes a log, `%TEMP%\Setup Log <date> #<n>.txt`.
+  Up to 3.0.4 the setup also installed the WebView2 Runtime where it was missing. The window no
+  longer needs it.
 - A new installation asks for the language (preselected from the one chosen for 2.0.x, else from
   the Windows display language); an update uses the one chosen before, and so do `/SILENT`,
   `/VERYSILENT`, `/P` and `/LANG=`. Setup writes it to `HKCU\Software\BlueCaster`, value
@@ -200,8 +244,8 @@ earlier versions first, and the app takes their settings over at its first start
   deletes what is left of its registry keys. In update mode the NSIS uninstaller keeps the
   adapters on WinUSB, the settings, the shortcuts and the Run value. An installation that fails
   or is cancelled after this leaves nothing installed; running the setup again installs it. The
-  core or, after an update, `bluecaster.exe` is started after the WebView2 Runtime is installed, not
-  from `[Run]`, which comes first.
+  core or, after an update, `bluecaster.exe` is started at the end of the installation
+  (`CurStepChanged`), not from `[Run]`.
 - Deletes the shortcuts of 2.0.x (`A2DP Windows Bridge.lnk` in the Start menu and on the desktop,
   the Start menu folder `A2DP Windows Bridge`); BlueCaster's are made where they were.
 - Points "start with Windows" (HKCU Run, value `BlueCaster`) at `bluecaster-core.exe --background` when
@@ -224,9 +268,12 @@ earlier versions first, and the app takes their settings over at its first start
     read through WinUSB, not any WinUSB device). Chosen, the uninstaller adds `--unrecorded` and
     Windows chooses their driver. Off by default: an adapter may be on WinUSB for another program.
   - **Delete user data**: `%APPDATA%\BlueCaster` (settings, codecs, pairings, firmware; not a folder
-    that `BLUECASTER_CONFIG_DIR` names) and the window's own data
-    (`%LOCALAPPDATA%\io.github.seiyafunaokajp.bluecaster`), and what 2.0.x may have left of them
-    (`%APPDATA%\A2DPWB`, `%LOCALAPPDATA%\io.github.seiyafunaokajp.a2dpwb`).
+    that `BLUECASTER_CONFIG_DIR` names), and what 2.0.x may have left (`%APPDATA%\A2DPWB`,
+    `%LOCALAPPDATA%\io.github.seiyafunaokajp.a2dpwb`). It also deletes
+    `%LOCALAPPDATA%\io.github.seiyafunaokajp.bluecaster`, where the WebView2 window of 3.0.4 and
+    earlier kept its data. The current window keeps nothing there and removes that data itself
+    when it starts. The uninstaller still deletes the folder in case BlueCaster is uninstalled before
+    that first start.
   - **Remove VB-CABLE** / **Remove Hi-Fi Cable** (issue #86): shown only when installed, **off** by
     default (other apps may use them). They run after the core has closed, each with its own UAC
     prompt, through VB-Audio's own setup without its window:
@@ -295,8 +342,28 @@ licenses\
   third-party\   THIRD_PARTY_LICENSES.md, each component's licence, rust-crates.txt (cargo-about)
 ```
 
-The About page opens `licenses\` next to the program. It uses the same settings folder as the installed copy. WebView2
-must be present (Windows 11 has it). Its update check only shows the release page.
+The About page opens `licenses\` next to the program. The portable copy uses the same settings
+folder as the installed copy. The portable copy's update check only opens the release page.
+
+## First release with the GPUI window: update test
+
+3.0.4 and earlier have the Tauri window. They check a new installer with tauri-plugin-updater
+2.14, which runs the same signature check as the new window (`verify_signature` in
+`app/src/crates/ui-host/src/update.rs` follows the plugin's). The tests of `tools/sign-update`
+check its signatures against that code. Before the first GPUI release, test the step from 3.0.4
+once anyway, as in step 6 of the 3.0.0 runbook below:
+
+1. Create a release under a tag that is not a version, for example `upgrade-test-<ver>`, with
+   `--prerelease --latest=false`. Upload the setups, the `.sig` files and a copy of `latest.json`
+   whose URLs point at that tag.
+2. On a PC with 3.0.4 installed, exit BlueCaster (tray icon > Exit). Start the installed
+   `bluecaster.exe` with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`.
+3. In the page, run
+   `window.__TAURI_INTERNALS__.invoke('update_install', {manifestUrl: '<that latest.json URL>'})`.
+4. Check: the setup runs with its progress only, the new window opens and starts the core, the
+   settings and the adapter are kept, and Settings > Apps shows the new version.
+   `%LOCALAPPDATA%\io.github.seiyafunaokajp.bluecaster\EBWebView` is gone after the first start.
+5. Repeat on arm64, then delete that release and its tag.
 
 ## Development: a second core
 

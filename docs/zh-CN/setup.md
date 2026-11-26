@@ -27,8 +27,8 @@ BlueCaster 会自动为适配器分配 WinUSB 驱动程序，因此不再需要 
 
 每个[发布版本](https://github.com/SeiyaFunaokaJP/BlueCaster/releases)提供两种形式，内含文件相同：
 
-- **安装程序**（`BlueCaster-<version>-win64-setup.exe`，ARM64 为 `-arm64-setup.exe`）：无需管理员权限即可为当前用户安装，添加“开始”菜单项（**BlueCaster**）和卸载程序；如果缺少 Microsoft Edge WebView2 Runtime，还会一并安装（Windows 11 已自带）。更新可直接在应用内安装（**设置 > 更新 > 立即更新**）。程序安装在 `%LOCALAPPDATA%\BlueCaster\` 中（三个程序、卸载程序，以及存放许可证文本的 `licenses\` 文件夹）
-- **便携版**（`BlueCaster-<version>-win64-portable.zip`，ARM64 为 `-arm64-portable.zip`）：解压到任意位置，运行 `bluecaster.exe` 即可。请将三个程序（`bluecaster.exe`、`bluecaster-core.exe`、`bluecaster-driver.exe`）放在一起。便携版只会提示有可用更新，并且需要已安装 WebView2 Runtime
+- **安装程序**（`BlueCaster-<version>-win64-setup.exe`，ARM64 为 `-arm64-setup.exe`）：无需管理员权限即可为当前用户安装，添加“开始”菜单项（**BlueCaster**）和卸载程序。更新可直接在应用内安装（**设置 > 更新 > 立即更新**）。程序安装在 `%LOCALAPPDATA%\BlueCaster\` 中（三个程序、卸载程序，以及存放许可证文本的 `licenses\` 文件夹）
+- **便携版**（`BlueCaster-<version>-win64-portable.zip`，ARM64 为 `-arm64-portable.zip`）：解压到任意位置，运行 `bluecaster.exe` 即可。请将三个程序（`bluecaster.exe`、`bluecaster-core.exe`、`bluecaster-driver.exe`）放在一起。便携版只会提示有可用更新
 
 两者都将设置、配置文件、链接密钥和固件保存在 `%APPDATA%\BlueCaster` 中，因此可以在两者之间切换。卸载时会删除该文件夹，除非你关闭**删除用户数据**（静默卸载会保留该文件夹）。
 

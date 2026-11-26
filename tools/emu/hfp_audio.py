@@ -337,9 +337,12 @@ def goertzel_ratio(samples, rate, freq):
 class HfSide:
     """The hands-free unit of emu_sink.py --hfp (see module doc)."""
 
-    def __init__(self, device, case):
+    def __init__(self, device, case, controller=None):
         self.device = device
         self.case = case
+        # The hands-free unit's own controller (HfpEmuController): send_loop
+        # sends no faster than its queue takes
+        self.controller = controller
         self.codecs = CODEC_CASES[case]
         features = [hfp.HfFeature.HF_INDICATORS, hfp.HfFeature.REMOTE_VOLUME_CONTROL]
         if len(self.codecs) > 1:
@@ -361,6 +364,7 @@ class HfSide:
         self.rx_packets = self.rx_bytes = self.tx_packets = 0
         self.rx_status = collections.Counter()
         self.pcm = []           # CVSD: received 16-bit samples
+        self.tx_waits = 0       # send_loop found its controller's queue full
         self.h2_good = self.h2_bad = 0   # mSBC / LC3-SWB: packets with / without the next H2 header
         self.h2_seq = None
         self.sco = None
@@ -459,6 +463,19 @@ class HfSide:
         frames = voice_frames.MSBC_FRAMES if self.codec == hfp.AudioCodec.MSBC else voice_frames.LC3_SWB_FRAMES
         seq = 0
         while True:
+            # A real hands-free unit's audio is clocked by the link, so it
+            # never has more for its controller than the air carries. Here a
+            # late wake of the event loop (15 to 45 ms now and then on
+            # Windows) is caught up in a burst, which filled the controller's
+            # queue of SCO_BUFFERS: a packet was dropped and the tone
+            # BlueCaster records jumped. So wait while the queue is full; the
+            # tone goes on where it was.
+            q = self.controller.sco_queues.get(handle) if self.controller is not None else None
+            if q is not None and len(q) >= SCO_BUFFERS:
+                self.tx_waits += 1
+                due = loop.time() + period
+                await asyncio.sleep(period)
+                continue
             if cvsd:
                 samples = [int(8000 * math.sin(2 * math.pi * TX_TONE_HZ * (phase + i) / CVSD_RATE))
                            for i in range(SCO_PACKET_LENGTH // 2)]
@@ -498,7 +515,8 @@ class HfSide:
     def report(self):
         status = ' '.join(f'{k}:{v}' for k, v in sorted(self.rx_status.items()))
         print(f'HFP rx: {self.rx_packets} packets {self.rx_bytes} bytes codec {CODEC_NAMES.get(self.codec)} '
-              f'status {status or "-"} tone {self.verdict()} | tx: {self.tx_packets} packets', flush=True)
+              f'status {status or "-"} tone {self.verdict()} | tx: {self.tx_packets} packets, '
+              f'{self.tx_waits} waits', flush=True)
 
     async def report_loop(self):
         while True:

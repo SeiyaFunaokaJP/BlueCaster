@@ -95,6 +95,9 @@ pub enum Source {
     /// HID host events (HCI_EVENT_HID_META: connections, descriptors and
     /// input reports), after [`Stack::hid_host_init`]
     Hid,
+    /// LE credit based channels ([`Stack::cbm_connect`]): channel opened,
+    /// SDU sent, channel closed (L2CAP_EVENT_*)
+    L2capCbm,
 }
 
 impl Source {
@@ -115,6 +118,7 @@ impl Source {
             13 => Source::SdpServices,
             14 => Source::Sco,
             15 => Source::Hid,
+            16 => Source::L2capCbm,
             _ => Source::Hci,
         }
     }

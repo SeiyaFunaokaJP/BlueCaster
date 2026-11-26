@@ -89,7 +89,7 @@ BlueCaster 能把你的蓝牙适配器变成 Hi-Fi 音频发射器，通过 **LD
 | 组件 | Windows 10 (x64 / ARM64) | Windows 11 (x64 / ARM64) | Linux (Ubuntu) |
 |:----------|:----------------:|:----------------:|:--------------:|
 | **BlueCaster**（窗口、托盘、CLI） | ✅（尚未在实机上试用） | ✅ | ❌ |
-| [从源代码构建](building)（Rust、Visual Studio 2022+、Node.js） | ✅ | ✅ | ❌ |
+| [从源代码构建](building)（Rust、Visual Studio 2022+） | ✅ | ✅ | ❌ |
 | `bluecaster_decode`（流检查工具） | ✅ | ✅ | ❌ |
 | 端到端测试 `tools/emu/run_test.py` | ✅ | ✅ | ❌ |
 | 虚拟适配器 `tools/emu/emu_vhci.py` | ❌ | ❌ | ✅ |

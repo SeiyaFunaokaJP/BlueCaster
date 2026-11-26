@@ -24,8 +24,8 @@
 
 use crate::defs::{
     CFG_CHANNEL_ALLOCATION, CFG_FRAME_DURATION, CFG_OCTETS_PER_FRAME, CFG_SAMPLING_FREQUENCY, CODING_FORMAT_LC3,
-    CONTEXT_MEDIA, LOCATION_FRONT_LEFT, LOCATION_FRONT_RIGHT, LOCATION_MONO, META_STREAMING_CONTEXTS, PHY_2M,
-    TARGET_LATENCY_HIGH_RELIABILITY, sf_hz_to_code,
+    CONTEXT_MEDIA, LOCATION_BACK_LEFT, LOCATION_BACK_RIGHT, LOCATION_FRONT_LEFT, LOCATION_FRONT_RIGHT, LOCATION_MONO,
+    META_STREAMING_CONTEXTS, PHY_2M, TARGET_LATENCY_HIGH_RELIABILITY, sf_hz_to_code,
 };
 use crate::ltv;
 use crate::plan::{ChannelPlan, ChannelSource, CisPlan, StreamPlan};
@@ -53,6 +53,9 @@ pub const PBP_HIGH_QUALITY: u8 = 0x04;
 pub const DEFAULT_PRESET: &str = "48_4_2";
 /// PBP standard quality
 pub const STANDARD_PRESET: &str = "24_2_2";
+/// Between the two (32 kHz, no PBP quality): the most four BIS in one BIG
+/// on the BT600 take without losing SDUs (48 kHz: about 60 % lost)
+pub const MID_PRESET: &str = "32_2_2";
 
 /// Broadcast Name: 4 to 32 octets of UTF-8 (PBP)
 pub const NAME_MIN: usize = 4;
@@ -128,12 +131,46 @@ struct LayoutBroadcast {
     suffix: Option<&'static str>,
     /// Its number of BIS
     bis: usize,
-    /// A subgroup per BIS (labelled by Program_Info), else one for all
-    subgroups: bool,
+    /// BIS per subgroup of its BASE (each labelled by Program_Info); 0:
+    /// one subgroup for all
+    subgroup_size: usize,
 }
 
-const fn broadcast(suffix: Option<&'static str>, bis: usize, subgroups: bool) -> LayoutBroadcast {
-    LayoutBroadcast { suffix, bis, subgroups }
+/// A broadcast of `bis` BIS, a subgroup per BIS (`per_bis`) or one for all
+const fn broadcast(suffix: Option<&'static str>, bis: usize, per_bis: bool) -> LayoutBroadcast {
+    LayoutBroadcast { suffix, bis, subgroup_size: if per_bis { 1 } else { 0 } }
+}
+
+/// How the four outputs of [`BroadcastLayout::Single`] are laid out in its
+/// one BIG (for trying receivers: which they take, and how)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SingleMode {
+    /// One subgroup: FL FR, the rear without a location (mono, which a
+    /// speaker of any location takes). Four mono receivers, or a stereo
+    /// one on the front.
+    #[default]
+    RearMono,
+    /// One subgroup: FL FR BL BR (a receiver whose sink locations are FL
+    /// FR, as a HomeBuddy's, takes no BL / BR BIS)
+    Located,
+    /// Two subgroups of FL FR, front then rear: a stereo receiver each
+    Pairs,
+    /// Four subgroups of one BIS, each labelled, without a location
+    PerBis,
+}
+
+impl SingleMode {
+    pub const ALL: [SingleMode; 4] = [SingleMode::RearMono, SingleMode::Located, SingleMode::Pairs, SingleMode::PerBis];
+
+    /// The layout's name: "single" + this
+    fn suffix(self) -> &'static str {
+        match self {
+            SingleMode::RearMono => "",
+            SingleMode::Located => "_located",
+            SingleMode::Pairs => "_pairs",
+            SingleMode::PerBis => "_per_bis",
+        }
+    }
 }
 
 /// How a pair of matrix outputs (front FL FR, rear RL RR) is sent
@@ -226,6 +263,18 @@ pub enum BroadcastLayout {
     /// RR) each sent as its [`PairMode`] says (not both off). The BT600
     /// runs two BIGs at most ([`BroadcastLayout::bigs`]).
     Matrix { front: PairMode, rear: PairMode },
+    /// The matrix mixer's four outputs as one broadcast (one BIG, one
+    /// subgroup) of four BIS: Front Left / Right, then the rear without a
+    /// location. For receivers an Auracast assistant tells their BIS (BASS
+    /// BIS_Sync); a stereo receiver left to itself takes the front by its
+    /// locations. Receivers pick BIS by location too: a HomeBuddy told BIS
+    /// 1 played every Front Left BIS, and one told BIS 3 located Back Left
+    /// took none (its sink locations are FL FR), so the rear BIS carry no
+    /// Audio_Channel_Allocation (mono, which a speaker of any location
+    /// takes).
+    /// One BIG: the BT600 loses SDUs once two BIGs' events meet. The
+    /// other ways to lay them out are [`SingleMode`]'s.
+    Single(SingleMode),
 }
 
 impl BroadcastLayout {
@@ -253,8 +302,9 @@ impl BroadcastLayout {
     ];
 
     /// The forms [`BroadcastLayout::parse`] takes, for an error message
-    pub const NAMES: &'static str = "stereo, mono, split, matrix_<front>_<rear> (each stereo, separate, subgroups \
-                                      or off), quad, front_rear, pairs, rear_subgroups, subgroups";
+    pub const NAMES: &'static str = "stereo, mono, split, single, single_located, single_pairs, single_per_bis, \
+                                      matrix_<front>_<rear> (each stereo, separate, subgroups or off), quad, \
+                                      front_rear, pairs, rear_subgroups, subgroups";
 
     /// The name in the API and on the command line
     pub fn as_str(self) -> String {
@@ -262,6 +312,7 @@ impl BroadcastLayout {
             BroadcastLayout::Stereo => "stereo".into(),
             BroadcastLayout::Mono => "mono".into(),
             BroadcastLayout::Split => "split".into(),
+            BroadcastLayout::Single(m) => format!("single{}", m.suffix()),
             BroadcastLayout::Matrix { front, rear } => format!("matrix_{}_{}", front.as_str(), rear.as_str()),
         }
     }
@@ -276,6 +327,9 @@ impl BroadcastLayout {
             "split" => return Some(BroadcastLayout::Split),
             _ => {}
         }
+        if let Some(m) = SingleMode::ALL.iter().find(|m| s == format!("single{}", m.suffix())) {
+            return Some(BroadcastLayout::Single(*m));
+        }
         if let Some((_, l)) = BroadcastLayout::ALIASES.iter().find(|(n, _)| *n == s) {
             return Some(*l);
         }
@@ -286,6 +340,12 @@ impl BroadcastLayout {
 
     /// Fed by the matrix mixer (else the fixed stereo / mono downmix)
     pub fn is_matrix(self) -> bool {
+        matches!(self, BroadcastLayout::Matrix { .. } | BroadcastLayout::Single(_))
+    }
+
+    /// Whose rear may run at a configuration of its own (a broadcast of
+    /// its own): a [`BroadcastLayout::Matrix`]
+    fn rear_apart(self) -> bool {
         matches!(self, BroadcastLayout::Matrix { .. })
     }
 
@@ -302,6 +362,18 @@ impl BroadcastLayout {
                 vec![(MONO, Left), (MONO, Right)],
                 vec![broadcast(Some("L"), 1, false), broadcast(Some("R"), 1, false)],
             ),
+            BroadcastLayout::Single(m) => {
+                let (fl, fr, bl, br, size) = match m {
+                    SingleMode::RearMono => (FL, FR, MONO, MONO, 0),
+                    SingleMode::Located => (FL, FR, LOCATION_BACK_LEFT, LOCATION_BACK_RIGHT, 0),
+                    SingleMode::Pairs => (FL, FR, FL, FR, 2),
+                    SingleMode::PerBis => (MONO, MONO, MONO, MONO, 1),
+                };
+                (
+                    vec![(fl, Left), (fr, Right), (bl, RearLeft), (br, RearRight)],
+                    vec![LayoutBroadcast { suffix: None, bis: 4, subgroup_size: size }],
+                )
+            }
             BroadcastLayout::Matrix { front, rear } => {
                 let (mut bis, mut broadcasts) = (Vec::new(), Vec::new());
                 front.spec((Left, Right), "Front", ("FL", "FR"), &mut bis, &mut broadcasts);
@@ -319,6 +391,21 @@ impl BroadcastLayout {
     /// Broadcasts (BIGs, advertising sets)
     pub fn broadcasts(self) -> usize {
         self.spec().1.len()
+    }
+
+    /// Each BIS: its broadcast (0-based, as [`groups`] lists them), its
+    /// index in that broadcast's BIG (1-based, as BIS_Sync counts) and the
+    /// output it carries; what an Auracast assistant tells a receiver
+    pub fn bis_map(self) -> Vec<(usize, u8, ChannelSource)> {
+        let (bis, broadcasts) = self.spec();
+        let mut sources = bis.into_iter().map(|(_, s)| s);
+        let mut out = Vec::new();
+        for (g, b) in broadcasts.iter().enumerate() {
+            for i in 0..b.bis {
+                out.extend(sources.next().map(|s| (g, i as u8 + 1, s)));
+            }
+        }
+        out
     }
 }
 
@@ -339,8 +426,9 @@ pub struct BroadcastGroup {
     pub broadcast_id: u32,
     /// Its BIS: these entries of the plan's `cis`, in BIS order
     pub bis: std::ops::Range<usize>,
-    /// A subgroup per BIS in its BASE (labelled by Program_Info), else one
-    pub subgroup_per_bis: bool,
+    /// BIS per subgroup of its BASE (each labelled by Program_Info); 0:
+    /// one subgroup for all
+    pub subgroup_size: usize,
 }
 
 /// The broadcasts of a configuration, in order: BIG 0, 1, ..., SID 1, 2,
@@ -353,7 +441,7 @@ pub fn groups(config: &BroadcastConfig) -> Vec<BroadcastGroup> {
         .1
         .iter()
         .enumerate()
-        .map(|(i, &LayoutBroadcast { suffix, bis: n, subgroups })| {
+        .map(|(i, &LayoutBroadcast { suffix, bis: n, subgroup_size })| {
             let g = BroadcastGroup {
                 big_handle: BIG_HANDLE + i as u8,
                 sid: ADV_SID + i as u8,
@@ -362,12 +450,38 @@ pub fn groups(config: &BroadcastConfig) -> Vec<BroadcastGroup> {
                 // ID) 1
                 broadcast_id: config.broadcast_id.wrapping_add(i as u32).wrapping_sub(1) % 0x00FF_FFFE + 1,
                 bis: first..first + n,
-                subgroup_per_bis: subgroups,
+                subgroup_size,
             };
             first += n;
             g
         })
         .collect()
+}
+
+impl BroadcastGroup {
+    /// The address its advertising set uses, as btstack-sys' shim sets it
+    /// (`bluecaster_broadcast_advertise`): the public one for BIG 0, for
+    /// every other a static random address of its own derived from it.
+    /// (address most significant byte first, random)
+    pub fn advertiser_address(&self, public: [u8; 6]) -> ([u8; 6], bool) {
+        let null = public == [0; 6];
+        if !null && self.big_handle == 0 {
+            return (public, false);
+        }
+        let mut a = if null { [0xC2, 0xA2, 0xD0, 0x00, 0x00, 0x01] } else { public };
+        a[0] |= 0xC0;
+        a[5] ^= 0x5Au8.wrapping_add(self.big_handle);
+        (a, true)
+    }
+
+    /// The BIS of each subgroup of its BASE, as BIS_Sync bit masks (bit n:
+    /// BIS index n + 1): one subgroup with all, or one per
+    /// [`BroadcastGroup::subgroup_size`] BIS
+    pub fn subgroup_bis(&self) -> Vec<u32> {
+        let n = self.bis.len().min(31);
+        let size = if self.subgroup_size == 0 { n.max(1) } else { self.subgroup_size };
+        (0..n).step_by(size).map(|first| (first..(first + size).min(n)).fold(0, |m, i| m | 1 << i)).collect()
+    }
 }
 
 /// `name` + " " + `suffix` within [`NAME_MAX`] octets (the name cut at a
@@ -444,7 +558,7 @@ pub fn group_preset<'a>(config: &'a BroadcastConfig, group: &BroadcastGroup) -> 
     let (channels, _) = config.layout.spec();
     let rear = channels.get(group.bis.clone()).is_some_and(|c| c.iter().any(|&(_, s)| s.is_rear()));
     match &config.rear_preset {
-        Some(r) if rear && config.layout.is_matrix() => r,
+        Some(r) if rear && config.layout.rear_apart() => r,
         _ => &config.preset,
     }
 }
@@ -517,7 +631,7 @@ pub fn plan(config: &BroadcastConfig) -> StreamPlan {
         p
     };
     // The rear's own configuration, when it differs (a matrix layout)
-    let rear = config.rear_preset.as_ref().filter(|r| **r != config.preset && config.layout.is_matrix()).map(held);
+    let rear = config.rear_preset.as_ref().filter(|r| **r != config.preset && config.layout.rear_apart()).map(held);
     let mut cis = Vec::with_capacity(channels.len());
     for g in groups(config) {
         for (i, &(allocation, source)) in channels[g.bis].iter().enumerate() {
@@ -585,14 +699,20 @@ pub fn describe(plan: &StreamPlan) -> String {
 /// with the plan's codec configuration and Media as Streaming Audio
 /// Contexts, then each BIS with its channel allocation (none for mono)
 pub fn base(plan: &StreamPlan) -> Vec<u8> {
-    base_with(plan, false)
+    base_with(plan, 0)
 }
 
 /// Metadata type Program_Info (UTF-8, a subgroup's label)
 pub const META_PROGRAM_INFO: u8 = 0x03;
 
-/// A subgroup's label: the speaker its BIS carries
-fn program_info(source: ChannelSource) -> &'static str {
+/// A subgroup's label: the speaker its BIS carries, or (`pair`) the pair
+fn program_info(source: ChannelSource, pair: bool) -> &'static str {
+    if pair {
+        return match source {
+            ChannelSource::RearLeft | ChannelSource::RearRight => "Rear",
+            _ => "Front",
+        };
+    }
     match source {
         ChannelSource::Left => "Front left",
         ChannelSource::Right => "Front right",
@@ -602,9 +722,9 @@ fn program_info(source: ChannelSource) -> &'static str {
     }
 }
 
-/// The BASE, with all BIS in one subgroup or (`subgroup_per_bis`) each
-/// in a subgroup of its own, labelled by Program_Info
-pub fn base_with(plan: &StreamPlan, subgroup_per_bis: bool) -> Vec<u8> {
+/// The BASE, with all BIS in one subgroup (`subgroup_size` 0) or in
+/// subgroups of `subgroup_size` BIS, each labelled by Program_Info
+pub fn base_with(plan: &StreamPlan, subgroup_size: usize) -> Vec<u8> {
     let p = &plan.preset;
     let mut out = Vec::new();
     out.extend_from_slice(&plan.presentation_delay_us.to_le_bytes()[..3]);
@@ -612,7 +732,8 @@ pub fn base_with(plan: &StreamPlan, subgroup_per_bis: bool) -> Vec<u8> {
     ltv::put(&mut config, CFG_SAMPLING_FREQUENCY, &[sf_hz_to_code(p.sampling_hz)]);
     ltv::put(&mut config, CFG_FRAME_DURATION, &[if p.frame_us == 7500 { 0x00 } else { 0x01 }]);
     ltv::put(&mut config, CFG_OCTETS_PER_FRAME, &p.octets.to_le_bytes());
-    let subgroups: Vec<&[CisPlan]> = if subgroup_per_bis { plan.cis.chunks(1).collect() } else { vec![&plan.cis[..]] };
+    let subgroups: Vec<&[CisPlan]> =
+        if subgroup_size > 0 { plan.cis.chunks(subgroup_size).collect() } else { vec![&plan.cis[..]] };
     out.push(subgroups.len() as u8);
     for bises in subgroups {
         out.push(bises.len() as u8);
@@ -621,9 +742,9 @@ pub fn base_with(plan: &StreamPlan, subgroup_per_bis: bool) -> Vec<u8> {
         out.extend_from_slice(&config);
         let mut metadata = Vec::new();
         ltv::put(&mut metadata, META_STREAMING_CONTEXTS, &plan.contexts.to_le_bytes());
-        if subgroup_per_bis {
+        if subgroup_size > 0 {
             let source = bises[0].channels.first().map_or(ChannelSource::Mono, |c| c.source);
-            ltv::put(&mut metadata, META_PROGRAM_INFO, program_info(source).as_bytes());
+            ltv::put(&mut metadata, META_PROGRAM_INFO, program_info(source, subgroup_size > 1).as_bytes());
         }
         out.push(metadata.len() as u8);
         out.extend_from_slice(&metadata);
@@ -644,7 +765,7 @@ pub fn base_with(plan: &StreamPlan, subgroup_per_bis: bool) -> Vec<u8> {
 /// The periodic advertising data of one broadcast of `plan`: its BASE
 pub fn group_base_ad(plan: &StreamPlan, group: &BroadcastGroup) -> Vec<u8> {
     let mut v = UUID_BASIC_AUDIO_ANNOUNCEMENT.to_le_bytes().to_vec();
-    v.extend_from_slice(&base_with(&group_plan(plan, group), group.subgroup_per_bis));
+    v.extend_from_slice(&base_with(&group_plan(plan, group), group.subgroup_size));
     let mut out = Vec::new();
     put_ad(&mut out, AD_SERVICE_DATA_UUID16, &v);
     out
@@ -678,6 +799,7 @@ mod tests {
     #[test]
     fn layouts_by_name() {
         let mut all = vec![BroadcastLayout::Stereo, BroadcastLayout::Mono, BroadcastLayout::Split];
+        all.extend(SingleMode::ALL.map(BroadcastLayout::Single));
         for front in PairMode::ALL {
             for rear in PairMode::ALL {
                 if (front, rear) != (PairMode::Off, PairMode::Off) {
@@ -701,6 +823,7 @@ mod tests {
             BroadcastLayout::Stereo,
             BroadcastLayout::Mono,
             BroadcastLayout::Split,
+            BroadcastLayout::Single(SingleMode::RearMono),
             BroadcastLayout::QUAD,
             BroadcastLayout::FRONT_REAR,
             BroadcastLayout::PAIRS,
@@ -710,7 +833,7 @@ mod tests {
         .iter()
         .map(|l| (l.bis_count(), l.broadcasts()))
         .collect();
-        assert_eq!(counts, [(2, 1), (1, 1), (2, 2), (4, 4), (4, 3), (4, 2), (4, 2), (4, 2)]);
+        assert_eq!(counts, [(2, 1), (1, 1), (2, 2), (4, 1), (4, 4), (4, 3), (4, 2), (4, 2), (4, 2)]);
         // BIGs: as the pair modes add up
         for l in &all {
             if let BroadcastLayout::Matrix { front, rear } = l {
@@ -775,7 +898,7 @@ mod tests {
         assert_eq!(names, [("BlueCaster test RL".to_string(), 0..1), ("BlueCaster test RR".to_string(), 1..2)]);
         c.layout = BroadcastLayout::Matrix { front: PairMode::Subgroups, rear: PairMode::Off };
         let g = groups(&c);
-        assert_eq!((g.len(), g[0].name.as_str(), g[0].subgroup_per_bis), (1, "BlueCaster test Front", true));
+        assert_eq!((g.len(), g[0].name.as_str(), g[0].subgroup_size), (1, "BlueCaster test Front", 1));
     }
 
     #[test]
@@ -795,6 +918,80 @@ mod tests {
             ids,
             [(0, 1, 0x123456, 0..1), (1, 2, 0x123457, 1..2), (2, 3, 0x123458, 2..3), (3, 4, 0x123459, 3..4)]
         );
+    }
+
+    #[test]
+    fn the_bis_an_assistant_tells_of_each_output() {
+        use ChannelSource::*;
+        assert_eq!(BroadcastLayout::Stereo.bis_map(), [(0, 1, Left), (0, 2, Right)]);
+        assert_eq!(BroadcastLayout::Split.bis_map(), [(0, 1, Left), (1, 1, Right)]);
+        assert_eq!(BroadcastLayout::Mono.bis_map(), [(0, 1, Mono)]);
+        let four = [(0, 1, Left), (0, 2, Right), (0, 3, RearLeft), (0, 4, RearRight)];
+        for m in SingleMode::ALL {
+            assert_eq!(BroadcastLayout::Single(m).bis_map(), four, "{m:?}");
+        }
+        assert_eq!(
+            BroadcastLayout::FRONT_REAR.bis_map(),
+            [(0, 1, Left), (0, 2, Right), (1, 1, RearLeft), (2, 1, RearRight)]
+        );
+    }
+
+    #[test]
+    fn single_pairs_are_two_subgroups_of_front_left_and_right() {
+        let mut c = config(true, "32_2_2", None);
+        c.layout = BroadcastLayout::Single(SingleMode::Pairs);
+        let p = plan(&c);
+        let locations: Vec<_> = p.cis.iter().map(|b| b.allocation()).collect();
+        let (fl, fr) = (LOCATION_FRONT_LEFT, LOCATION_FRONT_RIGHT);
+        assert_eq!(locations, [fl, fr, fl, fr]);
+        let g = groups(&c);
+        assert_eq!(g[0].subgroup_bis(), vec![0b0011, 0b1100]);
+        let base = base_with(&group_plan(&p, &g[0]), g[0].subgroup_size);
+        assert_eq!(base[3], 2);
+        let found = |s: &str| base.windows(s.len()).filter(|w| *w == s.as_bytes()).count();
+        assert_eq!((found("Front"), found("Rear")), (1, 1));
+        // Located: one subgroup, the rear Back Left / Right; per BIS: four
+        // subgroups, none located
+        c.layout = BroadcastLayout::Single(SingleMode::Located);
+        let locations: Vec<_> = plan(&c).cis.iter().map(|b| b.allocation()).collect();
+        assert_eq!(locations, [fl, fr, LOCATION_BACK_LEFT, LOCATION_BACK_RIGHT]);
+        assert_eq!(groups(&c)[0].subgroup_bis(), vec![0b1111]);
+        c.layout = BroadcastLayout::Single(SingleMode::PerBis);
+        assert!(plan(&c).cis.iter().all(|b| b.allocation() == 0));
+        assert_eq!(groups(&c)[0].subgroup_bis(), vec![1, 2, 4, 8]);
+    }
+
+    #[test]
+    fn single_is_one_broadcast_of_the_four_outputs() {
+        let mut c = config(true, "48_4_2", None);
+        c.layout = BroadcastLayout::Single(SingleMode::RearMono);
+        // One configuration for its one BIG: a rear preset is not used
+        c.rear_preset = find_preset("24_2_2");
+        let p = plan(&c);
+        use ChannelSource::*;
+        let sources: Vec<_> = p.cis.iter().map(|b| (b.cis_id, b.allocation(), b.channels[0].source)).collect();
+        assert_eq!(
+            sources,
+            [
+                (1, LOCATION_FRONT_LEFT, Left),
+                (2, LOCATION_FRONT_RIGHT, Right),
+                (3, LOCATION_MONO, RearLeft),
+                (4, LOCATION_MONO, RearRight)
+            ]
+        );
+        assert!(p.cis.iter().all(|b| b.preset.is_none()));
+        assert_eq!((p.preset.sampling_hz, p.preset.rtn), (48000, RTN_MANY_BIS));
+        let g = groups(&c);
+        assert_eq!(g.len(), 1);
+        assert_eq!(
+            (g[0].name.as_str(), g[0].bis.clone(), g[0].subgroup_bis()),
+            ("BlueCaster test", 0..4, vec![0b1111])
+        );
+        assert_eq!(group_preset(&c, &g[0]).name, "48_4_2");
+        // The BASE: one subgroup of four BIS
+        let base = group_base_ad(&p, &g[0]);
+        let b = &base[4..];
+        assert_eq!((b[3], b[4]), (1, 4));
     }
 
     #[test]
@@ -825,14 +1022,14 @@ mod tests {
         c.layout = BroadcastLayout::REAR_SUBGROUPS;
         let p = plan(&c);
         let g = groups(&c);
-        let names: Vec<_> = g.iter().map(|g| (g.name.as_str(), g.bis.clone(), g.subgroup_per_bis)).collect();
-        assert_eq!(names, [("BlueCaster test Front", 0..2, false), ("BlueCaster test Rear", 2..4, true)]);
+        let names: Vec<_> = g.iter().map(|g| (g.name.as_str(), g.bis.clone(), g.subgroup_size)).collect();
+        assert_eq!(names, [("BlueCaster test Front", 0..2, 0), ("BlueCaster test Rear", 2..4, 1)]);
         // The front: one subgroup of two BIS, as before
-        let front = base_with(&group_plan(&p, &g[0]), g[0].subgroup_per_bis);
+        let front = base_with(&group_plan(&p, &g[0]), g[0].subgroup_size);
         assert_eq!(front, base(&group_plan(&p, &g[0])));
         assert_eq!(front[3..5], [1, 2]);
         // The rear: two subgroups of one BIS (index 1 and 2), each labelled
-        let rear = base_with(&group_plan(&p, &g[1]), true);
+        let rear = base_with(&group_plan(&p, &g[1]), 1);
         assert_eq!(rear[3], 2);
         let label = |s: &str| {
             let mut v = vec![s.len() as u8 + 1, META_PROGRAM_INFO];
@@ -854,9 +1051,9 @@ mod tests {
         c.layout = BroadcastLayout::SUBGROUPS;
         let p = plan(&c);
         let g = groups(&c);
-        assert!(g.iter().all(|g| g.subgroup_per_bis));
+        assert!(g.iter().all(|g| g.subgroup_size == 1));
         assert!(p.cis.iter().all(|b| b.allocation() == 0));
-        let front = base_with(&group_plan(&p, &g[0]), true);
+        let front = base_with(&group_plan(&p, &g[0]), 1);
         assert_eq!(front[3], 2);
         let found = |b: &[u8], s: &str| b.windows(s.len()).any(|w| w == s.as_bytes());
         assert!(found(&front, "Front left") && found(&front, "Front right") && !found(&front, "Rear"));
@@ -1007,6 +1204,25 @@ mod tests {
         let base = super::base(&mono);
         assert_eq!(base[4], 1);
         assert_eq!(base[base.len() - 2..], [1, 0]); // BIS 1, no allocation
+    }
+
+    #[test]
+    fn the_advertiser_address_and_subgroups_of_a_broadcast() {
+        let g = |big_handle, n, subgroup_size| BroadcastGroup {
+            big_handle,
+            sid: 1 + big_handle,
+            name: String::new(),
+            broadcast_id: 1,
+            bis: 0..n,
+            subgroup_size,
+        };
+        let public = [0x00, 0x1A, 0x7D, 0xDA, 0x71, 0x13];
+        assert_eq!(g(0, 2, 0).advertiser_address(public), (public, false));
+        assert_eq!(g(1, 1, 0).advertiser_address(public), ([0xC0, 0x1A, 0x7D, 0xDA, 0x71, 0x13 ^ 0x5B], true));
+        assert_eq!(g(0, 1, 0).advertiser_address([0; 6]), ([0xC2, 0xA2, 0xD0, 0, 0, 0x01 ^ 0x5A], true));
+        assert_eq!(g(0, 2, 0).subgroup_bis(), vec![0b11]);
+        assert_eq!(g(0, 2, 1).subgroup_bis(), vec![0b01, 0b10]);
+        assert_eq!(g(0, 4, 2).subgroup_bis(), vec![0b0011, 0b1100]);
     }
 
     #[test]

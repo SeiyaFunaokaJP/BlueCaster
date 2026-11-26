@@ -4,8 +4,8 @@
 ; Built by installer/build-release.ps1 from the unpacked portable package, so
 ; both contain the same files:
 ;   ISCC /DAppVersion=<ver> /DAppVersionNumeric=<x.y.z> /DArch=<x64|arm64>
-;        /DPkgDir=<dir> /DWebView2Setup=<MicrosoftEdgeWebview2Setup.exe>
-;        /DOutputDir=<dir> /DOutputBaseFilename=<name> BlueCaster.iss
+;        /DPkgDir=<dir> /DOutputDir=<dir> /DOutputBaseFilename=<name>
+;        BlueCaster.iss
 ;
 ; Until 2.0.x the app was "A2DP Windows Bridge" (A2DPWB). 3.0.0 is BlueCaster,
 ; with an AppId of its own: the earlier versions are uninstalled first, and
@@ -38,7 +38,6 @@
 ;     uninstaller deletes it). An A2DPWB value pointing anywhere else stays;
 ;   - the old shortcuts ("A2DP Windows Bridge") are deleted, and made again as
 ;     BlueCaster when the old ones were there;
-;   - the WebView2 Runtime is installed where it is missing;
 ;   - a new installation asks for the language (AskLanguage, preselected from
 ;     the language chosen for 2.0.x, else from the Windows display language);
 ;     an update of this installation uses the one chosen before without asking
@@ -59,8 +58,9 @@
 ;     older than the app, which asks for the update itself.
 ; Uninstall: a page of the uninstall wizard asks whether the adapters BlueCaster
 ; put on WinUSB go back to Windows (one UAC prompt) and whether
-; %APPDATA%\BlueCaster (settings, codecs, pairings, firmware) and the window's
-; own data (%LOCALAPPDATA%\io.github.seiyafunaokajp.bluecaster) are deleted,
+; %APPDATA%\BlueCaster (settings, codecs, pairings, firmware) and what the
+; WebView2 window of 3.0.4 and earlier left
+; (%LOCALAPPDATA%\io.github.seiyafunaokajp.bluecaster) are deleted,
 ; both on by default (InitializeUninstallProgressForm), with what 2.0.x may
 ; have left of them (%APPDATA%\A2DPWB, %LOCALAPPDATA%\io.github.seiyafunaokajp.a2dpwb);
 ; the core is closed; the Run value is removed when it points at this
@@ -87,8 +87,9 @@
 ; after 3.0.0, once nobody updates from 2.0.x any more.
 ;
 ; Command line, besides Inno Setup's own (/SILENT, /VERYSILENT, /DIR=, ...):
-;   /UPDATE  the in-app update (app/src/ui/src-tauri/src/update.rs): starts
-;            bluecaster.exe again when done;
+;   /UPDATE  the in-app update (app/src/crates/ui-host/src/update.rs, with
+;            /SILENT /NORESTART; 3.0.4 and earlier: tauri-plugin-updater,
+;            the same arguments): starts bluecaster.exe again when done;
 ;   /P       NSIS's passive mode, which the updater of 2.0.2-beta.5 and
 ;            earlier passes: no pages, only the progress (like /SILENT);
 ;   /KEEPV1  leaves an installed v1, a running v1 and the Run value alone
@@ -114,9 +115,6 @@
 #ifndef PkgDir
   #error PkgDir is not defined
 #endif
-#ifndef WebView2Setup
-  #error WebView2Setup is not defined
-#endif
 #ifndef OutputDir
   #define OutputDir "."
 #endif
@@ -128,10 +126,12 @@
 #define AppExe "bluecaster.exe"
 #define CoreExe "bluecaster-core.exe"
 #define DriverExe "bluecaster-driver.exe"
-; tauri.conf.json's identifier: the windows' notifications and taskbar
-; button belong to the shortcut with this AppUserModelID
+; The window's identifier (ui-host single_instance::IDENTIFIER, Tauri's
+; identifier up to 3.0.4): the windows' notifications and taskbar button
+; belong to the shortcut with this AppUserModelID
 #define AppUserModelId "io.github.seiyafunaokajp.bluecaster"
-; Tauri's identifier: the window's WebView2 data is in %LOCALAPPDATA%\<this>
+; The same identifier: the WebView2 window of 3.0.4 and earlier kept its data
+; in %LOCALAPPDATA%\<this> (removed with the user data on uninstall)
 #define AppIdentifier "io.github.seiyafunaokajp.bluecaster"
 ; AppId without its braces (BlueCaster 3.0.0 and later; 2.0.x's is OldV2Guid)
 #define AppGuid "C7A109ED-F618-4214-8186-E4472C3BDD10"
@@ -178,7 +178,7 @@ MinVersion=10.0
 CloseApplications=yes
 RestartApplications=no
 LicenseFile={#PkgDir}\licenses\bluecaster\LICENSE
-SetupIconFile=..\app\src\ui\src-tauri\icons\icon.ico
+SetupIconFile=..\app\resources\app.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 WizardStyle=modern
@@ -406,17 +406,6 @@ zhtw.RestoreFailed=無法將介面卡完全交還給 Windows：介面卡可能�
 uk.RestoreFailed=Не вдалося повністю повернути адаптер до Windows: можливо, його від'єднано або Windows знову вибрала WinUSB. Під'єднайте адаптер, клацніть його правою кнопкою в диспетчері пристроїв, виберіть «Видалити пристрій», потім від'єднайте й під'єднайте його знову (див. «Вручну в диспетчері пристроїв» у посібнику з налаштування).
 ru.RestoreFailed=Не удалось полностью вернуть адаптер в Windows: возможно, он отключён или Windows снова выбрала WinUSB. Подключите адаптер, щёлкните его правой кнопкой в диспетчере устройств, выберите «Удалить устройство», затем отключите и снова подключите его (см. «Вручную в диспетчере устройств» в руководстве по настройке).
 
-en.InstallingWebView2=Installing the Microsoft Edge WebView2 Runtime...
-ja.InstallingWebView2=Microsoft Edge WebView2 ランタイムをインストールしています...
-de.InstallingWebView2=Die Microsoft Edge WebView2-Runtime wird installiert...
-fr.InstallingWebView2=Installation du runtime Microsoft Edge WebView2...
-es.InstallingWebView2=Instalando el runtime de Microsoft Edge WebView2...
-ko.InstallingWebView2=Microsoft Edge WebView2 런타임을 설치하는 중...
-zhcn.InstallingWebView2=正在安装 Microsoft Edge WebView2 运行时...
-zhtw.InstallingWebView2=正在安裝 Microsoft Edge WebView2 執行階段...
-uk.InstallingWebView2=Встановлення Microsoft Edge WebView2 Runtime...
-ru.InstallingWebView2=Установка Microsoft Edge WebView2 Runtime...
-
 ; The Start Menu task, beside Setup's own CreateDesktopIcon (worded as each
 ; language's CreateDesktopIcon)
 en.CreateStartMenuIcon=Create a &Start Menu shortcut
@@ -634,8 +623,6 @@ Name: "{app}\licenses"; Flags: uninsalwaysuninstall
 
 [Files]
 Source: "{#PkgDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-; Run only where WebView2 is missing (InstallWebView2)
-Source: "{#WebView2Setup}"; Flags: dontcopy
 
 [InstallDelete]
 ; The shortcuts of A2DP Windows Bridge 2.0.x, made again under BlueCaster's
@@ -669,8 +656,8 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; AppUserModelID: "
 Root: HKCU; Subkey: "Software\BlueCaster"; ValueType: string; ValueName: "SetupLanguage"; ValueData: "{code:SetupLanguage}"; Flags: uninsdeletevalue uninsdeletekeyifempty
 
 [Run]
-; The core (or, after an update, the window) is started in CurStepChanged,
-; after InstallWebView2: [Run] comes before ssPostInstall
+; The core (or, after an update, the window) is started in CurStepChanged
+; (ssPostInstall), after the Run value and the old registry values are done
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent; Check: not IsUpdate
 
 [Code]
@@ -701,11 +688,11 @@ const
   NsisManuKey = 'Software\Seiya Funaoka';
   NsisProductKey = 'Software\Seiya Funaoka\A2DP Windows Bridge';
   { The core's (ipc::core_mutex_name, without a BLUECASTER_INSTANCE suffix)
-    and the window's (tauri-plugin-single-instance: <identifier>-sim), and
+    and the window's (ui-host single_instance.rs: <identifier>-sim, the name
+    tauri-plugin-single-instance gave the window of 3.0.4 and earlier), and
     those of 2.0.x }
   CoreMutex = 'Local\BlueCaster_Core';
   AppMutexes = 'Local\BlueCaster_Core,Local\A2DPWB_v2_Core,{#AppUserModelId}-sim,io.github.seiyafunaokajp.a2dpwb-sim';
-  WebView2Key = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
   { VB-Audio's virtual audio drivers (RemoveCables). VB-CABLE's setup
     registers itself here (64-bit view); the key gone after its removal
     counts as removed. The Hi-Fi Cable comes with ASIO Bridge (its key in the
@@ -1200,30 +1187,6 @@ begin
     RunPointsInto(Cmd, ExpandConstant('{app}'), Exes);
 end;
 
-function WebView2Present: Boolean;
-var
-  Version: String;
-begin
-  Result := (RegQueryStringValue(HKLM32, WebView2Key, 'pv', Version) and (Version <> '') and (Version <> '0.0.0.0')) or
-            (RegQueryStringValue(HKCU, WebView2Key, 'pv', Version) and (Version <> '') and (Version <> '0.0.0.0'));
-end;
-
-{ The Evergreen bootstrapper: it downloads the runtime and asks for
-  administrator rights itself }
-procedure InstallWebView2;
-var
-  Code: Integer;
-begin
-  if WebView2Present then
-    Exit;
-  WizardForm.StatusLabel.Caption := CustomMessage('InstallingWebView2');
-  ExtractTemporaryFile('MicrosoftEdgeWebview2Setup.exe');
-  if ShellExec('', ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe'), '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, Code) then
-    Log(Format('WebView2 bootstrapper: exit code %d', [Code]))
-  else
-    Log(Format('WebView2 bootstrapper did not start: %s', [SysErrorMessage(Code)]));
-end;
-
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := PassiveMode;
@@ -1481,7 +1444,6 @@ begin
   { 2.0.x's language (now in LanguageKey), unless its uninstaller deleted it }
   RegDeleteValue(HKCU, OldLanguageKey, 'SetupLanguage');
   RegDeleteKeyIfEmpty(HKCU, OldLanguageKey);
-  InstallWebView2;
   { An update starts the window, which starts the core }
   if UpdateMode then
     Exec(ExpandConstant('{app}\{#AppExe}'), '', ExpandConstant('{app}'), SW_SHOWNORMAL, ewNoWait, Code)
@@ -1970,8 +1932,12 @@ begin
       end;
     usPostUninstall:
       begin
-        { With the window's own data (WebView2: what the pages remember,
-          such as "Show only supported codecs", issue #86) }
+        { With what the WebView2 window of 3.0.4 and earlier kept in
+          %LOCALAPPDATA%\<identifier> (EBWebView: its cache and what its
+          pages remembered). The current window keeps nothing there and
+          removes that data itself when it starts (ui-host webview_data.rs);
+          this covers an uninstall before that start, and files that were
+          still in use then. It can go once few users update from 3.0.4. }
         if DeleteData then begin
           DelTree(ExpandConstant('{userappdata}\BlueCaster'), True, True, True);
           DelTree(ExpandConstant('{localappdata}\{#AppIdentifier}'), True, True, True);

@@ -231,7 +231,7 @@ Keep each file's line endings: some source files use CRLF, others LF. Some edito
 
 10. `app/src/core/src/state.rs`, `vendor_note()`: an arm with a new key `firmware.vendor_<vendor>`, taken out of the `MediaTek | Qualcomm` arm, and its test. Before that arm, the function returns `firmware.vendor_unsupported` for chips that `chip_supported` rejects, so the vendor's other chips keep that note. The Adapters screen offers WinUSB to every adapter whose note is not `firmware.vendor_unsupported`
 11. `app/lang/*.json` (all 10 languages, same line in each): the new key, like the Intel one ("Intel adapter. …"). Where it names a button or folder, use that language's own words from the same file (the firmware folder's button is `firmware.open_folder`). Whole vendor: take its name out of `firmware.vendor_unsupported`. Some chips: leave it there, as the vendor's other chips still show that text
-12. `app/src/ui/src/lib/links.ts`: the vendor's firmware page (in `LINKS`, `firmwareUrl()` and `vendorFirmwareUrl()`, like Intel's linux-firmware folder), so the Adapters screen shows where to get the files; tests in `app/src/ui/src/lib/chips.test.ts`. The Adapters screen shows the page only for adapters whose note is not `firmware.vendor_unsupported`, so the vendor's other chips do not get it
+12. `app/src/crates/ui-model/src/links.rs`: the vendor's firmware page (in `LINKS`, `firmware_url()` and `vendor_firmware_url()`, like Intel's linux-firmware folder), so the Adapters screen shows where to get the files; tests in the same file. The Adapters screen shows the page only for adapters whose note is not `firmware.vendor_unsupported`, so the vendor's other chips do not get it
 
 **Docs**:
 
@@ -255,16 +255,7 @@ Then stream to headphones for a while with the window, and check that **Restart 
 
 ## Step 8: Open the pull request
 
-Before opening it, run these checks in order (see [Building](building) for the setup). Start with the UI, in `app\src\ui`: this checks your change from step 6 (item 12), and the Rust workspace includes the window's crate, which needs the built UI:
-
-```bat
-pnpm install
-pnpm build
-pnpm exec tsc --noEmit
-pnpm exec vitest run
-```
-
-Then in the repository root:
+Before opening it, run these checks in the repository root (see [Building](building) for the setup). `cargo test` also checks your change from step 6 (item 12):
 
 ```bat
 cargo fmt --all
@@ -273,11 +264,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 python tools/check_lang.py
 ```
 
-Without Node.js, run the tests and clippy on the three crates above instead (`-p bt-host -p bluecaster-core -p bluecaster-core-exe`), leave the UI checks to the pull request's CI, and say so in the pull request. `pwsh ./build.ps1 -Test` runs everything.
+`pwsh ./build.ps1 -Test` runs everything.
 
 Clippy also checks names: a `State` variant called `PatchState` fails `enum_variant_names`; call it `Patch`. `check_lang.py` may report "long hints left" that were there before your change; only errors and missing keys are yours to fix.
 
-Other places mention MediaTek or Qualcomm as unsupported in passing (the UI's mock data and tests, comments in `Adapter.tsx` and `probe.rs`, the "Not Realtek" choice): leave them as they are.
+Other places mention MediaTek or Qualcomm as unsupported in passing (the UI's tests, comments in `view/adapter.rs` and `probe.rs`, the "Not Realtek" choice): leave them as they are.
 
 In the pull request:
 

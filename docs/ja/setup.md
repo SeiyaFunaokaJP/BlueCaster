@@ -27,8 +27,8 @@ BlueCaster がアダプターに WinUSB ドライバーを割り当てるので�
 
 [リリース](https://github.com/SeiyaFunaokaJP/BlueCaster/releases)はそれぞれ 2 つの形式で配布しています。中のファイルはどちらも同じです。
 
-- **インストーラー版**（`BlueCaster-<バージョン>-win64-setup.exe`、ARM64 では `-arm64-setup.exe`）：管理者権限なしで現在のユーザーにインストールします。スタートメニューの項目（**BlueCaster**）とアンインストーラーを追加し、Microsoft Edge WebView2 ランタイムがなければ一緒にインストールします（Windows 11 には標準で入っています）。更新はアプリから入れられます（**設定 > 更新 > 今すぐ更新**）。プログラムは `%LOCALAPPDATA%\BlueCaster\` に入ります（3 つのプログラム、アンインストーラー、ライセンス文の入った `licenses\` フォルダー）
-- **ポータブル版**（`BlueCaster-<バージョン>-win64-portable.zip`、ARM64 では `-arm64-portable.zip`）：好きな場所に展開して `bluecaster.exe` を実行します。3 つのプログラム（`bluecaster.exe`、`bluecaster-core.exe`、`bluecaster-driver.exe`）は同じフォルダーに置いたままにしてください。ポータブル版は更新を通知するだけです。WebView2 ランタイムが必要です
+- **インストーラー版**（`BlueCaster-<バージョン>-win64-setup.exe`、ARM64 では `-arm64-setup.exe`）：管理者権限なしで現在のユーザーにインストールします。スタートメニューの項目（**BlueCaster**）とアンインストーラーを追加します。更新はアプリから入れられます（**設定 > 更新 > 今すぐ更新**）。プログラムは `%LOCALAPPDATA%\BlueCaster\` に入ります（3 つのプログラム、アンインストーラー、ライセンス文の入った `licenses\` フォルダー）
+- **ポータブル版**（`BlueCaster-<バージョン>-win64-portable.zip`、ARM64 では `-arm64-portable.zip`）：好きな場所に展開して `bluecaster.exe` を実行します。3 つのプログラム（`bluecaster.exe`、`bluecaster-core.exe`、`bluecaster-driver.exe`）は同じフォルダーに置いたままにしてください。ポータブル版は更新を通知するだけです
 
 どちらの形式も設定、プロファイル、リンクキー、ファームウェアを `%APPDATA%\BlueCaster` に保存するので、互いに切り替えられます。アンインストールすると、**ユーザーデータを削除する** をオフにしない限り、このフォルダーも削除されます（サイレント アンインストールでは残ります）。
 

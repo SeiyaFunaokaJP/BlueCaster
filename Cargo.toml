@@ -26,7 +26,10 @@ members = [
     "app/src/crates/session-host",
     "app/src/core",
     "app/src/driver",
-    "app/src/ui/src-tauri",
+    "app/src/ui",
+    "app/src/crates/ui-model",
+    "app/src/crates/ui-host",
+    "tools/sign-update",
 ]
 # Vendored aptX Adaptive encoder: a path dependency of codec, kept out of the
 # workspace (its unit tests read upstream's reference vectors, not vendored).
@@ -34,7 +37,7 @@ members = [
 exclude = ["app/src/crates/aptx-adaptive", "app/src/crates/nusb"]
 
 [workspace.package]
-version = "3.0.4"
+version = "3.0.5-beta.1"
 edition = "2024"
 rust-version = "1.90"
 license = "Apache-2.0 OR MIT"
@@ -63,6 +66,8 @@ hid-input = { path = "app/src/crates/hid-input" }
 input-helper = { path = "app/src/crates/input-helper" }
 pcm-link = { path = "app/src/crates/pcm-link" }
 session-host = { path = "app/src/crates/session-host" }
+ui-model = { path = "app/src/crates/ui-model" }
+ui-host = { path = "app/src/crates/ui-host" }
 
 cc = "1.2"
 tracing = "0.1"

@@ -13,6 +13,8 @@ path = "src/main.rs"
 [dependencies]
 bluecaster-core.workspace = true
 bt-host.workspace = true
+# cli.rs: --le-probe (advertising data, BASS receive states)
+le-audio.workspace = true
 # cli.rs: -u (UsbSelector)
 hci-transport.workspace = true
 codec = { workspace = true, features = ["default"] }

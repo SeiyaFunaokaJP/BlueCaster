@@ -20,7 +20,6 @@ nav_order: 3
 
 - **Rust** (stable, 1.90 oder neuer) über [rustup](https://rustup.rs/)
 - **Visual Studio 2022 oder neuer** (oder dessen Build Tools) mit der Workload „Desktopentwicklung mit C++“, da MSVC die C-Bibliotheken (BTstack, die Codecs) kompiliert
-- **Node.js** 22 und **pnpm** für die Oberfläche (`corepack enable` stellt pnpm bereit)
 - **Git** (für die Submodule)
 - **PowerShell 7** (`pwsh`) für `build.ps1` / `build.bat` (`winget install Microsoft.PowerShell`)
 - **Python 3.11 oder neuer** für die Prüfungen (`tools/check_lang.py`) und den [Emulatortest](#emu)
@@ -34,19 +33,14 @@ cd BlueCaster
 pwsh ./build.ps1
 ```
 
-Oder doppelklicken Sie im Explorer auf `build.bat`. Die Datei führt `build.ps1` aus und wartet am Ende auf einen Tastendruck (`build.bat -Test` reicht Schalter weiter). `build.ps1` prüft zuerst, ob Rust, Node.js, pnpm und die Submodule vorhanden sind, und führt `pnpm install` aus, wenn `node_modules` fehlt. Danach baut es die Seite des Fensters und die drei Programme nach `target/release/`: `bluecaster-core.exe` (der residente Kern: Bluetooth, Audio, Infobereich), `bluecaster.exe` (das Fenster) und `bluecaster-driver.exe` (das Hilfsprogramm mit Administratorrechten, das den WinUSB-Treiber zuweist und wiederherstellt). Lassen Sie alle drei im selben Ordner. `bluecaster-core.exe --cli` streamt ohne das Fenster.
+Oder doppelklicken Sie im Explorer auf `build.bat`. Die Datei führt `build.ps1` aus und wartet am Ende auf einen Tastendruck (`build.bat -Test` reicht Schalter weiter). `build.ps1` prüft zuerst, ob Rust und die Submodule vorhanden sind. Danach baut es die drei Programme nach `target/release/`: `bluecaster-core.exe` (der residente Kern: Bluetooth, Audio, Infobereich), `bluecaster.exe` (das Fenster) und `bluecaster-driver.exe` (das Hilfsprogramm mit Administratorrechten, das den WinUSB-Treiber zuweist und wiederherstellt). Lassen Sie alle drei im selben Ordner. `bluecaster-core.exe --cli` streamt ohne das Fenster.
 
 Schalter: `-Debug` (Dev-Profil, `target/debug/`), `-Test` (führt zusätzlich die Prüfungen unter „Tests“ aus), `-Decoder` (baut zusätzlich das Decoder-Werkzeug), `-Emu` (führt zusätzlich den [Emulatortest](#emu) aus; `-Emu -Codecs sbc,ldac` testet nur diese Codecs), `-Release -Arch x64|arm64` (führt nur das Release-Skript aus, siehe „Release-Pakete“).
 
-**Schritt für Schritt** (das macht `build.ps1`; die Seite des Fensters muss vor `bluecaster.exe` gebaut werden, weil `bluecaster.exe` sie einbettet):
+**Ohne das Skript** (das führt `build.ps1` aus):
 
 ```bash
-cargo build --release -p bluecaster-core-exe -p bluecaster-driver
-cd app/src/ui
-pnpm install --frozen-lockfile
-pnpm build
-cd ../../..
-cargo build --release -p bluecaster-ui
+cargo build --release -p bluecaster-core-exe -p bluecaster-driver -p bluecaster-ui
 ```
 
 ## Wenn Sie bereits ohne `--recursive` geklont haben
@@ -64,11 +58,11 @@ BlueCaster/
 ├── app/
 │   ├── src/
 │   │   ├── core/           bluecaster-core.exe: resident core, tray, IPC server, --cli
-│   │   ├── ui/             bluecaster.exe: Tauri 2 + SolidJS (pnpm dev runs it in a browser with a mock core)
+│   │   ├── ui/             bluecaster.exe: the window and the tray flyout (GPUI)
 │   │   ├── driver/         bluecaster-driver.exe: WinUSB assign / restore (elevated)
 │   │   └── crates/         Libraries: btstack-sys, hci-transport, bt-host, codec, the codec -sys crates,
 │   │                       pipeline, audio-capture, win-sys, core (bluecaster-core), ipc, le-audio, lc3-sys,
-│   │                       aptx-adaptive (aptX Adaptive encoder)
+│   │                       aptx-adaptive (aptX Adaptive encoder), ui-model and ui-host (the window's logic)
 │   ├── lang/               Localization (en.json is the source; tools/check_lang.py checks the others)
 │   └── resources/          Icon and manifest
 ├── Cargo.toml              Cargo workspace
@@ -94,9 +88,12 @@ BlueCaster/
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cd app/src/ui && pnpm exec tsc --noEmit && pnpm exec vitest run
 python tools/check_lang.py
 ```
+
+`cargo test --workspace` testet auch das Fenster: `ui-model` enthält die Regeln der Seiten, die Übersetzungen und die Formatierung und braucht zum Ausführen kein Fenster.
+
+Um die Seiten ohne Kern und ohne Adapter anzusehen, starten Sie `bluecaster.exe` mit `BLUECASTER_UI_DEMO`, gesetzt auf den Pfad einer JSON-Datei mit einer Momentaufnahme des Kernzustands. `BLUECASTER_UI_ROUTE` öffnet eine einzelne Seite, und `BLUECASTER_UI_SIZE` legt die Fenstergröße fest. Das Format der Datei ist in `app/src/ui/src/demo.rs` beschrieben.
 
 ## Release-Pakete {#release-packages}
 
@@ -155,7 +152,7 @@ Die virtuelle Verbindung hat keinen Funk. Sie prüft Kodierung, Paketierung, AVD
 
 ## Abhängigkeiten {#dependencies}
 
-Die C-Bibliotheken sind Git-Submodule. Rust-Crates und die npm-Pakete der Oberfläche lädt Cargo bzw. pnpm herunter (Versionen festgelegt in `Cargo.lock` und `app/src/ui/pnpm-lock.yaml`; `cargo deny check` prüft ihre Lizenzen).
+Die C-Bibliotheken sind Git-Submodule. Die Rust-Crates lädt Cargo herunter (Versionen festgelegt in `Cargo.lock`; `cargo deny check` prüft ihre Lizenzen).
 
 | Bibliothek | Methode | Feste Version | Lizenz |
 |:--------|:-------|:---------------|:--------|
@@ -169,7 +166,7 @@ Die C-Bibliotheken sind Git-Submodule. Rust-Crates und die npm-Pakete der Oberfl
 | fdk-aac | Git-Submodul | v3.0.0 | FDK AAC License |
 | LHDC-V5-Encoder | Git-Submodul | wie festgelegt | Apache-2.0 |
 | libopus | Git-Submodul | v1.6.1 | BSD-3-Clause |
-| Tauri, SolidJS, Rust-Crates | Cargo / pnpm | `Cargo.lock`, `pnpm-lock.yaml` | MIT / Apache-2.0 und weitere (`licenses/third-party/rust-crates.txt` im Release) |
+| GPUI, Rust-Crates | Cargo | `Cargo.lock` | MIT / Apache-2.0 und weitere (`licenses/third-party/rust-crates.txt` im Release) |
 
 {: .warning }
 Da BTstack eingebunden ist, darf jeder BlueCaster-Build, den Sie erstellen, nur für private, nicht kommerzielle Zwecke verwendet und weitergegeben werden. Das gilt, obwohl der Quellcode von BlueCaster selbst wahlweise unter Apache-2.0 oder MIT steht.

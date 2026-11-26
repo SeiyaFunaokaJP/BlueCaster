@@ -42,8 +42,11 @@ pub const CAPACITY: usize = 16;
 pub const LOGGED_UNDERRUNS: u64 = 10;
 
 /// Prefill on top of the controller queue depth at the start (v1:
-/// queue_depth + 3), and how far it may grow after underruns (+ 4 more)
-const PREFILL_EXTRA: usize = 3;
+/// queue_depth + 3; Developer > Debug may set another), and how far it may
+/// grow after underruns (+ 4 more)
+pub const PREFILL_EXTRA: usize = 3;
+/// The most a margin set by hand may be
+pub const PREFILL_EXTRA_MAX: u8 = 7;
 const PREFILL_GROWTH: usize = 4;
 
 /// Spare sets kept beyond [`CAPACITY`]: the one being encoded, the one
@@ -145,11 +148,20 @@ pub struct SduQueue {
     spares: Vec<SduSet>,
     /// The last underrun not yet taken by the log
     underrun: Option<Underrun>,
+    /// The margin over the controller queue; None: PREFILL_EXTRA
+    extra: Option<usize>,
 }
 
 impl SduQueue {
     pub fn new() -> SduQueue {
         SduQueue { buffering: true, ..SduQueue::default() }
+    }
+
+    /// The sets buffered on top of the controller queue at the start (each
+    /// one a frame of latency); None: [`PREFILL_EXTRA`]. Taken by the next
+    /// [`SduQueue::configure`]
+    pub fn set_prefill_extra(&mut self, extra: Option<u8>) {
+        self.extra = extra.map(|e| usize::from(e.min(PREFILL_EXTRA_MAX)));
     }
 
     /// For a new stream: empties the queue, resets the counters, sets the
@@ -166,7 +178,7 @@ impl SduQueue {
         // The controller queue takes queue_depth SDU sets at once and the
         // host may run queue_depth + 2 sets ahead of real time: buffer more
         // than that
-        self.prefill = usize::from(queue_depth) + PREFILL_EXTRA;
+        self.prefill = usize::from(queue_depth) + self.extra.unwrap_or(PREFILL_EXTRA);
         self.prefill_max = self.prefill + PREFILL_GROWTH;
         self.stats = QueueStats::default();
         self.underrun = None;
@@ -352,6 +364,24 @@ mod tests {
         assert!(q.is_empty());
         assert_eq!(q.stats().sets_popped, 5);
         assert_eq!(q.stats().sets_pushed, 5);
+    }
+
+    #[test]
+    fn the_margin_may_be_set_by_hand() {
+        let mut q = SduQueue::new();
+        q.set_prefill_extra(Some(1));
+        q.configure(2, vec![vec![0; 4]]);
+        assert_eq!(q.prefill(), 3);
+        q.set_prefill_extra(Some(0));
+        q.configure(2, vec![vec![0; 4]]);
+        assert_eq!(q.prefill(), 2);
+        // Capped, and the default again
+        q.set_prefill_extra(Some(50));
+        q.configure(2, vec![vec![0; 4]]);
+        assert_eq!(q.prefill(), 2 + usize::from(PREFILL_EXTRA_MAX));
+        q.set_prefill_extra(None);
+        q.configure(2, vec![vec![0; 4]]);
+        assert_eq!(q.prefill(), 2 + PREFILL_EXTRA);
     }
 
     #[test]

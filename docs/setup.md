@@ -26,8 +26,8 @@ BlueCaster assigns the WinUSB driver to the adapter for you, so you no longer ne
 
 Each [release](https://github.com/SeiyaFunaokaJP/BlueCaster/releases) comes in two forms with the same files:
 
-- **Installer** (`BlueCaster-<version>-win64-setup.exe`, on ARM64 `-arm64-setup.exe`): installs for the current user without administrator rights, adds a Start menu entry (**BlueCaster**) and an uninstaller, and installs the Microsoft Edge WebView2 Runtime if it is missing (Windows 11 includes it). Updates install from within the app (**Settings > Updates > Update now**). The programs go to `%LOCALAPPDATA%\BlueCaster\` (the three programs, the uninstaller and a `licenses\` folder with the license texts)
-- **Portable** (`BlueCaster-<version>-win64-portable.zip`, on ARM64 `-arm64-portable.zip`): extract anywhere and run `bluecaster.exe`. Keep the three programs (`bluecaster.exe`, `bluecaster-core.exe`, `bluecaster-driver.exe`) together. The portable copy only notifies you about updates and requires the WebView2 Runtime
+- **Installer** (`BlueCaster-<version>-win64-setup.exe`, on ARM64 `-arm64-setup.exe`): installs for the current user without administrator rights, adds a Start menu entry (**BlueCaster**) and an uninstaller. Updates install from within the app (**Settings > Updates > Update now**). The programs go to `%LOCALAPPDATA%\BlueCaster\` (the three programs, the uninstaller and a `licenses\` folder with the license texts)
+- **Portable** (`BlueCaster-<version>-win64-portable.zip`, on ARM64 `-arm64-portable.zip`): extract anywhere and run `bluecaster.exe`. Keep the three programs (`bluecaster.exe`, `bluecaster-core.exe`, `bluecaster-driver.exe`) together. The portable copy only notifies you about updates
 
 Both keep settings, profiles, link keys and firmware in `%APPDATA%\BlueCaster`, so you can switch between them. Uninstalling deletes that folder unless you turn **Delete user data** off (a silent uninstall keeps it).
 

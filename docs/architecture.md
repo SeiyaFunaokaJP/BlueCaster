@@ -36,7 +36,7 @@ BlueCaster runs as up to three programs:
 | Program | Runs | Does |
 |:--------|:-----|:-----|
 | `bluecaster-core.exe` | While BlueCaster is running (started by the window, the Start menu or **Start with Windows**) | Bluetooth, audio capture and encoding, profiles and settings, the tray icon and its menu, the IPC server. `--cli` runs the same core from a console instead |
-| `bluecaster.exe` | Only while a window is open (exits 3 minutes after the last one was closed) | The main window and the tray flyout (Tauri 2, SolidJS + TypeScript). Holds no state of its own |
+| `bluecaster.exe` | Only while a window is open (exits 3 minutes after the last one was closed) | The main window and the tray flyout (Rust, GPUI). Holds no state of its own |
 | `bluecaster-driver.exe` | Briefly, with administrator rights (UAC), for a driver change or key import | Assigns WinUSB to an adapter, restores the adapter's previous driver, or reads the link keys that Windows' Bluetooth stores for an adapter (`windows-keys`), then exits |
 
 ```mermaid
@@ -47,7 +47,7 @@ config:
     rankSpacing: 30
 ---
 flowchart TB
-    ui["bluecaster.exe:<br>window and tray flyout<br>(Tauri + SolidJS)"]
+    ui["bluecaster.exe:<br>window and tray flyout<br>(GPUI)"]
     src["Windows audio:<br>system loopback / virtual device /<br>one app"]
     subgraph core["bluecaster-core.exe"]
         ctl["Tray menu / IPC server /<br>CLI (--cli)"] --> svc["Core service: connection<br>state machine, codec selection,<br>profiles, reconnect"]
@@ -161,8 +161,10 @@ code; all other crates have `#![forbid(unsafe_code)]`.
 | 3. Engine | `pipeline` | PCM rings, format conversion, downmix, encoding, media payloads, pacing, ABR |
 | 4. Core | `bluecaster-core` (directory `core`) | The state machine, reconnects, sleep / resume, profiles, settings and the v1 migration, volume sync, the output mute, update check, Realtek firmware download, the receiver test client, statistics, vendor protocols (`vendor/`) |
 | 4. Core | `ipc` | The protocol types shared by core and window (serde; TypeScript types generated with `ts-rs`) and the pipe framing |
+| 4. Core | `ui-model` | The window's logic without the window: the core's state as the window sees it, translations, formatting and the screens' rules; plain `cargo test` covers all of it |
+| 4. Core | `ui-host` | The window process's non-UI work: the connection to the core, in-app updates (signatures checked with `minisign-verify`), the service add-on, single-instance handling and the log |
 | 5. Programs | `bluecaster-core-exe` (`app/src/core`) | `bluecaster-core.exe`: core, tray (`tray-icon` on a `tao` event loop), IPC server, `--cli` |
-| 5. Programs | `bluecaster-ui` (`app/src/ui`) | `bluecaster.exe`: Tauri 2; the Rust side is an IPC client, the page is SolidJS + TypeScript + Vite |
+| 5. Programs | `bluecaster-ui` (`app/src/ui`) | `bluecaster.exe`: the screens, controls and theme, built on GPUI (`gpui-kit`), and the tray flyout window |
 | 5. Programs | `bluecaster-driver` (`app/src/driver`) | `bluecaster-driver.exe`: the elevated helper |
 
 ## Audio Path and Threads
@@ -526,6 +528,7 @@ renames on its first start, sorting the files into these folders:
 | Path | Contents |
 |:-----|:---------|
 | `settings.json` | App settings, with a `schema_version`; unknown keys are kept |
+| `ui-state.json` | Window state kept between starts: the update put off with **Later**, the **Show only supported codecs** choice and a dismissed notice |
 | `profiles.json` | Profiles |
 | `devices\devices.txt` | Known devices |
 | `devices\le_audio_devices.txt` | LE Audio: the LE Audio entries of the device list |
@@ -555,10 +558,11 @@ uninstaller and `licenses\` (`licenses\README.txt`, `licenses\bluecaster\LICENSE
 - **Cargo** builds the programs; they need no CMake. Each `-sys` crate
   compiles its C library from the git submodule in `extern/` with MSVC in
   `build.rs`. Only the developer tool `tools/a2dp_decode` is built with CMake
-- The window's page is built with **Vite** (`pnpm build` in `app/src/ui`) and
-  embedded into `bluecaster.exe` by Tauri
-- The TypeScript types of the IPC protocol are generated from the Rust types
-  (`cargo test -p ipc export_bindings`)
+- The window is written in Rust like the rest, so Cargo alone builds
+  `bluecaster.exe`
+- For third-party tools, `cargo test -p ipc export_bindings` generates
+  TypeScript types of the IPC protocol from the Rust types into
+  `app/src/crates/ipc/bindings`
 - The window and the core's tray menu both use the language files
   (`app/lang/*.json`)
 - `installer/build-release.ps1` makes the installer (Inno Setup, `installer/BlueCaster.iss`),

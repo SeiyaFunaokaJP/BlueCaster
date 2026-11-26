@@ -1,5 +1,5 @@
 """Builds the BlueCaster icon from app/resources/icon-source.png and writes
-app/resources/app.ico, the Tauri copy and the UI's app-icon.png.
+app/resources/app.ico and the window's app-icon.png (About, the setup).
 
     python app/resources/make_icon.py        (needs Pillow)
 
@@ -146,8 +146,7 @@ def main() -> None:
     source = load_source()
     images = {s: render(s, source) for s in SIZES}
     write_ico(ROOT / "app/resources/app.ico", images)
-    write_ico(ROOT / "app/src/ui/src-tauri/icons/icon.ico", images)
-    images[256].save(ROOT / "app/src/ui/public/app-icon.png", optimize=True)
+    images[256].save(ROOT / "app/src/ui/resources/app-icon.png", optimize=True)
 
 
 if __name__ == "__main__":

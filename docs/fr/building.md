@@ -20,7 +20,6 @@ nav_order: 3
 
 - **Rust** (stable, 1.90 ou ultérieur) via [rustup](https://rustup.rs/)
 - **Visual Studio 2022 ou ultérieur** (ou ses Build Tools) avec la charge de travail « Développement Desktop en C++ » : les bibliothèques C (BTstack, les codecs) sont compilées avec MSVC
-- **Node.js** 22 et **pnpm** pour l'interface (`corepack enable` fournit pnpm)
 - **Git** (pour les sous-modules)
 - **PowerShell 7** (`pwsh`) pour `build.ps1` / `build.bat` (`winget install Microsoft.PowerShell`)
 - **Python 3.11 ou ultérieur** pour les vérifications (`tools/check_lang.py`) et le [test avec l'émulateur](#emu)
@@ -34,19 +33,14 @@ cd BlueCaster
 pwsh ./build.ps1
 ```
 
-Vous pouvez aussi double-cliquer sur `build.bat` dans l'Explorateur : il lance `build.ps1` et attend que vous appuyiez sur une touche à la fin (`build.bat -Test` transmet les options). `build.ps1` vérifie d'abord que Rust, Node.js, pnpm et les sous-modules sont présents, et lance `pnpm install` si `node_modules` est absent. Il compile ensuite la page de la fenêtre, puis les trois programmes dans `target/release/` : `bluecaster-core.exe` (le cœur résident : Bluetooth, audio, zone de notification), `bluecaster.exe` (la fenêtre) et `bluecaster-driver.exe` (le programme d'aide, exécuté avec les droits d'administrateur, qui attribue et restaure le pilote WinUSB). Gardez les trois programmes dans le même dossier ; `bluecaster-core.exe --cli` diffuse sans la fenêtre.
+Vous pouvez aussi double-cliquer sur `build.bat` dans l'Explorateur : il lance `build.ps1` et attend que vous appuyiez sur une touche à la fin (`build.bat -Test` transmet les options). `build.ps1` vérifie d'abord que Rust et les sous-modules sont présents. Il compile ensuite les trois programmes dans `target/release/` : `bluecaster-core.exe` (le cœur résident : Bluetooth, audio, zone de notification), `bluecaster.exe` (la fenêtre) et `bluecaster-driver.exe` (le programme d'aide, exécuté avec les droits d'administrateur, qui attribue et restaure le pilote WinUSB). Gardez les trois programmes dans le même dossier ; `bluecaster-core.exe --cli` diffuse sans la fenêtre.
 
 Options : `-Debug` (profil de développement, `target/debug/`), `-Test` (exécute aussi les vérifications de la section « Tests »), `-Decoder` (compile aussi l'outil de décodage), `-Emu` (lance aussi le [test avec l'émulateur](#emu) ; `-Emu -Codecs sbc,ldac` ne teste que ces codecs), `-Release -Arch x64|arm64` (lance uniquement le script de publication, voir « Paquets de version »).
 
-**Pas à pas** (ce que fait `build.ps1` ; la page de la fenêtre doit être compilée avant `bluecaster.exe`, qui l'intègre) :
+**Sans le script** (ce que lance `build.ps1`) :
 
 ```bash
-cargo build --release -p bluecaster-core-exe -p bluecaster-driver
-cd app/src/ui
-pnpm install --frozen-lockfile
-pnpm build
-cd ../../..
-cargo build --release -p bluecaster-ui
+cargo build --release -p bluecaster-core-exe -p bluecaster-driver -p bluecaster-ui
 ```
 
 ## Si vous avez déjà cloné sans `--recursive`
@@ -64,11 +58,11 @@ BlueCaster/
 ├── app/
 │   ├── src/
 │   │   ├── core/           bluecaster-core.exe: resident core, tray, IPC server, --cli
-│   │   ├── ui/             bluecaster.exe: Tauri 2 + SolidJS (pnpm dev runs it in a browser with a mock core)
+│   │   ├── ui/             bluecaster.exe: the window and the tray flyout (GPUI)
 │   │   ├── driver/         bluecaster-driver.exe: WinUSB assign / restore (elevated)
 │   │   └── crates/         Libraries: btstack-sys, hci-transport, bt-host, codec, the codec -sys crates,
 │   │                       pipeline, audio-capture, win-sys, core (bluecaster-core), ipc, le-audio, lc3-sys,
-│   │                       aptx-adaptive (aptX Adaptive encoder)
+│   │                       aptx-adaptive (aptX Adaptive encoder), ui-model and ui-host (the window's logic)
 │   ├── lang/               Localization (en.json is the source; tools/check_lang.py checks the others)
 │   └── resources/          Icon and manifest
 ├── Cargo.toml              Cargo workspace
@@ -94,9 +88,12 @@ BlueCaster/
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cd app/src/ui && pnpm exec tsc --noEmit && pnpm exec vitest run
 python tools/check_lang.py
 ```
+
+`cargo test --workspace` teste aussi la fenêtre : `ui-model` contient les règles des écrans, les traductions et la mise en forme, et s'exécute sans fenêtre.
+
+Pour voir les écrans sans cœur ni adaptateur, lancez `bluecaster.exe` avec la variable `BLUECASTER_UI_DEMO` définie sur le chemin d'un fichier JSON contenant un instantané de l'état du cœur. `BLUECASTER_UI_ROUTE` ouvre un seul écran, et `BLUECASTER_UI_SIZE` définit la taille de la fenêtre. Le format du fichier est décrit dans `app/src/ui/src/demo.rs`.
 
 ## Paquets de version
 
@@ -155,7 +152,7 @@ La liaison virtuelle n'a pas de radio : elle vérifie l'encodage, la mise en paq
 
 ## Dépendances
 
-Les bibliothèques C sont des sous-modules git ; les crates Rust et les paquets npm de l'interface sont récupérés par Cargo et pnpm (versions figées dans `Cargo.lock` et `app/src/ui/pnpm-lock.yaml` ; `cargo deny check` vérifie leurs licences).
+Les bibliothèques C sont des sous-modules git ; les crates Rust sont récupérés par Cargo (versions figées dans `Cargo.lock` ; `cargo deny check` vérifie leurs licences).
 
 | Bibliothèque | Méthode | Version figée | Licence |
 |:--------|:-------|:---------------|:--------|
@@ -169,7 +166,7 @@ Les bibliothèques C sont des sous-modules git ; les crates Rust et les paquets 
 | fdk-aac | sous-module git | v3.0.0 | FDK AAC License |
 | Encodeur LHDC V5 | sous-module git | celle du sous-module | Apache-2.0 |
 | libopus | sous-module git | v1.6.1 | BSD-3-Clause |
-| Tauri, SolidJS, crates Rust | Cargo / pnpm | `Cargo.lock`, `pnpm-lock.yaml` | MIT / Apache-2.0 et autres (`licenses/third-party/rust-crates.txt` dans la version publiée) |
+| GPUI, crates Rust | Cargo | `Cargo.lock` | MIT / Apache-2.0 et autres (`licenses/third-party/rust-crates.txt` dans la version publiée) |
 
 {: .warning }
 Comme BTstack est lié au programme, tout BlueCaster que vous compilez ne peut être utilisé et redistribué qu'à des fins personnelles et non commerciales, même si le code source de BlueCaster lui-même est sous double licence Apache-2.0 ou MIT.

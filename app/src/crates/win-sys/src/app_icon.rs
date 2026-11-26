@@ -1,5 +1,5 @@
 //! The app icon at the sizes Windows draws it (issue #86). Given one image,
-//! as tray-icon's default and Tauri's window icon do, Windows takes the
+//! as tray-icon's default and a toolkit's window icon do, Windows takes the
 //! large one and shrinks it: the fine lines blur into a blue square. Loaded
 //! at the size it is drawn at, the .ico's own image for that size is used
 //! (app/resources/make_icon.py: redrawn at 16 and 20 px).

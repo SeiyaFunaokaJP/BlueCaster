@@ -147,7 +147,7 @@ pub struct LeRequest {
     pub mic_rate: Option<u32>,
 }
 
-pub use le_audio::broadcast::BroadcastLayout;
+pub use le_audio::broadcast::{BroadcastLayout, SingleMode};
 
 /// What a broadcast was asked for (`stream.start_broadcast`, `--auracast`)
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -244,6 +244,9 @@ pub struct LeStreamStats {
     pub late_sdus: u64,
     /// CIS that are up but had no SDU completed for 2 s (the others play)
     pub cis_stalled: u32,
+    /// The largest transport latency C->P of the stream's CIS (LE CIS
+    /// Established), us; 0 while none is known (or a broadcast)
+    pub transport_latency_us: u32,
 }
 
 /// A device as the worker sees it (a copy; v1 DeviceInfo)

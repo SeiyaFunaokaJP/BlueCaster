@@ -10,8 +10,6 @@ publish.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 tokio = { version = "1", features = ["net"] }
-# webview.rs: WebView2's ProcessFailed (the version tauri's wry uses)
-webview2-com = "0.39"
 # usb_isoch.rs: the WinUSB handle of an interface claimed through nusb (the
 # vendored copy, root Cargo.toml [patch])
 nusb = "0.2.8"
@@ -25,6 +23,8 @@ features = [
     "Foundation_Collections",
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
+    # window.rs: the work area of the screen a flyout stands on
+    "Win32_Graphics_Gdi",
     "Win32_Globalization",
     "Win32_Security",
     "Win32_Security_Authorization",
@@ -37,6 +37,7 @@ features = [
     "Win32_System_Console",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
+    "Win32_System_Ole",
     "Win32_System_Threading",
     "Win32_System_StationsAndDesktops",
     "Win32_System_Pipes",
@@ -65,6 +66,8 @@ features = [
     "Win32_UI_Accessibility",
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",
+    # shell.rs: a file shown selected in Explorer (item ID lists)
+    "Win32_UI_Shell_Common",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",

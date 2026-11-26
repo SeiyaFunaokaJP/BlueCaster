@@ -89,7 +89,7 @@ BlueCaster は、お使いの Bluetooth アダプターを Hi-Fi オーディオ
 | コンポーネント | Windows 10 (x64 / ARM64) | Windows 11 (x64 / ARM64) | Linux (Ubuntu) |
 |:---------------|:----------------:|:----------------:|:--------------:|
 | **BlueCaster**（ウィンドウ / トレイ / CLI） | ✅（実機では未確認） | ✅ | ❌ |
-| [ソースからのビルド](building)（Rust、Visual Studio 2022 以降、Node.js） | ✅ | ✅ | ❌ |
+| [ソースからのビルド](building)（Rust、Visual Studio 2022 以降） | ✅ | ✅ | ❌ |
 | `bluecaster_decode`（ストリーム検査ツール） | ✅ | ✅ | ❌ |
 | エンドツーエンドテスト `tools/emu/run_test.py` | ✅ | ✅ | ❌ |
 | 仮想アダプター `tools/emu/emu_vhci.py` | ❌ | ❌ | ✅ |

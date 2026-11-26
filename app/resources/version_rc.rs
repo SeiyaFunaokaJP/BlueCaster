@@ -1,6 +1,6 @@
-// Shared by the build scripts of bluecaster-core.exe and bluecaster-driver.exe
-// (`include!`): the VERSIONINFO resource, so that both programs carry the
-// same product name and version as bluecaster.exe (Tauri writes its own).
+// Shared by the build scripts of bluecaster.exe, bluecaster-core.exe and
+// bluecaster-driver.exe (`include!`): the VERSIONINFO resource, so that the
+// programs carry the same product name and version.
 // Code signing checks these fields (product name, product version).
 
 /// The VERSIONINFO block of `file` (e.g. "bluecaster-core.exe") described as

@@ -387,6 +387,8 @@ fn uplink_source(source: &SourceRequest) -> Option<(Source, bool)> {
             (Source::RenderDevice { id: id.clone() }, true)
         }
         SourceRequest::VirtualDevice { .. } | SourceRequest::OutputDevice { .. } => (Source::SystemLoopback, true),
+        SourceRequest::InputDevice { id, .. } if !id.is_empty() => (Source::CaptureDevice { id: id.clone() }, true),
+        SourceRequest::InputDevice { .. } => return None,
         SourceRequest::Application { exe } => {
             (Source::Application { process_id: session_host::activity::find_process(exe)? }, true)
         }

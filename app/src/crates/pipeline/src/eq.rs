@@ -435,8 +435,8 @@ mod tests {
         assert!(max_step < tone_step, "{max_step} vs {tone_step}");
     }
 
-    /// The response the UI draws (src/ui/src/lib/eq.test.ts holds the same
-    /// table): both sides compute the same curve
+    /// The response the UI draws (ui-model's eq.rs, matches_the_cores_filters,
+    /// holds the same table): both sides compute the same curve
     #[test]
     fn response_table_shared_with_the_ui() {
         let bands = [

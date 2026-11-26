@@ -58,7 +58,7 @@ class Endpoints(unittest.TestCase):
         self.assertEqual(caps[6:], bytes([0x01, 0x03]))  # music direction, 44.1 / 48 kHz
 
     def test_names_match_the_receiver_test(self):
-        # app/src/ui/src/screens/ReceiverTest.tsx: lower case, no spaces = codec id
+        # The receiver test (ui-model's view/receiver_test.rs): lower case, no spaces = codec id
         ids = {s.CODEC_NAMES[c].lower().replace(' ', '') for c in (s.SBC_XQ, s.OPUS, s.FASTSTREAM)}
         self.assertEqual(ids, {'sbcxq', 'opus', 'faststream'})
 

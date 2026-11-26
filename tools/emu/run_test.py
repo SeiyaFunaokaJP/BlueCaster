@@ -44,6 +44,10 @@ bluecaster_decode --le-audio on both sides:
     --mic-output <out>/le-<case>/mic.wav)
 Outputs go to tools/emu/out/le-<case>/.
 
+    python tools/emu/run_test.py --asha [case ...]
+
+runs the hearing aid cases instead (ASHA, a proof of concept; asha_tests.py).
+
     python tools/emu/run_test.py --auracast [case ...]
 
 runs the Auracast cases instead (le_audio_tests/auracast.py: stereo, mono,
@@ -231,6 +235,7 @@ import threading
 import time
 import wave
 
+import asha_tests
 import le_audio_tests
 import le_audio_tests.auracast
 
@@ -1388,6 +1393,13 @@ LINK_CASES = {
         ('bluecaster.log', r'Starting again.*HCI disconnection.*state Streaming', True),
         ('bluecaster.log', r'Bluetooth stack stalled', False),
     ]),
+    # Headphones just turned on page the PC while it pages them: its
+    # controller refuses the page, and the connection goes over their link
+    'crossed-page': (['--crossed-page'], ['--duration', '3'], [
+        ('bluecaster.log', r'signaling connection failed \(0x0b\).*connecting over its link.*state Streaming', True),
+        ('bluecaster.log', r'state Error', False),
+        ('sink.log', r'paged the PC', True),
+    ]),
     # Headphones with Delay Reporting: their playout delay reaches the log
     'delay-report': (['--delay-report', '187.5'], ['--duration', '3'], [
         ('bluecaster.log', r'supports delay reporting.*device delay report: 187\.5 ms', True),
@@ -2141,7 +2153,7 @@ def run_voice_case(args, case, port):
             failures.append(f'sink: what BlueCaster sent is not right ({tone})')
     if 'dropped an incoming HCI packet' in bc_log:
         failures.append('bluecaster.log: incoming HCI packets dropped')
-    if gain and f'microphone processing: gain {gain} dB' not in bc_log:
+    if gain and f'microphone processing: on, gain {gain} dB' not in bc_log:
         failures.append(f"bluecaster.log: the microphone's gain of {gain} dB never applied")
     if auto and 'voice: auto: an application records' not in bc_log:
         failures.append('bluecaster.log: Auto never saw the WAV output as recorded from')
@@ -2945,6 +2957,9 @@ def main():
                         help='run the keyboard and mouse cases instead '
                              f'({", ".join(list(HID_CASES) + list(HID_LE_CASES) + list(HID_CONFIRM_CASES))}; '
                              'default: all of them)')
+    parser.add_argument('--asha', nargs='*', metavar='CASE',
+                        help=f'run the hearing aid cases instead ({", ".join(asha_tests.CASES)}; '
+                             'default: all of them)')
     parser.add_argument('--duration', type=int, default=5, help='seconds of streaming per codec')
     parser.add_argument('--max-packet', type=int, help='passed to BlueCaster --max-packet (default: its own)')
     parser.add_argument('--build-dir', default=os.path.join(REPO, 'build'),
@@ -2963,6 +2978,7 @@ def main():
         voice_decodes = args.voice is not None and any(c.endswith('-roundtrip') for c in args.voice or VOICE_CASES)
         if path == args.decoder and (args.scan is not None or args.link is not None or args.le_pairing is not None
                                      or args.hid is not None or args.auracast is not None
+                                     or args.asha is not None
                                      or (args.voice is not None and not voice_decodes)):
             continue  # a scan or HID case streams nothing, a link or voice case decodes nothing (but a round trip)
         if not os.path.exists(path):
@@ -2981,6 +2997,8 @@ def main():
         main_le_pairing(args)
     if args.hid is not None:
         main_hid(args)
+    if args.asha is not None:
+        asha_tests.main(sys.modules[__name__], args)
 
     results = []
     for index, codec in enumerate(args.codecs):

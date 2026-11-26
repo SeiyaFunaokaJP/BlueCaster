@@ -19,12 +19,14 @@ Writes to target/dist (or -OutDir):
     latest.json                             updater manifest of this release
 
 Updater signing (see installer/README.md): TAURI_SIGNING_PRIVATE_KEY (the
-private key file's path or content) and TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-sign the installer; BLUECASTER_UPDATER_PUBKEY (the .pub file's path or content)
-is built into bluecaster.exe so that it accepts only updates signed with that
-key. Without them the build still works, but its in-app update stays off
-(the update check only shows the release page, as the portable version).
-Neither key is part of the repository.
+private key file's path or content; or TAURI_SIGNING_PRIVATE_KEY_PATH) and
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD sign the installer with tools/sign-update
+(the Tauri CLI's format, so keys made by `tauri signer generate` keep
+working); BLUECASTER_UPDATER_PUBKEY (the .pub file's path or content) is built
+into bluecaster.exe so that it accepts only updates signed with that key.
+Without them the build still works, but its in-app update stays off (the
+update check only shows the release page, as the portable version). Neither
+key is part of the repository.
 
 Code signing (Authenticode, see installer/README.md):
 BLUECASTER_SIGN_THUMBPRINT (the SHA-1 thumbprint of a code signing
@@ -35,11 +37,11 @@ each signature. A signed set-up tool of the service add-on copies only files
 signed with the tool's own certificate; an unsigned build skips that check.
 signtool.exe comes from the Windows SDK (or $env:SIGNTOOL).
 
-Needs: Rust (with the target), pnpm, the UI's node_modules (pnpm install),
-the submodules under extern/, cargo-about (cargo install cargo-about), and
-Inno Setup 7.1.0 (winget install JRSoftware.InnoSetup.7 --version 7.1.0; ISCC.exe is found in
-its default folders, on PATH or in $env:ISCC). The WebView2
-bootstrapper is downloaded once into target/installer-cache.
+Needs: Rust (with the target), the submodules under extern/, cargo-about
+(cargo install cargo-about), and Inno Setup 7.1.0 (winget install
+JRSoftware.InnoSetup.7 --version 7.1.0; ISCC.exe is found in its default
+folders, on PATH or in $env:ISCC). No Node.js, pnpm or WebView2: the window
+(bluecaster.exe, package bluecaster-ui) is a Rust program like the others.
 #>
 [CmdletBinding()]
 param(
@@ -54,7 +56,9 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repo = Split-Path $PSScriptRoot -Parent
-$ui = Join-Path $repo 'app/src/ui'
+# The licence texts of what the window embeds besides Rust crates (the Fluent
+# UI System Icons)
+$uiLicenses = Join-Path $repo 'app/src/ui/LICENSES'
 if (-not $OutDir) { $OutDir = Join-Path $repo 'target/dist' }
 $OutDir = [IO.Path]::GetFullPath($OutDir)
 
@@ -68,20 +72,16 @@ function Invoke-Checked([string]$what, [scriptblock]$cmd) {
     if ($LASTEXITCODE -ne 0) { throw "$what failed (exit code $LASTEXITCODE)" }
 }
 
-# --- Version: the workspace's, which package.json must repeat ---
+# --- Version: the workspace's (every program takes version.workspace) ---
 $cargoToml = Get-Content -Raw (Join-Path $repo 'Cargo.toml')
 if ($cargoToml -notmatch '(?ms)^\[workspace\.package\].*?^version\s*=\s*"([^"]+)"') {
     throw 'no [workspace.package] version in Cargo.toml'
 }
 $version = $Matches[1]
-$pkgVersion = (Get-Content -Raw (Join-Path $ui 'package.json') | ConvertFrom-Json).version
-if ($pkgVersion -ne $version) {
-    throw "app/src/ui/package.json has version $pkgVersion, the workspace ${version}: set both"
-}
 Write-Host "BlueCaster $version for $Arch ($triple)"
 
 # --- Updater keys (from the environment, never from the repository) ---
-$signing = [bool]$env:TAURI_SIGNING_PRIVATE_KEY
+$signing = [bool]($env:TAURI_SIGNING_PRIVATE_KEY -or $env:TAURI_SIGNING_PRIVATE_KEY_PATH)
 $pubkey = $env:BLUECASTER_UPDATER_PUBKEY
 if ($pubkey -and (Test-Path -LiteralPath $pubkey -PathType Leaf)) {
     $pubkey = (Get-Content -Raw -LiteralPath $pubkey).Trim()
@@ -91,6 +91,8 @@ if ($signing -and -not $pubkey) {
 }
 if (-not $signing) {
     Write-Warning 'TAURI_SIGNING_PRIVATE_KEY is not set: no updater signature, and the in-app update of this build stays off'
+    # Only this variable: the build below also removes it from the
+    # environment (ui-host's build.rs reads it from there)
     $pubkey = ''
 }
 
@@ -157,9 +159,22 @@ if (-not $iscc) {
     throw 'Inno Setup''s ISCC.exe not found: winget install JRSoftware.InnoSetup.7 --version 7.1.0 (or set $env:ISCC)'
 }
 
-# --- The core and the driver helper (the UI is built by tauri build) ---
-Invoke-Checked 'cargo build' {
-    cargo build --release --locked --manifest-path (Join-Path $repo 'Cargo.toml') --target $triple -p bluecaster-core-exe -p bluecaster-driver
+# --- The programs: the core, the driver helper and the window ---
+# The window takes the updater's public key from BLUECASTER_UPDATER_PUBKEY at
+# build time (app/src/crates/ui-host/build.rs), and any key there turns its
+# in-app update on. So the variable is set only for a signed build. An
+# unsigned build removes it from the environment: a key left over in the
+# shell would otherwise make an unsigned build install updates. Both cases
+# rebuild the window when the key changes (build.rs: rerun-if-env-changed).
+$savedPubkey = $env:BLUECASTER_UPDATER_PUBKEY
+$env:BLUECASTER_UPDATER_PUBKEY = if ($signing) { $pubkey } else { $null }
+try {
+    Invoke-Checked 'cargo build' {
+        cargo build --release --locked --manifest-path (Join-Path $repo 'Cargo.toml') --target $triple `
+            -p bluecaster-core-exe -p bluecaster-driver -p bluecaster-ui
+    }
+} finally {
+    $env:BLUECASTER_UPDATER_PUBKEY = $savedPubkey
 }
 $release = Join-Path $repo "target/$triple/release"
 
@@ -189,13 +204,23 @@ $docs = [ordered]@{
     # LE Audio (experimental): LC3 encoder and LE Secure Connections' P-256
     'third-party/liblc3-LICENSE.txt'          = Join-Path $ext 'btstack/3rd-party/lc3-google/LICENSE'
     'third-party/micro-ecc-LICENSE.txt'       = Join-Path $ext 'btstack/3rd-party/micro-ecc/LICENSE.txt'
-    'third-party/fluentui-system-icons.txt'   = Join-Path $ui 'LICENSES/fluentui-system-icons.txt'
-    'third-party/solid-js-LICENSE.txt'        = Join-Path $ui 'node_modules/solid-js/LICENSE'
-    'third-party/tauri-apps-api-LICENSE-MIT.txt' = Join-Path $ui 'node_modules/@tauri-apps/api/LICENSE-MIT'
+    # The window's icons: Fluent UI System Icons (MIT, app/src/ui/src/ui/icons.rs)
+    'third-party/fluentui-system-icons.txt'   = Join-Path $uiLicenses 'fluentui-system-icons.txt'
 }
+# The GPUI component library embeds Lucide icons (ISC). Its crate is
+# Apache-2.0, so rust-crates.txt does not carry the icons' licence: it comes
+# from the crate's own LICENSE-LUCIDE, in the version Cargo.lock pins.
+$metadata = cargo metadata --format-version 1 --locked --manifest-path (Join-Path $repo 'Cargo.toml') --filter-platform $triple |
+    ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw "cargo metadata failed (exit code $LASTEXITCODE)" }
+$iconCrates = @($metadata.packages | Where-Object name -eq 'gpui-kit-assets')
+if ($iconCrates.Count -ne 1) {
+    throw "expected one gpui-kit-assets in Cargo.lock, found $($iconCrates.Count): check the icons' licence by hand"
+}
+$docs['third-party/lucide-LICENSE.txt'] = Join-Path (Split-Path $iconCrates[0].manifest_path -Parent) 'LICENSE-LUCIDE'
 foreach ($entry in $docs.GetEnumerator()) {
     if (-not (Test-Path -LiteralPath $entry.Value -PathType Leaf)) {
-        throw "required file not found: $($entry.Value) (git submodule update --init --recursive; pnpm install in app/src/ui)"
+        throw "required file not found: $($entry.Value) (git submodule update --init --recursive)"
     }
     Copy-Item -LiteralPath $entry.Value (Join-Path $licDir $entry.Key)
 }
@@ -251,17 +276,6 @@ See bluecaster\LICENSE and third-party\THIRD_PARTY_LICENSES.md for the
 terms of each component; third-party\rust-crates.txt lists the Rust crates.
 "@ | Set-Content -Encoding utf8NoBOM (Join-Path $licDir 'README.txt')
 
-# --- bluecaster.exe: Tauri's configuration plus the updater key ---
-$overlayPath = Join-Path $stage 'tauri.release.conf.json'
-@{ plugins = @{ updater = @{ pubkey = $pubkey } } } | ConvertTo-Json -Depth 4 |
-    Set-Content -Encoding utf8NoBOM $overlayPath
-Push-Location $ui
-try {
-    Invoke-Checked 'tauri build' { pnpm tauri build --target $triple --no-bundle --config $overlayPath }
-} finally {
-    Pop-Location
-}
-
 # --- The package: the portable zip's folder, which the installer installs ---
 $pkgName = "BlueCaster-$version"
 $pkgDir = Join-Path $stage $pkgName
@@ -293,19 +307,6 @@ $zip = Join-Path $OutDir "$pkgName-$archName-portable.zip"
 if (Test-Path $zip) { Remove-Item -Force $zip }
 Compress-Archive -Path $pkgDir -DestinationPath $zip
 
-# --- WebView2 bootstrapper (Evergreen), embedded for PCs without WebView2 ---
-$cache = Join-Path $repo 'target/installer-cache'
-$webView2Setup = Join-Path $cache 'MicrosoftEdgeWebview2Setup.exe'
-if (-not (Test-Path -LiteralPath $webView2Setup)) {
-    New-Item -ItemType Directory -Force $cache | Out-Null
-    Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile "$webView2Setup.part"
-    Move-Item -Force "$webView2Setup.part" $webView2Setup
-}
-$sig = Get-AuthenticodeSignature -LiteralPath $webView2Setup
-if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
-    throw "$webView2Setup is not signed by Microsoft ($($sig.Status)): delete it and build again"
-}
-
 # --- The installer ---
 $setupName = "BlueCaster-$version-$archName-setup.exe"
 $setup = Join-Path $OutDir $setupName
@@ -313,26 +314,25 @@ $setup = Join-Path $OutDir $setupName
 $versionNumeric = $version -replace '[-+].*$', ''
 Invoke-Checked 'ISCC' {
     & $iscc /Q "/DAppVersion=$version" "/DAppVersionNumeric=$versionNumeric" "/DArch=$Arch" `
-        "/DPkgDir=$pkgDir" "/DWebView2Setup=$webView2Setup" "/DOutputDir=$OutDir" `
+        "/DPkgDir=$pkgDir" "/DOutputDir=$OutDir" `
         "/DOutputBaseFilename=$([IO.Path]::GetFileNameWithoutExtension($setupName))" `
         (Join-Path $PSScriptRoot 'BlueCaster.iss')
 }
 
-# --- Updater signature of the installer; the version is part of what is
-# signed (plugins.updater.requireSignedVersion) ---
+# --- Updater signature of the installer (tools/sign-update, the Tauri CLI's
+# format). The version is part of what is signed: the app requires it
+# (ui-host update.rs), and so did the Tauri window (requireSignedVersion).
+# The tool reads the key and its password from the TAURI_SIGNING_*
+# variables itself. It is built for this machine, not for $triple. ---
 if ($signing) {
-    $key = $env:TAURI_SIGNING_PRIVATE_KEY
-    if (Test-Path -LiteralPath $key -PathType Leaf) { $key = Get-Content -Raw -LiteralPath $key }
-    $savedKey = $env:TAURI_SIGNING_PRIVATE_KEY
-    $env:TAURI_SIGNING_PRIVATE_KEY = $key
-    Push-Location $ui
-    try {
-        Invoke-Checked 'tauri signer sign' { pnpm tauri signer sign --app-version $version $setup }
-    } finally {
-        Pop-Location
-        $env:TAURI_SIGNING_PRIVATE_KEY = $savedKey
-    }
+    $signTool = @('run', '--quiet', '--locked', '--manifest-path', (Join-Path $repo 'Cargo.toml'), '-p', 'sign-update', '--')
+    Remove-Item -LiteralPath "$setup.sig" -ErrorAction SilentlyContinue
+    Invoke-Checked 'sign-update sign' { cargo @signTool sign --app-version $version $setup }
     if (-not (Test-Path -LiteralPath "$setup.sig")) { throw "no $setup.sig" }
+    # The check the app runs before it installs an update, with the key built
+    # into this bluecaster.exe: a private key that does not match it would
+    # otherwise only show when the update fails on users' PCs
+    Invoke-Checked 'sign-update verify' { cargo @signTool verify --app-version $version --pubkey $pubkey $setup }
 }
 
 # --- Symbols: the crash reports' minidumps (logs\crash) open with them ---

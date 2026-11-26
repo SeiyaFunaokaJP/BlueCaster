@@ -16,6 +16,8 @@ accepted = [
     "CC0-1.0",
     "CDLA-Permissive-2.0",
     "Unlicense",
+    # enum-iterator (the GPUI component library)
+    "0BSD",
 ]
 targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
 ignore-build-dependencies = true

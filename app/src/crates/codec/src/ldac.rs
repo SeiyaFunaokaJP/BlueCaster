@@ -29,6 +29,15 @@ pub const ABR_INTERVAL_MS: u32 = 100;
 /// Android's shallower queue.
 const ABR_THRESHOLDS: (u32, u32, u32) = (12, 8, 4);
 
+/// Send queue depth (packets) up to which libldac's ABR is told the queue
+/// is empty, as `sbc::ABR_UP_DEPTH`. libldac raises the quality only after
+/// 0.5 s windows in which every depth was 0, as Android's queue reads on a
+/// good link. The encode thread looks at BlueCaster's queue right after
+/// its round, when the packets just encoded may still wait for the
+/// controller: one such packet in a window kept the quality from ever
+/// going back up (#575).
+const ABR_DRAINED_DEPTH: u32 = 2;
+
 const CODEC: CodecKind = CodecKind::Ldac;
 
 pub struct LdacEncoder {
@@ -207,7 +216,9 @@ impl Encoder for LdacEncoder {
 
     /// The bit rate of the frames being encoded: 990 / 660 / 330 kbps at 48 /
     /// 96 kHz stereo (909 / 606 / 303 at 44.1 / 88.2 kHz, half for mono),
-    /// or 492 / 396 kbps on the way down under ABR
+    /// or 492 / 396 kbps on the way down under ABR (libldac's own steps,
+    /// reached through ldacBT_alter_eqmid_priority: ldacBT_set_eqmid takes
+    /// only HQ, SQ and MQ)
     fn bitrate_kbps(&self) -> u32 {
         self.bitrate_kbps
     }
@@ -215,13 +226,15 @@ impl Encoder for LdacEncoder {
     /// One ldac_ABR_Proc step. Call every [`ABR_INTERVAL_MS`] (100 ms) with
     /// the send queue depth in packets at that moment; libldac's observation
     /// windows assume that cadence. A deep queue moves the quality down
-    /// (HQ, SQ, 492 kbps, 396 kbps, MQ), an empty one back up step by step
-    /// after a few seconds. The new quality applies from the next packet.
+    /// (HQ, SQ, 492 kbps, 396 kbps, MQ), a drained one (at most
+    /// [`ABR_DRAINED_DEPTH`] packets) back up step by step after a few
+    /// seconds. The new quality applies from the next packet.
     /// Does nothing when ABR is off.
     fn abr_adjust(&mut self, queue_depth: u32) {
         let Some(abr) = self.abr.as_mut() else { return };
         let before = self.bt.eqmid();
-        match abr.process(&mut self.bt, queue_depth, true) {
+        let observed = if queue_depth <= ABR_DRAINED_DEPTH { 0 } else { queue_depth };
+        match abr.process(&mut self.bt, observed, true) {
             Ok(eqmid) if eqmid != before => {
                 tracing::debug!("LDAC: ABR quality mode {before} -> {eqmid} (queue {queue_depth})");
             }

@@ -20,7 +20,6 @@ nav_order: 3
 
 - [rustup](https://rustup.rs/)으로 설치한 **Rust** (stable, 1.90 이상)
 - "C++를 사용한 데스크톱 개발" 워크로드가 설치된 **Visual Studio 2022 이상**(또는 Build Tools). C 라이브러리(BTstack, 코덱)를 MSVC로 컴파일하기 때문입니다
-- UI 빌드용 **Node.js** 22와 **pnpm** (`corepack enable`로 pnpm을 쓸 수 있음)
 - **Git** (서브모듈용)
 - `build.ps1` / `build.bat`용 **PowerShell 7** (`pwsh`, `winget install Microsoft.PowerShell`)
 - 검사(`tools/check_lang.py`)와 [에뮬레이터 테스트](#emu)용 **Python 3.11 이상**
@@ -34,19 +33,14 @@ cd BlueCaster
 pwsh ./build.ps1
 ```
 
-탐색기에서 `build.bat`을 더블클릭해도 됩니다. `build.bat`은 `build.ps1`을 실행하고, 끝나면 키 입력을 기다립니다(`build.bat -Test`처럼 스위치도 그대로 전달됩니다). `build.ps1`은 먼저 Rust, Node.js, pnpm, 서브모듈이 있는지 확인하고, `node_modules`가 없으면 `pnpm install`을 실행합니다. 그다음 창의 페이지를 빌드하고 세 프로그램을 `target/release/`에 만듭니다. `bluecaster-core.exe`(상주 코어: Bluetooth, 오디오, 트레이), `bluecaster.exe`(창), `bluecaster-driver.exe`(WinUSB 드라이버를 할당·복원하는, 관리자 권한으로 실행되는 도우미)입니다. 세 프로그램은 같은 폴더에 두세요. `bluecaster-core.exe --cli`를 쓰면 창 없이 스트리밍합니다.
+탐색기에서 `build.bat`을 더블클릭해도 됩니다. `build.bat`은 `build.ps1`을 실행하고, 끝나면 키 입력을 기다립니다(`build.bat -Test`처럼 스위치도 그대로 전달됩니다). `build.ps1`은 먼저 Rust와 서브모듈이 있는지 확인한 다음, 세 프로그램을 `target/release/`에 만듭니다. `bluecaster-core.exe`(상주 코어: Bluetooth, 오디오, 트레이), `bluecaster.exe`(창), `bluecaster-driver.exe`(WinUSB 드라이버를 할당·복원하는, 관리자 권한으로 실행되는 도우미)입니다. 세 프로그램은 같은 폴더에 두세요. `bluecaster-core.exe --cli`를 쓰면 창 없이 스트리밍합니다.
 
 스위치: `-Debug`(개발 프로필, `target/debug/`), `-Test`(테스트 항목의 검사도 실행), `-Decoder`(디코더 도구도 빌드), `-Emu`([에뮬레이터 테스트](#emu)도 실행. `-Emu -Codecs sbc,ldac`는 지정한 코덱만 테스트), `-Release -Arch x64|arm64`(릴리스 스크립트만 실행, 릴리스 패키지 항목 참고).
 
-**단계별로 빌드하려면** (`build.ps1`이 하는 일과 같습니다. `bluecaster.exe`에 창의 페이지가 포함되므로 페이지를 먼저 빌드해야 합니다):
+**스크립트 없이 빌드하려면** (`build.ps1`이 실행하는 명령):
 
 ```bash
-cargo build --release -p bluecaster-core-exe -p bluecaster-driver
-cd app/src/ui
-pnpm install --frozen-lockfile
-pnpm build
-cd ../../..
-cargo build --release -p bluecaster-ui
+cargo build --release -p bluecaster-core-exe -p bluecaster-driver -p bluecaster-ui
 ```
 
 ## `--recursive` 없이 이미 클론한 경우
@@ -64,11 +58,11 @@ BlueCaster/
 ├── app/
 │   ├── src/
 │   │   ├── core/           bluecaster-core.exe: resident core, tray, IPC server, --cli
-│   │   ├── ui/             bluecaster.exe: Tauri 2 + SolidJS (pnpm dev runs it in a browser with a mock core)
+│   │   ├── ui/             bluecaster.exe: the window and the tray flyout (GPUI)
 │   │   ├── driver/         bluecaster-driver.exe: WinUSB assign / restore (elevated)
 │   │   └── crates/         Libraries: btstack-sys, hci-transport, bt-host, codec, the codec -sys crates,
 │   │                       pipeline, audio-capture, win-sys, core (bluecaster-core), ipc, le-audio, lc3-sys,
-│   │                       aptx-adaptive (aptX Adaptive encoder)
+│   │                       aptx-adaptive (aptX Adaptive encoder), ui-model and ui-host (the window's logic)
 │   ├── lang/               Localization (en.json is the source; tools/check_lang.py checks the others)
 │   └── resources/          Icon and manifest
 ├── Cargo.toml              Cargo workspace
@@ -94,9 +88,12 @@ BlueCaster/
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cd app/src/ui && pnpm exec tsc --noEmit && pnpm exec vitest run
 python tools/check_lang.py
 ```
+
+`cargo test --workspace`는 창도 테스트합니다. 각 화면의 규칙, 번역, 서식은 `ui-model`에 있어 창 없이 테스트할 수 있습니다.
+
+코어나 어댑터 없이 화면을 확인하려면, 코어 상태의 스냅샷이 담긴 JSON 파일 경로를 `BLUECASTER_UI_DEMO`에 지정하고 `bluecaster.exe`를 실행하세요. `BLUECASTER_UI_ROUTE`는 특정 화면을 열고, `BLUECASTER_UI_SIZE`는 창 크기를 정합니다. 파일 형식은 `app/src/ui/src/demo.rs`에 설명되어 있습니다.
 
 ## 릴리스 패키지 {#release-packages}
 
@@ -155,7 +152,7 @@ python tools/emu/run_test.py                        # every codec and negotiatio
 
 ## 종속성 {#dependencies}
 
-C 라이브러리는 git 서브모듈로 가져오고, Rust 크레이트와 UI의 npm 패키지는 Cargo와 pnpm이 내려받습니다(버전은 `Cargo.lock`과 `app/src/ui/pnpm-lock.yaml`에 고정, 라이선스는 `cargo deny check`로 검사).
+C 라이브러리는 git 서브모듈로 가져오고, Rust 크레이트는 Cargo가 내려받습니다(버전은 `Cargo.lock`에 고정, 라이선스는 `cargo deny check`로 검사).
 
 | 라이브러리 | 방식 | 고정 버전 | 라이선스 |
 |:-----------|:-----|:----------|:---------|
@@ -169,7 +166,7 @@ C 라이브러리는 git 서브모듈로 가져오고, Rust 크레이트와 UI�
 | fdk-aac | git submodule | v3.0.0 | FDK AAC License |
 | LHDC V5 encoder | git submodule | 고정된 버전 | Apache-2.0 |
 | libopus | git submodule | v1.6.1 | BSD-3-Clause |
-| Tauri, SolidJS, Rust 크레이트 | Cargo / pnpm | `Cargo.lock`, `pnpm-lock.yaml` | MIT / Apache-2.0 등 (릴리스의 `licenses/third-party/rust-crates.txt`) |
+| GPUI, Rust 크레이트 | Cargo | `Cargo.lock` | MIT / Apache-2.0 등 (릴리스의 `licenses/third-party/rust-crates.txt`) |
 
 {: .warning }
 BlueCaster 소스 코드 자체는 Apache-2.0 또는 MIT 이중 라이선스입니다. 하지만 BTstack이 링크되므로 직접 빌드한 BlueCaster도 개인적·비상업적 목적으로만 사용하고 재배포할 수 있습니다.

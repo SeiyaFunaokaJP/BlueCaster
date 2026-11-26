@@ -89,6 +89,7 @@ fn iso_counters(cis: u32, s: &bt_host::LeStreamStats) -> IsoCounters {
         underruns: s.underruns,
         dropped: s.overflows,
         prefill: s.prefill,
+        transport_latency_us: (s.transport_latency_us > 0).then_some(s.transport_latency_us),
     }
 }
 
@@ -760,6 +761,7 @@ mod tests {
             overflows: 3,
             send_errors: 1,
             prefill: 6,
+            transport_latency_us: 4200,
             ..Default::default()
         };
         let earlier = bt_host::LeStreamStats { sdus_sent: 1800, bytes_sent: 279000, ..le };
@@ -770,7 +772,15 @@ mod tests {
         let (s, _) = link_sample(1000, &stats, Some(total), t0 + Duration::from_secs(1), 48000, Some((2, le)), false);
         assert_eq!(
             s.iso,
-            Some(IsoCounters { cis: 2, sdu_sets: 1000, silence: 12, underruns: 1, dropped: 3, prefill: 6 })
+            Some(IsoCounters {
+                cis: 2,
+                sdu_sets: 1000,
+                silence: 12,
+                underruns: 1,
+                dropped: 3,
+                prefill: 6,
+                transport_latency_us: Some(4200),
+            })
         );
         // The rates are the SDUs' (not the A2DP counters'), drops its own
         assert_eq!((s.bytes_per_second, s.packets_per_second), (31000.0, 200.0));

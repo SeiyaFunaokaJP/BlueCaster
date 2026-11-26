@@ -1,4 +1,4 @@
-//! Render devices: the list (with v1's virtual device heuristic), the
+//! Render and capture devices: the lists (with v1's virtual device heuristic), the
 //! default device, its mix rate and format, switching the default
 //! (IPolicyConfig) and the endpoint volume primitives of volume sync.
 //!
@@ -112,6 +112,39 @@ pub fn render_devices() -> Result<Vec<DeviceInfo>, CaptureError> {
             );
         }
     }
+    Ok(out)
+}
+
+/// Active capture endpoints (microphones, line in, the recording sides of
+/// cables), in Windows' order. `is_default`: the default recording device
+/// (Console role); `is_virtual` and `is_display` as for render devices;
+/// no capture side of their own.
+pub fn capture_devices() -> Result<Vec<DeviceInfo>, CaptureError> {
+    let _com = com()?;
+    let enumerator = DeviceEnumerator::new().map_err(|e| CaptureError::from_wasapi("device enumerator", e))?;
+    let default_id = enumerator.get_default_device(&Direction::Capture).and_then(|d| d.get_id()).ok();
+    let collection = enumerator
+        .get_device_collection(&Direction::Capture)
+        .map_err(|e| CaptureError::from_wasapi("EnumAudioEndpoints", e))?;
+    let mut out = Vec::new();
+    for device in &collection {
+        let Ok(device) = device else { continue };
+        let Ok(id) = device.get_id() else { continue };
+        let name = device.get_friendlyname().unwrap_or_default();
+        let hints = audio_policy::endpoint_hints(&id).unwrap_or_default();
+        out.push(DeviceInfo {
+            is_default: default_id.as_deref() == Some(id.as_str()),
+            is_virtual: is_virtual_device(&name, &hints),
+            is_display: hints.form_factor == Some(DISPLAY_FORM_FACTOR),
+            short_name: device.get_description().ok().filter(|s| !s.trim().is_empty()),
+            adapter_name: device.get_interface_friendlyname().ok().filter(|s| !s.trim().is_empty()),
+            id,
+            name,
+            capture_name: None,
+            capture_rate: None,
+        });
+    }
+    tracing::debug!("audio devices: {} active capture endpoints, default {default_id:?}", out.len());
     Ok(out)
 }
 

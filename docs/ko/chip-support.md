@@ -232,7 +232,7 @@ cargo test -p bt-host
 
 10. `app/src/core/src/state.rs`, `vendor_note()`: `MediaTek | Qualcomm` arm에서 분리해 새 키 `firmware.vendor_<vendor>`를 쓰는 arm과 그 테스트를 추가합니다. 이 함수는 그 arm보다 앞에서 `chip_supported`가 거부하는 칩에 `firmware.vendor_unsupported`를 돌려주므로, 벤더의 다른 칩은 그 문구를 유지합니다. 어댑터 화면은 안내 문구가 `firmware.vendor_unsupported`가 아닌 모든 어댑터에 WinUSB 할당을 제공합니다
 11. `app/lang/*.json`(10개 언어 모두, 각 파일의 같은 줄): Intel의 키처럼("Intel 어댑터. …") 새 키를 추가합니다. 버튼이나 폴더 이름이 나오면 같은 파일에 있는 그 언어의 표현을 쓰세요(펌웨어 폴더 버튼은 `firmware.open_folder`). 벤더 전체: `firmware.vendor_unsupported`에서 벤더 이름을 뺍니다. 일부 칩: 벤더의 다른 칩이 여전히 그 문구를 표시하므로 그대로 둡니다
-12. `app/src/ui/src/lib/links.ts`: 어댑터 화면에 파일을 받을 곳이 표시되도록 벤더의 펌웨어 페이지(`LINKS`, `firmwareUrl()`, `vendorFirmwareUrl()`에, Intel의 linux-firmware 폴더처럼)를 추가합니다. 테스트는 `app/src/ui/src/lib/chips.test.ts`에 있습니다. 어댑터 화면은 안내 문구가 `firmware.vendor_unsupported`가 아닌 어댑터에만 이 페이지를 표시하므로, 벤더의 다른 칩에는 나타나지 않습니다
+12. `app/src/crates/ui-model/src/links.rs`: 어댑터 화면에 파일을 받을 곳이 표시되도록 벤더의 펌웨어 페이지(`LINKS`, `firmware_url()`, `vendor_firmware_url()`에, Intel의 linux-firmware 폴더처럼)를 추가합니다. 테스트는 같은 파일에 있습니다. 어댑터 화면은 안내 문구가 `firmware.vendor_unsupported`가 아닌 어댑터에만 이 페이지를 표시하므로, 벤더의 다른 칩에는 나타나지 않습니다
 
 **문서**:
 
@@ -256,16 +256,7 @@ WinUSB가 할당된 어댑터가 여러 개이면 `-u`를 지정해도 Realtek �
 
 ## 8단계: 풀 리퀘스트 열기
 
-풀 리퀘스트를 열기 전에 다음 검사를 순서대로 실행하세요(환경 준비는 [빌드](building) 참고). 먼저 `app\src\ui`에서 UI를 검사합니다. 6단계(12번 항목)의 변경을 확인하기 위해서이고, Rust 워크스페이스에 포함된 창의 크레이트를 빌드하려면 UI 빌드가 먼저 필요하기 때문입니다.
-
-```bat
-pnpm install
-pnpm build
-pnpm exec tsc --noEmit
-pnpm exec vitest run
-```
-
-그다음 저장소 루트에서:
+풀 리퀘스트를 열기 전에 저장소 루트에서 다음 검사를 실행하세요(환경 준비는 [빌드](building) 참고). 6단계(12번 항목)의 변경도 `cargo test`가 확인합니다.
 
 ```bat
 cargo fmt --all
@@ -274,11 +265,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 python tools/check_lang.py
 ```
 
-Node.js가 없다면 위의 세 크레이트만 대상으로 테스트와 clippy를 실행하고(`-p bt-host -p bluecaster-core -p bluecaster-core-exe`), UI 검사는 풀 리퀘스트의 CI에 맡기세요. 그렇게 했다고 풀 리퀘스트에 적어 주세요. `pwsh ./build.ps1 -Test`를 실행하면 모든 검사를 한 번에 할 수 있습니다.
+`pwsh ./build.ps1 -Test`를 실행하면 모든 검사를 한 번에 할 수 있습니다.
 
 Clippy는 이름도 검사합니다. `State`의 variant를 `PatchState`라고 지으면 `enum_variant_names`에 걸리므로 `Patch`로 하세요. `check_lang.py`가 변경 전부터 있던 "long hints left"를 보고할 수 있습니다. 직접 고쳐야 할 것은 오류와 누락된 키뿐입니다.
 
-MediaTek나 Qualcomm을 미지원으로 잠깐 언급하는 곳이 그 밖에도 있지만(UI의 목업 데이터와 테스트, `Adapter.tsx`와 `probe.rs`의 주석, "Realtek 아님" 선택지), 그대로 두세요.
+MediaTek나 Qualcomm을 미지원으로 잠깐 언급하는 곳이 그 밖에도 있지만(UI의 테스트, `view/adapter.rs`와 `probe.rs`의 주석, "Realtek 아님" 선택지), 그대로 두세요.
 
 풀 리퀘스트에서는:
 

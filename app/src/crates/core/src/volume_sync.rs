@@ -189,10 +189,11 @@ impl EndpointChoice {
     /// the device the audio comes from: the virtual device in virtual device
     /// mode, the chosen output device in output device mode, else the
     /// default output device (in application mode that is
-    /// where the volume keys act). The test tone has no Windows volume.
+    /// where the volume keys act). The test tone has no Windows volume, and a
+    /// recording device has its recording level in the audio already.
     pub fn for_stream(sync: &VolumeSync, source: &SourceRequest) -> Option<EndpointChoice> {
         match (sync, source) {
-            (VolumeSync::Off, _) | (_, SourceRequest::TestTone) => None,
+            (VolumeSync::Off, _) | (_, SourceRequest::TestTone | SourceRequest::InputDevice { .. }) => None,
             (VolumeSync::Device(id), _) if !id.is_empty() => Some(EndpointChoice::Device(id.clone())),
             (VolumeSync::Auto, SourceRequest::VirtualDevice { id, .. } | SourceRequest::OutputDevice { id, .. })
                 if !id.is_empty() =>

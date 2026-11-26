@@ -86,7 +86,9 @@ const JUST_LEFT: Duration = Duration::from_secs(5);
 const SWAP_FIND: Duration = Duration::from_secs(3);
 /// Broadcast presets of stream.start_broadcast's qualities: high (48 kHz)
 /// and standard (24 kHz)
-pub use le_audio::broadcast::{DEFAULT_PRESET as BROADCAST_PRESET_HQ, STANDARD_PRESET as BROADCAST_PRESET_SQ};
+pub use le_audio::broadcast::{
+    DEFAULT_PRESET as BROADCAST_PRESET_HQ, MID_PRESET as BROADCAST_PRESET_MQ, STANDARD_PRESET as BROADCAST_PRESET_SQ,
+};
 /// The codec name the UI shows (v1)
 pub const CODEC_NAME: &str = "LC3 (LE Audio)";
 
@@ -127,6 +129,16 @@ pub struct LeStreamDetails {
     pub low_latency: bool,
     /// English, v1's StreamPlan::describe
     pub summary: String,
+    /// The presentation delay set up (the device's, decoding included), us
+    pub presentation_delay_us: u32,
+    /// LC3's algorithmic delay, us ([`lc3_delay_us`])
+    pub codec_delay_us: u32,
+}
+
+/// LC3's algorithmic delay: a frame and the look-ahead of its transform (4
+/// ms for 7.5 ms frames, 2.5 ms for 10 ms frames; LC3 1.0 3.1.2)
+pub fn lc3_delay_us(frame_us: u32) -> u32 {
+    frame_us + if frame_us == 7500 { 4000 } else { 2500 }
 }
 
 impl LeStreamDetails {
@@ -149,6 +161,8 @@ impl LeStreamDetails {
             devices: status.devices.len() as u32,
             low_latency: plan.preset.name.ends_with("_gr"),
             summary: status.summary.clone(),
+            presentation_delay_us: plan.presentation_delay_us,
+            codec_delay_us: lc3_delay_us(plan.preset.frame_us.into()),
         }
     }
 }
@@ -184,7 +198,7 @@ pub struct LeAudioPath {
 impl LeAudioPath {
     /// The capture source for `source` (application capture is not
     /// supported with LE Audio: error.le_audio_capture before this)
-    fn capture_source(source: &SourceRequest) -> Result<Source, String> {
+    pub(crate) fn capture_source(source: &SourceRequest) -> Result<Source, String> {
         match source {
             SourceRequest::TestTone => Ok(Source::TestTone),
             SourceRequest::SystemLoopback => Ok(Source::SystemLoopback),
@@ -192,17 +206,23 @@ impl LeAudioPath {
             SourceRequest::VirtualDevice { .. } => Err("no virtual device selected".into()),
             SourceRequest::OutputDevice { id, .. } if !id.is_empty() => Ok(Source::RenderDevice { id: id.clone() }),
             SourceRequest::OutputDevice { .. } => Err("no output device selected".into()),
+            SourceRequest::InputDevice { id, .. } if !id.is_empty() => Ok(Source::CaptureDevice { id: id.clone() }),
+            SourceRequest::InputDevice { .. } => Err("no recording device selected".into()),
             SourceRequest::Application { .. } => Err("application capture is not supported with LE Audio".into()),
         }
     }
 
     /// Starts capture and encoding for the stream `started` (`mix`: the
-    /// broadcast's matrix mixer, else the fixed downmix)
+    /// broadcast's matrix mixer, else the fixed downmix; `gain`: the
+    /// broadcast's volume, else the audio as it comes; `channels`: the
+    /// device's channel settings, else as planned)
     pub fn start(
         source: &SourceRequest,
         started: &LeStreamStarted,
         stats: Arc<LinkStats>,
         mix: Option<pipeline::mix::MixHandle>,
+        gain: Option<pipeline::gain::GainHandle>,
+        channels: Option<pipeline::channels::ChannelsHandle>,
     ) -> Result<LeAudioPath, String> {
         let plan = &started.status.plan;
         let rate = plan.top_sampling_hz();
@@ -225,6 +245,8 @@ impl LeAudioPath {
                 buffer: BufferPreset::Standard,
                 media_eq: Some(crate::media_eq::handle()),
                 mix,
+                gain,
+                channels,
             },
             started.sink.clone(),
             stats,
@@ -244,11 +266,11 @@ impl LeAudioPath {
         self.channel_mask
     }
 
-    /// Both channels' mix on every channel (the earbud left alone) or the
-    /// plan's channels again
-    pub fn set_mono(&self, on: bool) {
+    /// An earbud is left alone (it plays what the device's channel
+    /// settings say for that) or the plan's channels again
+    pub fn set_alone(&self, on: bool) {
         if let Some(p) = &self.pipeline {
-            p.set_mono(on);
+            p.set_alone(on);
         }
     }
 
@@ -643,7 +665,17 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     let mut default_guard = switch_default();
     // Restored while the headphones are off: switched again when they are back
     let mut switch_default_again = false;
-    let mut audio = match LeAudioPath::start(&req.source, &started, host.stats().clone(), None) {
+    // The TWS matrix mixer (developer mode), when turned on: from the
+    // stream's start on, its cells followed while it runs
+    let tws_mix = crate::matrix_mix::tws_for_stream(inner.config_dir());
+    let mut audio = match LeAudioPath::start(
+        &req.source,
+        &started,
+        host.stats().clone(),
+        tws_mix.clone(),
+        None,
+        Some(crate::le_channels::handle()),
+    ) {
         Ok(a) => Some(a),
         Err(e) => {
             tracing::error!("LE Audio: audio capture: {e}");
@@ -666,6 +698,17 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         let channels = plan.channel_count() as u32;
         let rate = plan.preset.sampling_hz;
         let format = audio.map(LeAudioPath::format);
+        // What the TWS mixer shows of the capture
+        if let (Some(_), Some(a)) = (&tws_mix, audio) {
+            crate::matrix_mix::set_live(
+                crate::matrix_mix::Target::Tws,
+                Some(crate::matrix_mix::Live {
+                    channels: usize::from(a.format().channels),
+                    mask: a.channel_mask(),
+                    rear: false,
+                }),
+            );
+        }
         inner.set_le_stream(Some(details));
         inner.mic_rates(plan.source.as_ref().map(|s| s.rates.clone()).unwrap_or_default());
         inner.stream_info(StreamInfo {
@@ -781,9 +824,9 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         if dropped.len() != shown_dropped && (lost || playing > 0) {
             shown_dropped = dropped.len();
             tracing::info!("LE Audio: {shown_dropped} device(s) left the stream, {playing} play on");
-            // The one left alone gets both channels
+            // The one left alone plays what its settings say
             if let Some(a) = audio.as_ref() {
-                a.set_mono(playing <= 1);
+                a.set_alone(playing <= 1);
             }
             let known = host.le_devices();
             for d in known.iter().filter(|d| dropped.contains(&d.id)) {
@@ -939,7 +982,14 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
                     rejoin.restored(Instant::now(), host.le_set_members_missing() == 0);
                     mic_streams += 1;
                     mic = open_mic(inner, &mut started, mic_target.as_ref(), mic_streams, &mut mic_note);
-                    audio = match LeAudioPath::start(&req.source, &started, host.stats().clone(), None) {
+                    audio = match LeAudioPath::start(
+                        &req.source,
+                        &started,
+                        host.stats().clone(),
+                        tws_mix.clone(),
+                        None,
+                        Some(crate::le_channels::handle()),
+                    ) {
                         Ok(a) => Some(a),
                         Err(e) => {
                             tracing::error!("LE Audio: audio capture: {e}");
@@ -1092,7 +1142,14 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         tracing::info!("LE Audio stream restored: {}", started.status.summary);
         mic_streams += 1;
         mic = open_mic(inner, &mut started, mic_target.as_ref(), mic_streams, &mut mic_note);
-        audio = match LeAudioPath::start(&req.source, &started, host.stats().clone(), None) {
+        audio = match LeAudioPath::start(
+            &req.source,
+            &started,
+            host.stats().clone(),
+            tws_mix.clone(),
+            None,
+            Some(crate::le_channels::handle()),
+        ) {
             Ok(a) => Some(a),
             Err(e) => {
                 tracing::error!("LE Audio: audio capture: {e}");
@@ -1122,6 +1179,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     if let Some(a) = audio.take() {
         a.stop();
     }
+    crate::matrix_mix::set_live(crate::matrix_mix::Target::Tws, None);
     host.le_stop_stream();
     // After the stream stopped: what arrived until then is decoded
     stop_mic(inner, &mut mic);
@@ -1381,8 +1439,12 @@ fn broadcast_once(
     };
     // The matrix mixer feeds a matrix layout only; stereo, mono and split
     // keep the fixed downmix
-    let mix = config.layout.is_matrix().then(crate::auracast_mix::handle);
-    let mut audio = match LeAudioPath::start(source, &started, host.stats().clone(), mix.clone()) {
+    let mix = config.layout.is_matrix().then(|| crate::matrix_mix::handle(crate::matrix_mix::Target::Auracast));
+    // The broadcast's volume, set before the audio comes (with the Windows
+    // volume and mute it follows)
+    let mut volume = crate::broadcast_volume::Session::new(source, req.mutes_output(source));
+    let gain = Some(crate::broadcast_volume::gain());
+    let mut audio = match LeAudioPath::start(source, &started, host.stats().clone(), mix.clone(), gain.clone(), None) {
         Ok(a) => a,
         Err(e) => {
             tracing::error!("Auracast: audio capture: {e}");
@@ -1401,11 +1463,14 @@ fn broadcast_once(
     let show = |audio: &LeAudioPath, source: &SourceRequest| {
         let format = audio.format();
         if config.layout.is_matrix() {
-            crate::auracast_mix::set_live(Some(crate::auracast_mix::Live {
-                channels: usize::from(format.channels),
-                mask: audio.channel_mask(),
-                rear,
-            }));
+            crate::matrix_mix::set_live(
+                crate::matrix_mix::Target::Auracast,
+                Some(crate::matrix_mix::Live {
+                    channels: usize::from(format.channels),
+                    mask: audio.channel_mask(),
+                    rear,
+                }),
+            );
         }
         inner.stream_info(StreamInfo {
             codec: CODEC_NAME.into(),
@@ -1445,7 +1510,7 @@ fn broadcast_once(
             // the same queue (silence goes out in between)
             tracing::info!("Auracast: source {:?} -> {:?}", source, next);
             audio.stop_now();
-            match LeAudioPath::start(&next, &started, host.stats().clone(), mix.clone()) {
+            match LeAudioPath::start(&next, &started, host.stats().clone(), mix.clone(), gain.clone(), None) {
                 Ok(a) => {
                     audio = a;
                     *source = next;
@@ -1453,7 +1518,7 @@ fn broadcast_once(
                 }
                 Err(e) => {
                     tracing::error!("Auracast: audio capture of the new source: {e}");
-                    match LeAudioPath::start(source, &started, host.stats().clone(), mix.clone()) {
+                    match LeAudioPath::start(source, &started, host.stats().clone(), mix.clone(), gain.clone(), None) {
                         Ok(a) => {
                             audio = a;
                             // The request says the new source: back to this one
@@ -1471,6 +1536,9 @@ fn broadcast_once(
             show(&audio, source);
         }
         output_mute.tick(mutes_output);
+        if let Some(level) = volume.tick(source, mutes_output) {
+            inner.send_event(crate::service::ServiceEvent::Volume(level));
+        }
         discontinuities.tick(audio.discontinuities());
         if adapter_gone() {
             adapter_lost = true;
@@ -1495,7 +1563,8 @@ fn broadcast_once(
     if !capture_failed {
         audio.stop();
     }
-    crate::auracast_mix::set_live(None);
+    crate::matrix_mix::set_live(crate::matrix_mix::Target::Auracast, None);
+    drop(volume);
     // A stack without its adapter would only wait out the stop
     if !adapter_lost {
         host.le_stop_broadcast();
@@ -2004,6 +2073,12 @@ mod tests {
         assert!(just_left(&left, &[1; 6]));
         assert!(!just_left(&left, &[2; 6]));
         assert!(!just_left(&left, &[3; 6]));
+    }
+
+    #[test]
+    fn lc3_delay_is_a_frame_and_its_look_ahead() {
+        assert_eq!(lc3_delay_us(7500), 11500);
+        assert_eq!(lc3_delay_us(10000), 12500);
     }
 
     #[test]

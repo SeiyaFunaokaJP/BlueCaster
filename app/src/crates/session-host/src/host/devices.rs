@@ -1,6 +1,6 @@
-//! Group `devices`: Windows' render devices, a device's mix format, the
-//! default render device. (Switching the default device, capture devices
-//! and endpoint notifications are not here yet.)
+//! Group `devices`: Windows' render and capture devices, a device's mix
+//! format, the default render device. (Switching the default device and
+//! endpoint notifications are not here yet.)
 
 use audio_capture::{CaptureError, DeviceInfo, MixFormat};
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,8 @@ pub enum Request {
     /// Reply: `Result<Vec<DeviceInfo>, CaptureWireError>` as a reply or a
     /// failure with the capture error as its detail
     RenderDevices,
+    /// Reply: as [`Request::RenderDevices`], of the capture endpoints
+    CaptureDevices,
     /// Reply: `Option<MixFormat>`
     MixFormat { device: Option<String> },
     /// Reply: `Option<String>`
@@ -26,6 +28,8 @@ pub enum Request {
 pub trait DevicesHost {
     /// Active render endpoints, in Windows' order
     fn render_devices(&self) -> Result<Vec<DeviceInfo>, CaptureError>;
+    /// Active capture endpoints (microphones, line in), in Windows' order
+    fn capture_devices(&self) -> Result<Vec<DeviceInfo>, CaptureError>;
     /// A render device's shared-mode format (None = the default device);
     /// None if it cannot be read
     fn mix_format(&self, device_id: Option<&str>) -> Option<MixFormat>;
@@ -36,6 +40,10 @@ pub trait DevicesHost {
 impl DevicesHost for LocalHost {
     fn render_devices(&self) -> Result<Vec<DeviceInfo>, CaptureError> {
         audio_capture::render_devices()
+    }
+
+    fn capture_devices(&self) -> Result<Vec<DeviceInfo>, CaptureError> {
+        audio_capture::capture_devices()
     }
 
     fn mix_format(&self, device_id: Option<&str>) -> Option<MixFormat> {
@@ -64,6 +72,10 @@ impl DevicesHost for RemoteHost {
         self.call(GROUP, &Request::RenderDevices).map_err(capture_error)
     }
 
+    fn capture_devices(&self) -> Result<Vec<DeviceInfo>, CaptureError> {
+        self.call(GROUP, &Request::CaptureDevices).map_err(capture_error)
+    }
+
     fn mix_format(&self, device_id: Option<&str>) -> Option<MixFormat> {
         let request = Request::MixFormat { device: device_id.map(str::to_string) };
         self.call(GROUP, &request).unwrap_or_else(|e| {
@@ -83,6 +95,11 @@ impl DevicesHost for RemoteHost {
 /// [`DevicesHost::render_devices`] of this process's host
 pub fn render_devices() -> Result<Vec<DeviceInfo>, CaptureError> {
     crate::host().render_devices()
+}
+
+/// [`DevicesHost::capture_devices`] of this process's host
+pub fn capture_devices() -> Result<Vec<DeviceInfo>, CaptureError> {
+    crate::host().capture_devices()
 }
 
 /// [`DevicesHost::mix_format`] of this process's host

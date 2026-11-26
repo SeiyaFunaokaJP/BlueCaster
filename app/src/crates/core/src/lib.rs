@@ -6,15 +6,19 @@
 #![forbid(unsafe_code)]
 
 pub mod adapter;
-pub mod auracast_mix;
+pub mod asha;
+pub mod auracast_assist;
+pub mod broadcast_volume;
 pub mod compat;
 pub mod default_input;
 pub mod devices;
 mod health;
 pub mod hid;
+pub mod le_channels;
 pub mod le_sets;
 mod le_stream;
 pub mod link;
+pub mod matrix_mix;
 pub mod media_eq;
 pub mod messages;
 mod mic_test;
@@ -30,8 +34,8 @@ mod voice;
 
 pub use hid::{HidCounts, HidDevice};
 pub use le_stream::{
-    BROADCAST_PRESET_HQ, BROADCAST_PRESET_SQ, LeAudioPath, LeMicPath, LeStreamDetails, broadcast_config, le_mic_target,
-    le_silence_set, le_stats_line, start_mic,
+    BROADCAST_PRESET_HQ, BROADCAST_PRESET_MQ, BROADCAST_PRESET_SQ, LeAudioPath, LeMicPath, LeStreamDetails,
+    broadcast_config, le_mic_target, le_silence_set, le_stats_line, start_mic,
 };
 pub use messages::{CodecStop, CodecStopKind, Msg};
 pub use service::{LeCliOptions, ScannedDevice, Service, ServiceEvent, ServiceOptions, VoiceChange};

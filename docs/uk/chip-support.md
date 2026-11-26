@@ -232,7 +232,7 @@ cargo test -p bt-host
 
 10. `app/src/core/src/state.rs`, `vendor_note()`: гілка з новим ключем `firmware.vendor_<vendor>`, винесена з гілки `MediaTek | Qualcomm`, і її тест. До цієї гілки функція повертає `firmware.vendor_unsupported` для мікросхем, які відхиляє `chip_supported`, тож інші мікросхеми виробника зберігають цю примітку. Екран «Адаптери» пропонує WinUSB кожному адаптеру, примітка якого не `firmware.vendor_unsupported`
 11. `app/lang/*.json` (усі 10 мов, той самий рядок у кожній): новий ключ, як для Intel («Intel adapter. …»). Якщо в ньому згадано кнопку чи папку, використовуйте слова відповідної мови з того самого файлу (кнопка папки мікропрограм — `firmware.open_folder`). Увесь виробник: вилучіть його назву з `firmware.vendor_unsupported`. Деякі мікросхеми: залиште її там, бо інші мікросхеми виробника й далі показують цей текст
-12. `app/src/ui/src/lib/links.ts`: сторінка мікропрограм виробника (у `LINKS`, `firmwareUrl()` і `vendorFirmwareUrl()`, як папка Intel у linux-firmware), щоб екран «Адаптери» показував, де взяти файли; тести в `app/src/ui/src/lib/chips.test.ts`. Екран «Адаптери» показує сторінку лише для адаптерів, примітка яких не `firmware.vendor_unsupported`, тож інші мікросхеми виробника її не отримують
+12. `app/src/crates/ui-model/src/links.rs`: сторінка мікропрограм виробника (у `LINKS`, `firmware_url()` і `vendor_firmware_url()`, як папка Intel у linux-firmware), щоб екран «Адаптери» показував, де взяти файли; тести в тому самому файлі. Екран «Адаптери» показує сторінку лише для адаптерів, примітка яких не `firmware.vendor_unsupported`, тож інші мікросхеми виробника її не отримують
 
 **Документація**:
 
@@ -256,16 +256,7 @@ target\release\bluecaster-core.exe --cli -u 0e8d:7961 --scan 5 --hci-capture loa
 
 ## Крок 8: Відкрийте pull request
 
-Перед цим виконайте по черзі такі перевірки (налаштування описано в розділі [Збирання](building)). Почніть з інтерфейсу в `app\src\ui`: це перевіряє вашу зміну з кроку 6 (пункт 12), а робочий простір Rust містить крейт вікна, якому потрібен зібраний інтерфейс:
-
-```bat
-pnpm install
-pnpm build
-pnpm exec tsc --noEmit
-pnpm exec vitest run
-```
-
-Потім у корені репозиторію:
+Перед цим виконайте такі перевірки в корені репозиторію (налаштування описано в розділі [Збирання](building)). `cargo test` перевіряє й вашу зміну з кроку 6 (пункт 12):
 
 ```bat
 cargo fmt --all
@@ -274,11 +265,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 python tools/check_lang.py
 ```
 
-Якщо Node.js немає, натомість запустіть тести й clippy для трьох наведених вище крейтів (`-p bt-host -p bluecaster-core -p bluecaster-core-exe`), залиште перевірки інтерфейсу CI pull request і зазначте це в pull request. `pwsh ./build.ps1 -Test` запускає все.
+`pwsh ./build.ps1 -Test` запускає все.
 
 Clippy перевіряє й назви: варіант `State` з назвою `PatchState` не проходить `enum_variant_names`; назвіть його `Patch`. `check_lang.py` може повідомити «long hints left», які були ще до вашої зміни; виправляти потрібно лише помилки й відсутні ключі.
 
-В інших місцях MediaTek чи Qualcomm мимохідь згадано як непідтримувані (тестові дані й тести інтерфейсу, коментарі в `Adapter.tsx` і `probe.rs`, варіант «Не Realtek»): залиште їх як є.
+В інших місцях MediaTek чи Qualcomm мимохідь згадано як непідтримувані (тести інтерфейсу, коментарі в `view/adapter.rs` і `probe.rs`, варіант «Не Realtek»): залиште їх як є.
 
 У pull request:
 
