@@ -1016,8 +1016,21 @@ async def main(args):
             # no RTP header, so the parser is bypassed.
             sink.on_avdtp_packet = lambda packet: None
 
+    # Links whose A2DP connection the sink opened and the PC closed
+    replaced_a2dp = set()
+
+    def on_pc_avdtp_connection(server):
+        connection = server.l2cap_channel.connection
+        if args.ends_link_on_a2dp_close and connection.handle in replaced_a2dp:
+            # As Sony headphones (issue #602): the PC replaced their A2DP
+            # connection with its own, and they end the link
+            print('ending the link: the PC replaced our A2DP connection', flush=True)
+            asyncio.ensure_future(connection.disconnect(hci.HCI_REMOTE_USER_TERMINATED_CONNECTION_ERROR))
+            return
+        on_avdtp_connection(server)
+
     listener = Listener.for_device(device)
-    listener.on('connection', on_avdtp_connection)
+    listener.on('connection', on_pc_avdtp_connection)
 
     async def turn_off_and_on(connection):
         """Headphones switched off and on: they drop the link and page the PC,
@@ -1029,14 +1042,31 @@ async def main(args):
         connection = await device.connect(BLUECASTER_ADDRESS, transport=BT_BR_EDR_TRANSPORT)
         print('turned on', flush=True)
         if args.opens_a2dp:
-            await asyncio.sleep(0.5)
-            protocol = await Protocol.connect(connection)
-            protocol.l2cap_channel.on('close', lambda: print('A2DP closed', flush=True))
-            listener.set_server(connection, protocol)
-            on_avdtp_connection(protocol)
-            print('A2DP opened', flush=True)
-            if args.opens_stream:
-                await open_last_stream(protocol)
+            await open_a2dp(connection)
+
+    async def open_a2dp(connection):
+        """A2DP signaling opened by the sink, as headphones just turned on
+        open it to the PC they used last"""
+        await asyncio.sleep(0.5)
+        protocol = await Protocol.connect(connection)
+
+        def on_close():
+            print('A2DP closed', flush=True)
+            replaced_a2dp.add(connection.handle)
+        protocol.l2cap_channel.on('close', on_close)
+        listener.set_server(connection, protocol)
+        on_avdtp_connection(protocol)
+        print('A2DP opened', flush=True)
+        if args.opens_stream:
+            await open_last_stream(protocol)
+
+    async def page_back():
+        """The PC ended the link (Disconnect): headphones that look for it
+        again page it a moment later and open A2DP themselves"""
+        await asyncio.sleep(args.pages_after_disconnect)
+        connection = await device.connect(BLUECASTER_ADDRESS, transport=BT_BR_EDR_TRANSPORT)
+        print('paged the PC after its disconnect', flush=True)
+        await open_a2dp(connection)
 
     async def open_last_stream(protocol):
         """Configure and open the stream BlueCaster set up last, at once, as
@@ -1085,7 +1115,14 @@ async def main(args):
         if args.turn_off_after and not on_connection.turned_off:
             on_connection.turned_off = True
             asyncio.ensure_future(turn_off_and_on(connection))
+        if args.pages_after_disconnect is not None and not on_connection.paged_back:
+            def on_disconnection(reason):
+                if not on_connection.paged_back:
+                    on_connection.paged_back = True
+                    asyncio.ensure_future(page_back())
+            connection.on('disconnection', on_disconnection)
     on_connection.turned_off = False
+    on_connection.paged_back = False
     on_connection.count = 0
 
     device.on('connection', on_connection)
@@ -1120,6 +1157,10 @@ if __name__ == '__main__':
     parser.add_argument('--opens-a2dp', action='store_true', help='with --turn-off-after, open A2DP after paging')
     parser.add_argument('--opens-stream', action='store_true',
                         help='with --opens-a2dp, also configure and open the last stream')
+    parser.add_argument('--pages-after-disconnect', type=float, metavar='S',
+                        help='S seconds after the PC ends the first link, page it and open A2DP')
+    parser.add_argument('--ends-link-on-a2dp-close', action='store_true',
+                        help='end the link when the PC replaces an A2DP connection the sink opened with its own')
     parser.add_argument('--disconnect-delay', type=float, default=0, metavar='S',
                         help="seconds until an HCI Disconnect from BlueCaster takes effect")
     parser.add_argument('--crossed-page', action='store_true',

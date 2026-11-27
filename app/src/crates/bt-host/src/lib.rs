@@ -1332,7 +1332,6 @@ impl BtHost {
         }
         *self.remote_addr.lock().unwrap_or_else(|e| e.into_inner()) = Some(addr);
         self.shared.update(|s| {
-            s.remote_caps = Default::default();
             s.disconnect_occurred = false;
             s.last_connect_failure = None;
             // The link the device opened itself (turned on) is up already:
@@ -1344,11 +1343,35 @@ impl BtHost {
             // earlier stop, or the wait below aborts at once
             s.cancel = false;
             s.connect_done = None;
-            s.stream_done = None;
         });
         tracing::info!("connecting to {}", addr_str(&addr));
+        let adopted = self.caps_from_device(addr);
+        self.shared.update(|s| {
+            if adopted.is_none() {
+                s.remote_caps = Default::default();
+            }
+            s.stream_done = None;
+        });
+        if let Some(remote) = adopted {
+            return Ok(remote);
+        }
         self.release_leftover_avdtp(addr);
         self.establish_and_wait(addr)
+    }
+
+    /// The capabilities of an A2DP connection the device opened itself, as
+    /// headphones turned on while the PC is idle do. Closing it to open our
+    /// own makes some (Sony) end the link and leave the PC's pages
+    /// unanswered for a while (issue #602). None without one, or when the
+    /// device configured the stream itself: our connection replaces that.
+    fn caps_from_device(&self, addr: [u8; 6]) -> Option<RemoteCaps> {
+        match self.a2dp_from_device(addr)? {
+            DeviceA2dp::Caps(remote) => {
+                tracing::info!("{} connected A2DP itself, connecting over it", addr_str(&addr));
+                Some(remote)
+            }
+            DeviceA2dp::Stream(_) => None,
+        }
     }
 
     fn set_failure(&self, f: ConnectFailure) {
