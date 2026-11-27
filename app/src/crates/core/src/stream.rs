@@ -1203,6 +1203,11 @@ fn vendor_named(host: &BtHost, req: &StreamRequest, given: &mut Option<Option<St
     (v.named)(name)
 }
 
+/// Whether the device lists a codec AirPods never offer (they list SBC and AAC)
+fn lists_codec_airpods_lack(remote: &RemoteCaps) -> bool {
+    CodecKind::ALL.iter().any(|&k| !matches!(k, CodecKind::Sbc | CodecKind::SbcXq | CodecKind::Aac) && remote.has(k))
+}
+
 fn connect_error(f: Option<ConnectFailure>) -> Msg {
     Msg::new(match f {
         Some(ConnectFailure::Stalled) => "error.btstack_no_answer",
@@ -1617,12 +1622,15 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     // mode stays set on them and trades connection stability for it. No LDAC
     // from it: earbuds that had it off get it back, and a connection after it.
     let mut given_name = None;
+    // Earbuds another vendor's protocol took are not AirPods
+    let mut other_vendor = false;
     if req.codec == Some(CodecKind::Ldac)
         && !remote.has(CodecKind::Ldac)
         && remote.audio_sinks_in_use == 0
         && !stopped()
         && vendor_named(&host, &req, &mut given_name, vendor::HUAWEI)
     {
+        other_vendor = true;
         inner.notify(StreamState::Connecting, Msg::new("status.huawei_ldac"));
         if let Some(before) = vendor::huawei::ask_for_ldac(&host, req.device) {
             let mut result = connect_again();
@@ -1669,9 +1677,11 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         && let Some(why) = oppo_blocked
         && vendor_named(&host, &req, &mut given_name, vendor::OPPO)
     {
+        other_vendor = true;
         tracing::info!("OPPO: Hi-Res not asked for: {why}");
     }
     if oppo_candidate && oppo_blocked.is_none() && vendor_named(&host, &req, &mut given_name, vendor::OPPO) {
+        other_vendor = true;
         inner.notify(StreamState::Connecting, Msg::new("status.oppo_hi_res"));
         // Whether they kept the link or not, a new connection follows
         if let Some((before, _)) = vendor::oppo::ask_for_hi_res(&host, req.device) {
@@ -2094,7 +2104,12 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
 
     // AirPods: each bud's battery and noise control over their own channel,
     // for as long as the session streams (after a reconnect anew)
-    let airpods = !stopped() && vendor_named(&host, &req, &mut given_name, vendor::APPLE);
+    // AirPods list only SBC and AAC. Other earbuds are not asked for their
+    // name for it, unless developer mode says always.
+    let maybe_airpods = !other_vendor && !lists_codec_airpods_lack(&remote);
+    let airpods = !stopped()
+        && (maybe_airpods || vendor::mode(vendor::APPLE) == vendor::Mode::Always)
+        && vendor_named(&host, &req, &mut given_name, vendor::APPLE);
     let airpods_name = given_name.clone().flatten().unwrap_or_else(|| req.device_name.clone());
     let _airpods = airpods.then(|| {
         inner.start_apple(host.clone(), req.device, &airpods_name);
@@ -2740,6 +2755,16 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn airpods_only_for_sbc_and_aac_devices() {
+        let sep = Some(codec::caps::RemoteSep { seid: 1 });
+        let airpods = RemoteCaps { sbc: sep, aac: sep, ..Default::default() };
+        assert!(!lists_codec_airpods_lack(&airpods));
+        assert!(lists_codec_airpods_lack(&RemoteCaps { lhdcv5: sep, ..airpods.clone() }));
+        assert!(lists_codec_airpods_lack(&RemoteCaps { ldac: sep, ..airpods.clone() }));
+        assert!(lists_codec_airpods_lack(&RemoteCaps { aptx: sep, ..airpods }));
+    }
 
     #[test]
     fn sbc_abr_only_for_a_profile_of_that_codec() {
