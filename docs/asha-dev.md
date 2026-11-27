@@ -48,8 +48,18 @@ Codecs screen shows only G.722; there is nothing to choose.
 
 For bimodal, open a classic device's card on Audio Devices and choose a
 saved hearing aid under **Hearing aid for the other ear**. The hearing aid
-then connects whenever that device streams. **Hearing aid delay** delays the
-hearing aid's sound by up to 500 ms.
+then connects whenever that device streams. **Hearing aid volume** sets how
+loud the hearing aid plays. **Hearing aid delay** delays the hearing aid's
+sound by up to 500 ms. Changes to either take effect immediately, even while
+the device is streaming.
+
+The status line shows what the hearing aid is doing:
+
+- **Connected. Connecting to the hearing aid...**
+- **Connected. The hearing aid is playing too.**
+- **Connected. The hearing aid was not found.** BlueCaster keeps searching
+  every 5 seconds.
+- **Connected. Turn on LE Audio to use the hearing aid.**
 
 ## From the command line
 
@@ -102,8 +112,8 @@ that is paired with a phone may need to be put in pairing mode.
 
 The window and the command line start the same sessions. A saved hearing aid
 is an LE entry whose profile has `hearing_aid` set. A classic device's
-profile stores its hearing aid in `hearing_aid_beside` and the delay in
-`hearing_aid_delay_ms`.
+profile stores its hearing aid in `hearing_aid_beside`, the delay in
+`hearing_aid_delay_ms` and the volume in `hearing_aid_volume`.
 
 The steps follow Android's
 [ASHA specification](https://source.android.com/docs/core/connect/bluetooth/asha)
@@ -161,8 +171,9 @@ each hearing aid received.
   now.
 - Remembering the pair. BlueCaster searches for the other side at every
   connection.
-- Bimodal: the hearing aid's volume is fixed at -20, and the window does not
-  show whether the hearing aid is connected (the log does).
+- Bimodal: the hearing aid's volume is a setting on the device's card. The
+  volume slider and Windows Volume Sync still change only the A2DP device's
+  volume.
 - Bimodal: the A2DP device still gets both sides. Still to do: send the
   A2DP device only its own side, and measure the delay between the two
   paths.

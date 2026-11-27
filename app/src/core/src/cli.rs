@@ -177,8 +177,8 @@ Keyboards and mice (experimental):
                         aid then plays its own side)
   --asha-delay <ms>     with --asha: delay the hearing aids by 0 to 500 ms,
                         to sync them with the A2DP device
-  --asha-volume <n>     with --asha and without -d: the hearing aids' volume,
-                        -128 (muted) to 0 (default -20)
+  --asha-volume <n>     with --asha: the hearing aids' volume, -128 (muted)
+                        to 0 (default -20)
   --hid-test <seconds>  start Bluetooth with keyboards and mice on and nothing
                         streamed, print their counts once a second for this
                         time and exit
@@ -765,9 +765,6 @@ fn parse(args: &[String]) -> Result<Args, String> {
     if a.asha.aids.is_empty() && (a.asha.delay_ms != 0 || a.asha.volume.is_some()) {
         return Err("--asha-delay and --asha-volume need --asha".into());
     }
-    if a.asha.volume.is_some() && a.device.is_some() {
-        return Err("--asha-volume is for hearing aids alone (without -d)".into());
-    }
     if a.asha.aids.len() > 2 {
         return Err("--asha takes one hearing aid or both of a pair".into());
     }
@@ -1148,7 +1145,11 @@ pub fn run(args: &[String]) -> i32 {
         le: None,
         asha: match a.asha.aids.first().and_then(|aid| parse_device_address(aid)) {
             Some(_) if aids_alone => Some(bluecaster_core::stream::AshaRequest::Device),
-            Some(aid) => Some(bluecaster_core::stream::AshaRequest::Beside { aid, delay_ms: a.asha.delay_ms }),
+            Some(aid) => Some(bluecaster_core::stream::AshaRequest::Beside {
+                aid,
+                delay_ms: a.asha.delay_ms,
+                volume: a.asha.volume.unwrap_or(bluecaster_core::asha::DEFAULT_VOLUME),
+            }),
             None => None,
         },
         headset_mic: if a.headset_mic_toggle.is_none() { a.headset_mic } else { HeadsetMic::Off },
@@ -1281,7 +1282,9 @@ fn stream_session(
                         streaming_since = Some(Instant::now());
                         // --asha-volume: the hearing aids' volume, as the
                         // slider sets it
-                        if let (Some(v), Some(host)) = (a.asha.volume, service.host()) {
+                        if a.device.is_none()
+                            && let (Some(v), Some(host)) = (a.asha.volume, service.host())
+                        {
                             let set = host.le_request_volume(bt_host::asha_level_of_volume(v));
                             outln!("Hearing aid volume {v}{}", if set { "" } else { " (not taken)" });
                         }
@@ -2445,8 +2448,9 @@ mod tests {
         assert_eq!(a.asha.aids, ["00:A2:D0:00:00:22", "00:A2:D0:00:00:23"]);
         assert_eq!((a.asha.delay_ms, a.asha.volume, a.le.on), (0, None, false));
         assert!(a.device.is_none());
-        let a = parse(&args("--cli -d 00:A2:D0:00:00:02 --asha 00:A2:D0:00:00:23 --asha-delay 40")).unwrap();
-        assert_eq!((a.asha.aids.len(), a.asha.delay_ms, a.asha.volume), (1, 40, None));
+        let a = parse(&args("--cli -d 00:A2:D0:00:00:02 --asha 00:A2:D0:00:00:23 --asha-delay 40 --asha-volume -128"))
+            .unwrap();
+        assert_eq!((a.asha.aids.len(), a.asha.delay_ms, a.asha.volume), (1, 40, Some(-128)));
         assert!(a.device.is_some());
         // Repeated: the two of a pair
         let a = parse(&args("--cli --asha 00:A2:D0:00:00:22 --asha 00:A2:D0:00:00:23")).unwrap();
@@ -2454,7 +2458,6 @@ mod tests {
         for bad in [
             "--cli --asha-delay 40",
             "--cli --asha-volume -10",
-            "--cli -d 00:A2:D0:00:00:02 --asha 00:A2:D0:00:00:23 --asha-volume -10",
             "--cli --asha 00:A2:D0:00:00:22 --asha-delay 501",
             "--cli --asha 00:A2:D0:00:00:22 --asha-volume 1",
             "--cli --asha nonsense",

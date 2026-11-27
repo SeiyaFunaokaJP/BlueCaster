@@ -252,6 +252,7 @@ pub(crate) mod mock {
             hearing_aid: false,
             hearing_aid_beside: String::new(),
             hearing_aid_delay_ms: 0,
+            hearing_aid_volume: -20,
             le_low_latency: false,
             le_swap_channels: false,
             le_alone_channel: String::new(),

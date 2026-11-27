@@ -1,9 +1,10 @@
 //! A hearing aid for the other ear, on a classic device's card on Audio
 //! Devices (ASHA, a proof of concept): one of the saved hearing aids plays
-//! its own side beside this device's stream, and how much later it plays,
+//! its own side beside this device's stream, how loud, and how much later,
 //! so that both ears hear the sound together. Kept in the device's profile
-//! (`hearing_aid_beside`, `hearing_aid_delay_ms`); shown while LE Audio is
-//! on and a hearing aid is saved (or one is chosen).
+//! (`hearing_aid_beside`, `hearing_aid_volume`, `hearing_aid_delay_ms`);
+//! shown while LE Audio is on and a hearing aid is saved (or one is
+//! chosen). The stream takes another volume or delay while it plays.
 
 use gpui_kit::{App, Div, IntoElement as _, ParentElement as _, Styled as _, div};
 use ipc::{Device, Profile};
@@ -18,6 +19,19 @@ use crate::theme;
 
 /// The delays offered, in milliseconds (the core takes 0 to 500)
 pub const DELAYS: [u32; 12] = [0, 20, 40, 60, 80, 100, 120, 150, 200, 300, 400, 500];
+
+/// The volumes offered, in percent of the hearing aid's range
+pub const VOLUMES: [u8; 10] = [100, 90, 80, 70, 60, 50, 40, 30, 20, 10];
+
+/// The hearing aid's volume (-127 to 0, in steps of 0.375 dB) for a percentage
+pub fn volume_of_percent(percent: u8) -> i8 {
+    (-(i32::from(100 - percent.min(100)) * 127 + 50) / 100) as i8
+}
+
+/// The percentage offered that is nearest to a saved volume
+pub fn nearest_volume(volume: i8) -> u8 {
+    VOLUMES.iter().copied().min_by_key(|p| (i32::from(volume_of_percent(*p)) - i32::from(volume)).abs()).unwrap_or(100)
+}
 
 /// The delay offered that is nearest to a saved one
 pub fn nearest_delay(ms: u32) -> u32 {
@@ -77,6 +91,29 @@ pub fn beside(device: &Device, cx: &App) -> Option<Div> {
         div().min_w(gpui_kit::px(200.)).child(aid_select.into_any_element()),
         cx,
     );
+    let volume_field = (!chosen.is_empty()).then(|| {
+        let key = key.clone();
+        let volume = nearest_volume(profile.as_ref().map_or(-20, |p| p.hearing_aid_volume));
+        let choices = VOLUMES.iter().map(|&v| Choice::new(v, format!("{v}%"))).collect();
+        let select = super::select_labelled(
+            "hearing-aid-volume",
+            t("ui.profile.hearing_aid_volume"),
+            &volume,
+            choices,
+            false,
+            move |v: &u8, _, cx| {
+                let v = volume_of_percent(*v);
+                save(&key, move |p| p.hearing_aid_volume = v, cx);
+            },
+        );
+        super::field(
+            t("ui.profile.hearing_aid_volume"),
+            None,
+            None,
+            div().min_w(gpui_kit::px(200.)).child(select.into_any_element()),
+            cx,
+        )
+    });
     let delay_field = (!chosen.is_empty()).then(|| {
         let delay = nearest_delay(profile.as_ref().map_or(0, |p| p.hearing_aid_delay_ms));
         let choices = DELAYS.iter().map(|&ms| Choice::new(ms, format!("{ms} ms"))).collect();
@@ -99,7 +136,7 @@ pub fn beside(device: &Device, cx: &App) -> Option<Div> {
             cx,
         )
     });
-    Some(div().flex().flex_col().gap(theme::S3).child(aid_field).children(delay_field))
+    Some(div().flex().flex_col().gap(theme::S3).child(aid_field).children(volume_field).children(delay_field))
 }
 
 #[cfg(test)]
@@ -148,6 +185,7 @@ mod tests {
                 |p| {
                     p.hearing_aid_beside = AID.to_owned();
                     p.hearing_aid_delay_ms = 60;
+                    p.hearing_aid_volume = volume_of_percent(50);
                 },
                 cx,
             );
@@ -156,6 +194,18 @@ mod tests {
         let saved = h.last_saved();
         assert_eq!(saved["hearing_aid_beside"], serde_json::json!(AID));
         assert_eq!(saved["hearing_aid_delay_ms"], serde_json::json!(60));
+        assert_eq!(saved["hearing_aid_volume"], serde_json::json!(-64));
+    }
+
+    #[test]
+    fn the_volume_is_a_percentage_of_the_hearing_aids_range() {
+        assert_eq!((volume_of_percent(100), volume_of_percent(50), volume_of_percent(10)), (0, -64, -114));
+        // The default, -20, shows as the nearest step
+        assert_eq!(nearest_volume(-20), 80);
+        assert_eq!((nearest_volume(0), nearest_volume(-128)), (100, 10));
+        for p in VOLUMES {
+            assert_eq!(nearest_volume(volume_of_percent(p)), p);
+        }
     }
 
     #[test]
