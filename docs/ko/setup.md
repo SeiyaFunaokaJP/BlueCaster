@@ -18,7 +18,7 @@ nav_order: 1
 
 ## 준비 사항
 
-- **Windows 10 (22H2) / 11** (x64 또는 ARM64)
+- **Windows 10 / 11** (x64 또는 ARM64)
 - **BlueCaster용 USB Bluetooth 어댑터**: 별도의 동글을 권장합니다. USB 방식의 내장 어댑터도 쓸 수 있지만, 그동안 Windows에서는 Bluetooth를 쓸 수 없습니다([2단계](#winusb) 참고)
 
 BlueCaster가 어댑터에 WinUSB 드라이버를 자동으로 할당하므로 [Zadig](https://zadig.akeo.ie/)는 더 이상 필요하지 않습니다(계속 써도 됩니다. [Zadig 사용하기](#zadig) 참고).

@@ -95,6 +95,9 @@ pub struct ScannedDevice {
     /// looks like a keyboard or mouse, with its address type. Only listed
     /// while that feature is on; never an audio or LE Audio entry.
     pub hid_le: Option<u8>,
+    /// An ASHA hearing aid (a proof of concept), or the two of a pair as one
+    /// entry: an LE entry (`le_audio`) that streams G.722, not LE Audio
+    pub hearing_aid: bool,
 }
 
 /// One device, not two (issue #86): a scan that finds the other side
@@ -143,6 +146,7 @@ impl ScannedDevice {
             le_audio: false,
             le_audio_set: false,
             hid_le: None,
+            hearing_aid: false,
         }
     }
 }
@@ -182,6 +186,7 @@ fn hid_le_entries(results: &[LeScanResult]) -> Vec<ScannedDevice> {
                 le_audio: false,
                 le_audio_set: false,
                 hid_le: Some(a.addr_type),
+                hearing_aid: false,
             }),
         }
     }
@@ -201,6 +206,60 @@ fn classic_appearance_only(results: &[LeScanResult], classic: &[String]) -> Vec<
         .map(|r| r.identity.unwrap_or(r.addr).to_string())
         .filter(|a| classic.iter().any(|c| c.eq_ignore_ascii_case(a)))
         .collect()
+}
+
+/// The hearing aids of an LE scan (ASHA, a proof of concept): those that
+/// say so in their advertising. The two of a pair are one entry: the saved
+/// side, else the left one (connecting it finds the other). A hearing aid
+/// that also advertises LE Audio is an LE Audio device, not listed here.
+fn hearing_aid_entries(results: &[LeScanResult], saved_le: &[SavedDevice]) -> Vec<ScannedDevice> {
+    struct Seen {
+        entry: ScannedDevice,
+        pair: Option<[u8; 4]>,
+        right: bool,
+        saved: bool,
+    }
+    let mut out: Vec<Seen> = Vec::new();
+    for r in results.iter().filter(|r| r.connectable && (!r.le_audio || r.appearance_only)) {
+        let Some(aid) = r.hearing_aid else { continue };
+        let address = r.identity.unwrap_or(r.addr).to_string();
+        if let Some(seen) = out.iter_mut().find(|s| s.entry.address == address) {
+            if !r.name.is_empty() {
+                seen.entry.name = r.name.clone();
+            }
+            continue;
+        }
+        out.push(Seen {
+            saved: saved_le.iter().any(|d| d.address.eq_ignore_ascii_case(&address)),
+            entry: ScannedDevice {
+                address,
+                name: r.name.clone(),
+                rssi: r.rssi,
+                class_of_device: 0,
+                audio: true,
+                le_audio: true,
+                le_audio_set: false,
+                hid_le: None,
+                hearing_aid: true,
+            },
+            pair: aid.binaural.then_some(aid.set),
+            right: aid.right,
+        });
+    }
+    let keep: Vec<bool> = (0..out.len())
+        .map(|i| {
+            let Some(pair) = out[i].pair else { return true };
+            let same: Vec<usize> = (0..out.len()).filter(|&j| out[j].pair == Some(pair)).collect();
+            let pick = same
+                .iter()
+                .copied()
+                .find(|&j| out[j].saved)
+                .or_else(|| same.iter().copied().find(|&j| !out[j].right))
+                .unwrap_or(same[0]);
+            pick == i
+        })
+        .collect();
+    out.into_iter().zip(keep).filter(|(_, k)| *k).map(|(s, _)| s.entry).collect()
 }
 
 /// What [`le_scan_entries`] knows of an entry beyond what it lists
@@ -232,7 +291,9 @@ fn le_scan_entries(
 ) -> (Vec<ScannedDevice>, usize) {
     let mut out: Vec<(ScannedDevice, EntryFacts)> = Vec::new();
     let mut found = 0;
-    for r in results.iter().filter(|r| r.le_audio) {
+    // A hearing aid listed as LE Audio for its appearance alone is a
+    // hearing aid (hearing_aid_entries)
+    for r in results.iter().filter(|r| r.le_audio && !(r.hearing_aid.is_some() && r.appearance_only)) {
         let category = r.appearance >> 6;
         if matches!(category, APPEARANCE_PHONE | APPEARANCE_COMPUTER)
             || own.iter().any(|a| a.eq_ignore_ascii_case(&r.addr.to_string()))
@@ -277,6 +338,7 @@ fn le_scan_entries(
                 le_audio: true,
                 le_audio_set: set_member,
                 hid_le: None,
+                hearing_aid: false,
             },
             facts,
         ));
@@ -440,6 +502,10 @@ pub enum ServiceEvent {
     /// The headphones refused to report their battery level (HFP refused,
     /// another device may hold it)
     BatteryRefused,
+    /// Earbuds with a control channel of their own (AirPods) report each
+    /// bud and the case (None: the channel closed); StreamStatus.buds,
+    /// whose lowest bud replaces the HFP battery meanwhile
+    Buds(Option<ipc::BudsStatus>),
     /// The voice codecs the headphones listed on their HFP connection
     /// ("cvsd", "msbc", "lc3_swb"; StreamStatus.voice_codecs)
     VoiceCodecs(Vec<String>),
@@ -651,6 +717,8 @@ pub(crate) struct Inner {
     scanning: AtomicBool,
     /// The LE Audio stream being sent (le_stream)
     le_stream: Mutex<Option<crate::le_stream::LeStreamDetails>>,
+    /// The AirPods control channel of the stream, while it runs
+    apple: Mutex<Option<crate::vendor::apple::Session>>,
     /// An A2DP stream ran on the running stack (issue #84)
     streamed: AtomicBool,
     /// The running adapter has LE Audio's isochronous channels: known once
@@ -1469,6 +1537,18 @@ impl Inner {
         }
     }
 
+    /// Opens the AirPods control channel of the stream to `device` (a
+    /// running one ends first)
+    pub fn start_apple(&self, host: Arc<BtHost>, device: [u8; 6], name: &str) {
+        let session = crate::vendor::apple::Session::start(host, device, name, self.event_sender());
+        *self.apple.lock().unwrap_or_else(|e| e.into_inner()) = session;
+    }
+
+    /// Ends the AirPods control channel, if one runs
+    pub fn stop_apple(&self) {
+        self.apple.lock().unwrap_or_else(|e| e.into_inner()).take();
+    }
+
     /// The LE Audio stream now (set before its StreamInfo is sent)
     pub fn set_le_stream(&self, details: Option<crate::le_stream::LeStreamDetails>) {
         *self.le_stream.lock().unwrap_or_else(|e| e.into_inner()) = details;
@@ -1640,6 +1720,7 @@ impl Service {
             broadcast_adapter: Mutex::new(String::new()),
             scanning: AtomicBool::new(false),
             le_stream: Mutex::new(None),
+            apple: Mutex::new(None),
             le_support: Mutex::new(None),
             streamed: AtomicBool::new(false),
             waiting: AtomicBool::new(false),
@@ -1809,6 +1890,12 @@ impl Service {
 
     /// What the LE Audio (experimental) stream was set up with, while one
     /// runs (with its [`ServiceEvent::StreamInfo`]; codec "LC3 (LE Audio)")
+    /// Asks the connected earbuds for a listening mode; false: none
+    /// connected, or not a mode they offer
+    pub fn set_noise_control(&self, mode: ipc::NoiseMode) -> bool {
+        self.inner.apple.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|s| s.set_noise(mode))
+    }
+
     pub fn le_stream(&self) -> Option<crate::le_stream::LeStreamDetails> {
         self.inner.le_stream.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
@@ -2281,7 +2368,13 @@ impl Service {
                 // state says what happened
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     // LE Audio (experimental) profiles have their own session
-                    if req.le.is_some() { crate::le_stream::run(&inner, req) } else { stream::run(&inner, req) }
+                    if req.asha == Some(crate::stream::AshaRequest::Device) {
+                        crate::asha_stream::run(&inner, req)
+                    } else if req.le.is_some() {
+                        crate::le_stream::run(&inner, req)
+                    } else {
+                        stream::run(&inner, req)
+                    }
                 }));
                 if r.is_err() {
                     tracing::error!("the streaming session panicked");
@@ -2454,6 +2547,7 @@ impl Service {
                     .chain(saved_le.iter().map(|d| (d.address.clone(), d.name.clone())))
                     .collect();
                 fill_le_names(&mut le, &known);
+                le.extend(hearing_aid_entries(&results, &saved_le));
                 list.extend(le);
             }
             if hid_le {
@@ -2536,6 +2630,11 @@ impl Service {
                 .chain(saved_le.iter().map(|d| (d.address.clone(), d.name.clone())))
                 .collect();
             fill_le_names(&mut entries, &known);
+            let aids = hearing_aid_entries(&results, &saved_le);
+            if !aids.is_empty() {
+                tracing::info!("LE scan: {} hearing aid(s) or pair(s) listed", aids.len());
+            }
+            entries.extend(aids);
             for r in classic_le_sides(&results, &known) {
                 tracing::info!(
                     "LE scan: {} {} advertises over LE without an LE Audio service (type {}, connectable {}, \
@@ -2717,6 +2816,7 @@ mod tests {
             le_audio,
             le_audio_set: false,
             hid_le: None,
+            hearing_aid: false,
         };
         let list =
             [found("AA:BB:CC:DD:EE:01", false), found("aa:bb:cc:dd:ee:01", true), found("AA:BB:CC:DD:EE:02", true)];
@@ -3109,6 +3209,41 @@ mod tests {
             set_id: set,
             ..LeScanResult::default()
         }
+    }
+
+    #[test]
+    fn hearing_aids_are_listed_with_a_pair_as_one_entry() {
+        let aid = |addr: &str, name: &str, right: bool, binaural: bool, set: u8| LeScanResult {
+            le_audio: false,
+            connectable: true,
+            hearing_aid: Some(bt_host::HearingAidAdvert { right, binaural, set: [set, 0, 0, 1] }),
+            ..le(addr, name, None)
+        };
+        // Also a real LE Audio device (it advertises its LE Audio services)
+        let both = LeScanResult { le_audio: true, ..aid("00:A2:D0:00:00:40", "Both", false, true, 7) };
+        let results = [
+            aid("00:A2:D0:00:00:23", "Aid", true, true, 1),
+            aid("00:A2:D0:00:00:22", "Aid", false, true, 1),
+            aid("00:A2:D0:00:00:30", "Solo", true, false, 9),
+            both.clone(),
+            LeScanResult { connectable: false, ..aid("00:A2:D0:00:00:50", "Away", false, true, 5) },
+        ];
+        let list = hearing_aid_entries(&results, &[]);
+        // The left of the pair, and the single one
+        assert_eq!(
+            list.iter().map(|d| d.address.as_str()).collect::<Vec<_>>(),
+            ["00:A2:D0:00:00:22", "00:A2:D0:00:00:30"]
+        );
+        assert!(list.iter().all(|d| d.hearing_aid && d.le_audio && d.audio && !d.le_audio_set && d.hid_le.is_none()));
+        // The right side saved: the pair is that entry
+        let saved = [SavedDevice { address: "00:a2:d0:00:00:23".into(), name: "Aid".into(), le_audio: true }];
+        assert_eq!(hearing_aid_entries(&results, &saved)[0].address, "00:A2:D0:00:00:23");
+        // LE Audio's list keeps a real LE Audio device and leaves one listed
+        // for its appearance alone to the hearing aids
+        assert_eq!(le_scan_entries(std::slice::from_ref(&both), &[], &[], &no_sets()).0.len(), 1);
+        let by_appearance = LeScanResult { appearance_only: true, ..both };
+        assert!(le_scan_entries(std::slice::from_ref(&by_appearance), &[], &[], &no_sets()).0.is_empty());
+        assert_eq!(hearing_aid_entries(&[by_appearance], &[]).len(), 1);
     }
 
     #[test]

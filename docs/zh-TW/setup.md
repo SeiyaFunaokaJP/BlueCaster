@@ -18,7 +18,7 @@ nav_order: 1
 
 ## 必要條件
 
-- **Windows 10 (22H2) / 11** (x64 或 ARM64)
+- **Windows 10 / 11** (x64 或 ARM64)
 - **供 BlueCaster 使用的 USB 藍牙介面卡**：建議使用另一張獨立的介面卡。USB 類型的內建介面卡也可以使用，但這段期間 Windows 將無法使用藍牙（請參閱 [步驟 2](#winusb)）
 
 BlueCaster 會自動為介面卡指派 WinUSB 驅動程式，因此不再需要 [Zadig](https://zadig.akeo.ie/)（Zadig 仍然可用，請參閱 [改用 Zadig](#zadig)）。

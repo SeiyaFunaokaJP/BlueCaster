@@ -334,8 +334,24 @@ unsafe extern "C" {
     pub fn bluecaster_cbm_connect(con_handle: u16, psm: u16, out_cid: *mut u16) -> u8;
     pub fn bluecaster_cbm_send(cid: u16, sdu: *const u8, len: u16) -> u8;
     pub fn bluecaster_cbm_reset();
-    pub fn bluecaster_le_update_connection(con_handle: u16, interval: u16, latency: u16, timeout: u16) -> u8;
+    pub fn bluecaster_le_update_connection(
+        con_handle: u16,
+        interval: u16,
+        latency: u16,
+        timeout: u16,
+        ce_length: u16,
+    ) -> u8;
+    pub fn bluecaster_le_prefer_2m_phy(con_handle: u16) -> u8;
+    pub fn bluecaster_le_set_data_length(con_handle: u16, tx_octets: u8) -> u8;
+    pub fn bluecaster_le_connection_interval(con_handle: u16) -> u16;
     pub fn l2cap_disconnect(local_cid: u16) -> u8;
+    pub fn bluecaster_l2cap_create_channel(addr: *const u8, psm: u16, mtu: u16, out_cid: *mut u16) -> u8;
+    pub fn bluecaster_l2cap_register_service(psm: u16, mtu: u16) -> u8;
+    pub fn l2cap_unregister_service(psm: u16) -> u8;
+    pub fn l2cap_accept_connection(local_cid: u16);
+    pub fn l2cap_decline_connection(local_cid: u16);
+    pub fn l2cap_request_can_send_now_event(local_cid: u16) -> u8;
+    pub fn l2cap_send(local_cid: u16, data: *const u8, len: u16) -> u8;
 
     // ---- BTstack: HCI ISO ----
     pub fn hci_set_num_iso_packets_to_queue(num_packets: u8);

@@ -74,6 +74,7 @@ pub const HCI_EVENT_A2DP_META: u8 = 0xF0;
 
 // ---- RFCOMM, SDP client ----
 /// Packet type of an RFCOMM channel's data
+pub const L2CAP_DATA_PACKET: u8 = 0x06;
 pub const RFCOMM_DATA_PACKET: u8 = 0x07;
 pub const RFCOMM_EVENT_CHANNEL_OPENED: u8 = 0x80;
 pub const RFCOMM_EVENT_CHANNEL_CLOSED: u8 = 0x81;
@@ -231,8 +232,20 @@ pub const HCI_EVENT_ENCRYPTION_CHANGE_V2: u8 = 0x59;
 pub const HCI_EVENT_CIS_CAN_SEND_NOW: u8 = 0x6C;
 pub const HCI_EVENT_BIS_CAN_SEND_NOW: u8 = 0x6B;
 
-/// To the channel's handler ([`crate::Source::L2capCbm`]): local cid
+/// Classic ([`crate::Source::L2capClassic`]): status, address, connection,
+/// PSM, local cid, remote cid, local MTU, remote MTU, flush timeout,
+/// incoming, mode, FCS
+pub const L2CAP_EVENT_CHANNEL_OPENED: u8 = 0x70;
+/// [`crate::Stack::l2cap_register_service`] of a PSM registered already
+pub const L2CAP_SERVICE_ALREADY_REGISTERED: u8 = 0x6B;
+/// To the channel's handler ([`crate::Source::L2capCbm`],
+/// [`crate::Source::L2capClassic`]): local cid
 pub const L2CAP_EVENT_CHANNEL_CLOSED: u8 = 0x71;
+/// A device opens a channel to a registered PSM: address, connection, PSM,
+/// local cid, remote cid
+pub const L2CAP_EVENT_INCOMING_CONNECTION: u8 = 0x72;
+/// After [`crate::Stack::l2cap_request_can_send_now`]: local cid
+pub const L2CAP_EVENT_CAN_SEND_NOW: u8 = 0x79;
 /// The SDU given to [`crate::Stack::cbm_send`] went out: local cid
 pub const L2CAP_EVENT_PACKET_SENT: u8 = 0x7A;
 /// Status, address type, address, connection, incoming, PSM, local cid,

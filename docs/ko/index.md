@@ -95,7 +95,7 @@ BlueCaster는 Bluetooth 어댑터를 Hi-Fi 오디오 송신기로 바꿔 줍니�
 | 가상 어댑터 `tools/emu/emu_vhci.py` | ❌ | ❌ | ✅ |
 | [측정용 수신기](usage#receiver) `tools/linux_sink` | ❌ | ❌ | ✅ |
 
-BlueCaster 본체는 Windows(Windows 10 22H2 또는 Windows 11) 전용이며 x64용과 ARM64용이 있습니다. Linux 도구에는 Python 3.11 이상이 필요합니다(Ubuntu 26.04에서 확인). `setup.sh`는 Ubuntu / Debian용이며, 다른 배포판에서는 패키지를 직접 설치해야 합니다.
+BlueCaster 본체는 Windows(Windows 10 또는 Windows 11) 전용이며 x64용과 ARM64용이 있습니다. Linux 도구에는 Python 3.11 이상이 필요합니다(Ubuntu 26.04에서 확인). `setup.sh`는 Ubuntu / Debian용이며, 다른 배포판에서는 패키지를 직접 설치해야 합니다.
 
 ## 검증된 하드웨어 {#verified-hardware}
 

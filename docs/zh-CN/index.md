@@ -95,7 +95,7 @@ BlueCaster 能把你的蓝牙适配器变成 Hi-Fi 音频发射器，通过 **LD
 | 虚拟适配器 `tools/emu/emu_vhci.py` | ❌ | ❌ | ✅ |
 | [测量用接收器](usage#receiver) `tools/linux_sink` | ❌ | ❌ | ✅ |
 
-BlueCaster 本身仅在 Windows 上运行（Windows 10 22H2 或 Windows 11），提供 x64 和 ARM64 版本。Linux 工具需要 Python 3.11 或更高版本（已在 Ubuntu 26.04 上验证）；`setup.sh` 面向 Ubuntu / Debian，其他发行版需要手动安装所需软件包。
+BlueCaster 本身仅在 Windows 上运行（Windows 10 或 Windows 11），提供 x64 和 ARM64 版本。Linux 工具需要 Python 3.11 或更高版本（已在 Ubuntu 26.04 上验证）；`setup.sh` 面向 Ubuntu / Debian，其他发行版需要手动安装所需软件包。
 
 ## 已验证的硬件 {#verified-hardware}
 

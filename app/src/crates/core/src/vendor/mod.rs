@@ -1,5 +1,5 @@
 //! What single vendors' devices need beyond the standard profiles, one module
-//! per vendor: `channel` is the control channel they share.
+//! per vendor: `channel` is the RFCOMM control channel some of them share.
 //!
 //! [`VENDORS`] lists them for the rest of the app: how their earbuds are
 //! told apart, and the options developer mode offers for each. Developer
@@ -7,6 +7,7 @@
 //! added here needs nothing more in the settings or the UI than the labels
 //! of its options (issue #237).
 
+pub mod apple;
 mod channel;
 pub mod huawei;
 pub mod oppo;
@@ -29,11 +30,13 @@ pub struct Vendor {
 }
 
 pub const OPPO: &str = "oppo";
+pub const APPLE: &str = "apple";
 pub const HUAWEI: &str = "huawei";
 /// OPPO: asked for Hi-Res on every connection, the record notwithstanding
 pub const OPPO_EVERY_CONNECTION: &str = "every_connection";
 
 pub const VENDORS: &[Vendor] = &[
+    Vendor { id: APPLE, name: "AirPods", named: apple::is_airpods, options: &[] },
     Vendor { id: HUAWEI, name: "Huawei", named: huawei::is_huawei, options: &[] },
     Vendor { id: OPPO, name: "OPPO", named: oppo::is_oppo, options: &[OPPO_EVERY_CONNECTION] },
 ];
@@ -127,5 +130,6 @@ mod tests {
         }
         assert!((vendor(OPPO).unwrap().named)("OPPO Enco Free4"));
         assert!((vendor(HUAWEI).unwrap().named)("HUAWEI FreeBuds Pro 4"));
+        assert!((vendor(APPLE).unwrap().named)("AirPods Pro"));
     }
 }

@@ -37,9 +37,9 @@ use crate::core::Core;
 use crate::screens::codecs::{choose_codec, settle, settling};
 use crate::theme::{self, ActivePalette as _};
 use crate::ui::stream::{
-    CodecBadge, LinkSparkline, OnError, QualityIndicator, VolumeControl, adapter_hung, battery_level, codec_badge,
-    connect_button, dot, error_panel, firmware_download, firmware_folder_button, mic_row, ring_sized, state_colors,
-    tip, v1_running,
+    CodecBadge, LinkSparkline, OnError, QualityIndicator, VolumeControl, adapter_hung, battery_level, bud_batteries,
+    codec_badge, connect_button, dot, error_panel, firmware_download, firmware_folder_button, mic_row, noise_row,
+    ring_sized, state_colors, tip, v1_running,
 };
 use crate::ui::{self, BannerKind, ButtonKind, IconName, icon};
 
@@ -443,8 +443,11 @@ impl Render for DeviceCard {
             .gap(theme::S2)
             .min_w_0()
             .when(card.battery, |d| {
-                d.child(battery_level(SharedString::from(format!("battery-{key}")), stream.battery, false, cx))
-                    .child(div().text_color(p.text_2).child("|"))
+                // Each bud and the case when the earbuds report them
+                let battery = bud_batteries(&key, stream, cx).unwrap_or_else(|| {
+                    battery_level(SharedString::from(format!("battery-{key}")), stream.battery, false, cx)
+                });
+                d.child(battery).child(div().text_color(p.text_2).child("|"))
             })
             .child(
                 div()
@@ -471,6 +474,7 @@ impl Render for DeviceCard {
             })
             .flatten();
         let mic = card.live.then(|| mic_row(&entry, cx)).flatten();
+        let noise = card.live.then(|| noise_row(&key, stream, cx)).flatten();
         // The application it captures is not playing yet (the source is
         // chosen on Audio Devices)
         let waiting = card.waiting.as_ref().map(|w| {
@@ -496,6 +500,7 @@ impl Render for DeviceCard {
             .children(codec)
             // Close under the codec's details, as their two lines are (issue #86)
             .children(mic.map(|m| div().mt(theme::S1 - theme::S2).child(m)))
+            .children(noise)
             .children(waiting);
 
         let link = self.link.as_ref().map(|(quality, spark)| {
@@ -566,7 +571,7 @@ pub fn codec_picker(entry: &AudioEntry, cx: &App) -> AnyElement {
             .border_color(p.border)
             .rounded(theme::RADIUS)
             .font_weight(FontWeight::SEMIBOLD)
-            .child(t("ui.codec.lc3"))
+            .child(t(if entry.device.hearing_aid { "codec.g722" } else { "ui.codec.lc3" }))
             .into_any_element();
     }
     let Some(snap) = app::core(cx).read(cx).snap() else { return div().into_any_element() };

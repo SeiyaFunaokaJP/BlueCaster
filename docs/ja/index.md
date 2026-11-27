@@ -95,7 +95,7 @@ BlueCaster は、お使いの Bluetooth アダプターを Hi-Fi オーディオ
 | 仮想アダプター `tools/emu/emu_vhci.py` | ❌ | ❌ | ✅ |
 | [測定用受信機](usage#receiver) `tools/linux_sink` | ❌ | ❌ | ✅ |
 
-BlueCaster 本体は Windows 専用（Windows 10 22H2 または Windows 11）で、x64 版と ARM64 版があります。Linux 側のツールには Python 3.11 以降が必要です（Ubuntu 26.04 で確認済み）。`setup.sh` は Ubuntu / Debian 向けです。ほかのディストリビューションでは、パッケージを手動でインストールしてください。
+BlueCaster 本体は Windows 専用（Windows 10 または Windows 11）で、x64 版と ARM64 版があります。Linux 側のツールには Python 3.11 以降が必要です（Ubuntu 26.04 で確認済み）。`setup.sh` は Ubuntu / Debian 向けです。ほかのディストリビューションでは、パッケージを手動でインストールしてください。
 
 ## 検証済みの機器 {#verified-hardware}
 

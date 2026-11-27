@@ -22,6 +22,7 @@ pub mod esco_watch;
 pub mod events;
 pub mod hid;
 pub mod intel;
+pub mod l2cap;
 mod le;
 pub mod le_bond_file;
 pub mod le_import;
@@ -56,6 +57,7 @@ pub use btstack_sys::{CtkdOutcome, ImportedLeBond, LeBondAdded, LeKeys, expect_t
 pub use capture::HciCapture;
 pub use events::{addr_str, parse_addr};
 pub use hid::{HidConfig, HidCounters, HidEvent, Passkey};
+pub use l2cap::{L2capAccept, L2capCloseReason, L2capError, L2capEvent, L2capOpened, L2capReply, L2capSink};
 pub use le::api::{LE_NO_ANSWER, LE_NO_LINK};
 pub use le::bap::{CigOverrides, set_buffer_margin, set_cig_overrides, set_realign_off};
 pub use le::gatt_cache as le_gatt_cache;
@@ -65,15 +67,16 @@ pub use le::iso_recv::{
     RxSdu,
 };
 pub use le::modules::asha::{
-    AshaSink, SDU_BYTES as ASHA_SDU_BYTES, UUID_AUDIO_CONTROL_POINT as ASHA_AUDIO_CONTROL_POINT,
-    UUID_AUDIO_STATUS as ASHA_AUDIO_STATUS, UUID_LE_PSM_OUT as ASHA_LE_PSM_OUT,
-    UUID_READ_ONLY_PROPERTIES as ASHA_READ_ONLY_PROPERTIES, UUID_SERVICE_ASHA as ASHA_SERVICE,
-    UUID_VOLUME as ASHA_VOLUME,
+    AshaSink, INTERVAL_20_MS as ASHA_INTERVAL_20_MS, SDU_BYTES as ASHA_SDU_BYTES,
+    UUID_AUDIO_CONTROL_POINT as ASHA_AUDIO_CONTROL_POINT, UUID_AUDIO_STATUS as ASHA_AUDIO_STATUS,
+    UUID_LE_PSM_OUT as ASHA_LE_PSM_OUT, UUID_READ_ONLY_PROPERTIES as ASHA_READ_ONLY_PROPERTIES,
+    UUID_SERVICE_ASHA as ASHA_SERVICE, UUID_VOLUME as ASHA_VOLUME, level_of_volume as asha_level_of_volume,
+    volume_of_level as asha_volume_of_level,
 };
 pub use le::modules::csip::{forget_stored_file as le_forget_stored_sirk, stored_sets as le_stored_sets};
 pub use le::{
-    BroadcastLayout, LeAddr, LeBroadcast, LeConfig, LeDeviceId, LeDeviceInfo, LeRequest, LeScanResult, LeSduSink,
-    LeStreamRequest, LeStreamStarted, LeStreamStats, LeStreamStatus, SingleMode,
+    BroadcastLayout, HearingAidAdvert, LeAddr, LeBroadcast, LeConfig, LeDeviceId, LeDeviceInfo, LeRequest,
+    LeScanResult, LeSduSink, LeStreamRequest, LeStreamStarted, LeStreamStats, LeStreamStatus, SingleMode,
 };
 pub use media::{MediaPacket, MediaSink};
 pub use rfcomm::{
@@ -1054,6 +1057,73 @@ impl BtHost {
             let _ = tx.send(app.rfcomm.close(s, id));
         });
         RfcommReply(rx)
+    }
+
+    // ---- classic L2CAP channels ----
+
+    /// Opens a basic-mode L2CAP channel to `psm` of `addr`, the device being
+    /// streamed to, over the link the stack has to it (it never connects
+    /// for this: else [`L2capError::NotConnected`]). `sink` receives the
+    /// channel's packets and its close, on the BTstack thread.
+    pub fn l2cap_open(&self, addr: [u8; 6], psm: u16, sink: L2capSink) -> Result<L2capOpened, L2capError> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.post(move |app, s| {
+            if !app.streams_to(addr) {
+                let _ = tx.send(Err(L2capError::NotConnected));
+                return;
+            }
+            app.l2cap.open(s, addr, psm, sink, tx)
+        });
+        match rx.recv_timeout(RFCOMM_OPEN_TIMEOUT) {
+            Ok(r) => r,
+            // The channel is closed if it opens later
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(L2capError::NoAnswer),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(L2capError::NotConnected),
+        }
+    }
+
+    /// Channels `addr`, the device being streamed to, opens to `psm` are
+    /// offered to `accept` until [`BtHost::l2cap_unlisten`] or the end of
+    /// the A2DP connection. Returns the listener's id.
+    pub fn l2cap_listen(&self, addr: [u8; 6], psm: u16, accept: L2capAccept) -> Result<u32, L2capError> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.post(move |app, s| {
+            let r = if app.streams_to(addr) {
+                app.l2cap.listen(s, addr, psm, accept)
+            } else {
+                Err(L2capError::NotConnected)
+            };
+            let _ = tx.send(r);
+        });
+        rx.recv_timeout(JOB_TIMEOUT).unwrap_or(Err(L2capError::NoAnswer))
+    }
+
+    pub fn l2cap_unlisten(&self, id: u32) -> L2capReply {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.post(move |app, s| {
+            let _ = tx.send(app.l2cap.unlisten(s, id));
+        });
+        L2capReply(rx)
+    }
+
+    /// Queues one packet on channel `id`, without waiting: the order of the
+    /// calls is the order on the air
+    pub fn l2cap_send(&self, id: u32, data: Vec<u8>) -> L2capReply {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.post(move |app, s| {
+            let _ = tx.send(app.l2cap.send(s, id, data));
+        });
+        L2capReply(rx)
+    }
+
+    /// Closes channel `id` after what was queued before, without waiting
+    /// (no [`L2capEvent::Closed`] follows)
+    pub fn l2cap_close(&self, id: u32) -> L2capReply {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.post(move |app, s| {
+            let _ = tx.send(app.l2cap.close(s, id));
+        });
+        L2capReply(rx)
     }
 
     // ---- scanning ----

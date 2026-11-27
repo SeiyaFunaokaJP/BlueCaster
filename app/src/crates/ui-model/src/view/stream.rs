@@ -5,7 +5,7 @@
 //! main window's indicators (capture running, crash, notes, device pill).
 
 use ipc::{AdapterInfo, CodecStop, CodecStopKind, CrashReport, DriverKind, LinkSample, Msg, Profile, Snapshot};
-use ipc::{SourceInfo, StreamInfo, StreamState, StreamStatus};
+use ipc::{NoiseMode, SourceInfo, StreamInfo, StreamState, StreamStatus};
 
 use crate::codecdetails::live_bitpool;
 use crate::codecs::{bitrate_note_key, codec_label_key};
@@ -138,6 +138,45 @@ pub fn battery_tone(percent: Option<u8>) -> BatteryTone {
         Some(p) if p <= 40 => BatteryTone::Warn,
         Some(_) => BatteryTone::Good,
     }
+}
+
+/// One part of earbuds that report each bud and the case (AirPods)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BudPart {
+    /// "Left", "Right", "Case"
+    pub label: String,
+    pub percent: u8,
+    pub charging: bool,
+}
+
+/// The buds and the case the earbuds report, in place of the one battery;
+/// empty while they report neither bud (the one battery shows then)
+pub fn bud_parts(s: &StreamStatus) -> Vec<BudPart> {
+    let Some(b) = s.buds.as_ref().filter(|b| b.left.is_some() || b.right.is_some()) else { return Vec::new() };
+    [("ui.home.bud_left", b.left), ("ui.home.bud_right", b.right), ("ui.home.bud_case", b.case)]
+        .into_iter()
+        .filter_map(|(key, p)| p.map(|p| BudPart { label: t(key), percent: p.percent.min(100), charging: p.charging }))
+        .collect()
+}
+
+/// The listening modes to choose from, with their labels, and the one in
+/// force; empty while the earbuds offer none
+pub fn noise_choices(s: &StreamStatus) -> (Vec<(NoiseMode, String)>, Option<NoiseMode>) {
+    let Some(b) = s.buds.as_ref() else { return (Vec::new(), None) };
+    let choices = b
+        .noise_modes
+        .iter()
+        .map(|&m| {
+            let key = match m {
+                NoiseMode::Off => "ui.home.noise_off",
+                NoiseMode::NoiseCancellation => "ui.home.noise_cancellation",
+                NoiseMode::Transparency => "ui.home.noise_transparency",
+                NoiseMode::Adaptive => "ui.home.noise_adaptive",
+            };
+            (m, t(key))
+        })
+        .collect();
+    (choices, b.noise.filter(|m| b.noise_modes.contains(m)))
 }
 
 /// "Battery 80%", "Battery unknown" (the battery's accessible name)

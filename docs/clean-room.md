@@ -43,6 +43,17 @@ source. The code is written from the fact sheet, never from the source.
 - Logs from these experiments carry only results and counts, never
   addresses, keys or device paths.
 
+### Exception: headphone control messages
+
+The rule above protects adapters, where a wrong register write can leave
+the adapter unusable until a reboot. Headphone control messages are a
+different case. They are the same messages the headphones' own app sends,
+such as a request for the battery level or a change to noise control. If
+every user had to type these values, nobody would use the feature, so the
+values may appear in the code. The rest of the rule still applies: the
+feature lives in its own module, works only with that vendor's headphones,
+and can be turned off. This exception currently covers AirPods.
+
 ## Recording it
 
 Whoever works from a fact sheet says so in the pull request, naming the

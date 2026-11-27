@@ -350,6 +350,7 @@ enum {
     SOURCE_SCO = 14,
     SOURCE_HID = 15,
     SOURCE_L2CAP_CBM = 16,
+    SOURCE_L2CAP_CLASSIC = 17,
 };
 
 /* A keyboard being added that may ask for a passkey (bluecaster_hid_pairing_target) */
@@ -1822,10 +1823,58 @@ void bluecaster_cbm_reset(void) {
     memset(cbm_slots, 0, sizeof(cbm_slots));
 }
 
+/* ======================================================================== */
+/* Classic L2CAP channels in basic mode (vendor control protocols)          */
+/* ======================================================================== */
+
+/* Their events (L2CAP_EVENT_INCOMING_CONNECTION, _CHANNEL_OPENED,
+ * _CHANNEL_CLOSED, _CAN_SEND_NOW) and data (L2CAP_DATA_PACKET, channel =
+ * local cid): SOURCE_L2CAP_CLASSIC */
+static void handler_l2cap_classic(uint8_t t, uint16_t c, uint8_t *p, uint16_t s) {
+    bluecaster_rs_on_packet(SOURCE_L2CAP_CLASSIC, t, c, p, s);
+}
+
+/* Opens a channel to `psm` of the device, over its ACL link; basic mode
+ * (BTstack's default for classic channels) */
+uint8_t bluecaster_l2cap_create_channel(const uint8_t *addr, uint16_t psm, uint16_t mtu, uint16_t *out_cid) {
+    bd_addr_t a;
+    memcpy(a, addr, 6);
+    return l2cap_create_channel(&handler_l2cap_classic, a, psm, mtu, out_cid);
+}
+
+/* Channels a device opens to `psm` come as L2CAP_EVENT_INCOMING_CONNECTION,
+ * to accept or decline. Encryption needed (the device is paired). */
+uint8_t bluecaster_l2cap_register_service(uint16_t psm, uint16_t mtu) {
+    return l2cap_register_service(&handler_l2cap_classic, psm, mtu, LEVEL_2);
+}
+
 /* LE Connection Update with one interval (1.25 ms units), the latency in
- * connection events and the supervision timeout (10 ms units) */
-uint8_t bluecaster_le_update_connection(uint16_t con_handle, uint16_t interval, uint16_t latency, uint16_t timeout) {
-    return gap_update_connection_parameters(con_handle, interval, interval, latency, timeout) == 0
-               ? ERROR_CODE_SUCCESS
-               : ERROR_CODE_COMMAND_DISALLOWED;
+ * connection events, the supervision timeout (10 ms units) and the connection
+ * event length (0.625 ms units; ASHA wants it non-zero). Sent as the HCI
+ * command itself: BTstack's gap_update_connection_parameters takes the event
+ * length from the values new connections are made with, which stay as they
+ * are. BTSTACK_ACL_BUFFERS_FULL while another command is on its way: ask
+ * again a little later. */
+uint8_t bluecaster_le_update_connection(uint16_t con_handle, uint16_t interval, uint16_t latency, uint16_t timeout,
+                                        uint16_t ce_length) {
+    if (!hci_can_send_command_packet_now()) return BTSTACK_ACL_BUFFERS_FULL;
+    return hci_send_cmd(&hci_le_connection_update, con_handle, interval, interval, latency, timeout, ce_length,
+                        ce_length);
+}
+
+/* LE Set PHY: 2M both ways preferred (BTstack sends it when it can) */
+uint8_t bluecaster_le_prefer_2m_phy(uint16_t con_handle) {
+    return gap_le_set_phy(con_handle, 0, 2, 2, 0);
+}
+
+/* LE Set Data Length: PDUs of up to `tx_octets` (BTstack sends it when it
+ * can); the time is that of the longest PDU, which every controller takes */
+uint8_t bluecaster_le_set_data_length(uint16_t con_handle, uint8_t tx_octets) {
+    return gap_le_set_data_length(con_handle, tx_octets, 2120);
+}
+
+/* The connection interval of an LE link in 1.25 ms units, as its last
+ * connection (update) complete event said; 0: no such link */
+uint16_t bluecaster_le_connection_interval(uint16_t con_handle) {
+    return gap_le_connection_interval(con_handle);
 }

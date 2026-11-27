@@ -51,6 +51,7 @@ from bumble.avdtp import (
 )
 from bumble.controller import Controller
 from bumble.device import Device
+from bumble import l2cap
 from bumble.core import BT_BR_EDR_TRANSPORT, UUID
 from bumble.host import Host
 from bumble.link import LocalLink
@@ -248,12 +249,24 @@ class EmuController(Controller):
         # gets LE Connection Update Complete with its own values. ASHA asks
         # for a 20 ms interval before it streams.
         print(f'le connection update interval={command.connection_interval_max} '
-              f'latency={command.max_latency} timeout={command.supervision_timeout}', flush=True)
+              f'latency={command.max_latency} timeout={command.supervision_timeout} '
+              f'ce={command.min_ce_length}', flush=True)
         self._send_hci_command_status(hci.HCI_COMMAND_STATUS_PENDING, command.op_code)
         self.send_hci_packet(hci.HCI_LE_Connection_Update_Complete_Event(
             status=hci.HCI_ErrorCode.SUCCESS, connection_handle=command.connection_handle,
             connection_interval=command.connection_interval_max, peripheral_latency=command.max_latency,
             supervision_timeout=command.supervision_timeout))
+        return None
+
+    def on_hci_le_set_phy_command(self, command):
+        # Taken as asked too (Bumble's controller has no such command and,
+        # as it expects Command Status from a handler, would not answer at
+        # all: BTstack then sends no further command). ASHA asks for 2M.
+        print(f'le set phy tx={int(command.tx_phys)} rx={int(command.rx_phys)}', flush=True)
+        self._send_hci_command_status(hci.HCI_COMMAND_STATUS_PENDING, command.op_code)
+        phy = 2 if int(command.tx_phys) & 2 else 1
+        self.send_hci_packet(hci.HCI_LE_PHY_Update_Complete_Event(
+            status=hci.HCI_ErrorCode.SUCCESS, connection_handle=command.connection_handle, tx_phy=phy, rx_phy=phy))
         return None
 
     # Called for the first Create Connection, which is refused with ACL
@@ -651,6 +664,111 @@ class EchoService:
         dlc.on('close', lambda: print('echo: channel closed', flush=True))
 
 
+class AirPodsEarbuds:
+    """The control channel of AirPods on classic L2CAP PSM 0x1001, written from
+    a fact sheet on the AirPods control protocol. Answers the host's connect,
+    and once notifications are asked for reports the battery (left 75 %
+    charging, right 80 %, case 30 %; a second report 1 s later: right 79 %,
+    the case gone), both buds in the ear, the device info and the listening
+    mode. A listening mode the model has is set and echoed; Adaptive without
+    the host's features, or with adaptive_refused, is echoed as the mode in
+    force. A model without listening modes answers a set with nothing.
+    opens: the earbuds open the channel themselves (and take none of the
+    host's); silent_connect: no connect answer. Lines start with 'AirPods:'."""
+
+    PSM = 0x1001
+    # Model number, listening modes (1 off, 2 noise cancellation,
+    # 3 transparency, 4 adaptive)
+    MODELS = {'pro2': ('A3048', (1, 2, 3, 4)), 'pro': ('A2084', (1, 2, 3)), 'plain': ('A0000', ())}
+
+    def __init__(self, device, model, opens, silent_connect, adaptive_refused):
+        self.model, self.modes = self.MODELS[model]
+        self.silent_connect, self.adaptive_refused = silent_connect, adaptive_refused
+        self.mode = self.modes[0] if self.modes else None
+        self.features = False
+        self.channel = None
+        if opens:
+            device.on('connection', lambda connection: asyncio.ensure_future(self.open(connection)))
+        else:
+            device.create_l2cap_server(spec=l2cap.ClassicChannelSpec(psm=self.PSM), handler=self.on_channel)
+
+    async def open(self, connection):
+        down = []
+        connection.on('disconnection', lambda _reason: down.append(True))
+        # Until the host listens (it does once it streams)
+        await asyncio.sleep(2)
+        for _ in range(40):
+            if self.channel is not None or down:
+                return
+            try:
+                channel = await connection.create_l2cap_channel(spec=l2cap.ClassicChannelSpec(psm=self.PSM))
+            except Exception as e:  # refused while nobody listens
+                log.info('AirPods: open refused (%s)', e)
+                await asyncio.sleep(0.5)
+                continue
+            print('AirPods: opened the channel', flush=True)
+            self.on_channel(channel)
+            return
+
+    def on_channel(self, channel):
+        print('AirPods: channel open', flush=True)
+        self.channel = channel
+        channel.sink = self.on_data
+        channel.on('close', lambda: (print('AirPods: channel closed', flush=True), setattr(self, 'channel', None)))
+
+    def send(self, opcode, payload):
+        if self.channel is not None:
+            self.channel.write(bytes([4, 0, 4, 0]) + struct.pack('<H', opcode) + bytes(payload))
+
+    def battery(self, cells):
+        payload = bytes([len(cells)])
+        for part, level, state in cells:
+            payload += bytes([part, 1, level, state, 1])
+        self.send(0x0004, payload)
+
+    def on_data(self, data):
+        if data[:4] == bytes([0, 0, 4, 0]):
+            print(f'AirPods: connect {data[4:8].hex()}', flush=True)
+            if not self.silent_connect:
+                self.channel.write(bytes.fromhex('01000400 0000 0100 0200 0500494E0500A54F'))
+            return
+        if len(data) < 6 or data[:4] != bytes([4, 0, 4, 0]):
+            print(f'AirPods: unknown packet {data.hex()}', flush=True)
+            return
+        opcode = struct.unpack('<H', data[4:6])[0]
+        payload = data[6:]
+        if opcode == 0x004D:
+            self.features = True
+            print(f'AirPods: host features {payload.hex()}', flush=True)
+        elif opcode == 0x000F:
+            print(f'AirPods: notifications {payload.hex()}', flush=True)
+            asyncio.ensure_future(self.report())
+        elif opcode == 0x0009 and len(payload) >= 2 and payload[0] == 0x0D:
+            wanted = payload[1]
+            if not self.modes:
+                print(f'AirPods: listening mode {wanted} ignored', flush=True)
+                return
+            if wanted in self.modes and not (wanted == 4 and (self.adaptive_refused or not self.features)):
+                self.mode = wanted
+                print(f'AirPods: listening mode set to {wanted}', flush=True)
+            else:
+                print(f'AirPods: listening mode {wanted} refused', flush=True)
+            self.send(0x0009, [0x0D, self.mode, 0, 0, 0])
+        else:
+            print(f'AirPods: opcode {opcode:04X} {payload.hex()}', flush=True)
+
+    async def report(self):
+        self.battery([(0x04, 75, 0x01), (0x02, 80, 0x02), (0x08, 30, 0x02)])
+        self.send(0x0006, [0x00, 0x00])
+        name = b'Test AirPods'
+        self.send(0x001D, bytes.fromhex('02D5000400') + name + b'\0' + self.model.encode() + b'\0Apple Inc.\0')
+        if self.mode is not None:
+            self.send(0x0009, [0x0D, self.mode, 0, 0, 0])
+        await asyncio.sleep(1)
+        self.battery([(0x02, 79, 0x02), (0x04, 75, 0x01), (0x08, 0, 0x04)])
+        print('AirPods: reported', flush=True)
+
+
 def refuse_dual_channel(sink):
     """The SBC endpoint lists dual channel but rejects a SET_CONFIGURATION
     with it, as some headsets do (SBC XQ then has to fall back to SBC)."""
@@ -724,6 +842,9 @@ async def main(args):
     if args.oppo:
         oppo = OppoEarbuds(device, args.oppo == 'on', args.oppo_drop, args.oppo_product, args.oppo_no_change,
                            args.oppo_spatial, args.oppo_codec_write, args.oppo_no_write)
+    if args.airpods:
+        AirPodsEarbuds(device, args.airpods, args.airpods_opens, args.airpods_silent_connect,
+                       args.airpods_no_adaptive)
     if args.ctkd:
         bluecaster_controller.aes_ccm = sink_controller.aes_ccm = True
         bluecaster_controller.link_key_request = True
@@ -1061,6 +1182,13 @@ if __name__ == '__main__':
     parser.add_argument('--oppo-spatial', action='store_true', help='report spatial audio on')
     parser.add_argument('--oppo-codec-write', action='store_true', help='advertise the codec write')
     parser.add_argument('--oppo-no-write', action='store_true', help='advertise no feature write')
+    parser.add_argument('--airpods', choices=sorted(AirPodsEarbuds.MODELS),
+                        help="serve AirPods' control channel (L2CAP PSM 0x1001) as this model")
+    parser.add_argument('--airpods-opens', action='store_true',
+                        help='with --airpods, the earbuds open the control channel (and take no open of the host)')
+    parser.add_argument('--airpods-silent-connect', action='store_true', help='with --airpods, no connect answer')
+    parser.add_argument('--airpods-no-adaptive', action='store_true',
+                        help='with --airpods, a request for Adaptive is echoed as the mode in force')
     parser.add_argument('--ctkd', action='store_true',
                         help='encrypt with AES-CCM (Secure Connections) and answer SMP over BR/EDR: the LE keys '
                              'derived from the link key (cross-transport key derivation, issue #86)')

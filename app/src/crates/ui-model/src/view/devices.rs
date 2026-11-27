@@ -15,8 +15,8 @@ use crate::format::js_trim;
 use crate::i18n::t;
 use crate::profile::{
     AudioEntry, DeviceFields, HeadsetMode, ProfilesView, audio_entries, capture_device, default_output_name,
-    device_fields, entry_base, followed_name, format_mismatch, headset_mode, headset_modes, hifi_cable, is_hifi_cable,
-    le_audio_on, listed_devices, multichannel_cable, new_profile, normalize_profile, own_default_output, vb_cable,
+    device_fields, followed_name, format_mismatch, headset_mode, headset_modes, hifi_cable, is_hifi_cable, le_audio_on,
+    listed_devices, multichannel_cable, new_profile, normalize_profile, own_default_output, vb_cable,
 };
 use crate::t;
 
@@ -77,7 +77,13 @@ pub fn le_listed(snap: &Snapshot, classic_only: bool) -> bool {
 /// (`saved_only`), the unsaved ones where the saved stand in a list of their
 /// own (`paired`), else all
 pub fn picker_devices(snap: &Snapshot, classic_only: bool, saved_only: bool, paired: bool) -> Vec<Device> {
-    let all = sort_devices(&listed_devices(&snap.devices, le_listed(snap, classic_only)));
+    // A hearing aid needs Bluetooth LE, not an adapter that streams LE Audio
+    let le = le_audio_on(&snap.settings) && !classic_only;
+    let le_audio = le_listed(snap, classic_only);
+    let all: Vec<Device> = sort_devices(&listed_devices(&snap.devices, le))
+        .into_iter()
+        .filter(|d| !d.le_audio || le_audio || d.hearing_aid)
+        .collect();
     if saved_only {
         return all.into_iter().filter(|d| d.saved).collect();
     }
@@ -127,7 +133,12 @@ pub fn picker_head_text(snap: &Snapshot, scan_text: Option<&str>, count: usize) 
 
 /// The address and kind under the rename dialog's field
 pub fn rename_hint(d: &Device) -> String {
-    if d.le_audio { format!("{} ({})", d.address, t("device.tag_le_audio")) } else { d.address.clone() }
+    if d.le_audio { format!("{} ({})", d.address, t(le_tag(d))) } else { d.address.clone() }
+}
+
+/// The kind of an LE entry: a hearing aid, or LE Audio
+pub fn le_tag(d: &Device) -> &'static str {
+    if d.hearing_aid { "device.tag_hearing_aid" } else { "device.tag_le_audio" }
 }
 
 /// A row's name: the device's, else "Unknown device"
@@ -138,7 +149,9 @@ pub fn device_label(d: &Device) -> String {
 /// The tag of a row's kind: LE Audio (a set or not), else Audio for an
 /// audio device, else none
 pub fn kind_tag(d: &Device) -> Option<String> {
-    if d.le_audio {
+    if d.le_audio && d.hearing_aid {
+        Some(t("device.tag_hearing_aid"))
+    } else if d.le_audio {
         Some(t(if d.le_audio_set { "device.tag_le_audio_set" } else { "device.tag_le_audio" }))
     } else if d.audio {
         Some(t("device.tag_audio"))
@@ -190,7 +203,7 @@ pub fn switcher_choices(snap: &Snapshot) -> Vec<(String, String)> {
         .filter_map(|e| {
             let p = e.profile?;
             let name = if e.name.is_empty() { e.address.clone() } else { e.name.clone() };
-            let label = if e.le_audio { format!("{name} ({})", t("device.tag_le_audio")) } else { name };
+            let label = if e.le_audio { format!("{name} ({})", t(le_tag(&e.device))) } else { name };
             Some((p.name, label))
         })
         .collect()
@@ -435,7 +448,7 @@ pub fn mic_device(entry: Option<&AudioEntry>) -> String {
 /// The first profile of a device without one, with the settings chosen
 /// (Auto, as the Codecs screen would make it)
 pub fn first_device_profile(device: &Device, next: &DeviceFields, profiles: &[Profile]) -> Profile {
-    let mut base = entry_base(&device.address, &device.name, device.le_audio, profiles);
+    let mut base = crate::profile::device_base(device, profiles);
     next.apply_to(&mut base);
     let codec = if device.le_audio { String::new() } else { t(codec_spec("auto").label) };
     let taken: Vec<&str> = profiles.iter().map(|p| p.name.as_str()).collect();
@@ -687,7 +700,7 @@ pub fn input_source_view(
     let shown = match &entry.profile {
         Some(p) => p.clone(),
         None => {
-            let mut base = entry_base(&entry.address, &entry.name, entry.le_audio, &snap.profiles);
+            let mut base = crate::profile::device_base(&entry.device, &snap.profiles);
             // VB-Cable first: the Hi-Fi Cable, with less delay, stays free for the sound
             let cable = [vb_cable(devices), hifi_cable(devices)].into_iter().flatten().find(|c| c.id != looped);
             if let Some(cable) = cable {

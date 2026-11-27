@@ -165,6 +165,17 @@ pub struct LeBroadcast {
     pub rear_preset: Option<String>,
 }
 
+/// What a hearing aid says in its advertising (the ASHA service data)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HearingAidAdvert {
+    /// The right side (else the left)
+    pub right: bool,
+    /// One of a pair
+    pub binaural: bool,
+    /// The first four bytes of the HiSyncId, the same on both sides of a pair
+    pub set: [u8; 4],
+}
+
 /// One advertiser seen by [`crate::BtHost::le_scan`] /
 /// [`crate::BtHost::le_find`] (v1 ScanResult)
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -193,6 +204,8 @@ pub struct LeScanResult {
     pub rsi: Option<[u8; 6]>,
     /// CSIP module: the coordinated set the advertiser belongs to
     pub set_id: Option<u32>,
+    /// ASHA module: the advertiser is a hearing aid
+    pub hearing_aid: Option<HearingAidAdvert>,
     /// Module annotation for the UI / log
     pub note: String,
     /// Last raw advertising data

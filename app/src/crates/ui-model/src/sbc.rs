@@ -249,6 +249,9 @@ pub(crate) mod mock {
             volume_device_name: String::new(),
             max_media_payload: 1023,
             le_audio: false,
+            hearing_aid: false,
+            hearing_aid_beside: String::new(),
+            hearing_aid_delay_ms: 0,
             le_low_latency: false,
             le_swap_channels: false,
             le_alone_channel: String::new(),
@@ -294,6 +297,7 @@ pub(crate) mod mock {
             le_audio: false,
             le_audio_set: false,
             hid_le: None,
+            hearing_aid: false,
             set_addresses: Vec::new(),
         }
     }

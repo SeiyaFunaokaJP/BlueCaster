@@ -59,6 +59,12 @@ le_audio_set: boolean,
  */
 hid_le: number | null, 
 /**
+ * An ASHA hearing aid (a proof of concept), or the two of a pair as
+ * one entry. An LE entry (`le_audio` is true) that streams G.722, not
+ * LE Audio; listed while Settings.le_audio_experimental is on.
+ */
+hearing_aid: boolean, 
+/**
  * LE Audio: the addresses of the other members of its coordinated set
  * (the other earbud), once a connection learned it
  */

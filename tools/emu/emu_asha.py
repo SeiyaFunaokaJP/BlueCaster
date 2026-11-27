@@ -22,7 +22,7 @@ without the counter.
 Prints "READY <host:port> aids=<addr>[,<addr>]" once BlueCaster can connect,
 then one line per step for run_test.py:
   asha: <side> start codec=<n> type=<n> volume=<n> other=<n>
-  asha: <side> status <n>
+  asha: <side> status <n> [<interval>]
   asha: <side> volume <n>
   asha: <side> stop frames=<n> lost=<n> bad=<n>
   asha: <side> link down frames=<n> lost=<n> bad=<n>
@@ -83,7 +83,9 @@ class Aid:
 
         async def on_control_point(connection, value):
             if value and value[0] == OpCode.STATUS and len(value) > 1:
-                say(self.side, f'status {value[1]}')
+                # 0: the other side disconnected, 1: connected, 2: connection
+                # parameters changed, followed by the interval (Android)
+                say(self.side, 'status ' + ' '.join(str(b) for b in value[1:]))
             await write(connection, value)
         self.service.audio_control_point_characteristic.value.write = on_control_point
         sink.device.add_service(self.service)

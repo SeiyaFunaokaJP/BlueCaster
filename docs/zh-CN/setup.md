@@ -18,7 +18,7 @@ nav_order: 1
 
 ## 前提条件
 
-- **Windows 10（22H2）/ 11**（x64 或 ARM64）
+- **Windows 10 / 11**（x64 或 ARM64）
 - **供 BlueCaster 使用的 USB 蓝牙适配器**：建议使用单独的适配器；USB 类型的内置适配器也可以，但这样 Windows 就无法使用自己的蓝牙了（请参阅[第 2 步](#winusb)）
 
 BlueCaster 会自动为适配器分配 WinUSB 驱动程序，因此不再需要 [Zadig](https://zadig.akeo.ie/)（Zadig 仍可使用，请参阅[改用 Zadig](#zadig)）。

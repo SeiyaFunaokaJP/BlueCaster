@@ -295,6 +295,16 @@ OPPO_SINK = ['--codecs', 'sbc', 'aac', 'lhdcv5', '--log-level', 'INFO', '--name'
 OTHER_NAME = ['--name', 'Other Buds']
 OPPO_NAME = ['--device-name', 'OPPO Enco Free4']
 OPPO_TWICE = OPPO_NAME + ['--sessions', '2']
+# AirPods' control channel (issue #595; emu_sink.py AirPodsEarbuds): the
+# battery of each bud and the case, noise control, where the buds are
+AIRPODS_SINK = ['--codecs', 'sbc', 'aac', '--log-level', 'INFO', '--name', 'AirPods Pro']
+AIRPODS_NAME = ['--device-name', 'AirPods Pro']
+AIRPODS_BATTERY = 'Buds: left 75% (charging), right 80%, case 30%'
+AIRPODS_BATTERY_2 = 'Buds: left 75% (charging), right 79%, case -'
+AIRPODS_UP = [('sink.log', 'AirPods: connect 01000200', 1), ('sink.log', 'AirPods: host features ff00000000000000', 1),
+              ('sink.log', 'AirPods: notifications ffffffff', 1), ('sink.log', 'AirPods: reported', 1),
+              ('bluecaster.log', AIRPODS_BATTERY, True), ('bluecaster.log', AIRPODS_BATTERY_2, True),
+              ('bluecaster.log', 'ear InEar/InEar', True)]
 CTKD_SINK = ['--codecs', 'sbc', '--ctkd', '--log-level', 'INFO']
 CTKD_ON = {'debug_mode': True, 'le_audio_experimental': True}
 # Further cases: name -> (BlueCaster -c, emu_sink.py arguments, the codec expected,
@@ -446,6 +456,24 @@ NEGOTIATION = {
     # Saved under another name (issue #237): the name they give tells them
     'oppo-renamed': ('lhdcv5', OPPO_SINK + ['--oppo', 'off'], 'lhdcv5', ['--device-name', 'test', '--sessions', '2']),
     'huawei-renamed': ('ldac', HUAWEI_SINK + ['--huawei', 'off'], 'ldac', ['--device-name', 'test']),
+    # AirPods (issue #595): the control channel opened after the stream
+    # starts, each bud's battery, a listening mode set and confirmed; Adaptive
+    # taken or echoed as the mode in force; the earbuds opening the channel
+    # themselves, or not answering the connect; a model without noise
+    # control; another name is left alone
+    'airpods': ('aac', AIRPODS_SINK + ['--airpods', 'pro2'], 'aac', AIRPODS_NAME + ['--noise-control', 'transparency']),
+    'airpods-adaptive': ('aac', AIRPODS_SINK + ['--airpods', 'pro2'], 'aac',
+                         AIRPODS_NAME + ['--noise-control', 'adaptive']),
+    'airpods-no-adaptive': ('aac', AIRPODS_SINK + ['--airpods', 'pro2', '--airpods-no-adaptive'], 'aac',
+                            AIRPODS_NAME + ['--noise-control', 'adaptive']),
+    'airpods-pro1': ('aac', AIRPODS_SINK + ['--airpods', 'pro'], 'aac', AIRPODS_NAME),
+    'airpods-they-open': ('aac', AIRPODS_SINK + ['--airpods', 'pro2', '--airpods-opens'], 'aac',
+                          AIRPODS_NAME + ['--noise-control', 'anc']),
+    'airpods-silent-connect': ('aac', AIRPODS_SINK + ['--airpods', 'pro2', '--airpods-silent-connect'], 'aac',
+                               AIRPODS_NAME),
+    'airpods-plain': ('aac', AIRPODS_SINK + ['--airpods', 'plain', '--name', 'AirPods'], 'aac',
+                      ['--device-name', 'AirPods']),
+    'airpods-other-name': ('aac', AIRPODS_SINK + ['--airpods', 'pro2'] + OTHER_NAME, 'aac', AIRPODS_NAME),
     # Developer mode's vendor settings (DEV_SETTINGS): OPPO's protocol for
     # earbuds of any name, for none, and Hi-Res asked on every connection
     'oppo-always': ('lhdcv5', OPPO_SINK + ['--oppo', 'off'] + OTHER_NAME, 'lhdcv5', []),
@@ -563,6 +591,29 @@ LOG_CHECKS = {
     'oppo-auto': [('sink.log', HI_RES_ON, 1), ('bluecaster.log', ENCODED_1000, 1), ('bluecaster.log', ENCODED_400, False)],
     'oppo-renamed': [('sink.log', HI_RES_ON, 1), ('bluecaster.log', ENCODED_400, False), ('bluecaster.log', ENCODED_1000, 2),
                      ('bluecaster.log', 'name=“OPPO Enco Free4”', 1)],
+    'airpods': AIRPODS_UP + [('sink.log', 'AirPods: listening mode set to 3', 1),
+                             ('bluecaster.log', 'noise control Transparency of Off/NoiseCancellation/Transparency/Adaptive',
+                              True),
+                             ('bluecaster.log', 'AirPods: asking for Transparency', 1),
+                             ('bluecaster.log', 'AirPods: no answer to', False)],
+    'airpods-adaptive': AIRPODS_UP + [('sink.log', 'AirPods: listening mode set to 4', 1),
+                                      ('bluecaster.log', 'noise control Adaptive of', True)],
+    'airpods-no-adaptive': AIRPODS_UP + [('sink.log', 'AirPods: listening mode 4 refused', 1),
+                                         ('bluecaster.log', 'AirPods: asked for Adaptive, they keep Off', 1),
+                                         ('bluecaster.log', 'noise control Off of Off/NoiseCancellation/Transparency,',
+                                          True)],
+    # The model number tells a first-generation Pro: no Adaptive
+    'airpods-pro1': AIRPODS_UP + [('bluecaster.log', 'AirPods: model A2084 (known)', 1),
+                                  ('bluecaster.log', 'noise control Off of Off/NoiseCancellation/Transparency,', True)],
+    'airpods-they-open': AIRPODS_UP + [('sink.log', 'AirPods: opened the channel', 1),
+                                       ('bluecaster.log', 'AirPods: they opened the control channel', 1),
+                                       ('sink.log', 'AirPods: listening mode set to 2', 1)],
+    'airpods-silent-connect': [(f, x, n) for f, x, n in AIRPODS_UP if 'connect' not in x]
+                              + [('sink.log', 'AirPods: connect 01000200', 1),
+                                 ('bluecaster.log', 'AirPods: connected (status', False)],
+    'airpods-plain': AIRPODS_UP + [('bluecaster.log', 'noise control', False),
+                                   ('bluecaster.log', 'AirPods: model A0000 (not known', 1)],
+    'airpods-other-name': [('sink.log', 'AirPods:', False), ('bluecaster.log', 'Buds:', False)],
     'huawei-renamed': [('sink.log', QUALITY_ON, True), ('bluecaster.log', 'name=“HUAWEI FreeBuds Pro 4”', True)],
     'oppo-always': [('sink.log', HI_RES_ON, 1), ('bluecaster.log', ENCODED_1000, 1), ('bluecaster.log', 'remote name of', False)],
     'oppo-never': [('sink.log', 'OPPO control', False), ('bluecaster.log', ENCODED_400, True)],

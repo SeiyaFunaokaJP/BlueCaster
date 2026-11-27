@@ -345,6 +345,70 @@ impl Stack {
         unsafe { ffi::rfcomm_send(rfcomm_cid, data.as_ptr() as *mut u8, data.len() as u16) }
     }
 
+    // ---- classic L2CAP channels (after l2cap_init) ----
+
+    /// Opens a basic-mode channel to `psm` of the device, over its ACL link;
+    /// its events and data come as [`crate::Source::L2capClassic`]
+    /// (L2CAP_EVENT_CHANNEL_OPENED first). Returns the local cid, or
+    /// BTstack's status.
+    pub fn l2cap_create_channel(&self, addr: &[u8; 6], psm: u16, mtu: u16) -> Result<u16, u8> {
+        let mut cid = 0u16;
+        // SAFETY: on the BTstack thread after l2cap_init; the shim copies the
+        // 6 bytes; cid writable.
+        let status = unsafe { ffi::bluecaster_l2cap_create_channel(addr.as_ptr(), psm, mtu, &mut cid) };
+        tracing::debug!(target: "btstack", "l2cap create channel psm 0x{psm:04X}: 0x{status:02X}, cid 0x{cid:04X}");
+        if status == 0 { Ok(cid) } else { Err(status) }
+    }
+
+    /// Channels a device opens to `psm` come as
+    /// L2CAP_EVENT_INCOMING_CONNECTION ([`crate::Source::L2capClassic`]),
+    /// to [`Stack::l2cap_accept`] or [`Stack::l2cap_decline`]
+    pub fn l2cap_register_service(&self, psm: u16, mtu: u16) -> u8 {
+        // SAFETY: on the BTstack thread after l2cap_init.
+        let status = unsafe { ffi::bluecaster_l2cap_register_service(psm, mtu) };
+        tracing::debug!(target: "btstack", "l2cap register service psm 0x{psm:04X}: 0x{status:02X}");
+        status
+    }
+
+    pub fn l2cap_unregister_service(&self, psm: u16) -> u8 {
+        // SAFETY: on the BTstack thread after l2cap_init.
+        unsafe { ffi::l2cap_unregister_service(psm) }
+    }
+
+    pub fn l2cap_accept(&self, local_cid: u16) {
+        // SAFETY: on the BTstack thread, for a cid of an incoming connection.
+        unsafe { ffi::l2cap_accept_connection(local_cid) }
+    }
+
+    pub fn l2cap_decline(&self, local_cid: u16) {
+        // SAFETY: on the BTstack thread, for a cid of an incoming connection.
+        unsafe { ffi::l2cap_decline_connection(local_cid) }
+    }
+
+    /// L2CAP_EVENT_CAN_SEND_NOW follows once the channel can take a packet
+    pub fn l2cap_request_can_send_now(&self, local_cid: u16) -> u8 {
+        // SAFETY: on the BTstack thread.
+        unsafe { ffi::l2cap_request_can_send_now_event(local_cid) }
+    }
+
+    /// One packet of at most the peer's MTU; BTSTACK_ACL_BUFFERS_FULL: not
+    /// taken, ask for [`Stack::l2cap_request_can_send_now`]
+    pub fn l2cap_send(&self, local_cid: u16, data: &[u8]) -> u8 {
+        if data.len() > u16::MAX as usize {
+            return crate::consts::ERROR_CODE_INVALID_HCI_COMMAND_PARAMETERS;
+        }
+        // SAFETY: on the BTstack thread; a basic-mode channel copies the
+        // packet into its outgoing buffer during the call.
+        unsafe { ffi::l2cap_send(local_cid, data.as_ptr(), data.len() as u16) }
+    }
+
+    pub fn l2cap_disconnect(&self, local_cid: u16) -> u8 {
+        // SAFETY: on the BTstack thread.
+        let status = unsafe { ffi::l2cap_disconnect(local_cid) };
+        tracing::debug!(target: "btstack", "l2cap disconnect cid 0x{local_cid:04X}: 0x{status:02X}");
+        status
+    }
+
     /// Opens the service level connection to the headphones' HFP
     pub fn hfp_ag_connect(&self, addr: &[u8; 6]) -> u8 {
         // SAFETY: on the BTstack thread after hfp_ag_init; 6 bytes.

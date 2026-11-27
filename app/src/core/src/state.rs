@@ -213,6 +213,9 @@ fn to_ipc_profile(p: &CoreProfile, legacy: u16) -> Profile {
         volume_device_name: p.volume_device_name.clone(),
         max_media_payload: p.max_media_payload.unwrap_or(legacy),
         le_audio: p.le_audio,
+        hearing_aid: p.hearing_aid,
+        hearing_aid_beside: p.hearing_aid_beside.clone(),
+        hearing_aid_delay_ms: p.hearing_aid_delay_ms,
         le_low_latency: p.le_low_latency,
         le_swap_channels: p.le_swap_channels,
         le_alone_channel: p.le_alone_channel.clone(),
@@ -313,6 +316,12 @@ fn merge_profile(base: Option<&CoreProfile>, p: &Profile) -> CoreProfile {
     c.volume_device_name = p.volume_device_name.clone();
     c.max_media_payload = Some(bt_host::media::clamp_media_payload_limit(p.max_media_payload as u32));
     c.le_audio = p.le_audio;
+    c.hearing_aid = p.hearing_aid && p.le_audio;
+    // Beside a classic device only, a known address, a delay within range
+    let beside = (!p.le_audio).then(|| bt_host::parse_addr(&p.hearing_aid_beside)).flatten();
+    c.hearing_aid_beside = beside.map(|a| bt_host::addr_str(&a)).unwrap_or_default();
+    c.hearing_aid_delay_ms =
+        if beside.is_some() { p.hearing_aid_delay_ms.min(bluecaster_core::asha::MAX_DELAY_MS) } else { 0 };
     c.le_low_latency = p.le_low_latency;
     c.le_swap_channels = p.le_swap_channels;
     c.le_alone_channel = bluecaster_core::le_channels::saved_key(&p.le_alone_channel);
@@ -950,14 +959,25 @@ fn saved_devices(
             le_audio: d.le_audio,
             le_audio_set: false,
             hid_le: None,
+            hearing_aid: false,
             set_addresses: Vec::new(),
         })
         .collect();
+    // A saved hearing aid is known by its profile
+    let aids: Vec<String> = bluecaster_core::profiles::load(config_dir)
+        .into_iter()
+        .filter(|p| p.hearing_aid)
+        .map(|p| p.device_address)
+        .collect();
+    for d in list.iter_mut().filter(|d| d.le_audio) {
+        d.hearing_aid = aids.iter().any(|a| a.eq_ignore_ascii_case(&d.address));
+    }
     // A Bluetooth LE keyboard or mouse is never an audio device (issue #413)
     for s in scanned.iter().filter(|s| s.hid_le.is_none()) {
         match list.iter_mut().find(|d| d.le_audio == s.le_audio && d.address.eq_ignore_ascii_case(&s.address)) {
             Some(d) => {
                 d.rssi = s.rssi;
+                d.hearing_aid |= s.hearing_aid;
                 d.le_audio_set |= s.le_audio_set;
                 if d.name.is_empty() {
                     d.name = s.name.clone();
@@ -1047,6 +1067,7 @@ fn scanned_device(d: &ScannedDevice) -> Device {
         le_audio: d.le_audio,
         le_audio_set: d.le_audio_set,
         hid_le: d.hid_le,
+        hearing_aid: d.hearing_aid,
         set_addresses: Vec::new(),
     }
 }
@@ -2682,6 +2703,7 @@ impl CoreState {
                 if state == CoreStreamState::Reconnecting {
                     stream.battery = None;
                     stream.battery_refused = false;
+                    stream.buds = None;
                     stream.voice = None;
                     stream.slow_link = None;
                     stream.voice_codecs.clear();
@@ -2692,6 +2714,7 @@ impl CoreState {
                     stream.volume = None;
                     stream.battery = None;
                     stream.battery_refused = false;
+                    stream.buds = None;
                     stream.voice = None;
                     stream.slow_link = None;
                     stream.voice_codecs.clear();
@@ -2849,23 +2872,30 @@ impl CoreState {
             {
                 tracing::debug!("battery report while not connected: ignored");
             }
+            ServiceEvent::Buds(_) if matches!(stream.state, StreamState::Idle | StreamState::Error) => {
+                stream.buds = None;
+            }
+            ServiceEvent::Buds(buds) => {
+                let level = buds.as_ref().and_then(ipc::buds_level);
+                let had = stream.buds.as_ref().and_then(ipc::buds_level).is_some();
+                stream.buds = buds;
+                match level {
+                    Some(v) => self.battery_level(&s, &mut stream, v),
+                    // The HFP battery comes back with its next report
+                    None if had => stream.battery = None,
+                    None => {}
+                }
+            }
             ServiceEvent::VoiceCodecs(codecs) => stream.voice_codecs = codecs,
             ServiceEvent::MicRates(rates) => stream.mic_rates = rates,
+            // The earbuds' own report of each bud is finer than HFP's
+            ServiceEvent::Battery(_) | ServiceEvent::BatteryRefused
+                if stream.buds.as_ref().and_then(ipc::buds_level).is_some() => {}
             ServiceEvent::BatteryRefused => {
                 stream.battery = None;
                 stream.battery_refused = true;
             }
-            ServiceEvent::Battery(v) => {
-                stream.battery = Some(v);
-                stream.battery_refused = false;
-                let mut warned = self.battery_warned.load(Ordering::Acquire);
-                let low = self.service.settings().battery_low_percent;
-                let alert = battery_low_alert(&mut warned, v, low);
-                self.battery_warned.store(warned, Ordering::Release);
-                if alert {
-                    self.battery_low(&s, v, low);
-                }
-            }
+            ServiceEvent::Battery(v) => self.battery_level(&s, &mut stream, v),
         }
         self.publish(Event::Stream(stream));
         self.announce_connected();
@@ -3420,6 +3450,7 @@ impl CoreState {
             codec_stop: None,
             slow_link: None,
             broadcast,
+            buds: None,
         }));
         let service = self.service.clone();
         // A restart for a save waits a moment: a request right behind it
@@ -3802,6 +3833,20 @@ impl CoreState {
         self.service.set_settings(s);
     }
 
+    /// The headphones' battery level reported (HFP, or the lowest bud):
+    /// shown, and the low-battery balloon when it is due
+    fn battery_level(&self, s: &Snapshot, stream: &mut StreamStatus, v: u8) {
+        stream.battery = Some(v);
+        stream.battery_refused = false;
+        let mut warned = self.battery_warned.load(Ordering::Acquire);
+        let low = self.service.settings().battery_low_percent;
+        let alert = battery_low_alert(&mut warned, v, low);
+        self.battery_warned.store(warned, Ordering::Release);
+        if alert {
+            self.battery_low(s, v, low);
+        }
+    }
+
     /// The streamed headphones' battery went low: a balloon, once per
     /// connection ([`battery_low_alert`])
     fn battery_low(&self, s: &Snapshot, level: u8, low: u8) {
@@ -4107,6 +4152,13 @@ impl CoreState {
                     self.request_volume(volume);
                 }
                 Ok(json(&volume))
+            }
+            Method::StreamSetNoiseControl { mode } => {
+                if !self.service.set_noise_control(mode) {
+                    return Err(err("stream.no_noise_control", "ipc.error.no_noise_control"));
+                }
+                tracing::debug!("IPC: stream.set_noise_control {mode:?}");
+                Ok(serde_json::Value::Null)
             }
             Method::ProfileSetHeadsetMic { name, mode } => {
                 let developer = self.service.settings().debug_mode;
@@ -5482,6 +5534,7 @@ mod tests {
             le_audio,
             le_audio_set: false,
             hid_le: None,
+            hearing_aid: false,
             set_addresses: Vec::new(),
         };
         let core = CoreProfile {
@@ -6834,6 +6887,7 @@ mod tests {
             le_audio: false,
             le_audio_set: false,
             hid_le: None,
+            hearing_aid: false,
             set_addresses: Vec::new(),
         }];
         let mut codecs = BTreeMap::new();
@@ -7056,6 +7110,7 @@ mod tests {
                 le_audio: false,
                 le_audio_set: false,
                 hid_le: None,
+                hearing_aid: false,
             },
             ScannedDevice {
                 address: "AA:BB:CC:DD:EE:FF".into(),
@@ -7066,6 +7121,7 @@ mod tests {
                 le_audio: true,
                 le_audio_set: false,
                 hid_le: None,
+                hearing_aid: false,
             },
             ScannedDevice {
                 address: "C0:11:22:33:44:55".into(),
@@ -7076,6 +7132,7 @@ mod tests {
                 le_audio: true,
                 le_audio_set: true,
                 hid_le: None,
+                hearing_aid: false,
             },
         ];
         let scanned: Vec<Device> = scan.iter().map(scanned_device).collect();
@@ -7120,6 +7177,7 @@ mod tests {
             le_audio: false,
             le_audio_set: false,
             hid_le,
+            hearing_aid: false,
         };
         let scan = [
             entry("AA:BB:CC:DD:EE:FF", "Phones", true, None),

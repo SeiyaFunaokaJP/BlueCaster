@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Disableable as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -23,7 +24,10 @@ use gpui_kit::{
     ElementId, Entity, FontWeight, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Render,
     SharedString, StatefulInteractiveElement as _, Styled as _, Task, WeakEntity, Window, div, point, px,
 };
-use ipc::{AdapterInfo, DiagInfo, DiagInfoParams, ErrorInfo, Method, Msg, Profile, StreamState, WindowsPairedDevice};
+use ipc::{
+    AdapterInfo, DiagInfo, DiagInfoParams, ErrorInfo, Method, Msg, NoiseMode, Profile, StreamState, StreamStatus,
+    WindowsPairedDevice,
+};
 use ui_model::format::{kbps, khz, percent_to_volume, volume_percent};
 use ui_model::i18n::{t, tm};
 use ui_model::links::{BugReport, bug_report_url};
@@ -418,6 +422,69 @@ pub fn battery_level(id: impl Into<ElementId>, percent: Option<u8>, sub: bool, c
         .child(div().when(sub, |d| d.text_color(p.text_2)).child(number))
         .when(percent.is_none(), |d| d.tooltip(tip(t("ui.home.battery_refused_tip"))))
         .into_any_element()
+}
+
+/// Earbuds that report each bud and the case (AirPods): "Left 80%
+/// Right 75% Case 30%", a bolt beside the ones charging; None: the one
+/// battery shows
+pub fn bud_batteries(key: &str, s: &StreamStatus, cx: &App) -> Option<AnyElement> {
+    let parts = model::bud_parts(s);
+    if parts.is_empty() {
+        return None;
+    }
+    let p = *cx.palette();
+    Some(
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(theme::S3)
+            .children(parts.into_iter().enumerate().map(|(i, part)| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(theme::S1)
+                    .child(div().text_color(p.text_2).child(part.label))
+                    .child(battery_level(SharedString::from(format!("bud-{key}-{i}")), Some(part.percent), false, cx))
+                    .when(part.charging, |d| d.child(icon(IconName::Flash).xsmall().text_color(p.good)))
+            }))
+            .into_any_element(),
+    )
+}
+
+/// The earbuds' listening modes, the one in force selected (none while
+/// unknown); a click asks the earbuds for another, which shows once they
+/// confirm it
+pub fn noise_row(key: &str, s: &StreamStatus, cx: &App) -> Option<AnyElement> {
+    let (choices, current) = model::noise_choices(s);
+    if choices.is_empty() {
+        return None;
+    }
+    let p = *cx.palette();
+    let modes: Vec<NoiseMode> = choices.iter().map(|(m, _)| *m).collect();
+    let mut bar = TabBar::new(SharedString::from(format!("noise-{key}")))
+        .segmented()
+        .xsmall()
+        .children(choices.into_iter().map(|(_, label)| Tab::new().label(label)));
+    if let Some(i) = current.and_then(|c| modes.iter().position(|m| *m == c)) {
+        bar = bar.selected_index(i);
+    }
+    let bar = bar.on_click(move |index: &usize, _, cx| {
+        if let Some(&mode) = modes.get(*index) {
+            app::send(Method::StreamSetNoiseControl { mode }, cx);
+        }
+    });
+    Some(
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(theme::S2)
+            .min_w_0()
+            .child(div().text_color(p.text_2).child(t("ui.home.noise_control")))
+            .child(bar)
+            .into_any_element(),
+    )
 }
 
 // ---------------------------------------------------------------------------

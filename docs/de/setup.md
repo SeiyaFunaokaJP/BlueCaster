@@ -18,7 +18,7 @@ nav_order: 1
 
 ## Voraussetzungen
 
-- **Windows 10 (22H2) / 11** (x64 oder ARM64)
+- **Windows 10 / 11** (x64 oder ARM64)
 - **Ein USB-Bluetooth-Adapter für BlueCaster**: Ein separater Dongle wird empfohlen. Ein eingebauter USB-Adapter funktioniert auch, dann hat Windows aber kein eigenes Bluetooth mehr (siehe [Schritt 2](#winusb))
 
 BlueCaster weist dem Adapter den WinUSB-Treiber selbst zu. [Zadig](https://zadig.akeo.ie/) brauchen Sie daher nicht mehr (es funktioniert aber weiterhin, siehe [Stattdessen Zadig verwenden](#zadig)).

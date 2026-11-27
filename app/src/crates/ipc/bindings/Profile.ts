@@ -55,6 +55,21 @@ volume_sync: string, volume_device_id: string, volume_device_name: string, max_m
  */
 le_audio: boolean, 
 /**
+ * The device is an ASHA hearing aid (a proof of concept; `le_audio` is
+ * true too): G.722 at 16 kHz, no codec settings
+ */
+hearing_aid: boolean, 
+/**
+ * A classic device: the address of the saved hearing aid that plays
+ * beside this device's stream, for the other ear ("" = none)
+ */
+hearing_aid_beside: string, 
+/**
+ * With hearing_aid_beside: the hearing aid plays this many
+ * milliseconds later (0 to 500)
+ */
+hearing_aid_delay_ms: number, 
+/**
  * LE Audio: GMAP low-latency presets with a gaming headset (LC3 LL; off
  * by default: LC3); other headsets get the media configuration either way
  */

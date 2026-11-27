@@ -35,10 +35,16 @@ const OP_STOP: u8 = 2;
 const OP_STATUS: u8 = 3;
 /// Start: G.722 at 16 kHz
 const CODEC_G722: u8 = 1;
-/// Start: media
-const AUDIO_TYPE_MEDIA: u8 = 3;
+/// Start: the audio type Android sends for everything (unknown; 3 would be
+/// media)
+const AUDIO_TYPE_UNKNOWN: u8 = 0;
 /// Status: the other side of the pair connected
-const STATUS_OTHER_CONNECTED: u8 = 2;
+const STATUS_OTHER_CONNECTED: u8 = 1;
+/// Status: the connection parameters changed, followed by the new interval
+/// (as Android sends it)
+const STATUS_CONNECTION_UPDATE: u8 = 2;
+/// How long the 20 ms connection interval is waited for before the start
+const INTERVAL_TIMEOUT: Duration = Duration::from_secs(3);
 /// ReadOnlyProperties: capabilities
 const CAP_RIGHT: u8 = 0x01;
 const CAP_BINAURAL: u8 = 0x02;
@@ -92,6 +98,9 @@ pub fn connect(host: &BtHost, address: [u8; 6]) -> Result<HearingAid, String> {
         None => (LeAddr { addr: address, addr_type: LeAddr::PUBLIC }, String::new()),
     };
     let device = host.le_connect_bare(addr, &name, CONNECT_TIMEOUT)?;
+    // In the background while its service is read: the 20 ms interval, the
+    // 2M PHY and long link layer PDUs
+    host.asha_prepare_link(device);
     let services = host.le_services(device);
     let Some(service) = services.iter().find(|s| s.uuid16 == bt_host::ASHA_SERVICE) else {
         host.le_disconnect(device);
@@ -198,13 +207,37 @@ impl AshaStream {
             }
         }
         let stream = AshaStream { aids: open, channels, delay_ms };
-        let pair = stream.aids.len() > 1;
+        // The connection update is done before the start (the specification's
+        // order); each hearing aid is told the interval, as Android does
+        let until = Instant::now() + INTERVAL_TIMEOUT;
         for (aid, _) in &stream.aids {
+            let mut interval = host.asha_link_interval(aid.device);
+            while interval != Some(bt_host::ASHA_INTERVAL_20_MS) && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(50));
+                interval = host.asha_link_interval(aid.device);
+            }
+            match interval {
+                Some(bt_host::ASHA_INTERVAL_20_MS) => {
+                    let update = vec![OP_STATUS, STATUS_CONNECTION_UPDATE, bt_host::ASHA_INTERVAL_20_MS as u8];
+                    for (each, _) in &stream.aids {
+                        let _ = host.le_write_command(each.device, each.control, update.clone());
+                    }
+                }
+                other => tracing::warn!(
+                    "ASHA: {} hearing aid: the connection interval is {:?} x 1.25 ms, not 20 ms; the sound may break up",
+                    aid.side(),
+                    other
+                ),
+            }
+        }
+        for (index, (aid, _)) in stream.aids.iter().enumerate() {
             // Old notifications are not this start's answer
             if let Some(rx) = &aid.status {
                 while rx.try_recv().is_ok() {}
             }
-            let start = vec![OP_START, CODEC_G722, AUDIO_TYPE_MEDIA, volume as u8, u8::from(pair)];
+            // The last byte: the other side streams already (the side
+            // started first is told below)
+            let start = vec![OP_START, CODEC_G722, AUDIO_TYPE_UNKNOWN, volume as u8, u8::from(index > 0)];
             if let Err(status) = host.le_write(aid.device, aid.control, start) {
                 let e = format!("{} hearing aid: the start was refused (0x{status:02x})", aid.side());
                 stream.stop(host);
@@ -222,11 +255,9 @@ impl AshaStream {
                     Err(_) => tracing::warn!("ASHA: {} hearing aid: no answer to the start, going on", aid.side()),
                 }
             }
-        }
-        if pair {
-            // Each side learns that the other one is there
-            for (aid, _) in &stream.aids {
-                let _ = host.le_write(aid.device, aid.control, vec![OP_STATUS, STATUS_OTHER_CONNECTED]);
+            // The sides that stream already learn that this one is there
+            for (earlier, _) in &stream.aids[..index] {
+                let _ = host.le_write_command(earlier.device, earlier.control, vec![OP_STATUS, STATUS_OTHER_CONNECTED]);
             }
         }
         Ok(stream)
@@ -234,6 +265,12 @@ impl AshaStream {
 
     pub fn aids(&self) -> impl Iterator<Item = &HearingAid> {
         self.aids.iter().map(|(a, _)| a)
+    }
+
+    /// Each hearing aid with the handle of its Volume characteristic (those
+    /// that have one), for `BtHost::asha_volume_targets`
+    pub fn volume_targets(&self) -> Vec<(LeDeviceId, u16)> {
+        self.aids().filter_map(|a| Some((a.device, a.volume?))).collect()
     }
 
     /// The longest render delay of the hearing aids
@@ -391,6 +428,109 @@ pub fn clear_tap() {
     let tap = TAP.lock().unwrap_or_else(|e| e.into_inner()).take();
     if let Some((_, pipeline, _)) = tap.and_then(|t| t.running) {
         pipeline.stop();
+    }
+}
+
+/// A hearing aid beside a running A2DP stream (bimodal), on a thread of its
+/// own: connected and started once Bluetooth LE is up, fed from the A2DP
+/// stream's capture ([`set_tap`]), and looked for again when it goes away.
+/// The A2DP stream never waits for it.
+pub struct Beside {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Beside {
+    /// The volume the hearing aid plays at (-128 muted to 0)
+    const VOLUME: i8 = -20;
+    /// Waits for the LE core after the A2DP stream started
+    const READY_WAIT: Duration = Duration::from_secs(5);
+    /// The pause before the hearing aid is looked for again
+    const RETRY: Duration = Duration::from_secs(5);
+
+    pub fn start(host: Arc<BtHost>, aid: [u8; 6], delay_ms: u32) -> Beside {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopped = {
+            let stop = stop.clone();
+            move || stop.load(std::sync::atomic::Ordering::Acquire)
+        };
+        let thread = std::thread::Builder::new()
+            .name("asha-beside".into())
+            .spawn(move || Beside::run(&host, aid, delay_ms, &stopped))
+            .map_err(|e| tracing::error!("ASHA: the hearing aid's thread did not start: {e}"))
+            .ok();
+        Beside { stop, thread }
+    }
+
+    fn run(host: &BtHost, aid: [u8; 6], delay_ms: u32, stopped: &dyn Fn() -> bool) {
+        let pause = |d: Duration| {
+            let until = Instant::now() + d;
+            while Instant::now() < until && !stopped() {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        };
+        let until = Instant::now() + Beside::READY_WAIT;
+        while !host.le_ready() && Instant::now() < until && !stopped() {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if !host.le_ready() {
+            if !stopped() {
+                tracing::warn!("ASHA: Bluetooth LE is not running, the hearing aid beside this stream is not used");
+            }
+            return;
+        }
+        let mut failures = 0u32;
+        while !stopped() {
+            let started =
+                connect(host, aid).and_then(|aid| AshaStream::start(host, vec![aid], Beside::VOLUME, true, delay_ms));
+            let stream = match started {
+                Ok(s) => s,
+                Err(e) => {
+                    // Said once: the hearing aid may be off for the whole stream
+                    if failures == 0 && !stopped() {
+                        tracing::warn!("ASHA: the hearing aid beside this stream is not playing: {e}");
+                    }
+                    failures += 1;
+                    pause(Beside::RETRY);
+                    continue;
+                }
+            };
+            failures = 0;
+            tracing::info!("ASHA: a hearing aid plays beside this stream, {delay_ms} ms later");
+            set_tap(&stream);
+            while !stopped() && !stream.lost() {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            clear_tap();
+            tracing::info!("ASHA: {}", stream.stats_line());
+            let devices: Vec<LeDeviceId> = stream.aids().map(|a| a.device).collect();
+            stream.stop(host);
+            for device in devices {
+                host.le_disconnect(device);
+            }
+            if !stopped() {
+                tracing::info!("ASHA: the hearing aid went away, looking for it again");
+                pause(Beside::RETRY);
+            }
+        }
+    }
+
+    /// Ends it: the hearing aid stops and is disconnected
+    pub fn stop(mut self) {
+        self.halt();
+    }
+
+    fn halt(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+impl Drop for Beside {
+    fn drop(&mut self) {
+        self.halt();
     }
 }
 

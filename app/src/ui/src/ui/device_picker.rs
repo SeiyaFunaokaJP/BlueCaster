@@ -120,6 +120,9 @@ pub fn save_with_profile(
         let taken: Vec<&str> = s.profiles.iter().map(|p| p.name.as_str()).collect();
         let profile_name = free_name(&taken, &default_profile_name(&saved, &address, true, ""));
         let mut profile = entry_base(&address, &saved, true, &s.profiles);
+        // A hearing aid streams through its own session, not LE Audio's
+        profile.hearing_aid =
+            s.devices.iter().any(|d| d.le_audio && d.hearing_aid && d.address.eq_ignore_ascii_case(&address));
         profile.name = profile_name.clone();
         let save = Method::ProfileSave { profile: Box::new(normalize_profile(&profile)), original_name: None };
         run_ok(save, cx).await.then_some(profile_name)
@@ -645,7 +648,7 @@ impl DevicePicker {
                             .child(
                                 div().font_family(theme::FONT_MONO).text_color(p.text_2).child(shown.address.clone()),
                             )
-                            .when(shown.le_audio, |d| d.child(tag(t("device.tag_le_audio"), cx))),
+                            .when(shown.le_audio, |d| d.child(tag(t(ui_model::view::devices::le_tag(&shown)), cx))),
                     )
                     .into_any_element()
             },

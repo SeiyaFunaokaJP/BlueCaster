@@ -28,7 +28,7 @@
 
 ## Requirements
 
-- **Windows 10 (22H2) or 11**, x64 or ARM64 (ARM64 and Windows 10 not yet tested on real hardware)
+- **Windows 10 or 11**, x64 or ARM64 (ARM64 and Windows 10 not yet tested on real hardware)
 - **A USB Bluetooth adapter for BlueCaster**. A separate dongle is recommended. A built-in adapter also works if it is a USB device (as on many laptops), but Windows loses its own Bluetooth while BlueCaster uses it. See [Recommended Adapters](https://seiyafunaokajp.github.io/BlueCaster/setup#adapters) and the [verified hardware](https://seiyafunaokajp.github.io/BlueCaster/hardware).
 
 ### Why does BlueCaster take over a whole adapter?

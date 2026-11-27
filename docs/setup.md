@@ -17,7 +17,7 @@ nav_order: 2
 
 ## Prerequisites
 
-- **Windows 10 (22H2) / 11** (x64 or ARM64)
+- **Windows 10 / 11** (x64 or ARM64)
 - **A USB Bluetooth adapter for BlueCaster**: a separate dongle is recommended; a built-in USB adapter also works, but Windows then loses its own Bluetooth (see [Step 2](#winusb))
 
 BlueCaster assigns the WinUSB driver to the adapter for you, so you no longer need [Zadig](https://zadig.akeo.ie/) (it still works; see [Using Zadig instead](#zadig)).

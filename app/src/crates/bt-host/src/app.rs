@@ -21,6 +21,7 @@ use codec::sbc::{Allocation, ChannelMode};
 use crate::bringup::{self, ChipLoader};
 use crate::esco_watch::{EscoWatch, Verdict};
 use crate::events::{addr_at, addr_str, event_type, hci_error_string, le16, le24, subevent, u8_at};
+use crate::l2cap::L2cap;
 use crate::le::core::LeCore;
 use crate::le::iso_send::TIMER_ISO;
 use crate::link_details::{self, LinkTracker};
@@ -139,6 +140,8 @@ pub(crate) struct HostApp {
     pub le: Option<LeCore>,
     /// RFCOMM client channels of IPC clients
     pub rfcomm: Rfcomm,
+    /// Classic L2CAP channels of vendor control protocols
+    pub l2cap: L2cap,
     /// A device's services asked for (developer mode)
     pub sdp_services: SdpServices,
 
@@ -274,6 +277,7 @@ impl HostApp {
             afh,
             le,
             rfcomm: Rfcomm::default(),
+            l2cap: L2cap::default(),
             sdp_services: SdpServices::default(),
             a2dp_cid: 0,
             avrcp_cid: 0,
@@ -876,12 +880,19 @@ impl HostApp {
         }
     }
 
+    /// The device being streamed to, connected (not while the connection is
+    /// set up, which may be given up on)
+    pub fn streams_to(&self, addr: [u8; 6]) -> bool {
+        self.a2dp_cid != 0 && self.remote_addr == Some(addr) && self.shared.lock().connected
+    }
+
     /// After an abort: this was never a live stream. RFCOMM channels to the
     /// device go too, in case no signaling release came to close them.
     pub fn forget_connection(&mut self, stack: &Stack) {
         tracing::debug!("forget connection (cid 0x{:04X}, streaming {})", self.a2dp_cid, self.streaming);
         if let Some(addr) = self.remote_addr {
             self.rfcomm.close_device(stack, addr);
+            self.l2cap.close_device(stack, addr);
         }
         self.a2dp_cid = 0;
         self.set_streaming(false);
@@ -2245,6 +2256,7 @@ impl HostApp {
                 }
                 if let Some(addr) = self.remote_addr {
                     self.rfcomm.close_device(stack, addr);
+                    self.l2cap.close_device(stack, addr);
                 }
                 self.shared.update(|s| s.battery = None);
                 if self.a2dp_cid == 0 {
@@ -2816,6 +2828,11 @@ impl App for HostApp {
             self.rfcomm.on_packet(stack, packet_type, channel, packet);
             return;
         }
+        // Classic L2CAP's data packets as well as its events
+        if source == Source::L2capClassic {
+            self.l2cap.on_packet(stack, packet_type, channel, packet);
+            return;
+        }
         // SCO data as well as HCI_EVENT_SCO_CAN_SEND_NOW
         if source == Source::Sco {
             if let Some(e) = self.voice.on_sco(stack, packet_type, packet) {
@@ -2867,7 +2884,7 @@ impl App for HostApp {
                     self.hid.on_event(stack, packet)
                 }
             }
-            Source::Rfcomm | Source::Sco | Source::L2capCbm => {}
+            Source::Rfcomm | Source::Sco | Source::L2capCbm | Source::L2capClassic => {}
             Source::Avrcp | Source::AvrcpController | Source::AvrcpTarget => {
                 if event_type(packet) == Some(HCI_EVENT_AVRCP_META) {
                     self.handle_avrcp(stack, packet)
@@ -2961,6 +2978,7 @@ impl App for HostApp {
         tracing::debug!("run loop exit (a2dp cid 0x{:04X}, avrcp cid 0x{:04X})", self.a2dp_cid, self.avrcp_cid);
         self.set_streaming(false);
         self.rfcomm.stop();
+        self.l2cap.stop();
         // Nothing may stay pressed in Windows
         self.hid.stop();
         if let Some(le) = self.le.as_mut() {

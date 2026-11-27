@@ -98,6 +98,10 @@ pub enum Source {
     /// LE credit based channels ([`Stack::cbm_connect`]): channel opened,
     /// SDU sent, channel closed (L2CAP_EVENT_*)
     L2capCbm,
+    /// Classic L2CAP channels ([`Stack::l2cap_create_channel`],
+    /// [`Stack::l2cap_register_service`]): their events, and their data
+    /// (L2CAP_DATA_PACKET, channel = local cid)
+    L2capClassic,
 }
 
 impl Source {
@@ -119,6 +123,7 @@ impl Source {
             14 => Source::Sco,
             15 => Source::Hid,
             16 => Source::L2capCbm,
+            17 => Source::L2capClassic,
             _ => Source::Hci,
         }
     }

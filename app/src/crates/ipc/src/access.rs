@@ -52,7 +52,8 @@ pub fn access(m: &Method) -> Access {
         // Developer mode only, and developer mode needs an elevated client
         | Method::StreamStartBroadcast { .. }
         | Method::StreamSetVolume { .. }
-        | Method::StreamVolumeStep { .. } => Open,
+        | Method::StreamVolumeStep { .. }
+        | Method::StreamSetNoiseControl { .. } => Open,
         Method::DeviceScan { .. }
         | Method::DeviceScanStop
         | Method::DeviceWindowsPaired

@@ -166,6 +166,18 @@ pub struct Profile {
     pub sbc_channel_mode: String,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub le_audio: bool,
+    /// A hearing aid (ASHA, a proof of concept): an LE entry (`le_audio`)
+    /// that streams G.722 through the hearing aid session, not LE Audio
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hearing_aid: bool,
+    /// A classic device: the saved hearing aid (its address) that plays
+    /// beside this device's A2DP stream, for the other ear; "": none
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub hearing_aid_beside: String,
+    /// With `hearing_aid_beside`: the hearing aid plays this many
+    /// milliseconds later (0 to 500)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub hearing_aid_delay_ms: u32,
     /// LE Audio: GMAP low-latency presets with a gaming headset (the LC3 LL
     /// card); other headsets get the media configuration either way. Off by
     /// default since issue #86 (LC3), written only when on: before, on was
@@ -273,6 +285,9 @@ impl Default for Profile {
             sbc_allocation: String::new(),
             sbc_channel_mode: String::new(),
             le_audio: false,
+            hearing_aid: false,
+            hearing_aid_beside: String::new(),
+            hearing_aid_delay_ms: 0,
             le_low_latency: false,
             le_swap_channels: false,
             le_alone_channel: String::new(),
@@ -647,6 +662,22 @@ impl Profile {
     /// with error.le_audio_disabled while the setting is off); its codec,
     /// quality, rate and depth are not used (LC3 as the device and the
     /// preset decide).
+    /// What the stream does with hearing aids: the device is one, or (a
+    /// classic device) one plays beside it
+    pub fn asha_request(&self) -> Option<crate::stream::AshaRequest> {
+        if self.hearing_aid {
+            return Some(crate::stream::AshaRequest::Device);
+        }
+        if self.le_audio {
+            return None;
+        }
+        let aid = bt_host::parse_addr(&self.hearing_aid_beside)?;
+        Some(crate::stream::AshaRequest::Beside {
+            aid,
+            delay_ms: self.hearing_aid_delay_ms.min(crate::asha::MAX_DELAY_MS),
+        })
+    }
+
     pub fn to_request(&self, legacy_max_media_payload: u16) -> Result<StreamRequest, ProfileError> {
         let device = bt_host::parse_addr(&self.device_address)
             .ok_or_else(|| ProfileError::Address(self.device_address.clone()))?;
@@ -706,9 +737,9 @@ impl Profile {
             max_media_payload: clamp_media_payload_limit(
                 self.max_media_payload.unwrap_or(legacy_max_media_payload) as u32
             ),
-            le: self
-                .le_audio
+            le: (self.le_audio && !self.hearing_aid)
                 .then(|| bt_host::LeRequest { low_latency: self.le_low_latency, ..bt_host::LeRequest::default() }),
+            asha: self.asha_request(),
             // Whoever starts the stream decides (an output chosen, the
             // app's start_profile)
             headset_mic: HeadsetMic::Off,
@@ -1696,6 +1727,41 @@ mod tests {
         // Kept as saved
         let back: Profile = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
         assert_eq!(back, p);
+    }
+
+    #[test]
+    fn a_hearing_aid_has_its_own_session_and_one_can_play_beside_a_classic_device() {
+        use crate::stream::AshaRequest;
+        let aid = Profile {
+            device_address: "00:A2:D0:00:00:22".into(),
+            le_audio: true,
+            hearing_aid: true,
+            ..Profile::default()
+        };
+        let r = aid.to_request(1023).unwrap();
+        assert_eq!((r.asha, r.le.is_some()), (Some(AshaRequest::Device), false));
+        // The delay within what the core takes
+        let classic = Profile {
+            device_address: "00:A2:D0:00:00:02".into(),
+            hearing_aid_beside: "00:a2:d0:00:00:23".into(),
+            hearing_aid_delay_ms: 9000,
+            ..Profile::default()
+        };
+        assert_eq!(
+            classic.to_request(1023).unwrap().asha,
+            Some(AshaRequest::Beside { aid: [0x00, 0xA2, 0xD0, 0x00, 0x00, 0x23], delay_ms: 500 })
+        );
+        // None beside an LE Audio device, none for what is no address
+        let le = Profile { le_audio: true, ..classic.clone() };
+        assert_eq!(le.to_request(1023).unwrap().asha, None);
+        assert!(le.to_request(1023).unwrap().le.is_some());
+        let none = Profile { hearing_aid_beside: "none".into(), ..classic.clone() };
+        assert_eq!(none.to_request(1023).unwrap().asha, None);
+        // Written only when set
+        let text = serde_json::to_string(&Profile { device_address: "00:A2:D0:00:00:02".into(), ..Profile::default() })
+            .unwrap();
+        assert!(!text.contains("hearing_aid"), "{text}");
+        assert!(serde_json::to_string(&classic).unwrap().contains("\"hearing_aid_delay_ms\":9000"));
     }
 
     #[test]

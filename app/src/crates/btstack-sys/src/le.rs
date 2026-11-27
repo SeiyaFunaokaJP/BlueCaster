@@ -930,13 +930,42 @@ impl Stack {
 
     /// Asks for new connection parameters on the LE link `con`: the interval
     /// in 1.25 ms units, the latency in connection events, the supervision
-    /// timeout in 10 ms units
-    pub fn le_update_connection(&self, con: u16, interval: u16, latency: u16, timeout: u16) -> u8 {
+    /// timeout in 10 ms units, the connection event length in 0.625 ms
+    /// units. [`crate::consts::BTSTACK_ACL_BUFFERS_FULL`]: another command
+    /// is on its way, nothing was sent.
+    pub fn le_update_connection(&self, con: u16, interval: u16, latency: u16, timeout: u16, ce_length: u16) -> u8 {
         if !self.le_initialized() {
             return ERROR_CODE_COMMAND_DISALLOWED;
         }
         // SAFETY: on the BTstack thread after le_init.
-        unsafe { ffi::bluecaster_le_update_connection(con, interval, latency, timeout) }
+        unsafe { ffi::bluecaster_le_update_connection(con, interval, latency, timeout, ce_length) }
+    }
+
+    /// Asks for the 2M PHY in both directions on the LE link `con`
+    pub fn le_prefer_2m_phy(&self, con: u16) -> u8 {
+        if !self.le_initialized() {
+            return ERROR_CODE_COMMAND_DISALLOWED;
+        }
+        // SAFETY: on the BTstack thread after le_init.
+        unsafe { ffi::bluecaster_le_prefer_2m_phy(con) }
+    }
+
+    /// Asks for link layer PDUs of up to `tx_octets` on the LE link `con`
+    pub fn le_set_data_length(&self, con: u16, tx_octets: u8) -> u8 {
+        if !self.le_initialized() {
+            return ERROR_CODE_COMMAND_DISALLOWED;
+        }
+        // SAFETY: on the BTstack thread after le_init.
+        unsafe { ffi::bluecaster_le_set_data_length(con, tx_octets) }
+    }
+
+    /// The connection interval of the LE link `con` in 1.25 ms units
+    pub fn le_connection_interval(&self, con: u16) -> Option<u16> {
+        if !self.le_initialized() {
+            return None;
+        }
+        // SAFETY: on the BTstack thread after le_init.
+        Some(unsafe { ffi::bluecaster_le_connection_interval(con) }).filter(|i| *i != 0)
     }
 
     // ---- Broadcast: advertising and BIG (after le_init) ----

@@ -14,7 +14,7 @@ use crate::codecs::{
     offered_sample_rates, only_choice, quality_ignored, unlisted_caps,
 };
 use crate::i18n::t;
-use crate::profile::{AudioEntry, codecs_on_request, entry_base, known_codecs, with_codec};
+use crate::profile::{AudioEntry, codecs_on_request, known_codecs, with_codec};
 use crate::sbc::{
     SBC_ALLOCATIONS, SBC_BLOCKS, SBC_CHANNEL_MODES, SBC_SUBBANDS, SbcCaps, SbcField, sbc_kbps_text, sbc_offered,
     sbc_rate, sbc_setup, xq_max_bitpool,
@@ -40,7 +40,7 @@ pub fn restarting(snap: Option<&Snapshot>) -> bool {
 
 /// The profile shown for a device: its own, or what it would start from
 pub fn shown_profile(snap: &Snapshot, entry: &AudioEntry) -> Profile {
-    entry.profile.clone().unwrap_or_else(|| entry_base(&entry.address, &entry.name, entry.le_audio, &snap.profiles))
+    entry.profile.clone().unwrap_or_else(|| crate::profile::device_base(&entry.device, &snap.profiles))
 }
 
 /// `values` differ from the profile's in the bitpools alone
@@ -395,6 +395,10 @@ pub const LE_MIC_CARD: FixedCard =
 /// latency configuration (the profile's le_low_latency)
 pub const LE_CARDS: [FixedCard; 2] =
     [fixed("lc3", "codec.lc3", (4, 3, 4), None, None), fixed("lc3_ll", "codec.lc3_ll", (3, 5, 3), None, None)];
+
+/// A hearing aid's (ASHA, a proof of concept): G.722 at 16 kHz, 64 kbit/s
+/// for each one, nothing to choose
+pub const HEARING_AID_CARDS: [FixedCard; 1] = [fixed("g722", "codec.g722", (2, 3, 4), Some(16000), Some(64))];
 
 /// The call codec cards shown and their tags: the one the link uses, those
 /// the headphones list (CVSD always: every headset has it), and with `hide`

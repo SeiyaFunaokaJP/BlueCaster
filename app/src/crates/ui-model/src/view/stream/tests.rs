@@ -452,3 +452,37 @@ fn battery_changes_colour_with_its_level() {
     assert_eq!(battery_text(Some(80)), "Battery 80%");
     assert_eq!(battery_text(None), "Battery unknown");
 }
+
+#[test]
+fn earbuds_show_each_bud_and_their_noise_control() {
+    use ipc::{BudBattery, BudsStatus, NoiseMode};
+    let mut s = StreamStatus { state: StreamState::Streaming, battery: Some(70), ..StreamStatus::default() };
+    // No report of each bud: the one battery
+    assert!(bud_parts(&s).is_empty());
+    assert_eq!(noise_choices(&s), (Vec::new(), None));
+    let level = |percent, charging| Some(BudBattery { percent, charging });
+    s.buds = Some(BudsStatus {
+        left: level(70, false),
+        right: level(80, true),
+        case: None,
+        noise: Some(NoiseMode::Transparency),
+        noise_modes: vec![NoiseMode::Off, NoiseMode::NoiseCancellation, NoiseMode::Transparency],
+        ear: Vec::new(),
+    });
+    let parts = bud_parts(&s);
+    assert_eq!(parts.iter().map(|p| p.label.as_str()).collect::<Vec<_>>(), ["Left", "Right"]);
+    assert!(parts[1].charging && !parts[0].charging);
+    let (choices, current) = noise_choices(&s);
+    assert_eq!(choices.len(), 3);
+    assert_eq!(choices[1].1, "Noise cancellation");
+    assert_eq!(current, Some(NoiseMode::Transparency));
+    // A mode they no longer offer is not shown as chosen
+    s.buds.as_mut().unwrap().noise = Some(NoiseMode::Adaptive);
+    assert_eq!(noise_choices(&s).1, None);
+    // Only the case reported: the one battery again
+    let b = s.buds.as_mut().unwrap();
+    b.left = None;
+    b.right = None;
+    b.case = level(30, false);
+    assert!(bud_parts(&s).is_empty());
+}

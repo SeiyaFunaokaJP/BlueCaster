@@ -139,6 +139,10 @@ pub fn new_profile() -> Profile {
         volume_device_name: String::new(),
         max_media_payload: PACKET_DEFAULT,
         le_audio: false,
+        // Not a hearing aid, and none beside it
+        hearing_aid: false,
+        hearing_aid_beside: String::new(),
+        hearing_aid_delay_ms: 0,
         // LE Audio: LC3 unless LC3 LL is chosen (issue #86)
         le_low_latency: false,
         // LE Audio: the channels as planned; an earbud alone plays mono
@@ -263,6 +267,22 @@ pub fn entry_base(address: &str, name: &str, le_audio: bool, profiles: &[Profile
         f.apply_to(&mut p);
     }
     p
+}
+
+/// [`entry_base`] for a device of the list: a hearing aid's profile says so
+pub fn device_base(device: &Device, profiles: &[Profile]) -> Profile {
+    let mut p = entry_base(&device.address, &device.name, device.le_audio, profiles);
+    p.hearing_aid = device.le_audio && device.hearing_aid;
+    p
+}
+
+/// The saved hearing aids (ASHA, a proof of concept), listed while LE Audio
+/// is on: what a classic device can have beside it, for the other ear
+pub fn saved_hearing_aids(snap: &Snapshot) -> Vec<&Device> {
+    if !le_audio_on(&snap.settings) {
+        return Vec::new();
+    }
+    snap.devices.iter().filter(|d| d.saved && d.le_audio && d.hearing_aid).collect()
 }
 
 /// The entry a profile belongs to

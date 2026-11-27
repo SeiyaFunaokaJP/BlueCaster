@@ -95,7 +95,7 @@ BlueCaster convierte su adaptador Bluetooth en un transmisor de audio Hi-Fi. Tra
 | Adaptador virtual `tools/emu/emu_vhci.py` | ❌ | ❌ | ✅ |
 | [Receptor de medición](usage#receiver) `tools/linux_sink` | ❌ | ❌ | ✅ |
 
-BlueCaster solo funciona en Windows (Windows 10 22H2 o Windows 11), con compilaciones para x64 y ARM64. Las herramientas de Linux necesitan Python 3.11 o posterior (verificado en Ubuntu 26.04). `setup.sh` está pensado para Ubuntu / Debian; en otras distribuciones, instale los paquetes a mano.
+BlueCaster solo funciona en Windows (Windows 10 o Windows 11), con compilaciones para x64 y ARM64. Las herramientas de Linux necesitan Python 3.11 o posterior (verificado en Ubuntu 26.04). `setup.sh` está pensado para Ubuntu / Debian; en otras distribuciones, instale los paquetes a mano.
 
 ## Hardware verificado {#verified-hardware}
 

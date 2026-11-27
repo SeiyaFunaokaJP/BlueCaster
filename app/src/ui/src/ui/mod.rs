@@ -13,6 +13,7 @@ pub mod device_picker;
 pub mod device_settings;
 pub mod device_switcher;
 pub mod dialog;
+pub mod hearing_aid;
 pub mod icons;
 pub mod import_pairings;
 pub mod input_source;

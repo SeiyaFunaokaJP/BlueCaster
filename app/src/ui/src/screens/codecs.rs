@@ -76,8 +76,7 @@ use ui_model::codecs::{
 };
 use ui_model::i18n::t;
 use ui_model::profile::{
-    AudioEntry, EntryByKey, audio_entries, capture_device, entry_base, followed_name, known_codec_caps,
-    normalize_profile,
+    AudioEntry, EntryByKey, audio_entries, capture_device, followed_name, known_codec_caps, normalize_profile,
 };
 use ui_model::sbc::known_sbc_caps;
 use ui_model::t;
@@ -112,8 +111,7 @@ use crate::ui::{self, BannerKind, ButtonKind, Choice, IconName, icon};
 pub fn save_entry(entry: &AudioEntry, edit: impl FnOnce(&mut Profile), cx: &App) -> Task<Option<String>> {
     let Some(snap) = app::core(cx).read(cx).snap() else { return Task::ready(None) };
     let cur = entry.profile.clone();
-    let mut next =
-        cur.clone().unwrap_or_else(|| entry_base(&entry.address, &entry.name, entry.le_audio, &snap.profiles));
+    let mut next = cur.clone().unwrap_or_else(|| ui_model::profile::device_base(&entry.device, &snap.profiles));
     edit(&mut next);
     let cur_name = cur.as_ref().map(|c| c.name.clone());
     let taken: Vec<&str> =
@@ -948,7 +946,7 @@ impl DeviceCodecs {
                     .flex()
                     .gap(theme::S1)
                     .when(e.device.audio && !e.le_audio, |d| d.child(tag(t("device.tag_audio"), cx)))
-                    .when(e.le_audio, |d| d.child(tag(t("device.tag_le_audio"), cx))),
+                    .when(e.le_audio, |d| d.child(tag(t(ui_model::view::devices::le_tag(&e.device)), cx))),
             )
     }
 
@@ -1282,7 +1280,11 @@ impl DeviceCodecs {
         let shown = shown_profile(snap, e);
         let weak = cx.entity().downgrade();
         let w = weak.clone();
-        let pick: CardAct = if e.le_audio {
+        let hearing_aid = e.device.hearing_aid;
+        let pick: CardAct = if hearing_aid {
+            // G.722 is all a hearing aid takes
+            Rc::new(|_, _, _| {})
+        } else if e.le_audio {
             Rc::new(move |id, _, cx| {
                 let _ = w.update(cx, |this, cx| this.save_low_latency(id == "lc3_ll", cx));
             })
@@ -1302,13 +1304,17 @@ impl DeviceCodecs {
                 cx,
             );
         });
-        let cards: Vec<(FixedCard, Option<ui_model::codecs::CodecSupport>)> = if e.le_audio {
+        let cards: Vec<(FixedCard, Option<ui_model::codecs::CodecSupport>)> = if hearing_aid {
+            ui_model::view::codecs::HEARING_AID_CARDS.iter().map(|c| (*c, None)).collect()
+        } else if e.le_audio {
             LE_CARDS.iter().map(|c| (*c, None)).collect()
         } else {
             call_cards(&mic.listed_calls, mic.call_codec.as_deref(), hide())
         };
         // LE Audio: LC3 unless LC3 LL is chosen (issue #86)
-        let picked = if e.le_audio {
+        let picked = if hearing_aid {
+            "g722".to_owned()
+        } else if e.le_audio {
             if shown.le_low_latency { "lc3_ll".to_owned() } else { "lc3".to_owned() }
         } else {
             mic.call_codec.clone().or_else(|| self.reopening.as_ref().map(|r| r.to.clone())).unwrap_or_default()

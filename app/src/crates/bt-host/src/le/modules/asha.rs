@@ -25,9 +25,9 @@ use std::time::Duration;
 use btstack_sys::events::{cbm_channel_opened, l2cap_channel_closed, l2cap_packet_sent};
 use tracing::{debug, info, warn};
 
-use super::super::LeDeviceId;
 use super::super::core::{LeCtx, LeDone, LePoster};
-use super::super::module::{LeModule, LeModuleEntry, LeModuleSetup};
+use super::super::module::{LeGroupHooks, LeModule, LeModuleEntry, LeModuleSetup};
+use super::super::{HearingAidAdvert, LeDeviceId, LeScanResult};
 use crate::BtHost;
 
 /// The ASHA service
@@ -49,12 +49,23 @@ pub const UUID_LE_PSM_OUT: [u8; 16] = uuid128(0x2d410339_82b6_42aa_b34e_e2e01df8
 pub const SDU_BYTES: usize = 161;
 /// SDUs waiting for one hearing aid (80 ms); the oldest goes when full
 const MAX_QUEUED: usize = 4;
-/// The connection interval ASHA streams with: 20 ms, in 1.25 ms units
-const INTERVAL_20_MS: u16 = 16;
-/// Connection events a hearing aid may skip while nothing is sent
+/// The connection interval ASHA streams G.722 at 16 kHz with: 20 ms, in
+/// 1.25 ms units
+pub const INTERVAL_20_MS: u16 = 16;
+/// The rest of the connection update as Android sends it: the connection
+/// events a hearing aid may skip while nothing is sent, a supervision
+/// timeout of 1 s (10 ms units) and a connection event length of 7.5 ms
+/// (0.625 ms units; the specification wants it non-zero)
 const LATENCY: u16 = 10;
-/// Supervision timeout: 2 s, in 10 ms units
-const SUPERVISION_TIMEOUT: u16 = 200;
+const SUPERVISION_TIMEOUT: u16 = 100;
+const CE_LENGTH: u16 = 12;
+/// Link layer PDUs that hold a whole audio SDU: 160 bytes of G.722, the
+/// sequence counter, the SDU length (2) and the L2CAP header (4)
+const DATA_LENGTH: u8 = 167;
+/// The connection update is asked for again this often while BTstack is
+/// busy with another command, this many times
+const UPDATE_RETRY_MS: u32 = 20;
+const UPDATE_TRIES: u32 = 50;
 
 const fn uuid128(v: u128) -> [u8; 16] {
     v.to_be_bytes()
@@ -128,6 +139,93 @@ pub struct AshaModule {
     poster: LePoster,
     /// By local cid
     channels: BTreeMap<u16, Channel>,
+    volume: Arc<VolumeState>,
+}
+
+/// The volume of the hearing aids that stream, for the volume slider and
+/// VolumeSync (which use the AVRCP scale, 0 to 127)
+#[derive(Default)]
+struct VolumeState {
+    /// The Volume characteristic of each hearing aid of the stream
+    targets: Mutex<Vec<(LeDeviceId, u16)>>,
+    /// The level set last, -1 while nothing streams
+    level: std::sync::atomic::AtomicI32,
+}
+
+/// The hearing aids' volume (-128 muted, -127 to 0 in steps of 0.375 dB) for
+/// a level of the AVRCP scale
+pub fn volume_of_level(level: u8) -> i8 {
+    match level.min(127) {
+        0 => -128,
+        l => (-127 + ((i32::from(l) - 1) * 127 + 63) / 126) as i8,
+    }
+}
+
+/// The level of the AVRCP scale for a hearing aid volume
+pub fn level_of_volume(volume: i8) -> u8 {
+    match volume {
+        -128 => 0,
+        v => (1 + ((i32::from(v) + 127) * 126 + 63) / 127) as u8,
+    }
+}
+
+/// The ASHA service data of an advertising report: version, capabilities,
+/// the first four bytes of the HiSyncId
+fn advert(ad: &[u8]) -> Option<HearingAidAdvert> {
+    let mut rest = ad;
+    while let [len, tail @ ..] = rest {
+        let len = usize::from(*len);
+        if len == 0 || tail.len() < len {
+            return None;
+        }
+        if let [0x16, 0xF0, 0xFD, _version, caps, set @ ..] = &tail[..len]
+            && let Some(set) = set.get(..4)
+        {
+            return Some(HearingAidAdvert {
+                right: caps & 0x01 != 0,
+                binaural: caps & 0x02 != 0,
+                set: set.try_into().ok()?,
+            });
+        }
+        rest = &tail[len..];
+    }
+    None
+}
+
+struct AshaHooks {
+    volume: Arc<VolumeState>,
+    poster: LePoster,
+}
+
+impl LeGroupHooks for AshaHooks {
+    fn name(&self) -> &'static str {
+        "ASHA"
+    }
+
+    fn remote_volume(&self) -> Option<u8> {
+        u8::try_from(self.volume.level.load(Ordering::Acquire)).ok()
+    }
+
+    fn request_volume(&self, level: u8) -> bool {
+        let targets = self.volume.targets.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if targets.is_empty() {
+            return false;
+        }
+        let level = level.min(127);
+        self.volume.level.store(i32::from(level), Ordering::Release);
+        let value = [volume_of_level(level) as u8];
+        self.poster.post(move |ctx| {
+            for (device, handle) in targets {
+                if let Some(con) = ctx.device(device).filter(|d| d.connected()).map(|d| d.acl) {
+                    let status = ctx.stack().gatt_write_without_response(con, handle, &value);
+                    if status != 0 {
+                        debug!("ASHA: device {device}: volume not written (0x{status:02x})");
+                    }
+                }
+            }
+        });
+        true
+    }
 }
 
 impl AshaModule {
@@ -214,26 +312,98 @@ impl LeModule for AshaModule {
         "ASHA"
     }
 
+    fn on_scan_result(&mut self, _ctx: &mut LeCtx<'_>, result: &mut LeScanResult, ad: &[u8]) {
+        if let Some(found) = advert(ad) {
+            result.hearing_aid = Some(found);
+        }
+    }
+
     fn on_disconnected(&mut self, _ctx: &mut LeCtx<'_>, dev: LeDeviceId, _reason: u8) {
         self.drop_channels(Some(dev));
     }
 
     fn on_stack_deinit(&mut self) {
         self.drop_channels(None);
+        self.volume.targets.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.volume.level.store(-1, Ordering::Release);
+    }
+}
+
+/// Asks for the connection parameters ASHA streams with, again a little
+/// later while BTstack is busy with another command
+fn update_connection(ctx: &mut LeCtx<'_>, device: LeDeviceId, con: u16, tries: u32) {
+    if ctx.device_on(device, con).is_none() {
+        return;
+    }
+    let status = ctx.stack().le_update_connection(con, INTERVAL_20_MS, LATENCY, SUPERVISION_TIMEOUT, CE_LENGTH);
+    match status {
+        0 => debug!("ASHA: device {device}: 20 ms connection interval asked for"),
+        btstack_sys::consts::BTSTACK_ACL_BUFFERS_FULL if tries > 1 => {
+            ctx.run_after(UPDATE_RETRY_MS, Box::new(move |ctx| update_connection(ctx, device, con, tries - 1)));
+        }
+        _ => warn!("ASHA: device {device}: the connection update was not sent (0x{status:02x})"),
     }
 }
 
 pub fn create(setup: &mut LeModuleSetup) -> LeModuleEntry {
+    let volume = Arc::new(VolumeState::default());
+    volume.level.store(-1, Ordering::Release);
     LeModuleEntry {
-        module: Box::new(AshaModule { poster: setup.poster.clone(), channels: BTreeMap::new() }),
-        hooks: None,
+        module: Box::new(AshaModule {
+            poster: setup.poster.clone(),
+            channels: BTreeMap::new(),
+            volume: volume.clone(),
+        }),
+        hooks: Some(Arc::new(AshaHooks { volume, poster: setup.poster.clone() })),
     }
 }
 
 impl BtHost {
+    /// Sets the link of a connected hearing aid up as Android does once it
+    /// is connected: the 20 ms connection interval, the 2M PHY and link
+    /// layer PDUs long enough for an audio SDU. The link changes in the
+    /// background ([`BtHost::asha_link_interval`] tells when the interval
+    /// is there). False: not connected.
+    pub fn asha_prepare_link(&self, device: LeDeviceId) -> bool {
+        self.le_run(Duration::from_secs(3), move |ctx| {
+            let Some(con) = ctx.device(device).filter(|d| d.connected()).map(|d| d.acl) else { return false };
+            update_connection(ctx, device, con, UPDATE_TRIES);
+            // A controller without the 2M PHY refuses the command: the
+            // stream then runs on 1M, which carries it too
+            let phy = ctx.stack().le_prefer_2m_phy(con);
+            let length = ctx.stack().le_set_data_length(con, DATA_LENGTH);
+            debug!("ASHA: device {device}: 2M PHY asked for (0x{phy:02x}), data length {DATA_LENGTH} (0x{length:02x})");
+            true
+        })
+        .unwrap_or(false)
+    }
+
+    /// The connection interval of a connected hearing aid's link, in 1.25 ms
+    /// units ([`INTERVAL_20_MS`] once the update of
+    /// [`BtHost::asha_prepare_link`] took place)
+    pub fn asha_link_interval(&self, device: LeDeviceId) -> Option<u16> {
+        self.le_run(Duration::from_secs(3), move |ctx| {
+            let con = ctx.device(device).filter(|d| d.connected()).map(|d| d.acl)?;
+            ctx.stack().le_connection_interval(con)
+        })
+        .flatten()
+    }
+
+    /// The hearing aids of the stream that starts, each with the handle of
+    /// its Volume characteristic, and the volume they start with: from now
+    /// on [`BtHost::le_remote_volume`] / [`BtHost::le_request_volume`] are
+    /// theirs. Empty: the stream ended.
+    pub fn asha_volume_targets(&self, targets: Vec<(LeDeviceId, u16)>, volume: i8) {
+        self.le_run(Duration::from_secs(3), move |ctx| {
+            let Some(m) = ctx.module_mut::<AshaModule>() else { return };
+            let level = if targets.is_empty() { -1 } else { i32::from(level_of_volume(volume)) };
+            *m.volume.targets.lock().unwrap_or_else(|e| e.into_inner()) = targets;
+            m.volume.level.store(level, Ordering::Release);
+        });
+    }
+
     /// Opens the audio channel of a connected hearing aid on `psm` (its
-    /// LE_PSM_OUT) and asks for the 20 ms connection interval ASHA streams
-    /// with. Err: why, for the log.
+    /// LE_PSM_OUT). Err: why, for the log.
     pub fn asha_open(&self, device: LeDeviceId, psm: u16, timeout: Duration) -> Result<AshaSink, String> {
         let out = Arc::new(Mutex::new(None::<Result<AshaSink, String>>));
         let o = out.clone();
@@ -243,10 +413,6 @@ impl BtHost {
                 set(Err("not connected".into()));
                 return done(false);
             };
-            let status = ctx.stack().le_update_connection(con, INTERVAL_20_MS, LATENCY, SUPERVISION_TIMEOUT);
-            if status != 0 {
-                debug!("ASHA: device {device}: no connection update (0x{status:02x})");
-            }
             let cid = match ctx.stack().cbm_connect(con, psm) {
                 Ok(cid) => cid,
                 Err(status) => {
@@ -294,6 +460,29 @@ mod tests {
 
     fn sink() -> AshaSink {
         AshaSink { cid: 0x40, shared: Arc::new(Shared::default()), poster: LePoster::detached() }
+    }
+
+    #[test]
+    fn the_volume_scales_cover_each_other() {
+        assert_eq!((volume_of_level(0), volume_of_level(1), volume_of_level(127)), (-128, -127, 0));
+        assert_eq!((level_of_volume(-128), level_of_volume(-127), level_of_volume(0)), (0, 1, 127));
+        for level in 0..=127u8 {
+            assert_eq!(level_of_volume(volume_of_level(level)), level, "level {level}");
+        }
+        assert!(volume_of_level(200) == 0, "levels above 127 are the loudest");
+    }
+
+    #[test]
+    fn a_hearing_aid_is_known_by_its_service_data() {
+        // Flags, the ASHA service data (version 1, right of a pair), a name
+        let ad = [2, 0x01, 0x06, 9, 0x16, 0xF0, 0xFD, 1, 0x03, 0xA2, 0xD0, 0, 1, 3, 0x09, b'B', b'C'];
+        assert_eq!(advert(&ad), Some(HearingAidAdvert { right: true, binaural: true, set: [0xA2, 0xD0, 0, 1] }));
+        // Another service's data, a cut structure, nothing
+        assert_eq!(advert(&[5, 0x16, 0x4E, 0x18, 1, 2]), None);
+        assert_eq!(advert(&[9, 0x16, 0xF0, 0xFD, 1]), None);
+        assert_eq!(advert(&[]), None);
+        // Too short for the HiSyncId
+        assert_eq!(advert(&[6, 0x16, 0xF0, 0xFD, 1, 0, 9]), None);
     }
 
     #[test]
