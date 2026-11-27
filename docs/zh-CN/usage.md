@@ -208,7 +208,7 @@ bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c lhdcv5 -a
 bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c aptxad -a
 ```
 
-ABR 会在蓝牙连接不稳定时自动降低比特率，并在状况改善后提高比特率。LDAC 在其各音质模式之间切换；LHDC V5 遵循 Android 的策略，保持在 160 到 400 kbps 之间；aptX Adaptive 在“高”音质内的各级别之间逐级切换（请参阅 [aptX Adaptive](#aptx-adaptive)）；SBC 和 SBC XQ 每秒将 bitpool 降低 2 或提高 1。对于 SBC、SBC XQ 和 aptX Adaptive，如果连接不得不从某个 bitpool 或级别退回，要过 10 秒才会再次尝试该级别；每次在那里再次退回，等待时间就加倍（最长 2 分钟），因此在低一级下能正常工作的设备会稳定在那一级。在该级别下连续一分钟没有问题后，等待时间重新开始计算。在窗口中，ABR 位于编解码器的设置中（**编解码器**页面上卡片的 **...**）。
+ABR 会在蓝牙连接不稳定时自动降低比特率，并在状况改善后提高比特率。LDAC 在其各音质模式之间切换；LHDC V5 保持在 160 到 400 kbps 之间：连接一出现问题就降到最低一级，之后每 5 秒提高一级；aptX Adaptive 在“高”音质内的各级别之间逐级切换（请参阅 [aptX Adaptive](#aptx-adaptive)）；SBC 和 SBC XQ 每秒将 bitpool 降低 2 或提高 1。对于 SBC、SBC XQ、LHDC V5 和 aptX Adaptive，如果连接不得不从某个 bitpool 或级别退回，要过 10 秒才会再次尝试该级别；每次在那里再次退回，等待时间就加倍（最长 2 分钟），因此在低一级下能正常工作的设备会稳定在那一级。在该级别下连续一分钟没有问题后，等待时间重新开始计算。在窗口中，ABR 位于编解码器的设置中（**编解码器**页面上卡片的 **...**）。
 
 ### 设备发现
 

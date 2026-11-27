@@ -209,7 +209,7 @@ bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c lhdcv5 -a
 bluecaster-core.exe --cli -d AA:BB:CC:DD:EE:FF -c aptxad -a
 ```
 
-ABR 會在藍牙連線不穩定時自動降低位元率，並在狀況改善後提高。LDAC 會在其品質模式之間切換；LHDC V5 依照 Android 的策略，維持在 160 到 400 kbps 之間；aptX Adaptive 會在「高」的範圍內於各等級之間切換（請參閱 [aptX Adaptive](#aptx-adaptive)）；SBC 與 SBC XQ 每秒將 bitpool 降低 2 或提高 1。使用 SBC、SBC XQ 與 aptX Adaptive 時，若連線曾在某個 bitpool 或等級被迫退回，要等 10 秒後才會再次嘗試該值；每次在該處再度退回，等待時間就加倍（最長 2 分鐘），因此在低一級就能穩定的裝置會停留在那一級。在該值維持一分鐘沒有問題後，等待時間會重新計算。在視窗中，ABR 位於編解碼器的設定中（**編解碼器** 畫面上卡片的 **...**）。
+ABR 會在藍牙連線不穩定時自動降低位元率，並在狀況改善後提高。LDAC 會在其品質模式之間切換；LHDC V5 維持在 160 到 400 kbps 之間：連線一出現問題就降到最低一級，之後每 5 秒提高一級；aptX Adaptive 會在「高」的範圍內於各等級之間切換（請參閱 [aptX Adaptive](#aptx-adaptive)）；SBC 與 SBC XQ 每秒將 bitpool 降低 2 或提高 1。使用 SBC、SBC XQ、LHDC V5 與 aptX Adaptive 時，若連線曾在某個 bitpool 或等級被迫退回，要等 10 秒後才會再次嘗試該值；每次在該處再度退回，等待時間就加倍（最長 2 分鐘），因此在低一級就能穩定的裝置會停留在那一級。在該值維持一分鐘沒有問題後，等待時間會重新計算。在視窗中，ABR 位於編解碼器的設定中（**編解碼器** 畫面上卡片的 **...**）。
 
 ### 裝置探索
 

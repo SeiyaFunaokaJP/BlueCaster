@@ -445,6 +445,15 @@ averages 12 packets or more over a second, the encoder steps down one level
 back up one level. If a step up does not hold for 30 s, the wait doubles, up
 to 10 minutes.
 
+**LHDC V5 ABR** uses Android's stages (160 to 400 kbps, 256 to 400 at 96 and
+192 kHz) and drops as Android does: every 4 packets sent, an average send
+queue above 0 drops the bit rate to the lowest stage. In the first 3 s of a
+stream, only an average of 4 packets or more drops it. The climb back is
+BlueCaster's own: Android waits 3000 packets per stage (about a minute);
+BlueCaster climbs one stage per 5 s of an empty queue. A stage where the
+queue backed up is retried after the same wait as SBC's (10 s, doubled for
+each new stall there, up to 2 minutes).
+
 All encoders implement the `codec::Encoder` trait: they state the PCM
 format and the number of frames one call consumes, and return codec frames.
 
