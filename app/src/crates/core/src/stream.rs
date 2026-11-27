@@ -2093,8 +2093,9 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     inner.stream_info(info.clone());
 
     // AirPods: each bud's battery and noise control over their own channel,
-    // for as long as the session streams (after a reconnect anew)
-    let airpods = !stopped() && vendor_named(&host, &req, &mut given_name, vendor::APPLE);
+    // for as long as the session streams (after a reconnect anew). Developer
+    // mode only until it was tried with real AirPods (issue #595).
+    let airpods = !stopped() && inner.developer() && vendor_named(&host, &req, &mut given_name, vendor::APPLE);
     let airpods_name = given_name.clone().flatten().unwrap_or_else(|| req.device_name.clone());
     let _airpods = airpods.then(|| {
         inner.start_apple(host.clone(), req.device, &airpods_name);
