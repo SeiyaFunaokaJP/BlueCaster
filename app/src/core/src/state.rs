@@ -220,6 +220,7 @@ fn to_ipc_profile(p: &CoreProfile, legacy: u16) -> Profile {
         hearing_aid: p.hearing_aid,
         hearing_aid_beside: p.hearing_aid_beside.clone(),
         hearing_aid_delay_ms: p.hearing_aid_delay_ms,
+        hearing_aid_volume: p.hearing_aid_volume,
         le_low_latency: p.le_low_latency,
         le_swap_channels: p.le_swap_channels,
         le_alone_channel: p.le_alone_channel.clone(),
@@ -326,6 +327,8 @@ fn merge_profile(base: Option<&CoreProfile>, p: &Profile) -> CoreProfile {
     c.hearing_aid_beside = beside.map(|a| bt_host::addr_str(&a)).unwrap_or_default();
     c.hearing_aid_delay_ms =
         if beside.is_some() { p.hearing_aid_delay_ms.min(bluecaster_core::asha::MAX_DELAY_MS) } else { 0 };
+    c.hearing_aid_volume =
+        if beside.is_some() { p.hearing_aid_volume.min(0) } else { bluecaster_core::asha::DEFAULT_VOLUME };
     c.le_low_latency = p.le_low_latency;
     c.le_swap_channels = p.le_swap_channels;
     c.le_alone_channel = bluecaster_core::le_channels::saved_key(&p.le_alone_channel);
@@ -3588,6 +3591,8 @@ impl CoreState {
         if restart_after_save(&s.stream, &key) {
             media_eq::apply(Some(&in_order.media_eq));
             bluecaster_core::le_channels::apply(in_order.le_channels());
+            // The hearing aid beside it takes its volume and delay in place
+            bluecaster_core::asha::set_beside_settings(in_order.hearing_aid_volume, in_order.hearing_aid_delay_ms);
         }
         // The profile in use starts again with what was saved (v1),
         // but for another source, which needs nothing of the link

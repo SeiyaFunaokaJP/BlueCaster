@@ -98,14 +98,18 @@ pub struct StreamRequest {
     pub mic_processing: ipc::MicProcessing,
 }
 
+/// How long a status of the stream stays before the hearing aid's state
+/// replaces it ("Reconnected", then "Connected, with the hearing aid")
+const BESIDE_STATUS_HOLD: Duration = Duration::from_secs(2);
+
 /// What a stream does with hearing aids ([`StreamRequest::asha`])
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AshaRequest {
     /// The stream's device is a hearing aid, or one of a pair: both play
     Device,
     /// This hearing aid plays its own side beside the A2DP stream (bimodal),
-    /// this many milliseconds later
-    Beside { aid: [u8; 6], delay_ms: u32 },
+    /// this many milliseconds later, at this volume (-128 muted to 0)
+    Beside { aid: [u8; 6], delay_ms: u32, volume: i8 },
 }
 
 /// The bitpools of a request ([`crate::profiles::Profile::bitpools`]; 0 = Auto)
@@ -2152,19 +2156,32 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     // A hearing aid for the other ear (bimodal, a proof of concept): it
     // joins on its own thread and hears this stream's capture
     let beside = match req.asha {
-        Some(AshaRequest::Beside { aid, delay_ms }) if inner.le_wanted() => {
-            Some(crate::asha::Beside::start(host.clone(), aid, delay_ms))
-        }
-        Some(AshaRequest::Beside { .. }) => {
-            tracing::warn!("ASHA: Bluetooth LE is off, the hearing aid beside this stream is not used");
-            None
+        Some(AshaRequest::Beside { aid, delay_ms, volume }) => {
+            Some(crate::asha::Beside::start(host.clone(), aid, delay_ms, volume, inner.le_wanted()))
         }
         _ => None,
     };
+    // What the status says of the hearing aid (None: to be said), and
+    // until when another status of this stream stays before it
+    let mut shown_beside = None;
+    let mut beside_after = Instant::now();
     while !stopped() {
         inner.wait_tick(Duration::from_millis(200));
         if stopped() {
             break;
+        }
+        // The status tells whether the hearing aid plays too. Only while
+        // this stream itself plays: a lost connection has its own status,
+        // and "Reconnected" stays for a moment before it is said again.
+        if let Some(b) = &beside
+            && inner.state() == StreamState::Streaming
+            && Instant::now() >= beside_after
+        {
+            let now = b.state();
+            if shown_beside != Some(now) {
+                shown_beside = Some(now);
+                inner.notify(StreamState::Streaming, Msg::new(now.status_key()));
+            }
         }
         if let Some(v) = volume.as_mut() {
             v.tick(true, &*host);
@@ -2693,6 +2710,9 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         }
         headset.reconnected(inner);
         inner.notify(StreamState::Streaming, Msg::new("status.reconnected"));
+        // The hearing aid's state after it
+        shown_beside = None;
+        beside_after = Instant::now() + BESIDE_STATUS_HOLD;
         // The control channel went with the connection
         if airpods {
             inner.start_apple(host.clone(), req.device, &airpods_name);

@@ -949,6 +949,10 @@ pub struct Profile {
     /// milliseconds later (0 to 500)
     #[serde(default)]
     pub hearing_aid_delay_ms: u32,
+    /// With hearing_aid_beside: the hearing aid's volume, -128 (muted) to 0
+    /// in steps of 0.375 dB (absent: -20)
+    #[serde(default = "default_hearing_aid_volume")]
+    pub hearing_aid_volume: i8,
     /// LE Audio: GMAP low-latency presets with a gaming headset (LC3 LL; off
     /// by default: LC3); other headsets get the media configuration either way
     #[serde(default)]
@@ -3412,6 +3416,11 @@ pub enum ServerMessage {
         result: Option<serde_json::Value>,
         error: Option<ErrorInfo>,
     },
+}
+
+/// Profile.hearing_aid_volume of a profile saved without it
+fn default_hearing_aid_volume() -> i8 {
+    -20
 }
 
 #[cfg(test)]
