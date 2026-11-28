@@ -355,11 +355,13 @@ impl HostApp {
 
     /// The Intel firmware download (crate::intel), then HCI init. Intel
     /// controllers start in a bootloader after a cold boot; with the
-    /// firmware running the loader is done after one command.
+    /// firmware running the loader is done after one command. The firmware
+    /// folder first, then Intel's Windows driver.
     pub fn start_intel_loader(&mut self, stack: &Stack) {
         let dir = self.setup.firmware_dir.clone();
         tracing::info!("Intel adapter: checking bootloader firmware, folder {}", dir.display());
-        let loader = intel::Loader::new(Box::new(move |name| read_firmware_file(&dir, "intel", name)));
+        let loader = intel::Loader::new(Box::new(move |name| read_firmware_file(&dir, "intel", name)))
+            .with_driver(Box::new(intel::driver::from_windows_driver));
         self.start_loader(stack, Box::new(loader));
     }
 
