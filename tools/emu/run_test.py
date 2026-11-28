@@ -1425,6 +1425,16 @@ LINK_CASES = {
         ('sink.log', r'stream opened \(ldac\)', True),
         ('sink.log', r'A2DP closed.*stream opened', False),
     ]),
+    # Headphones that page the PC after its Disconnect and open A2DP
+    # themselves, then end the link when the PC closes that connection (Sony,
+    # issue #602): Connect goes over their connection
+    'device-a2dp-idle': (['--pages-after-disconnect', '1', '--ends-link-on-a2dp-close'],
+                         ['--duration', '12', '--sessions', '2'], [
+        ('bluecaster.log', r'Connecting again.*connected A2DP itself, connecting over it.*state Streaming', True),
+        ('bluecaster.log', r'closing a leftover AVDTP', False),
+        ('sink.log', r'paged the PC after its disconnect.*A2DP opened', True),
+        ('sink.log', r'ending the link', False),
+    ]),
     # The link details: the remote chip and the readings the virtual
     # controller answers; the failed contact counter it refuses is left
     # out without holding up the other commands or the stream
