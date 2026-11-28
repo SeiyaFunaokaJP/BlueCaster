@@ -474,6 +474,8 @@ NEGOTIATION = {
     'airpods-plain': ('aac', AIRPODS_SINK + ['--airpods', 'plain', '--name', 'AirPods'], 'aac',
                       ['--device-name', 'AirPods']),
     'airpods-other-name': ('aac', AIRPODS_SINK + ['--airpods', 'pro2'] + OTHER_NAME, 'aac', AIRPODS_NAME),
+    # Developer mode only for now: off, the earbuds are left alone
+    'airpods-developer-off': ('aac', AIRPODS_SINK + ['--airpods', 'pro2'], 'aac', AIRPODS_NAME),
     # Developer mode's vendor settings (DEV_SETTINGS): OPPO's protocol for
     # earbuds of any name, for none, and Hi-Res asked on every connection
     'oppo-always': ('lhdcv5', OPPO_SINK + ['--oppo', 'off'] + OTHER_NAME, 'lhdcv5', []),
@@ -535,6 +537,10 @@ EXPECT_ERROR = {
 }
 # The settings.json a case starts with (developer mode)
 DEV_SETTINGS = {
+    # AirPods control is developer mode only (issue #595)
+    **{case: {'debug_mode': True} for case in ('airpods', 'airpods-adaptive', 'airpods-no-adaptive', 'airpods-pro1',
+                                                'airpods-they-open', 'airpods-silent-connect', 'airpods-plain',
+                                                'airpods-other-name')},
     'sbcxq-abr-hold': {'debug_mode': True, 'dev_overrides': {'encode_at_send': True}},
     'ldac-hold': {'debug_mode': True, 'dev_overrides': {'encode_at_send': True}},
     'oppo-always': {'debug_mode': True, 'dev_vendors': {'oppo': {'mode': 'always'}}},
@@ -614,6 +620,7 @@ LOG_CHECKS = {
     'airpods-plain': AIRPODS_UP + [('bluecaster.log', 'noise control', False),
                                    ('bluecaster.log', 'AirPods: model A0000 (not known', 1)],
     'airpods-other-name': [('sink.log', 'AirPods:', False), ('bluecaster.log', 'Buds:', False)],
+    'airpods-developer-off': [('sink.log', 'AirPods:', False), ('bluecaster.log', 'Buds:', False)],
     'huawei-renamed': [('sink.log', QUALITY_ON, True), ('bluecaster.log', 'name=“HUAWEI FreeBuds Pro 4”', True)],
     'oppo-always': [('sink.log', HI_RES_ON, 1), ('bluecaster.log', ENCODED_1000, 1), ('bluecaster.log', 'remote name of', False)],
     'oppo-never': [('sink.log', 'OPPO control', False), ('bluecaster.log', ENCODED_400, True)],
