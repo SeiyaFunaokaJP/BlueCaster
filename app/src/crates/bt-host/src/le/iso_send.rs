@@ -183,6 +183,13 @@ const ALIGN_MAX: u32 = 4;
 /// SDUs one realignment leaves out at most (frames a CIS is behind)
 const ALIGN_FRAMES_MAX: u8 = 3;
 
+/// BIG rounds are counted over windows this long
+const RATE_WINDOW_MS: u32 = 1000;
+/// A window with fewer rounds than this share of its intervals (%) is slow
+const RATE_SLOW_PCT: u64 = 75;
+/// Slow windows in a row that count as slow sending (reported once)
+const RATE_SLOW_WINDOWS: u8 = 5;
+
 /// LE CIS Established parameters kept (the latest per handle)
 const LINKS_MAX: usize = 8;
 
@@ -586,6 +593,14 @@ pub struct IsoSender {
     guard_waits: u64,
     guard_due_ms: Option<u32>,
     guard_late_ms: u32,
+    /// Round rate: the current window's start and its rounds, the slow
+    /// windows in a row, slow sending (why, until taken) and whether it
+    /// was reported for this start
+    rate_start_ms: Option<u32>,
+    rate_rounds: u64,
+    slow_windows: u8,
+    slow: Option<String>,
+    slow_reported: bool,
 }
 
 impl IsoSender {
@@ -680,6 +695,11 @@ impl IsoSender {
         self.guard_waits = 0;
         self.guard_due_ms = None;
         self.guard_late_ms = 0;
+        self.rate_start_ms = None;
+        self.rate_rounds = 0;
+        self.slow_windows = 0;
+        self.slow = None;
+        self.slow_reported = false;
         self.publish();
         out.set_queue(queue_depth);
         self.timer_resolution = Some(HighTimerResolution::new());
@@ -820,6 +840,50 @@ impl IsoSender {
         self.stall.take()
     }
 
+    /// BIG rounds well below the frame rate for [`RATE_SLOW_WINDOWS`]
+    /// windows in a row (the controller takes only some of the SDUs, the
+    /// jitter buffer drops the rest): why, once per start
+    pub(crate) fn take_slow(&mut self) -> Option<String> {
+        self.slow.take()
+    }
+
+    /// A round started at `now`: counted in the rate window
+    fn count_round(&mut self, now: u32) {
+        let Some(start) = self.rate_start_ms else {
+            self.rate_start_ms = Some(now);
+            self.rate_rounds = 0;
+            return;
+        };
+        self.rate_rounds += 1;
+        let span = now.wrapping_sub(start);
+        if span < RATE_WINDOW_MS {
+            return;
+        }
+        let intervals = u64::from(span) * 1000 / u64::from(self.frame_us.max(1));
+        let pct = self.rate_rounds * 100 / intervals.max(1);
+        if pct < RATE_SLOW_PCT {
+            self.slow_windows = self.slow_windows.saturating_add(1);
+            tracing::debug!(
+                "LE Audio: {} BIG round(s) in {span} ms ({pct} % of the intervals), {} slow window(s) in a row",
+                self.rate_rounds,
+                self.slow_windows
+            );
+        } else {
+            self.slow_windows = 0;
+        }
+        self.rate_start_ms = Some(now);
+        self.rate_rounds = 0;
+        if self.slow_windows >= RATE_SLOW_WINDOWS && !self.slow_reported && !self.stopping {
+            self.slow_reported = true;
+            let why = format!(
+                "BIG rounds at {pct} % of the frame rate for {} s",
+                u32::from(self.slow_windows) * RATE_WINDOW_MS / 1000
+            );
+            tracing::warn!("LE Audio: ISO sending slow: {why}");
+            self.slow = Some(why);
+        }
+    }
+
     /// HCI events (all of them): LE CIS Established (logged and kept for
     /// the depth), Number Of Completed Packets and the transport's packet
     /// sent (room again: send)
@@ -924,6 +988,7 @@ impl IsoSender {
             }
             // First BIS of a round: the next frame interval for all BIS
             self.start_round();
+            self.count_round(out.time_ms());
         }
         self.bis_retry.retain(|&i| i != index);
         if !self.send_bis(out, index) {
@@ -2364,5 +2429,67 @@ mod tests {
         );
         let st = s.stats();
         assert_eq!((st.underruns, st.silence_sets), (1, 3));
+    }
+
+    /// One BIG round of two BIS at `ms`; the slow report, if any
+    fn round_at(s: &mut IsoSender, out: &Fake, ms: u32) -> Option<String> {
+        out.now.set(ms);
+        s.on_bis_can_send_now(out, &bis_can_send(0, 0, 0x10));
+        s.on_bis_can_send_now(out, &bis_can_send(0, 1, 0x11));
+        s.take_slow()
+    }
+
+    #[test]
+    fn big_rounds_at_the_frame_rate_are_not_slow() {
+        let out = Fake::default();
+        let mut s = IsoSender::new(Arc::default());
+        s.start_big(&out, 0, &[0x10, 0x11], queue(2), 10_000, 2);
+        for i in 0..2000u32 {
+            assert_eq!(round_at(&mut s, &out, i * 10), None, "at {i}");
+        }
+        s.stop(&out);
+    }
+
+    #[test]
+    fn big_rounds_at_half_the_rate_are_reported_once_after_five_seconds() {
+        let out = Fake::default();
+        let mut s = IsoSender::new(Arc::default());
+        s.start_big(&out, 0, &[0x10, 0x11], queue(2), 10_000, 2);
+        let mut reports = Vec::new();
+        for i in 0..1000u32 {
+            if let Some(why) = round_at(&mut s, &out, i * 20) {
+                reports.push((i * 20, why));
+            }
+        }
+        assert_eq!(reports.len(), 1, "{reports:?}");
+        let (at, why) = &reports[0];
+        assert_eq!(*at, 5000);
+        assert_eq!(why, "BIG rounds at 50 % of the frame rate for 5 s");
+        // A new start reports again
+        s.stop(&out);
+        s.start_big(&out, 0, &[0x10, 0x11], queue(2), 10_000, 2);
+        let n = (0..400u32).filter_map(|i| round_at(&mut s, &out, 30_000 + i * 20)).count();
+        assert_eq!(n, 1);
+        s.stop(&out);
+    }
+
+    #[test]
+    fn a_few_slow_seconds_between_full_rate_ones_are_not_reported() {
+        let out = Fake::default();
+        let mut s = IsoSender::new(Arc::default());
+        s.start_big(&out, 0, &[0x10, 0x11], queue(2), 10_000, 2);
+        let mut t = 0;
+        for _ in 0..5 {
+            // 4 s at half the rate, then 1 s at the full rate
+            for _ in 0..200 {
+                assert_eq!(round_at(&mut s, &out, t), None, "at {t}");
+                t += 20;
+            }
+            for _ in 0..100 {
+                assert_eq!(round_at(&mut s, &out, t), None, "at {t}");
+                t += 10;
+            }
+        }
+        s.stop(&out);
     }
 }

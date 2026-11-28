@@ -706,6 +706,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
                     channels: usize::from(a.format().channels),
                     mask: a.channel_mask(),
                     rear: false,
+                    sub: ipc::AuracastSub::None,
                 }),
             );
         }
@@ -1457,7 +1458,11 @@ fn broadcast_once(
     let plan = &started.status.plan;
     let channels = plan.channel_count() as u32;
     let rate = plan.top_sampling_hz();
-    let rear = plan.cis.iter().flat_map(|c| &c.channels).any(|c| c.source.is_rear());
+    let rear = plan.cis.iter().flat_map(|c| &c.channels).any(|c| c.source.is_third_lane_on());
+    let sub = crate::matrix_mix::sub_of(pipeline::mix::outputs_for(
+        plan.cis.iter().flat_map(|c| &c.channels).map(|c| c.source),
+        rear,
+    ));
     inner.set_le_stream(Some(LeStreamDetails::of(&started)));
     // What the stream info and the mixer show of the capture
     let show = |audio: &LeAudioPath, source: &SourceRequest| {
@@ -1469,6 +1474,7 @@ fn broadcast_once(
                     channels: usize::from(format.channels),
                     mask: audio.channel_mask(),
                     rear,
+                    sub,
                 }),
             );
         }

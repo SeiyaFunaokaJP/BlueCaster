@@ -37,7 +37,7 @@ impl Tws {
     /// change is heard at once)
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let live = self.core.read(cx).snap().is_some_and(|s| s.stream.state == StreamState::Streaming);
-        self.mixer.update(cx, |m, cx| m.set_props(Some((false, live)), window, cx));
+        self.mixer.update(cx, |m, cx| m.set_props(Some((false, ipc::AuracastSub::None, live)), window, cx));
     }
 }
 

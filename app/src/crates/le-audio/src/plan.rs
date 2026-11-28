@@ -104,6 +104,16 @@ pub enum ChannelSource {
     /// channels; the front left if the source has no rear)
     RearLeft,
     RearRight,
+    /// The subwoofer's left / right of a 2.1 broadcast: the low end of the
+    /// left / right (the broadcast mixer's third and fourth outputs, low
+    /// passed by its crossover)
+    SubLeft,
+    SubRight,
+    /// The subwoofer of a 2.1 or 3.1 broadcast as one mono channel: the
+    /// low end of left and right together (the mixer's fourth output)
+    SubMono,
+    /// The centre speaker of a 3.1 broadcast (the mixer's third output)
+    Center,
 }
 
 impl ChannelSource {
@@ -111,6 +121,17 @@ impl ChannelSource {
     /// instead of the stereo downmix
     pub fn is_rear(self) -> bool {
         matches!(self, ChannelSource::RearLeft | ChannelSource::RearRight)
+    }
+
+    /// The subwoofer of a 2.1 broadcast
+    pub fn is_sub(self) -> bool {
+        matches!(self, ChannelSource::SubLeft | ChannelSource::SubRight | ChannelSource::SubMono)
+    }
+
+    /// Fed by the third or fourth lane (the rear's, the subwoofer's or the
+    /// centre's): the stream mixes four lanes instead of the stereo downmix
+    pub fn is_third_lane_on(self) -> bool {
+        self.is_rear() || self.is_sub() || self == ChannelSource::Center
     }
 }
 

@@ -44,7 +44,7 @@ fn open(cx: &mut TestAppContext) -> (Harness, AnyWindowHandle, Entity<AuracastMi
         cx.new(|_| Host { mixer })
     });
     let mixer = cx.read(|cx| host.read(cx).mixer.clone());
-    h.on(cx, w, |window, cx| mixer.update(cx, |m, cx| m.set_props(Some((true, false)), window, cx)));
+    h.on(cx, w, |window, cx| mixer.update(cx, |m, cx| m.set_props(Some((true, AuracastSub::None, false)), window, cx)));
     (h, w, mixer)
 }
 
@@ -108,7 +108,9 @@ fn a_field_being_typed_into_keeps_its_text_when_the_state_comes_again(cx: &mut T
     type_into(&mut h, cx, w, &center, "-1");
     // The mixer is read again (the broadcast's rear changed)
     h.answer("auracast.mix", Answer::Ok(mix_state(true, -9.0)));
-    h.on(cx, w, |window, cx| mixer.update(cx, |m, cx| m.set_props(Some((false, false)), window, cx)));
+    h.on(cx, w, |window, cx| {
+        mixer.update(cx, |m, cx| m.set_props(Some((false, AuracastSub::None, false)), window, cx))
+    });
     assert_eq!(shown(&mixer, cx, MixField::Center), "-1");
     // The other fields show the new state
     assert_eq!(shown(&mixer, cx, MixField::Surround), "0");
@@ -132,7 +134,9 @@ fn open_tws(cx: &mut TestAppContext) -> (Harness, AnyWindowHandle, Entity<Auraca
         cx.new(|_| Host { mixer })
     });
     let mixer = cx.read(|cx| host.read(cx).mixer.clone());
-    h.on(cx, w, |window, cx| mixer.update(cx, |m, cx| m.set_props(Some((false, false)), window, cx)));
+    h.on(cx, w, |window, cx| {
+        mixer.update(cx, |m, cx| m.set_props(Some((false, AuracastSub::None, false)), window, cx))
+    });
     (h, w, mixer)
 }
 
@@ -141,7 +145,7 @@ fn the_earbuds_mixer_reads_and_saves_through_tws_and_turns_on_from_its_switch(cx
     let (mut h, w, mixer) = open_tws(cx);
     assert!(h.methods().iter().any(|m| m == "tws.mix"));
     assert!(!h.methods().iter().any(|m| m.starts_with("auracast.")));
-    assert_eq!(cx.read(|cx| mixer.read(cx).outputs().len()), 2);
+    assert_eq!(cx.read(|cx| mixer.read(cx).output_names(AuracastSub::None).len()), 2);
     h.on(cx, w, |window, cx| mixer.update(cx, |m, cx| m.set_enabled(true, window, cx)));
     h.settle(cx);
     let calls = h.calls("tws.mix_set");

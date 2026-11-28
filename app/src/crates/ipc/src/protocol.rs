@@ -773,6 +773,35 @@ pub struct AuracastMix {
     pub delay_ms: Vec<f32>,
     /// Per output: polarity inverted
     pub invert: Vec<bool>,
+    /// 2.1 broadcast: the crossover between the fronts and the subwoofer
+    /// (Hz, 40 to 500; 0 or missing: 80)
+    pub crossover_hz: f32,
+    /// 2.1 broadcast: the fronts play the full range (no high pass)
+    pub mains_full_range: bool,
+    /// Auto without a subwoofer: per output, the LFE goes to it (missing:
+    /// the fronts)
+    pub full_range: Vec<bool>,
+    /// Listening tests, per input (8) and per output (4): only the soloed
+    /// ones are heard when any is, the muted ones never. Not saved.
+    pub solo_in: Vec<bool>,
+    pub mute_in: Vec<bool>,
+    pub solo_out: Vec<bool>,
+    pub mute_out: Vec<bool>,
+}
+
+/// The subwoofer of a broadcast, as the mixer feeds it
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AuracastSub {
+    /// None: the third and fourth outputs are the rear's
+    #[default]
+    None,
+    /// 2.1: the subwoofer's left and right on the third and fourth outputs
+    Stereo,
+    /// 2.1: a mono subwoofer on the fourth output (the third unused)
+    Mono,
+    /// 3.1: the centre on the third output, a mono subwoofer on the fourth
+    Center,
 }
 
 /// A named mixer setting
@@ -823,6 +852,9 @@ pub struct AuracastReceiverStatus {
     pub bis: Vec<u8>,
     /// Why it failed, or what else it reports
     pub detail: String,
+    /// Its battery level (%), when it has a Battery Service
+    #[serde(default)]
+    pub battery: Option<u8>,
 }
 
 /// auracast.receivers
@@ -845,6 +877,10 @@ pub struct AuracastMixState {
     pub present: Vec<bool>,
     /// The broadcast has rear outputs (else only FL FR are heard)
     pub rear: bool,
+    /// A subwoofer layout: what the third and fourth outputs are (after
+    /// the crossover)
+    #[serde(default)]
+    pub sub: AuracastSub,
     /// The matrix that plays (auto computed), 4 rows of 8
     pub effective: Vec<Vec<f32>>,
     /// The mixer is used: Auracast always; TWS once turned on, from the
@@ -2229,6 +2265,12 @@ pub enum Method {
         #[ts(optional = nullable)]
         #[serde(default)]
         receivers: Option<Vec<BroadcastReceiver>>,
+        /// The assistant closes its link to each receiver once it plays:
+        /// the receiver keeps the broadcast, nothing takes the source off
+        /// at the stop (absent: false, the links stay up)
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        leave_receivers: Option<bool>,
     },
     /// AVRCP absolute volume 0..127; while broadcasting, the broadcast's
     /// level
@@ -2335,7 +2377,8 @@ pub enum Method {
     /// The auracast.* methods: error developer.off while developer mode is
     /// off.
     /// -> AuracastMixState: for the broadcast running, else a source of
-    /// `channels` (default 8) and rear outputs `rear` (default true)
+    /// `channels` (default 8), rear outputs `rear` (default true) and a
+    /// subwoofer `sub` (default none)
     #[serde(rename = "auracast.mix")]
     AuracastMixGet {
         #[ts(optional = nullable)]
@@ -2344,6 +2387,9 @@ pub enum Method {
         #[ts(optional = nullable)]
         #[serde(default)]
         rear: Option<bool>,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        sub: Option<AuracastSub>,
     },
     /// -> AuracastMixState: saved, and heard at once while broadcasting
     #[serde(rename = "auracast.mix_set")]
@@ -2355,6 +2401,9 @@ pub enum Method {
         #[ts(optional = nullable)]
         #[serde(default)]
         rear: Option<bool>,
+        #[ts(optional = nullable)]
+        #[serde(default)]
+        sub: Option<AuracastSub>,
     },
     /// -> AuracastMixState; a built-in preset's name is refused
     /// (auracast.mix_save_failed)
@@ -2416,6 +2465,11 @@ pub enum Method {
     /// `follow_volume`), as kept for the next broadcast
     #[serde(rename = "auracast.follow_volume")]
     AuracastFollowVolume,
+    /// -> Method | null: the last stream.start_broadcast that started (its
+    /// source as auracast.set_source last changed it), kept across restarts:
+    /// the form shows it again
+    #[serde(rename = "auracast.last_start")]
+    AuracastLastStart,
     /// -> AuracastReceivers: the saved LE Audio devices an assistant can
     /// tell (`bass` as their GATT services were kept at the last
     /// connection), and what the receivers of the broadcast running (or of

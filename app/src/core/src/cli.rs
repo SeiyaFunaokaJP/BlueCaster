@@ -124,6 +124,8 @@ LE Audio (experimental, LC3 over LE isochronous channels):
                         which broadcast of the layout (1, 2, ...; default 1)
   --assist-bis <list>   only these BIS of it, e.g. 1 (left) or 1,2; default:
                         the receiver picks
+  --assist-leave        close the link to each receiver once it plays (it
+                        keeps the broadcast; nothing takes it off at the end)
   --auracast-layout <layout>
                         stereo (default); split: left and right as two
                         broadcasts of their own (<name> L / <name> R, a mono
@@ -132,7 +134,13 @@ LE Audio (experimental, LC3 over LE isochronous channels):
                         rear BIS without a location, for --assist
                         <address>=<bis>); single-located: FL FR BL BR;
                         single-pairs: two subgroups of FL FR; single-per-bis:
-                        a subgroup per mono BIS; matrix-<front>-<rear>: the matrix
+                        a subgroup per mono BIS; single-2-1: 2.1, the
+                        subwoofer's FL FR subgroup (low passed, for a
+                        receiver left to itself) then the main pair's;
+                        single-2-1-mono: the same with one mono subwoofer
+                        BIS (three BIS); single-3-1: a mono subwoofer BIS,
+                        then FL FR and the centre;
+                        matrix-<front>-<rear>: the matrix
                         mixer's outputs, front (FL FR) and rear (RL RR) each
                         stereo (one broadcast), separate (a mono broadcast
                         each), subgroups (one broadcast of two subgroups) or
@@ -402,6 +410,8 @@ struct LeArgs {
     assist_broadcast: Option<u8>,
     /// --assist-bis: BIS indexes (1-based)
     assist_bis: Vec<u8>,
+    /// --assist-leave
+    assist_leave: bool,
 }
 
 /// --le-scan without a time (v1 scan_seconds)
@@ -691,6 +701,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
                     Some(v.parse().ok().filter(|&n| n > 0).ok_or("--assist-broadcast takes 1, 2, ...")?);
             }
             "--assist-bis" => a.le.assist_bis = parse_bis_list(&value(&mut it, "--assist-bis")?)?,
+            "--assist-leave" => a.le.assist_leave = true,
             "--auracast-mono" => a.le.broadcast_mono = true,
             "--auracast-volume" => {
                 let v = value(&mut it, "--auracast-volume")?;
@@ -725,7 +736,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
                 let v = value(&mut it, "--auracast-layout")?;
                 if bt_host::BroadcastLayout::parse(&v).is_none() {
                     return Err(
-                        "--auracast-layout takes stereo, mono, split, single, single-located, single-pairs, single-per-bis, matrix-<front>-<rear> (each stereo, separate, subgroups or off), quad, front-rear, pairs, rear-subgroups or subgroups"
+                        "--auracast-layout takes stereo, mono, split, single, single-located, single-pairs, single-per-bis, single-2-1, single-2-1-mono, single-3-1, matrix-<front>-<rear> (each stereo, separate, subgroups or off), quad, front-rear, pairs, rear-subgroups or subgroups"
                             .into(),
                     );
                 }
@@ -2048,6 +2059,7 @@ fn le_broadcast(a: &Args, service: &Service, rx: &mpsc::Receiver<ServiceEvent>, 
                         broadcast: usize::from(spec.broadcast.or(le.assist_broadcast).unwrap_or(1) - 1),
                         bis: spec.bis.clone().unwrap_or_else(|| le.assist_bis.clone()),
                         code: le.broadcast_code.clone(),
+                        leave: le.assist_leave,
                     })
                     .collect();
                 let out: bluecaster_core::auracast_assist::Out = Arc::new(|line: &str| outln!("{line}"));
