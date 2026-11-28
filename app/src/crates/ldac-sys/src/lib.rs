@@ -308,6 +308,15 @@ impl LdacBt {
         if ret != 0 { Err(Error::Ldac(self.error_code())) } else { Ok(()) }
     }
 
+    /// ldacBT_alter_eqmid_priority: one step of libldac's quality ladder
+    /// (HQ, SQ, Q0, Q1, MQ) towards HQ (`LDACBT_EQMID_INC_QUALITY`) or
+    /// away from it (`LDACBT_EQMID_INC_CONNECTION`); fails at either end
+    pub fn alter_eqmid_priority(&mut self, priority: i32) -> Result<(), Error> {
+        // SAFETY: the handle is valid; libldac validates the priority
+        let ret = unsafe { ffi::ldacBT_alter_eqmid_priority(self.as_ptr(), priority) };
+        if ret != 0 { Err(Error::Ldac(self.error_code())) } else { Ok(()) }
+    }
+
     /// ldacBT_get_bitrate: the bit rate in kbps of the frames being encoded
     /// (a quality change takes effect at the next packet boundary), -1
     /// before init

@@ -421,6 +421,7 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
             encode_at_send: s.dev_overrides.encode_at_send,
             keep_bitrate_on_slow_link: s.dev_overrides.keep_bitrate_on_slow_link,
             auto_mic_tick_poll: s.dev_overrides.auto_mic_tick_poll,
+            abr_extended: s.dev_overrides.abr_extended,
         },
         dev_vendors: s
             .dev_vendors
@@ -560,6 +561,7 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
         encode_at_send: s.dev_overrides.encode_at_send,
         keep_bitrate_on_slow_link: s.dev_overrides.keep_bitrate_on_slow_link,
         auto_mic_tick_poll: s.dev_overrides.auto_mic_tick_poll,
+        abr_extended: s.dev_overrides.abr_extended,
     };
     // Known vendors and options only, defaults left out
     c.dev_vendors = s

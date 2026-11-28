@@ -34,4 +34,8 @@ keep_bitrate_on_slow_link: boolean,
  * The microphone's Auto looks for recording apps on the session's
  * tick, not with its own watcher
  */
-auto_mic_tick_poll: boolean, };
+auto_mic_tick_poll: boolean, 
+/**
+ * ABR climbs faster and higher than Android's (LHDC V5, LDAC)
+ */
+abr_extended: boolean, };
