@@ -1011,6 +1011,12 @@ impl BtHost {
         s.hci_version.filter(|_| s.hci_version_settled)
     }
 
+    /// The controller's Bluetooth SIG company ID (its chip's maker), once it
+    /// has answered Read Local Version
+    pub fn controller_company(&self) -> Option<u16> {
+        self.shared.lock().controller_company
+    }
+
     /// The controller has LE Audio's isochronous channels (its supported
     /// commands at HCI init; also known with LE Audio off). Streaming still
     /// needs ISO buffers ([`BtHost::le_iso_buffers`]).

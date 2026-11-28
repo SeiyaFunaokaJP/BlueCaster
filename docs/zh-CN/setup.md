@@ -171,7 +171,7 @@ BlueCaster 会检测适配器的芯片组，并显示需要哪些固件文件。
 | Realtek | TP-Link UB500、RTL8761BU | 已安装 Realtek 的 Windows 驱动程序时使用其中的固件，否则需要下载固件（见上文）。测试最充分 |
 | Realtek | RTL8852BD（`0BDA:B853`）、RTL8852BT、RTL8922A | BlueCaster 从 Realtek 的 Windows 蓝牙驱动程序中读取固件（例如 `rtl8852bd_mp_chip_new.dat`），因此请保留该驱动程序，或将日志中列出的文件放入固件文件夹。尚未在实际硬件上测试 |
 | CSR | 通用 CSR8510 适配器 | 开箱即用，无需固件 |
-| Barrot | 蓝牙 5.4 / 6.0 适配器（`33FA:0010`、`33FA:0012`） | 使用 ROM 固件运行，无需固件。目前仅有一份用户报告 |
+| Barrot | 蓝牙 5.3 / 5.4 / 6.0 适配器（`33FA:0001`、`33FA:0010`、`33FA:0012`） | 使用 ROM 固件运行，无需固件。目前有两份用户报告 |
 | Marvell | Microsoft Surface Pro / Surface Book 内置（88W8897） | 无需固件文件：Wi-Fi 驱动也会加载蓝牙固件，请保持 Wi-Fi 开启。尚未在实际硬件上测试 |
 | Actions | ATS2851 适配器（`10D7:B012`） | 使用 ROM 固件运行，无需固件。该适配器会列出一些它并不支持的命令，BlueCaster 会将其隐藏。尚未在实际硬件上测试 |
 | Broadcom | ASUS BT400 (BCM20702) 及其他采用 BCM20702 / BCM20703 / BCM43142 的 USB 适配器和笔记本电脑内置模块 | 报告厂商类 `FF/01/01` 而非蓝牙类 `E0/01/01` 的适配器（BCM20702 OEM 适配器）也能被检测到。使用 ROM 固件运行。如果装有 Broadcom 的 Windows 蓝牙驱动程序，BlueCaster 会在启动时上传该驱动程序中的补丁。如果固件文件夹中有 PatchRAM `.hcd` 文件（如 `BCM20702A1-0b05-17cb.hcd`），BlueCaster 会改用该文件。如果驱动程序的补丁上传失败，BlueCaster 会提示你拔下适配器再重新插入。此后 BlueCaster 不再向该适配器上传补丁。驱动程序的补丁尚未在实际硬件上测试 |

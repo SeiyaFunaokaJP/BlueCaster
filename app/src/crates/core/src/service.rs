@@ -1168,6 +1168,9 @@ impl Inner {
                     }
                     if address_saved && let Some(v) = host.hci_version() {
                         crate::adapter::save_hci_version(&dir, vid, pid, v);
+                        if let Some(c) = host.controller_company() {
+                            crate::adapter::save_company(&dir, vid, pid, c);
+                        }
                         return;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(250));
