@@ -87,6 +87,7 @@
   "error.audio_capture_start": "오디오 캡처를 시작하지 못했습니다",
   "error.reconnect_failed": "다시 연결하지 못했습니다",
   "error.btstack_init": "Bluetooth 어댑터를 시작하지 못했습니다. WinUSB 드라이버를 사용하는지 확인하세요.",
+  "error.firmware_missing": "Bluetooth 어댑터의 펌웨어가 없습니다. 어댑터 화면에서 다운로드 페이지 열기를 클릭해 %s을(를) 다운로드하세요. 그런 다음 펌웨어 폴더 열기를 클릭하고, 열린 폴더로 파일을 옮긴 후 다시 연결하세요.",
   "error.btstack_no_answer": "Bluetooth 어댑터가 응답하지 않습니다. 어댑터를 뽑았다가 다시 꽂은 후(내장 어댑터는 Shift 키를 누른 채 시스템 종료) 다시 시도하세요.",
   "error.btstack_crash_stream": "Bluetooth가 예기치 않게 중단되었습니다. BlueCaster를 다시 시작하세요.",
   "status.connecting_retry": "연결에 실패하여 다시 시도하는 중(%d/%d)...",

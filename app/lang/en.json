@@ -87,6 +87,7 @@
   "error.audio_capture_start": "Failed to start audio capture",
   "error.reconnect_failed": "Failed to reconnect",
   "error.btstack_init": "The Bluetooth adapter could not start. Check that it uses the WinUSB driver.",
+  "error.firmware_missing": "The Bluetooth adapter's firmware is missing. On the Adapters screen, click Open Download Page and download %s. Then click Open Firmware Folder, move the files into that folder, and connect again.",
   "error.btstack_no_answer": "The Bluetooth adapter is not responding. Unplug it and plug it back in (built-in adapter: hold Shift while choosing Shut down), then try again.",
   "error.btstack_crash_stream": "Bluetooth stopped unexpectedly. Restart BlueCaster.",
   "status.connecting_retry": "Connection failed, trying again (%d/%d)...",

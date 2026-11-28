@@ -1099,6 +1099,13 @@ impl Inner {
         // An adapter a firmware loader left needing a power cycle: the same
         // advice as for one that does not answer (unplug it, or shut down)
         let needs_replug = matches!(last, InitFailure::NoAnswer | InitFailure::NeedsReplug);
+        // An Intel controller in its bootloader (e.g. after a cold boot)
+        // without its files: name them, not the driver (issue #602)
+        if last == InitFailure::FirmwareMissing
+            && let Some(files) = bt_host::missing_firmware()
+        {
+            return Err(Msg::with("error.firmware_missing", &[&files]));
+        }
         Err(Msg::new(if needs_replug { "error.btstack_no_answer" } else { "error.btstack_init" }))
     }
 

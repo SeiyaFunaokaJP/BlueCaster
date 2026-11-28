@@ -437,6 +437,17 @@ fn missing_firmware_file() {
 }
 
 #[test]
+fn missing_files_named_for_the_window() {
+    let loader = Loader::new(Box::new(|_| None));
+    assert_eq!(loader.missing_files("ibt-0040-2120.sfi"), ["ibt-0040-2120.sfi", "ibt-0040-2120.ddc"]);
+    assert_eq!(loader.missing_files("ibt-0040-0041-iml.sfi"), ["ibt-0040-0041-iml.sfi"]);
+    assert_eq!(
+        loader.missing_file_hint("ibt-0040-2120.sfi"),
+        "ibt-0040-2120.sfi and ibt-0040-2120.ddc from linux-firmware (intel/)"
+    );
+}
+
+#[test]
 fn wrong_file_for_the_controller() {
     let mut ctl = Controller::new(vec![tlv_version(0x18, IMG_BOOTLOADER, 1, None)]);
     let f = files(&[("ibt-0040-0041.sfi", sfi(false))]);

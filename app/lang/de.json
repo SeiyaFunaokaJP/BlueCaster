@@ -87,6 +87,7 @@
   "error.audio_capture_start": "Audioaufnahme konnte nicht gestartet werden",
   "error.reconnect_failed": "Erneute Verbindung fehlgeschlagen",
   "error.btstack_init": "Der Bluetooth-Adapter konnte nicht gestartet werden. Prüfen, ob er den WinUSB-Treiber verwendet.",
+  "error.firmware_missing": "Die Firmware des Bluetooth-Adapters fehlt. Klicken Sie auf der Seite „Adapter“ auf „Downloadseite öffnen“ und laden Sie %s herunter. Klicken Sie dann auf „Firmware-Ordner öffnen“, verschieben Sie die Dateien in diesen Ordner und verbinden Sie erneut.",
   "error.btstack_no_answer": "Der Bluetooth-Adapter reagiert nicht. Ziehen Sie ihn ab und stecken Sie ihn wieder ein (eingebauter Adapter: Umschalttaste gedrückt halten und Herunterfahren wählen). Versuchen Sie es dann erneut.",
   "error.btstack_crash_stream": "Bluetooth wurde unerwartet beendet. BlueCaster neu starten.",
   "status.connecting_retry": "Verbindung fehlgeschlagen, neuer Versuch (%d/%d)...",

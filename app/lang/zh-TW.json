@@ -87,6 +87,7 @@
   "error.audio_capture_start": "無法啟動音訊擷取",
   "error.reconnect_failed": "無法重新連線",
   "error.btstack_init": "藍牙介面卡無法啟動。請確認它使用 WinUSB 驅動程式。",
+  "error.firmware_missing": "找不到藍牙介面卡的韌體。請在「介面卡」頁面按一下「開啟下載頁面」，下載 %s。接著按一下「開啟韌體資料夾」，將檔案移到開啟的資料夾，然後重新連線。",
   "error.btstack_no_answer": "藍牙介面卡沒有回應。請拔下後重新插入（內建介面卡：按住 Shift 鍵選擇「關機」），然後再試一次。",
   "error.btstack_crash_stream": "藍牙意外停止。請重新啟動 BlueCaster。",
   "status.connecting_retry": "連線失敗，正在重試 (%d/%d)...",

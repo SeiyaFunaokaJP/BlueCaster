@@ -1368,9 +1368,16 @@ impl ChipLoader for Loader {
 
     /// An intermediate loader has no .ddc
     fn missing_file_hint(&self, file: &str) -> String {
+        format!("{} from linux-firmware (intel/)", self.missing_files(file).join(" and "))
+    }
+
+    fn missing_files(&self, file: &str) -> Vec<String> {
         let stem = file.strip_suffix(".sfi").unwrap_or(file);
-        let files = if stem.ends_with("-iml") { format!("{stem}.sfi") } else { format!("{stem}.sfi and {stem}.ddc") };
-        format!("{files} from linux-firmware (intel/)")
+        if stem.ends_with("-iml") {
+            vec![format!("{stem}.sfi")]
+        } else {
+            vec![format!("{stem}.sfi"), format!("{stem}.ddc")]
+        }
     }
 }
 

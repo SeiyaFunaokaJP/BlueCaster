@@ -170,6 +170,11 @@ fn firmware_text(adapters: &[ipc::AdapterInfo]) -> Option<String> {
                 (Some(true), _) => format!("present ({files})"),
                 (Some(false), Some(bad)) => format!("INVALID: {bad} is not a valid file ({files})"),
                 (Some(false), None) => format!("MISSING ({files})"),
+                // Which files depends on the controller's answer at start:
+                // the loader's line under [Adapter] says (issue #602)
+                (None, _) if a.vendor == "Intel" => {
+                    "checked at start (ibt-*.sfi + .ddc in bootloader mode)".to_string()
+                }
                 (None, _) => "none needed".to_string(),
             };
             format!("{}: {status}", a.display_name)
@@ -418,9 +423,19 @@ mod tests {
         };
         let csr = ipc::AdapterInfo { display_name: "CSR8510".into(), firmware_present: None, ..a.clone() };
         let page = ipc::AdapterInfo { firmware_invalid: Some("rtl8761bu_fw.bin".into()), ..a.clone() };
+        let intel = ipc::AdapterInfo {
+            display_name: "Intel (0x8087:0x0AAA)".into(),
+            vendor: "Intel".into(),
+            firmware_present: None,
+            ..a.clone()
+        };
         assert_eq!(
             firmware_text(&[a, csr]).unwrap(),
             "RTL8761BU: MISSING (rtl8761bu_fw.bin, rtl8761bu_config.bin); CSR8510: none needed"
+        );
+        assert_eq!(
+            firmware_text(&[intel]).unwrap(),
+            "Intel (0x8087:0x0AAA): checked at start (ibt-*.sfi + .ddc in bootloader mode)"
         );
         assert_eq!(
             firmware_text(&[page]).unwrap(),

@@ -87,6 +87,7 @@
   "error.audio_capture_start": "Échec du démarrage de la capture audio",
   "error.reconnect_failed": "Échec de la reconnexion",
   "error.btstack_init": "L'adaptateur Bluetooth n'a pas pu démarrer. Vérifiez qu'il utilise le pilote WinUSB.",
+  "error.firmware_missing": "Le firmware de l'adaptateur Bluetooth est manquant. Dans l'écran Adaptateur, cliquez sur Ouvrir la page de téléchargement et téléchargez %s. Cliquez ensuite sur Ouvrir le dossier du firmware, déplacez les fichiers dans ce dossier, puis reconnectez l'appareil.",
   "error.btstack_no_answer": "L'adaptateur Bluetooth ne répond pas. Débranchez-le et rebranchez-le (adaptateur intégré : maintenez Maj en choisissant Arrêter), puis réessayez.",
   "error.btstack_crash_stream": "Le Bluetooth s'est arrêté de façon inattendue. Redémarrez BlueCaster.",
   "status.connecting_retry": "Échec de la connexion, nouvelle tentative (%d/%d)...",

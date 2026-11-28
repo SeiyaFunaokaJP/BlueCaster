@@ -99,6 +99,9 @@ const INIT_NO_ANSWER: Duration = Duration::from_secs(5);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const STREAM_TIMEOUT: Duration = Duration::from_secs(10);
 const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the AVRCP / HFP closes of an A2DP release may take before the
+/// link is dropped anyway (headphones answer them in about 30 ms)
+const PROFILE_CLOSE_WAIT: Duration = Duration::from_secs(1);
 /// The capability discovery on an A2DP connection the device opened
 const DEVICE_A2DP_TIMEOUT: Duration = Duration::from_secs(2);
 /// A job the run loop should take at once
@@ -316,6 +319,21 @@ pub enum InitFailure {
     /// A firmware loader left the controller in a state only a power cycle
     /// ends: the adapter must be unplugged and plugged back in
     NeedsReplug,
+    /// A firmware loader did not find its files ([`missing_firmware`] names
+    /// them), e.g. an Intel controller in its bootloader after a cold boot
+    FirmwareMissing,
+}
+
+static MISSING_FIRMWARE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// The firmware files the last loader did not find ("ibt-0040-2120.sfi,
+/// ibt-0040-2120.ddc"), after a [`InitFailure::FirmwareMissing`]
+pub fn missing_firmware() -> Option<String> {
+    MISSING_FIRMWARE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+pub(crate) fn set_missing_firmware(files: Option<String>) {
+    *MISSING_FIRMWARE.lock().unwrap_or_else(|e| e.into_inner()) = files;
 }
 
 /// How a connection attempt failed
@@ -1735,11 +1753,29 @@ impl BtHost {
     /// BTstack looks for an idle one only once, 10 s after it came up, so
     /// the link of a stream stays and keeps the headphones from going to
     /// another device (issue #270).
+    ///
+    /// AVRCP and HFP closes sent with the A2DP release are given
+    /// [`PROFILE_CLOSE_WAIT`] to be confirmed first: Airoha-based Sony
+    /// headphones stopped answering pages, also from phones, after the link
+    /// went down 20 ms after those closes (issue #602).
     pub fn drop_acl_link(&self, timeout: Duration) {
         if !self.hci_ready() {
             return;
         }
-        self.shared.update(|s| s.acl_down = false);
+        let closing = self.shared.lock().profiles_closing;
+        if closing != 0 {
+            let started = Instant::now();
+            let done = self.shared.wait(PROFILE_CLOSE_WAIT, false, |s| s.profiles_closing == 0);
+            tracing::debug!(
+                "drop ACL: profile closes 0x{closing:02X} {} after {} ms",
+                if done == Wait::Done { "confirmed" } else { "not confirmed" },
+                started.elapsed().as_millis()
+            );
+        }
+        self.shared.update(|s| {
+            s.acl_down = false;
+            s.profiles_closing = 0;
+        });
         if self.call(Duration::from_secs(2), |app, s| app.drop_acl(s)) != Some(true) {
             tracing::debug!("drop ACL: no link to drop");
             return;
