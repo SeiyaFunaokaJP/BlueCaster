@@ -171,7 +171,7 @@ BlueCaster 會偵測介面卡的晶片組，並顯示需要哪些韌體檔案。
 | Realtek | TP-Link UB500, RTL8761BU | 已安裝 Realtek 的 Windows 驅動程式時使用其中的韌體，否則需要下載韌體（見上文）。測試最完整 |
 | Realtek | RTL8852BD（`0BDA:B853`）、RTL8852BT、RTL8922A | BlueCaster 會從 Realtek 的 Windows 藍牙驅動程式讀取韌體（例如 `rtl8852bd_mp_chip_new.dat`），因此請保留該驅動程式，或將記錄中列出的檔案放入韌體資料夾。尚未在實際硬體上測試 |
 | CSR | 一般的 CSR8510 接收器 | 隨插即用，不需要韌體 |
-| Barrot | Bluetooth 5.4 / 6.0 接收器（`33FA:0010`、`33FA:0012`） | 使用 ROM 韌體運作，不需要韌體。目前只有一份使用者回報 |
+| Barrot | Bluetooth 5.3 / 5.4 / 6.0 接收器（`33FA:0001`、`33FA:0010`、`33FA:0012`） | 使用 ROM 韌體運作，不需要韌體。目前有兩份使用者回報 |
 | Marvell | Microsoft Surface Pro / Surface Book 內建（88W8897） | 不需要韌體檔案：Wi-Fi 驅動程式也會載入藍牙韌體，請保持 Wi-Fi 開啟。尚未在實際硬體上測試 |
 | Actions | ATS2851 介面卡（`10D7:B012`） | 使用 ROM 韌體運作，不需要韌體。介面卡會列出一些實際不支援的命令，BlueCaster 會將其隱藏。尚未在實際硬體上測試 |
 | Broadcom | ASUS BT400 (BCM20702) 及其他採用 BCM20702 / BCM20703 / BCM43142 的接收器與筆電內建模組 | 回報廠商類別 `FF/01/01` 而非藍牙類別 `E0/01/01` 的介面卡（BCM20702 OEM 接收器）也能偵測。使用 ROM 韌體運作。若已安裝 Broadcom 的 Windows 藍牙驅動程式，BlueCaster 會在啟動時上傳該驅動程式中的修補檔。如果韌體資料夾中有 PatchRAM `.hcd`（例如 `BCM20702A1-0b05-17cb.hcd`），BlueCaster 會改用該檔案。如果驅動程式的修補檔上傳失敗，BlueCaster 會提示您拔下介面卡再重新插入。之後 BlueCaster 不會再對該介面卡上傳修補檔。驅動程式的修補檔尚未在實際硬體上測試 |

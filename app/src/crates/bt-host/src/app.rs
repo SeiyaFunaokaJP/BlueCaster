@@ -1882,6 +1882,7 @@ impl HostApp {
             crate::chips::company_name(manufacturer).unwrap_or("unknown")
         );
         self.controller_company = Some(manufacturer);
+        self.shared.update(|s| s.controller_company = Some(manufacturer));
         if manufacturer == COMPANY_ID_REALTEK && self.setup.realtek_pid != 0 {
             // The first read of an init comes before the firmware download
             if !self.rtk_version_seen {
