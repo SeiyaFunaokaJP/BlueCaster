@@ -2116,9 +2116,8 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         && inner.developer()
         && (maybe_airpods || vendor::mode(vendor::APPLE) == vendor::Mode::Always)
         && vendor_named(&host, &req, &mut given_name, vendor::APPLE);
-    let airpods_name = given_name.clone().flatten().unwrap_or_else(|| req.device_name.clone());
     let _airpods = airpods.then(|| {
-        inner.start_apple(host.clone(), req.device, &airpods_name);
+        inner.start_apple(host.clone(), req.device);
         AppleMark(inner)
     });
 
@@ -2732,7 +2731,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         beside_after = Instant::now() + BESIDE_STATUS_HOLD;
         // The control channel went with the connection
         if airpods {
-            inner.start_apple(host.clone(), req.device, &airpods_name);
+            inner.start_apple(host.clone(), req.device);
         }
     }
 

@@ -679,7 +679,9 @@ class AirPodsEarbuds:
     PSM = 0x1001
     # Model number, listening modes (1 off, 2 noise cancellation,
     # 3 transparency, 4 adaptive)
-    MODELS = {'pro2': ('A3048', (1, 2, 3, 4)), 'pro': ('A2084', (1, 2, 3)), 'plain': ('A0000', ())}
+    # A0000 and A0001 are in no table: a model released later
+    MODELS = {'pro2': ('A3048', (1, 2, 3, 4)), 'pro': ('A2084', (1, 2, 3)), 'plain': ('A0000', ()),
+              'new': ('A0001', (1, 2, 3))}
 
     def __init__(self, device, model, opens, silent_connect, adaptive_refused):
         self.model, self.modes = self.MODELS[model]

@@ -472,7 +472,8 @@ NEGOTIATION = {
     'airpods-silent-connect': ('aac', AIRPODS_SINK + ['--airpods', 'pro2', '--airpods-silent-connect'], 'aac',
                                AIRPODS_NAME),
     'airpods-plain': ('aac', AIRPODS_SINK + ['--airpods', 'plain', '--name', 'AirPods'], 'aac',
-                      ['--device-name', 'AirPods']),
+                      ['--device-name', 'AirPods', '--noise-control', 'anc']),
+    'airpods-new': ('aac', AIRPODS_SINK + ['--airpods', 'new'], 'aac', AIRPODS_NAME + ['--noise-control', 'adaptive']),
     'airpods-other-name': ('aac', AIRPODS_SINK + ['--airpods', 'pro2'] + OTHER_NAME, 'aac', AIRPODS_NAME),
     # Developer mode only for now: off, the earbuds are left alone
     'airpods-developer-off': ('aac', AIRPODS_SINK + ['--airpods', 'pro2'], 'aac', AIRPODS_NAME),
@@ -540,7 +541,7 @@ DEV_SETTINGS = {
     # AirPods control is developer mode only (issue #595)
     **{case: {'debug_mode': True} for case in ('airpods', 'airpods-adaptive', 'airpods-no-adaptive', 'airpods-pro1',
                                                 'airpods-they-open', 'airpods-silent-connect', 'airpods-plain',
-                                                'airpods-other-name')},
+                                                'airpods-new', 'airpods-other-name')},
     'sbcxq-abr-hold': {'debug_mode': True, 'dev_overrides': {'encode_at_send': True}},
     'ldac-hold': {'debug_mode': True, 'dev_overrides': {'encode_at_send': True}},
     'oppo-always': {'debug_mode': True, 'dev_vendors': {'oppo': {'mode': 'always'}}},
@@ -617,8 +618,15 @@ LOG_CHECKS = {
     'airpods-silent-connect': [(f, x, n) for f, x, n in AIRPODS_UP if 'connect' not in x]
                               + [('sink.log', 'AirPods: connect 01000200', 1),
                                  ('bluecaster.log', 'AirPods: connected (status', False)],
-    'airpods-plain': AIRPODS_UP + [('bluecaster.log', 'noise control', False),
-                                   ('bluecaster.log', 'AirPods: model A0000 (not known', 1)],
+    # A model in no table: every mode offered, then what the earbuds answer
+    # (#595); no answer at all hides noise control
+    'airpods-plain': AIRPODS_UP + [('bluecaster.log', 'AirPods: model A0000 (not known', 1),
+                                   ('sink.log', 'AirPods: listening mode 2 ignored', 1),
+                                   ('bluecaster.log', 'AirPods: no answer to NoiseCancellation', 1)],
+    'airpods-new': AIRPODS_UP + [('bluecaster.log', 'AirPods: model A0001 (not known', 1),
+                                 ('sink.log', 'AirPods: listening mode 4 refused', 1),
+                                 ('bluecaster.log', 'AirPods: asked for Adaptive, they keep Off', 1),
+                                 ('bluecaster.log', 'noise control Off of Off/NoiseCancellation/Transparency,', True)],
     'airpods-other-name': [('sink.log', 'AirPods:', False), ('bluecaster.log', 'Buds:', False)],
     'airpods-developer-off': [('sink.log', 'AirPods:', False), ('bluecaster.log', 'Buds:', False)],
     'huawei-renamed': [('sink.log', QUALITY_ON, True), ('bluecaster.log', 'name=“HUAWEI FreeBuds Pro 4”', True)],
