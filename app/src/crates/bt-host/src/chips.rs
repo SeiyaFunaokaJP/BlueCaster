@@ -784,9 +784,10 @@ pub fn vendor_for_usb(vid: u16, pid: u16, realtek_pid: Option<u16>) -> ChipVendo
         // OEM adapters with a Broadcom chip under their own VID (ASUS
         // BT400, laptop modules): the IDs of Broadcom's Windows driver
         _ if crate::broadcom::is_broadcom_usb(vid, pid) => ChipVendor::Broadcom,
-        // Barrot ROM dongles (Linux btusb's Barrot entries); not the whole
+        // Barrot ROM dongles (Linux btusb's Barrot entries, and 0x0001,
+        // whose probe report gave Barrot's company ID, #616); not the whole
         // VID: no list says which other devices use it
-        0x33FA if matches!(pid, 0x0010 | 0x0012) => ChipVendor::Barrot,
+        0x33FA if matches!(pid, 0x0001 | 0x0010 | 0x0012) => ChipVendor::Barrot,
         // Marvell AVASTAR Bluetooth of Wi-Fi combos (Linux btusb's Marvell
         // IDs, 0x204B/0x204C from Windows driver lists); the VID is also on
         // Marvell's Wi-Fi and other devices

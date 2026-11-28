@@ -171,7 +171,7 @@ BlueCaster에서 실제로 사용한 어댑터와 헤드폰은 코덱, 보고 �
 | Realtek | TP-Link UB500, RTL8761BU | Realtek Windows 드라이버가 설치되어 있으면 그 펌웨어 사용, 없으면 펌웨어 다운로드 필요(위 참고). 가장 많이 테스트됨 |
 | Realtek | RTL8852BD(`0BDA:B853`), RTL8852BT, RTL8922A | BlueCaster가 Realtek의 Windows Bluetooth 드라이버에서 펌웨어(예: `rtl8852bd_mp_chip_new.dat`)를 읽으므로 그 드라이버를 제거하지 마세요. 또는 로그에 표시된 파일을 펌웨어 폴더에 넣으세요. 아직 실제 하드웨어에서 테스트하지 않았습니다 |
 | CSR | 일반 CSR8510 동글 | 바로 작동하며 펌웨어 불필요 |
-| Barrot | Bluetooth 5.4 / 6.0 동글(`33FA:0010`, `33FA:0012`) | ROM 펌웨어로 작동하며 펌웨어 불필요. 지금까지 사용자 보고 1건 |
+| Barrot | Bluetooth 5.3 / 5.4 / 6.0 동글(`33FA:0001`, `33FA:0010`, `33FA:0012`) | ROM 펌웨어로 작동하며 펌웨어 불필요. 지금까지 사용자 보고 2건 |
 | Marvell | Microsoft Surface Pro / Surface Book 내장(88W8897) | 펌웨어 파일 불필요: Wi-Fi 드라이버가 Bluetooth 펌웨어도 로드하므로 Wi-Fi를 켜 두세요. 아직 실제 하드웨어에서 테스트하지 않았습니다 |
 | Actions | ATS2851 동글 (`10D7:B012`) | ROM 펌웨어로 작동하며 펌웨어 불필요. 실제로는 지원하지 않는 명령을 지원 목록에 올리므로 BlueCaster가 숨깁니다. 아직 실제 하드웨어에서 테스트하지 않았습니다 |
 | Broadcom | ASUS BT400 (BCM20702), 그 밖의 BCM20702 / BCM20703 / BCM43142 동글 및 노트북 내장 모듈 | Bluetooth 클래스 `E0/01/01` 대신 벤더 클래스 `FF/01/01`을 보고하는 어댑터(BCM20702 OEM 동글)도 감지합니다. ROM 펌웨어로 작동합니다. Broadcom의 Windows Bluetooth 드라이버가 설치되어 있으면 BlueCaster가 시작할 때 이 드라이버의 패치를 업로드합니다. 펌웨어 폴더에 PatchRAM `.hcd`(예: `BCM20702A1-0b05-17cb.hcd`)가 있으면 BlueCaster는 드라이버의 패치 대신 이 파일을 사용합니다. 드라이버의 패치 적용에 실패하면 BlueCaster가 어댑터를 뽑았다가 다시 꽂으라고 안내합니다. 그 뒤로 BlueCaster는 해당 어댑터에 패치를 업로드하지 않습니다. 드라이버의 패치는 아직 실제 하드웨어에서 테스트하지 않았습니다 |
