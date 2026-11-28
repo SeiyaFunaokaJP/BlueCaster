@@ -246,6 +246,10 @@ pub struct Settings {
     /// available" (issue #86): off for new settings since 3.0.0-beta.4;
     /// settings that have it on keep it (on since 2.0.1, schema 3).
     pub le_audio_experimental: bool,
+    /// Hearing aids (ASHA, a proof of concept): BTstack starts with
+    /// Bluetooth LE for them, with or without LE Audio. Adapters > "Use
+    /// hearing aids" (discussion #584); off for new settings.
+    pub hearing_aids: bool,
     /// Before 2.0.1: GMAP low latency for every LE Audio profile. Now a
     /// profile option (`le_low_latency`); kept only so the file round-trips.
     pub le_audio_low_latency: bool,
@@ -434,6 +438,7 @@ impl Default for Settings {
             remote_sink: String::new(),
             last_profile: String::new(),
             le_audio_experimental: false,
+            hearing_aids: false,
             le_audio_low_latency: false,
             auto_codec: true,
             max_media_payload: None,
@@ -530,6 +535,11 @@ impl Settings {
     /// #86: off for everyone else until a later version)
     pub fn le_audio(&self) -> bool {
         self.le_audio_experimental && self.debug_mode
+    }
+
+    /// Hearing aids in force: only in developer mode, as LE Audio
+    pub fn hearing_aids(&self) -> bool {
+        self.hearing_aids && self.debug_mode
     }
 
     /// Keyboards and mice through BlueCaster in force: only in developer

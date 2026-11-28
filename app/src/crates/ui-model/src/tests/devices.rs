@@ -209,16 +209,16 @@ fn lists_every_entry_home_shows_for_removal() {
     // lists its LE Audio entries, so Audio Devices does too)
     for le_on in [false, true] {
         let home: Vec<(String, bool)> =
-            listed_devices(&list, le_on).into_iter().filter(|d| d.saved).map(|d| (d.name, d.le_audio)).collect();
+            listed_devices(&list, le_on, false).into_iter().filter(|d| d.saved).map(|d| (d.name, d.le_audio)).collect();
         let mut here: Vec<(String, bool)> =
-            managed_saved(&list, le_on, false).into_iter().map(|d| (d.name, d.le_audio)).collect();
+            managed_saved(&list, le_on, false, false).into_iter().map(|d| (d.name, d.le_audio)).collect();
         let mut home = home;
         home.sort();
         here.sort();
         assert_eq!(here, home);
     }
     // The dual-mode device once, as its LE Audio entry
-    let on = managed_saved(&list, true, false);
+    let on = managed_saved(&list, true, false, false);
     assert_eq!(on.len(), 2);
     assert!(on.iter().any(|d| d.le_audio));
 }

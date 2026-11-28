@@ -2174,7 +2174,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     // joins on its own thread and hears this stream's capture
     let beside = match req.asha {
         Some(AshaRequest::Beside { aid, delay_ms, volume }) => {
-            Some(crate::asha::Beside::start(host.clone(), aid, delay_ms, volume, inner.le_wanted()))
+            Some(crate::asha::Beside::start(host.clone(), aid, delay_ms, volume, inner.asha_wanted()))
         }
         _ => None,
     };

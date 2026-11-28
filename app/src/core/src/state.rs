@@ -471,6 +471,7 @@ fn to_ipc_settings(s: &CoreSettings) -> Settings {
         afh: s.afh.clone(),
         remote_sink: s.remote_sink.clone(),
         le_audio_experimental: s.le_audio_experimental,
+        hearing_aids: s.hearing_aids,
         le_audio_low_latency: s.le_audio_low_latency,
         auto_codec: s.auto_codec,
         hid_host: s.hid_host,
@@ -616,6 +617,7 @@ fn merge_settings(base: &CoreSettings, s: &Settings) -> CoreSettings {
     c.afh = s.afh.clone();
     c.remote_sink = s.remote_sink.clone();
     c.le_audio_experimental = s.le_audio_experimental;
+    c.hearing_aids = s.hearing_aids;
     c.le_audio_low_latency = s.le_audio_low_latency;
     c.auto_codec = s.auto_codec;
     // Keyboards and mice through BlueCaster: only hid.enable turns them on

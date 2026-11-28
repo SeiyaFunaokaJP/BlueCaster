@@ -942,8 +942,12 @@ impl DevicePicker {
     /// adapter not known to stream it could not be removed here)
     fn managed(&mut self, snap: &Snapshot, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let p = *cx.palette();
-        let saved =
-            managed_saved(&snap.devices, ui_model::profile::le_audio_on(&snap.settings), self.props.classic_only);
+        let saved = managed_saved(
+            &snap.devices,
+            ui_model::profile::le_audio_on(&snap.settings),
+            ui_model::profile::hearing_aids_on(&snap.settings),
+            self.props.classic_only,
+        );
         // One device, one entry (issue #86): its settings view goes by its key
         let keys: Vec<String> = saved.iter().map(|d| device_key(&d.address, d.le_audio)).collect();
         self.settings.retain(|k, _| keys.contains(k));

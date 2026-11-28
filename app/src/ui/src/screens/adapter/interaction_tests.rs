@@ -96,3 +96,20 @@ fn auto_takes_no_typing(cx: &mut TestAppContext) {
     assert!(saved_afh(&h).is_empty());
     assert_eq!(cx.read(|cx| a.read(cx).afh_input.read(cx).value().to_string()), "");
 }
+
+/// Hearing aids have a switch of their own in developer mode, also on an
+/// adapter without LE Audio, where the LE Audio switch is not shown
+/// (discussion #584)
+#[gpui_kit::test]
+fn the_hearing_aid_switch_saves_its_own_setting(cx: &mut TestAppContext) {
+    let mut s = snapshot();
+    s["settings"]["developer_mode"] = json!(true);
+    s["adapter"]["le_audio"] = json!(false);
+    let mut h = Harness::start(cx, s);
+    let (w, _) = h.open_sized(cx, (1000., 1400.), |window, cx| cx.new(|cx| Adapter::new(window, cx)));
+    h.on(cx, w, |window, cx| window.click("hearing-aids", cx));
+    h.settle(cx);
+    let saved = h.calls("settings.set");
+    let last = &saved.last().expect("saved")["settings"];
+    assert_eq!((&last["hearing_aids"], &last["le_audio_experimental"]), (&json!(true), &json!(false)));
+}

@@ -391,8 +391,10 @@ pub struct LeCore {
     /// The GAP Device Name (HostConfig::local_name)
     local_name: String,
     /// LE Audio is on: its profile modules, services and logs. False: the
-    /// core runs only for keyboards and mice.
+    /// core runs only for keyboards and mice, or hearing aids.
     audio: bool,
+    /// Hearing aids (ASHA): the ASHA module, with or without LE Audio
+    asha: bool,
     /// Keyboards and mice (issue #413): the list and what classic and LE
     /// share; None: no HID
     hid: Option<SharedHid>,
@@ -2621,6 +2623,7 @@ impl LeCore {
         battery: bool,
         local_name: String,
         audio: bool,
+        asha: bool,
         hid: Option<SharedHid>,
     ) -> LeCore {
         LeCore {
@@ -2628,6 +2631,7 @@ impl LeCore {
             battery,
             local_name,
             audio,
+            asha,
             hid,
             background: Vec::new(),
             hid_blocked: Vec::new(),
@@ -2699,7 +2703,14 @@ impl LeCore {
         if self.audio {
             tracing::info!("LE Audio: initializing (SM, GATT client / server, ISO)");
         } else {
-            tracing::info!("LE: initializing for keyboards and mice (SM, GATT client)");
+            tracing::info!(
+                "LE: initializing for {} (SM, GATT client)",
+                match (self.asha, self.hid.is_some()) {
+                    (true, true) => "hearing aids, keyboards and mice",
+                    (true, false) => "hearing aids",
+                    _ => "keyboards and mice",
+                }
+            );
         }
         let path: PathBuf = self
             .config
@@ -2723,6 +2734,7 @@ impl LeCore {
                 events: self.events.clone(),
                 battery: self.battery,
                 audio: self.audio,
+                asha: self.asha,
                 hid: self.hid.clone(),
             };
             let mut hooks = Vec::new();

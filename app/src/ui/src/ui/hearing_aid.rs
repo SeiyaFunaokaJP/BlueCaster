@@ -172,7 +172,7 @@ mod tests {
         cx.update(|cx| assert!(beside(&classic(), cx).is_none()));
         drop(h);
         s["settings"]["developer_mode"] = serde_json::json!(true);
-        s["settings"]["le_audio_experimental"] = serde_json::json!(true);
+        s["settings"]["hearing_aids"] = serde_json::json!(true);
         h = Harness::start(cx, s);
         let key = device_key(CLASSIC, false);
         cx.update(|cx| {

@@ -668,10 +668,13 @@ impl Adapter {
         }
     }
 
-    /// LE Audio for the whole stack, as Windows has it (issue #86)
+    /// LE Audio for the whole stack, as Windows has it (issue #86), and
+    /// hearing aids, which need Bluetooth LE but not LE Audio (discussion
+    /// #584); both in developer mode
     fn le_audio_toggle(snap: &Snapshot, cx: &App) -> Option<Div> {
-        le_audio_toggle_shown(&snap.adapter, snap.settings.developer_mode).then(|| {
-            ui::card(cx).child(ui::first_row(ui::toggle(
+        let mut rows = Vec::new();
+        if le_audio_toggle_shown(&snap.adapter, snap.settings.developer_mode) {
+            rows.push(ui::toggle(
                 "le-audio",
                 t("ui.adapter.le_audio"),
                 None,
@@ -682,8 +685,25 @@ impl Adapter {
                     app::save_settings(move |s| s.le_audio_experimental = v, cx);
                 },
                 cx,
-            )))
-        })
+            ));
+        }
+        if snap.settings.developer_mode {
+            rows.push(ui::toggle(
+                "hearing-aids",
+                t("ui.adapter.hearing_aids"),
+                Some(t("ui.adapter.hearing_aids_hint").into()),
+                snap.settings.hearing_aids,
+                false,
+                |v, _, cx| {
+                    let v = *v;
+                    app::save_settings(move |s| s.hearing_aids = v, cx);
+                },
+                cx,
+            ));
+        }
+        let mut rows = rows.into_iter();
+        let first = rows.next()?;
+        Some(ui::card(cx).child(ui::first_row(first)).children(rows))
     }
 
     fn afh_section(
