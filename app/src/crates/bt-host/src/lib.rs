@@ -83,7 +83,7 @@ pub use rfcomm::{
     MAX_SEND_BYTES as RFCOMM_MAX_SEND_BYTES, OPEN_DEADLINE as RFCOMM_OPEN_DEADLINE, RfcommCloseReason, RfcommError,
     RfcommEvent, RfcommOpened, RfcommReply, RfcommSink, is_voice_service, parse_uuid, uuid_str,
 };
-pub use sdp_services::{SdpRecord, ServicesError};
+pub use sdp_services::{DeviceId, ID_SOURCE_BLUETOOTH, ID_SOURCE_USB, SdpRecord, ServicesError, device_id};
 use shared::{Shared, Wait};
 pub use stats::{
     EncodeTiming, EncodeTotals, LinkDetails, LinkMode, LinkRadio, LinkStats, LiveCodec, MaxGauge, RemoteFeatures,

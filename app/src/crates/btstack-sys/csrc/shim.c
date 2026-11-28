@@ -777,7 +777,11 @@ static int sdp_services_listed;
 static bd_addr_t sdp_services_addr;
 /* Own buffers: the SDP client reads them while the query runs */
 static const uint8_t sdp_services_pattern[] = {0x35, 0x03, 0x19, 0x01, 0x00};
-static const uint8_t sdp_services_attributes[] = {0x35, 0x06, 0x09, 0x00, 0x01, 0x09, 0x01, 0x00};
+/* Service class list, service name, and the Device ID record's vendor id,
+ * product id and vendor id source (other records use these ids for other
+ * things: read only where the class is PnP Information) */
+static const uint8_t sdp_services_attributes[] = {0x35, 0x0F, 0x09, 0x00, 0x01, 0x09, 0x01, 0x00, 0x09,
+                                                  0x02, 0x01, 0x09, 0x02, 0x02, 0x09, 0x02, 0x05};
 
 static void sdp_services_start(void *context) {
     (void)context;

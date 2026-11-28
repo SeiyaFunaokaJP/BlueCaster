@@ -69,12 +69,6 @@ pub enum Taken {
     LinkClosed,
 }
 
-/// Earbuds of this protocol, by their name
-pub fn is_oppo(device_name: &str) -> bool {
-    let name = device_name.to_lowercase();
-    name.contains("oppo") || name.starts_with("enco ")
-}
-
 fn packet(command: u16, sequence: u8, payload: &[u8]) -> Vec<u8> {
     let mut p = vec![START];
     let mut length = 7 + payload.len();
@@ -383,15 +377,5 @@ mod tests {
         assert_eq!(feature(&features, SPATIAL_AUDIO), Some(0));
         assert_eq!(feature(&features, DUAL_CONNECTION), None);
         assert_eq!(feature(&[1, 2, HI_RES, 1], HI_RES), None);
-    }
-
-    #[test]
-    fn oppo_names() {
-        for n in ["OPPO Enco Free4", "oppo enco x3", "Enco Free4", "ENCO Air3"] {
-            assert!(is_oppo(n), "{n}");
-        }
-        for n in ["Encore Plus", "WH-1000XM4", ""] {
-            assert!(!is_oppo(n), "{n}");
-        }
     }
 }

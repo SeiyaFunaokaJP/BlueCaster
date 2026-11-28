@@ -18,16 +18,43 @@ pub const DEADLINE: Duration = Duration::from_secs(15);
 
 const ATTR_SERVICE_CLASS_ID_LIST: u16 = 0x0001;
 const ATTR_SERVICE_NAME: u16 = 0x0100;
+// Of the Device ID record only (other records use these ids for other things)
+const ATTR_VENDOR_ID: u16 = 0x0201;
+const ATTR_PRODUCT_ID: u16 = 0x0202;
+const ATTR_VENDOR_ID_SOURCE: u16 = 0x0205;
+/// PnP Information, the Device ID record's class
+const PNP_INFORMATION: &str = "00001200-0000-1000-8000-00805f9b34fb";
 /// An attribute value longer than this is cut (a name, or a list of UUIDs,
 /// is far shorter)
 const MAX_VALUE_BYTES: usize = 1024;
 
 /// One SDP record: its service class UUIDs (the 128-bit form, lowercase)
-/// and its name, if it has them
+/// and its name, if it has them; the Device ID record also its ids
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SdpRecord {
     pub classes: Vec<String>,
     pub name: Option<String>,
+    pub device_id: Option<DeviceId>,
+}
+
+/// What a Device ID record says about the maker: set by the maker, never by
+/// the user (unlike the device's name)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceId {
+    /// 1: a Bluetooth SIG company id, 2: a USB vendor id
+    pub source: u16,
+    pub vendor: u16,
+    pub product: u16,
+}
+
+/// Source of a vendor id given by the Bluetooth SIG
+pub const ID_SOURCE_BLUETOOTH: u16 = 1;
+/// Source of a vendor id given by the USB Implementers Forum
+pub const ID_SOURCE_USB: u16 = 2;
+
+/// The Device ID of the records a device lists, if it has one
+pub fn device_id(records: &[SdpRecord]) -> Option<DeviceId> {
+    records.iter().find_map(|r| r.device_id)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,6 +153,17 @@ fn records(values: &BTreeMap<(u16, u16), Vec<u8>>) -> Vec<SdpRecord> {
             _ => {}
         }
     }
+    for (&record, r) in out.iter_mut() {
+        if !r.classes.iter().any(|c| c == PNP_INFORMATION) {
+            continue;
+        }
+        let id = |attribute| values.get(&(record, attribute)).and_then(|v| uint16(v));
+        // Without a source the id is the SIG's (Device ID 1.3)
+        if let (Some(vendor), Some(product)) = (id(ATTR_VENDOR_ID), id(ATTR_PRODUCT_ID)) {
+            let source = id(ATTR_VENDOR_ID_SOURCE).unwrap_or(ID_SOURCE_BLUETOOTH);
+            r.device_id = Some(DeviceId { source, vendor, product });
+        }
+    }
     out.into_values().filter(|r| !r.classes.is_empty() || r.name.is_some()).collect()
 }
 
@@ -148,6 +186,7 @@ fn element(data: &[u8]) -> Option<(u8, &[u8], usize)> {
     Some((kind, body, skip + len))
 }
 
+const DE_UINT: u8 = 1;
 const DE_UUID: u8 = 3;
 const DE_TEXT: u8 = 4;
 const DE_SEQUENCE: u8 = 6;
@@ -165,6 +204,11 @@ fn uuids(value: &[u8]) -> Vec<String> {
         rest = &rest[used..];
     }
     out
+}
+
+fn uint16(value: &[u8]) -> Option<u16> {
+    let (DE_UINT, body, _) = element(value)? else { return None };
+    Some(u16::from_be_bytes(body.try_into().ok()?))
 }
 
 fn text(value: &[u8]) -> Option<String> {
@@ -221,6 +265,28 @@ mod tests {
         assert_eq!(r[0].name.as_deref(), Some("Audio Sink"));
         assert_eq!(r[1].classes, ["0000110e-0000-1000-8000-00805f9b34fb"]);
         assert_eq!(r[1].name, None);
+    }
+
+    #[test]
+    fn device_id_only_of_its_record() {
+        let mut values = BTreeMap::new();
+        // A HID record's 0x0201 and 0x0202 are not ids
+        values.insert((0, ATTR_SERVICE_CLASS_ID_LIST), vec![0x35, 0x03, 0x19, 0x11, 0x24]);
+        values.insert((0, ATTR_VENDOR_ID), vec![0x09, 0x01, 0x11]);
+        values.insert((0, ATTR_PRODUCT_ID), vec![0x09, 0x00, 0x40]);
+        values.insert((1, ATTR_SERVICE_CLASS_ID_LIST), vec![0x35, 0x03, 0x19, 0x12, 0x00]);
+        values.insert((1, ATTR_VENDOR_ID), vec![0x09, 0x00, 0x4C]);
+        values.insert((1, ATTR_PRODUCT_ID), vec![0x09, 0x20, 0x14]);
+        values.insert((1, ATTR_VENDOR_ID_SOURCE), vec![0x09, 0x00, 0x01]);
+        let r = records(&values);
+        assert_eq!(r[0].device_id, None);
+        assert_eq!(device_id(&r), Some(DeviceId { source: 1, vendor: 0x004C, product: 0x2014 }));
+        // No source: the SIG's; no product: no id
+        values.remove(&(1, ATTR_VENDOR_ID_SOURCE));
+        assert_eq!(device_id(&records(&values)).map(|d| d.source), Some(ID_SOURCE_BLUETOOTH));
+        values.remove(&(1, ATTR_PRODUCT_ID));
+        assert_eq!(device_id(&records(&values)), None);
+        assert_eq!(uint16(&[0x0A, 0, 0, 0, 1]), None);
     }
 
     #[test]

@@ -63,6 +63,10 @@ from bumble.transport import open_transport
 from bumble.transport.common import AsyncPipeSink
 
 BLUECASTER_ADDRESS = '00:A2:D0:00:00:01'
+# The Device ID each vendor's earbuds list by default: source 1 (Bluetooth
+# SIG company id), vendor id, product id. BlueCaster tells the vendors apart
+# by it, never by the name.
+VENDOR_DEVICE_IDS = {'huawei': (1, 0x027D, 0x0001), 'oppo': (1, 0x079A, 0x0001), 'airpods': (1, 0x004C, 0x2014)}
 SINK_ADDRESS = '00:A2:D0:00:00:02'
 
 log = logging.getLogger('emu_sink')
@@ -664,6 +668,35 @@ class EchoService:
         dlc.on('close', lambda: print('echo: channel closed', flush=True))
 
 
+def device_id_record(handle, source, vendor, product):
+    """A Device ID (PnP Information) record: what BlueCaster tells the
+    vendors apart by."""
+    from bumble.core import BT_L2CAP_PROTOCOL_ID, BT_PNP_INFORMATION_SERVICE, BT_SDP_PROTOCOL_ID
+    from bumble.sdp import DataElement, ServiceAttribute
+    u16 = DataElement.unsigned_integer_16
+    return [
+        ServiceAttribute(0x0000, DataElement.unsigned_integer_32(handle)),
+        ServiceAttribute(0x0001, DataElement.sequence([DataElement.uuid(BT_PNP_INFORMATION_SERVICE)])),
+        ServiceAttribute(0x0004, DataElement.sequence([
+            DataElement.sequence([DataElement.uuid(BT_L2CAP_PROTOCOL_ID), u16(0x0001)]),
+            DataElement.sequence([DataElement.uuid(BT_SDP_PROTOCOL_ID)]),
+        ])),
+        ServiceAttribute(0x0200, u16(0x0103)),
+        ServiceAttribute(0x0201, u16(vendor)),
+        ServiceAttribute(0x0202, u16(product)),
+        ServiceAttribute(0x0203, u16(0x0100)),
+        ServiceAttribute(0x0204, DataElement.boolean(True)),
+        ServiceAttribute(0x0205, u16(source)),
+    ]
+
+
+def device_id_arg(text):
+    if text == 'none':
+        return ()
+    source, vendor, product = (int(x, 16) for x in text.split(':'))
+    return source, vendor, product
+
+
 class AirPodsEarbuds:
     """The control channel of AirPods on classic L2CAP PSM 0x1001, written from
     a fact sheet on the AirPods control protocol. Answers the host's connect,
@@ -845,6 +878,11 @@ async def main(args):
     if args.airpods:
         AirPodsEarbuds(device, args.airpods, args.airpods_opens, args.airpods_silent_connect,
                        args.airpods_no_adaptive)
+    device_id = args.device_id
+    if device_id is None:
+        device_id = next((VENDOR_DEVICE_IDS[v] for v in VENDOR_DEVICE_IDS if getattr(args, v)), None)
+    if device_id:
+        device.sdp_service_records[0x00010010] = device_id_record(0x00010010, *device_id)
     if args.ctkd:
         bluecaster_controller.aes_ccm = sink_controller.aes_ccm = True
         bluecaster_controller.link_key_request = True
@@ -1230,6 +1268,9 @@ if __name__ == '__main__':
     parser.add_argument('--airpods-silent-connect', action='store_true', help='with --airpods, no connect answer')
     parser.add_argument('--airpods-no-adaptive', action='store_true',
                         help='with --airpods, a request for Adaptive is echoed as the mode in force')
+    parser.add_argument('--device-id', type=device_id_arg, metavar='SOURCE:VENDOR:PRODUCT',
+                        help='the Device ID record listed, in hex (e.g. 1:004C:2014), or "none"; default: the one '
+                             'of the vendor given with --huawei, --oppo or --airpods, else none')
     parser.add_argument('--ctkd', action='store_true',
                         help='encrypt with AES-CCM (Secure Connections) and answer SMP over BR/EDR: the LE keys '
                              'derived from the link key (cross-transport key derivation, issue #86)')
