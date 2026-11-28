@@ -1577,7 +1577,7 @@ impl Inner {
     }
 
     pub fn save_device(&self, addr: &str, name: &str) {
-        if let Err(e) = crate::devices::save(&self.opts.config_dir, addr, name) {
+        if let Err(e) = crate::devices::remember(&self.opts.config_dir, addr, name, false) {
             tracing::warn!("cannot save the device: {e}");
         }
     }
@@ -1601,7 +1601,7 @@ impl Inner {
 
     /// An LE Audio device that streamed (le_audio_devices.txt)
     pub fn save_le_device(&self, addr: &str, name: &str) {
-        if let Err(e) = crate::devices::save_le(&self.opts.config_dir, addr, name) {
+        if let Err(e) = crate::devices::remember(&self.opts.config_dir, addr, name, true) {
             tracing::warn!("cannot save the LE Audio device: {e}");
         }
     }

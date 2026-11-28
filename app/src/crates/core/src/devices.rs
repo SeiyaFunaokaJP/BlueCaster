@@ -28,6 +28,9 @@ pub struct SavedDevice {
 /// The suffix of the prototype's LE Audio lines in devices.txt
 const LEGACY_LE_SUFFIX: &str = "|le";
 
+// IPC renames and stream saves can run on different threads.
+static DEVICES_FILE: Mutex<()> = Mutex::new(());
+
 /// One "addr|name" line (v1 parse_saved_device_line); the address in upper
 /// case
 fn parse_line(line: &str) -> Option<(String, &str)> {
@@ -51,6 +54,11 @@ fn read_lines(file: &Path) -> Vec<(String, String)> {
 /// the prototype's "|le" lines of devices.txt first, an address listed in
 /// both places once)
 pub fn load_all(dir: &Path) -> Vec<SavedDevice> {
+    let _one = DEVICES_FILE.lock().unwrap_or_else(|e| e.into_inner());
+    read_all(dir)
+}
+
+fn read_all(dir: &Path) -> Vec<SavedDevice> {
     let mut classic = Vec::new();
     let mut le: Vec<SavedDevice> = Vec::new();
     for (address, name) in read_lines(&paths::devices_file(dir)) {
@@ -99,8 +107,9 @@ pub fn load_le(dir: &Path) -> Vec<SavedDevice> {
     load_all(dir).into_iter().filter(|d| d.le_audio).collect()
 }
 
-fn save_kind(dir: &Path, address: &str, name: &str, le_audio: bool) -> std::io::Result<()> {
-    let mut devices = load_all(dir);
+fn save_kind(dir: &Path, address: &str, name: &str, le_audio: bool, replace_name: bool) -> std::io::Result<()> {
+    let _one = DEVICES_FILE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut devices = read_all(dir);
     let address = address.to_uppercase();
     // Another earbud of a saved pair: the same device
     let set_member = le_audio
@@ -108,7 +117,7 @@ fn save_kind(dir: &Path, address: &str, name: &str, le_audio: bool) -> std::io::
         && saved_set_member(dir, &devices, &address);
     match devices.iter_mut().find(|d| d.address == address && d.le_audio == le_audio) {
         Some(d) => {
-            if !name.is_empty() {
+            if !name.is_empty() && (replace_name || d.name.is_empty()) {
                 d.name = name.to_string();
             }
         }
@@ -135,7 +144,8 @@ fn saved_set_member(dir: &Path, devices: &[SavedDevice], address: &str) -> bool 
 }
 
 fn remove_kind(dir: &Path, address: &str, le_audio: bool) -> std::io::Result<()> {
-    let mut devices = load_all(dir);
+    let _one = DEVICES_FILE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut devices = read_all(dir);
     let before = devices.len();
     devices.retain(|d| !(d.le_audio == le_audio && d.address.eq_ignore_ascii_case(address)));
     let r = write_all(dir, &devices);
@@ -145,7 +155,7 @@ fn remove_kind(dir: &Path, address: &str, le_audio: bool) -> std::io::Result<()>
 
 /// Adds or renames a classic device (an empty name keeps the known one)
 pub fn save(dir: &Path, address: &str, name: &str) -> std::io::Result<()> {
-    save_kind(dir, address, name, false)
+    save_kind(dir, address, name, false, true)
 }
 
 /// Forgets a classic device (its LE Audio entry stays)
@@ -155,7 +165,12 @@ pub fn remove(dir: &Path, address: &str) -> std::io::Result<()> {
 
 /// Adds or renames an LE Audio device (an empty name keeps the known one)
 pub fn save_le(dir: &Path, address: &str, name: &str) -> std::io::Result<()> {
-    save_kind(dir, address, name, true)
+    save_kind(dir, address, name, true, true)
+}
+
+/// Saves a streamed device. Its profile supplies a name only if no name is saved.
+pub(crate) fn remember(dir: &Path, address: &str, name: &str, le_audio: bool) -> std::io::Result<()> {
+    save_kind(dir, address, name, le_audio, false)
 }
 
 /// Forgets an LE Audio device (its classic entry stays)
@@ -326,6 +341,26 @@ mod tests {
         assert_eq!(load(&dir).len(), 1);
         // No LE Audio device: no file of them
         assert!(!paths::le_devices_file(&dir).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reconnecting_with_an_old_profile_name_keeps_the_rename() {
+        let dir = temp_dir("rename");
+        let address = "AA:BB:CC:DD:EE:FF";
+        save(&dir, address, "").unwrap();
+        remember(&dir, address, "Headphones", false).unwrap();
+        assert_eq!(load(&dir)[0].name, "Headphones");
+        remember(&dir, address, "Headphones LE", true).unwrap();
+        assert_eq!(load_le(&dir)[0].name, "Headphones LE");
+
+        save(&dir, address, "Desk headphones").unwrap();
+        save_le(&dir, address, "Desk headphones LE").unwrap();
+        remember(&dir, address, "Headphones", false).unwrap();
+        remember(&dir, address, "Headphones LE", true).unwrap();
+
+        assert_eq!(load(&dir)[0].name, "Desk headphones");
+        assert_eq!(load_le(&dir)[0].name, "Desk headphones LE");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
