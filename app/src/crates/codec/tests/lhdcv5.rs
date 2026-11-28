@@ -356,8 +356,9 @@ fn abr_lowers_the_bitrate_under_a_deep_queue_and_raises_it_back() {
         assert_eq!(enc.bitrate_kbps(), 400);
 
         // A queue that does not drain: down to the floor after 4 packets
-        for _ in 0..5 {
-            enc.abr_adjust(3);
+        // (a backlog: the start of a stream forgives a short queue)
+        for _ in 0..4 {
+            enc.abr_adjust(6);
         }
         assert_eq!(enc.bitrate_kbps(), floor, "{sample_rate}");
         // The encoder follows
@@ -366,31 +367,11 @@ fn abr_lowers_the_bitrate_under_a_deep_queue_and_raises_it_back() {
         let stats = run_on(&mut enc, &cfg, 1.0, &mut clock);
         assert_stream_bitrate(&stats, sample_rate, block, floor, "ABR floor");
 
-        // An empty queue: one stage up per 3000 packets, back to 400 kbps
-        let mut ticks = 0;
-        let mut seen = vec![floor];
-        while enc.bitrate_kbps() != 400 {
-            enc.abr_adjust(0);
-            ticks += 1;
-            if seen.last() != Some(&enc.bitrate_kbps()) {
-                seen.push(enc.bitrate_kbps());
-            }
-            assert!(ticks < 20 * 3000, "{sample_rate}: still at {} kbps", enc.bitrate_kbps());
-        }
-        assert!(seen.windows(2).all(|w| w[1] > w[0]), "{sample_rate}: {seen:?}");
-        assert!(ticks >= 3000 * (seen.len() - 1), "{sample_rate}: {ticks} ticks for {seen:?}");
+        // An empty queue climbs back over seconds: the unit tests of
+        // lhdcv5.rs step the clock. Back at the top, the encoder follows.
+        enc.abr_reset();
         let stats = run_on(&mut enc, &cfg, 1.0, &mut clock);
         assert_stream_bitrate(&stats, sample_rate, block, 400, "ABR back up");
-
-        // A single busy packet in an up window holds the rate
-        for _ in 0..5 {
-            enc.abr_adjust(3);
-        }
-        assert_eq!(enc.bitrate_kbps(), floor);
-        for i in 0..2 * 3000 {
-            enc.abr_adjust(u32::from(i == 4000));
-        }
-        assert_eq!(enc.bitrate_kbps(), floor, "{sample_rate}");
     }
 }
 
@@ -410,17 +391,17 @@ fn abr_reset_goes_back_to_the_top_of_the_table() {
     let mut enc = LhdcV5Encoder::new(&cfg).unwrap();
     assert!(enc.abr_active());
     for _ in 0..5 {
-        enc.abr_adjust(3);
+        enc.abr_adjust(6);
     }
     assert_eq!(enc.bitrate_kbps(), 160);
     enc.abr_reset();
     assert_eq!(enc.bitrate_kbps(), 400);
     // The counters started over: 4 packets again before it drops
-    for _ in 0..4 {
-        enc.abr_adjust(3);
+    for _ in 0..3 {
+        enc.abr_adjust(6);
     }
     assert_eq!(enc.bitrate_kbps(), 400);
-    enc.abr_adjust(3);
+    enc.abr_adjust(6);
     assert_eq!(enc.bitrate_kbps(), 160);
 
     let fixed = LhdcV5Encoder::new(&config(48000, Quality::Standard, 16, MTUS[0])).unwrap();

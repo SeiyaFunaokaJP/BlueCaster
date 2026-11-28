@@ -12,12 +12,14 @@
 //! calls. Parameters follow Android's a2dp_vendor_lhdcv5_encoder.cc as v1
 //! did: 20 ms encode interval, packets sized for the MTU minus the 2-byte
 //! media payload header, the sink's bit rate limits applied after init, and
-//! the ABR policy of lhdcv5BT_enc.c ([`LhdcV5Encoder::abr_adjust`]).
+//! the ABR stages of lhdcv5BT_enc.c ([`LhdcV5Encoder::abr_adjust`]; the
+//! climb back up is faster than Android's).
 
 use std::time::{Duration, Instant};
 
 use lhdcv5_sys::{LhdcV5Enc, ffi};
 
+use crate::abr::StallMemory;
 use crate::{CodecKind, Encoded, Encoder, EncoderConfig, EncoderError, Pcm, PcmFormat, Quality};
 
 const CODEC: CodecKind = CodecKind::LhdcV5;
@@ -26,14 +28,24 @@ const CODEC: CodecKind = CodecKind::LhdcV5;
 /// (A2DP_LHDC_MPL_HDR_LEN)
 const MPL_HDR_LEN: usize = 2;
 
-// ABR policy of Android's lhdcv5BT_enc.c. A "tick" is one media packet sent.
-/// Ticks between checks for going up
-const ABR_UP_RATE_TIME_CNT: u32 = 3000;
-/// Ticks between checks for going down
+// ABR. Going down follows Android's lhdcv5BT_enc.c: every 4 packets sent,
+// an average queue above 0 drops the bit rate to the lowest stage. Going up
+// does not: Android waits 3000 packets per stage (a minute of 20 ms
+// packets, four minutes from 160 back to 400 kbps, #600). Here a stage
+// takes 5 s of an empty queue, longer back to a stage the queue backed up
+// at ([`StallMemory`]).
+/// Packets between checks for going down
 const ABR_DOWN_RATE_TIME_CNT: u32 = 4;
-const ABR_UP_QUEUE_LENGTH_THRESHOLD: u32 = 1;
+/// Average queue (packets) above which a check goes down
 const ABR_DOWN_QUEUE_LENGTH_THRESHOLD: u32 = 0;
-const ABR_DOWN_TARGET_STAGE: usize = 0;
+/// Average queue that goes down in the first [`ABR_START_GRACE`] of a
+/// stream: the queue that builds up as it starts is not the link's limit
+const ABR_START_DOWN_AVG: u32 = 4;
+const ABR_START_GRACE: Duration = Duration::from_secs(3);
+/// One step of the climb: calm when no packet sent in it saw a queue
+const ABR_TICK: Duration = Duration::from_millis(100);
+/// Calm steps for one stage up: 5 s
+const ABR_UP_TICKS: u32 = 50;
 const ABR_TABLE_44K: [u32; 6] = [160, 192, 240, 320, 400, 400];
 const ABR_TABLE_48K: [u32; 6] = [160, 192, 256, 320, 400, 400];
 const ABR_TABLE_96K: [u32; 6] = [256, 320, 400, 400, 400, 400];
@@ -128,14 +140,93 @@ impl Guard {
     }
 }
 
-/// Adaptive bit rate state (Android lhdcv5BT_enc.c)
+/// Adaptive bit rate state: stages of Android's table (lhdcv5BT_enc.c)
+#[derive(Debug)]
 struct Abr {
     table: &'static [u32; 6],
+    /// The first stage at the table's highest rate (the tables repeat
+    /// 400 kbps at the end)
+    top: usize,
     index: usize,
+    /// The first packet since the encoder was made or ABR was reset
+    started: Option<Instant>,
     down_count: u32,
     down_sum: u32,
-    up_count: u32,
-    up_sum: u32,
+    tick_start: Instant,
+    /// A packet in this step saw a queue
+    tick_busy: bool,
+    /// Calm steps in a row
+    calm: u32,
+    stalls: StallMemory,
+}
+
+impl Abr {
+    fn new(table: &'static [u32; 6]) -> Abr {
+        let max = table.iter().copied().max().unwrap_or(0);
+        let top = table.iter().position(|&r| r == max).unwrap_or(table.len() - 1);
+        Abr {
+            table,
+            top,
+            index: top,
+            started: None,
+            down_count: 0,
+            down_sum: 0,
+            tick_start: Instant::now(),
+            tick_busy: false,
+            calm: 0,
+            stalls: StallMemory::default(),
+        }
+    }
+
+    /// One packet sent at `now` with `depth` packets queued before its
+    /// round: the stage to switch to, if any (already noted as current)
+    fn step(&mut self, now: Instant, depth: u32) -> Option<usize> {
+        let started = match self.started {
+            Some(t) => t,
+            None => {
+                self.started = Some(now);
+                self.tick_start = now;
+                now
+            }
+        };
+        self.down_sum = self.down_sum.saturating_add(depth);
+        self.down_count += 1;
+        if depth > 0 {
+            self.tick_busy = true;
+        }
+        if self.down_count >= ABR_DOWN_RATE_TIME_CNT {
+            let avg = self.down_sum / self.down_count;
+            self.down_count = 0;
+            self.down_sum = 0;
+            let starting = now.saturating_duration_since(started) < ABR_START_GRACE;
+            let backed_up = if starting { avg >= ABR_START_DOWN_AVG } else { avg > ABR_DOWN_QUEUE_LENGTH_THRESHOLD };
+            if backed_up {
+                self.calm = 0;
+                if self.index > 0 {
+                    self.stalls.stepped_down("LHDC V5", self.index as u8);
+                    self.index = 0;
+                    return Some(0);
+                }
+            }
+        }
+        if now.saturating_duration_since(self.tick_start) < ABR_TICK {
+            return None;
+        }
+        self.tick_start = now;
+        if std::mem::take(&mut self.tick_busy) {
+            self.calm = 0;
+        } else {
+            self.calm += 1;
+        }
+        let here = self.index as u8;
+        self.stalls.tick("LHDC V5", here, self.calm, ABR_UP_TICKS);
+        if self.index < self.top && self.calm >= self.stalls.wait(here, here + 1, ABR_UP_TICKS) {
+            self.calm = 0;
+            self.index += 1;
+            return Some(self.index);
+        }
+        None
+    }
 }
 
 pub struct LhdcV5Encoder {
@@ -314,7 +405,7 @@ impl LhdcV5Encoder {
                 192000 => &ABR_TABLE_192K,
                 _ => &ABR_TABLE_48K,
             };
-            Abr { table, index: table.len() - 1, down_count: 0, down_sum: 0, up_count: 0, up_sum: 0 }
+            Abr::new(table)
         });
 
         let mut encoder = LhdcV5Encoder {
@@ -378,6 +469,24 @@ impl LhdcV5Encoder {
                 if next < current { "send queue backed up" } else { "queue calm" }
             ),
             Err(e) => tracing::warn!("LHDC V5: queue guard to index {next} failed: {e}"),
+        }
+    }
+
+    /// [`Encoder::abr_adjust`] at `now`
+    fn abr_adjust_at(&mut self, now: Instant, queue_depth: u32) {
+        let Some(abr) = self.abr.as_mut() else {
+            self.guard_adjust(queue_depth);
+            return;
+        };
+        let before = abr.table[abr.index];
+        let Some(stage) = abr.step(now, queue_depth) else { return };
+        let rate = abr.table[stage];
+        match self.enc.bitrate_index(rate).and_then(|inx| self.enc.set_bitrate_index(inx, false)) {
+            Ok(()) => tracing::debug!(
+                "LHDC V5: ABR {} {before} -> {rate} kbps (queue {queue_depth})",
+                if rate < before { "down" } else { "up" }
+            ),
+            Err(e) => tracing::warn!("LHDC V5: ABR to {rate} kbps failed: {e}"),
         }
     }
 
@@ -452,72 +561,15 @@ impl Encoder for LhdcV5Encoder {
         self.peer_capped
     }
 
-    /// ABR policy of Android's lhdcv5BT_enc.c (lhdcv5_enc_abr_adjust_bitrate).
-    /// Call once per media packet sent, with the send queue depth (packets)
-    /// seen before this round's packets were enqueued, as Android does
-    /// (lhdcv5BT_adjust_bitrate) and v1 did. Every 4 calls an average depth
-    /// above 0 drops the bit rate to the lowest stage of the table (160 kbps,
-    /// 256 at 96 / 192 kHz); every 3000 calls with the queue empty
+    /// ABR ([`Abr`]). Call once per media packet sent, with the send queue
+    /// depth (packets) seen before this round's packets were enqueued, as
+    /// Android does (lhdcv5BT_adjust_bitrate) and v1 did. Every 4 calls an
+    /// average depth above 0 drops the bit rate to the lowest stage of the
+    /// table (160 kbps, 256 at 96 / 192 kHz); 5 s with the queue empty
     /// throughout raise it one stage, up to 400 kbps. Does nothing when ABR
     /// is off.
     fn abr_adjust(&mut self, queue_depth: u32) {
-        if self.abr.is_none() {
-            self.guard_adjust(queue_depth);
-            return;
-        }
-        let Some(mut abr) = self.abr.take() else { return };
-
-        if abr.down_count >= ABR_DOWN_RATE_TIME_CNT {
-            let avg = abr.down_sum / abr.down_count;
-            abr.down_count = 0;
-            abr.down_sum = 0;
-            if avg > ABR_DOWN_QUEUE_LENGTH_THRESHOLD {
-                let new_stage = ABR_DOWN_TARGET_STAGE;
-                if let (Some(last_inx), Ok(new_inx)) =
-                    (self.current_index(), self.enc.bitrate_index(abr.table[new_stage]))
-                    && new_inx <= last_inx
-                    && new_stage < abr.index
-                    && self.enc.set_bitrate_index(new_inx, false).is_ok()
-                {
-                    tracing::debug!(
-                        "LHDC V5: ABR down {} -> {} kbps (queue avg {avg})",
-                        abr.table[abr.index],
-                        abr.table[new_stage]
-                    );
-                    abr.up_count = 0;
-                    abr.up_sum = 0;
-                    abr.index = new_stage;
-                }
-            }
-        }
-
-        if abr.up_count >= ABR_UP_RATE_TIME_CNT {
-            let sum = abr.up_sum;
-            abr.up_count = 0;
-            abr.up_sum = 0;
-            if sum < ABR_UP_QUEUE_LENGTH_THRESHOLD {
-                let new_stage = if abr.index < abr.table.len() - 1 { abr.index + 1 } else { 0 };
-                if let (Some(last_inx), Ok(new_inx)) =
-                    (self.current_index(), self.enc.bitrate_index(abr.table[new_stage]))
-                    && new_inx >= last_inx
-                    && new_stage > abr.index
-                    && self.enc.set_bitrate_index(new_inx, false).is_ok()
-                {
-                    tracing::debug!("LHDC V5: ABR up {} -> {} kbps", abr.table[abr.index], abr.table[new_stage]);
-                    abr.down_count = 0;
-                    abr.down_sum = 0;
-                    abr.index = new_stage;
-                }
-            }
-        }
-
-        if queue_depth > 0 {
-            abr.up_sum = abr.up_sum.saturating_add(queue_depth);
-            abr.down_sum = abr.down_sum.saturating_add(queue_depth);
-        }
-        abr.up_count += 1;
-        abr.down_count += 1;
-        self.abr = Some(abr);
+        self.abr_adjust_at(Instant::now(), queue_depth);
     }
 
     fn abr_active(&self) -> bool {
@@ -542,9 +594,8 @@ impl Encoder for LhdcV5Encoder {
             return;
         }
         let Some(abr) = self.abr.as_mut() else { return };
-        let top = abr.table.len() - 1;
-        *abr = Abr { table: abr.table, index: top, down_count: 0, down_sum: 0, up_count: 0, up_sum: 0 };
-        let rate = abr.table[top];
+        *abr = Abr::new(abr.table);
+        let rate = abr.table[abr.top];
         match self.enc.bitrate_index(rate) {
             Ok(inx) if self.current_index() != Some(inx) => {
                 if let Err(e) = self.enc.set_bitrate_index(inx, false) {
@@ -554,6 +605,125 @@ impl Encoder for LhdcV5Encoder {
             Ok(_) => {}
             Err(e) => tracing::warn!("LHDC V5: ABR reset to {rate} kbps failed: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod abr_tests {
+    use super::*;
+
+    /// Feeds `ms` milliseconds of packets (one per 20 ms) with `depth`
+    /// queued, from `t`; returns the time after and each switch as
+    /// (milliseconds from `t`, stage)
+    fn feed(abr: &mut Abr, t: Instant, ms: u64, depth: u32) -> (Instant, Vec<(u64, usize)>) {
+        let mut switches = Vec::new();
+        for i in 1..=ms / 20 {
+            if let Some(stage) = abr.step(t + Duration::from_millis(i * 20), depth) {
+                switches.push((i * 20, stage));
+            }
+        }
+        (t + Duration::from_millis(ms), switches)
+    }
+
+    /// An ABR past its start grace
+    fn running(table: &'static [u32; 6]) -> (Abr, Instant) {
+        let mut abr = Abr::new(table);
+        let (t, sw) = feed(&mut abr, Instant::now(), 4000, 0);
+        assert!(sw.is_empty(), "{sw:?}");
+        (abr, t)
+    }
+
+    #[test]
+    fn the_top_is_the_first_stage_at_the_highest_rate() {
+        assert_eq!(Abr::new(&ABR_TABLE_44K).top, 4);
+        assert_eq!(Abr::new(&ABR_TABLE_48K).top, 4);
+        assert_eq!(Abr::new(&ABR_TABLE_96K).top, 2);
+        assert_eq!(Abr::new(&ABR_TABLE_192K).top, 2);
+        assert_eq!(Abr::new(&ABR_TABLE_48K).index, 4);
+    }
+
+    #[test]
+    fn a_queue_drops_to_the_bottom_and_the_climb_takes_seconds() {
+        let (mut abr, t) = running(&ABR_TABLE_48K);
+        let (t, sw) = feed(&mut abr, t, 80, 1);
+        assert_eq!(sw, vec![(80, 0)], "4 packets with a queue: down to 160 kbps");
+        let (_, sw) = feed(&mut abr, t, 60_000, 0);
+        let stages: Vec<usize> = sw.iter().map(|s| s.1).collect();
+        assert_eq!(stages, vec![1, 2, 3, 4]);
+        // 5 s per stage, 10 s back to the stage the queue backed up at
+        let at: Vec<u64> = sw.iter().map(|s| s.0).collect();
+        for (got, want) in at.iter().zip([5000, 10_000, 15_000, 25_000]) {
+            assert!(got.abs_diff(want) <= 200, "{at:?}");
+        }
+    }
+
+    #[test]
+    fn a_stall_at_the_same_stage_doubles_the_last_wait() {
+        let (mut abr, t) = running(&ABR_TABLE_96K);
+        let (t, _) = feed(&mut abr, t, 80, 2);
+        let (t, sw) = feed(&mut abr, t, 30_000, 0);
+        assert_eq!(sw.last().map(|s| s.1), Some(2));
+        let (t, sw) = feed(&mut abr, t, 80, 2);
+        assert_eq!(sw, vec![(80, 0)]);
+        let (_, sw) = feed(&mut abr, t, 60_000, 0);
+        let at: Vec<u64> = sw.iter().map(|s| s.0).collect();
+        assert_eq!(sw.iter().map(|s| s.1).collect::<Vec<_>>(), vec![1, 2]);
+        assert!(at[1].abs_diff(25_000) <= 200, "5 s, then 20 s: {at:?}");
+    }
+
+    #[test]
+    fn one_queued_packet_starts_the_wait_again() {
+        let (mut abr, t) = running(&ABR_TABLE_48K);
+        let (t, _) = feed(&mut abr, t, 80, 3);
+        assert_eq!(abr.index, 0);
+        let (t, sw) = feed(&mut abr, t, 4000, 0);
+        assert!(sw.is_empty());
+        // Too few to step down, enough to break the calm
+        assert_eq!(abr.step(t + Duration::from_millis(20), 1), None);
+        let (_, sw) = feed(&mut abr, t + Duration::from_millis(20), 4500, 0);
+        assert!(sw.is_empty(), "{sw:?}");
+    }
+
+    #[test]
+    fn the_queue_of_a_starting_stream_is_not_a_stall() {
+        let mut abr = Abr::new(&ABR_TABLE_48K);
+        let t = Instant::now();
+        let (t, sw) = feed(&mut abr, t, 2900, 3);
+        assert!(sw.is_empty(), "{sw:?}");
+        let (_, sw) = feed(&mut abr, t, 200, 1);
+        assert_eq!(sw.first().map(|s| s.1), Some(0), "after 3 s a queue counts again");
+
+        // A real backlog counts at once
+        let mut abr = Abr::new(&ABR_TABLE_48K);
+        let (_, sw) = feed(&mut abr, Instant::now(), 80, 4);
+        assert_eq!(sw, vec![(80, 0)]);
+    }
+
+    #[test]
+    fn the_encoder_follows_the_climb() {
+        let cfg = EncoderConfig {
+            sample_rate: 48000,
+            channels: 2,
+            quality: Quality::High,
+            mtu: 1011,
+            bits_per_sample: 24,
+            abr: true,
+            peer: Default::default(),
+        };
+        let mut enc = LhdcV5Encoder::new(&cfg).unwrap();
+        let t = Instant::now();
+        let at = |i: u64| t + Duration::from_millis(i * 20);
+        for i in 1..=4 {
+            enc.abr_adjust_at(at(i), 6);
+        }
+        let mut seen = vec![enc.bitrate_kbps()];
+        for i in 5..=2000 {
+            enc.abr_adjust_at(at(i), 0);
+            if seen.last() != Some(&enc.bitrate_kbps()) {
+                seen.push(enc.bitrate_kbps());
+            }
+        }
+        assert_eq!(seen, vec![160, 192, 256, 320, 400]);
     }
 }
 
