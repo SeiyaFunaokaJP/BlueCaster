@@ -415,6 +415,7 @@ mod tests {
             address: None,
             hci_version: None,
             lmp_version: None,
+            manufacturer: None,
         }
     }
 

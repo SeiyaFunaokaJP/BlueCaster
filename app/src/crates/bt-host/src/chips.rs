@@ -798,6 +798,22 @@ pub fn vendor_for_usb(vid: u16, pid: u16, realtek_pid: Option<u16>) -> ChipVendo
     }
 }
 
+/// Barrot's Bluetooth SIG company ID
+const COMPANY_ID_BARROT: u16 = 0x08E7;
+
+/// The vendor of an adapter whose USB ID told none, from the company ID its
+/// controller reports (Read Local Version, also what Windows' Bluetooth
+/// stored): Barrot only, whose chips run from ROM and need nothing before
+/// HCI init (#616). A loader's vendor must be known from the USB ID before
+/// init; CSR's ID 0x000A is also on Qualcomm chips, and Actions' broken
+/// commands are hidden by its USB ID.
+pub fn vendor_with_company(vendor: ChipVendor, company: Option<u16>) -> ChipVendor {
+    match (vendor, company) {
+        (ChipVendor::Unknown, Some(COMPANY_ID_BARROT)) => ChipVendor::Barrot,
+        _ => vendor,
+    }
+}
+
 /// A VID only Bluetooth controllers use (not Realtek's: it is also on card
 /// readers and Wi-Fi). With it, a device with no driver and no Bluetooth
 /// compatible ID (a vendor-class adapter such as the BT400) is still

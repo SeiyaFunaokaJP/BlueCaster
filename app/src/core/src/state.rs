@@ -811,6 +811,7 @@ fn adapter_infos(config_dir: &Path, settings: &CoreSettings) -> (Vec<AdapterInfo
                         r.address = p.address;
                         r.hci_version = r.hci_version.or(p.hci_version);
                         r.lmp_version = r.lmp_version.or(p.lmp_version);
+                        r.manufacturer = r.manufacturer.or(p.manufacturer);
                     }
                     r
                 })
@@ -824,14 +825,29 @@ fn adapter_infos(config_dir: &Path, settings: &CoreSettings) -> (Vec<AdapterInfo
                     r.address.as_deref(),
                     r.hci_version,
                 );
+                if let Some(c) = r.manufacturer {
+                    bluecaster_core::adapter::save_company(config_dir, a.device.vid, a.device.pid, c);
+                }
             }
+            // A chip its USB ID does not tell, by the company ID its
+            // controller reported (#616: Barrot dongles of other IDs)
+            let company = radio
+                .as_ref()
+                .and_then(|r| r.manufacturer)
+                .or_else(|| bluecaster_core::adapter::company(config_dir, a.device.vid, a.device.pid));
+            let vendor = chips::vendor_with_company(a.vendor, company);
+            let display_name = if vendor == a.vendor {
+                a.display_name.clone()
+            } else {
+                chips::display_name(a.device.vid, a.device.pid, a.realtek_pid, vendor)
+            };
             let driver = match a.device.driver_kind {
                 win_sys::driver::DriverKind::WinUsb => DriverKind::Winusb,
                 win_sys::driver::DriverKind::Bluetooth => DriverKind::Bluetooth,
                 win_sys::driver::DriverKind::Other => DriverKind::Other,
                 win_sys::driver::DriverKind::None => DriverKind::None,
             };
-            let (chip_pid, fw_stem) = adapter_chip(a.vendor, a.realtek_pid, settings);
+            let (chip_pid, fw_stem) = adapter_chip(vendor, a.realtek_pid, settings);
             let files = chips::firmware_files(chip_pid, fw_stem);
             let mut check = chips::firmware_check(&paths::firmware_dir(config_dir), chip_pid, fw_stem);
             let mut file_names = files.clone().map(|(f, c)| vec![f, c]).unwrap_or_default();
@@ -851,9 +867,9 @@ fn adapter_infos(config_dir: &Path, settings: &CoreSettings) -> (Vec<AdapterInfo
                 instance_id: a.device.instance_id.clone(),
                 vid: a.device.vid,
                 pid: a.device.pid,
-                display_name: a.display_name.clone(),
+                display_name,
                 device_name: a.device.display_name().to_owned(),
-                vendor: a.vendor.name().to_string(),
+                vendor: vendor.name().to_string(),
                 driver,
                 driver_service: a.device.driver.service.clone(),
                 realtek_chip: a.realtek_pid.and_then(chips::realtek_chip_name).map(str::to_owned),
@@ -863,7 +879,7 @@ fn adapter_infos(config_dir: &Path, settings: &CoreSettings) -> (Vec<AdapterInfo
                 firmware_from_driver: from_driver,
                 firmware_driver: driver_fw.is_some(),
                 firmware_invalid: check.and_then(|c| c.invalid_file),
-                vendor_note: vendor_note(a.vendor, a.device.vid, a.device.pid),
+                vendor_note: vendor_note(vendor, a.device.vid, a.device.pid),
                 restart_needed: a.device.problem_code == Some(CM_PROB_NEED_RESTART),
                 le_audio: bluecaster_core::adapter::le_audio(config_dir, a.device.vid, a.device.pid),
                 // What Windows' radio of this very device reads now, else

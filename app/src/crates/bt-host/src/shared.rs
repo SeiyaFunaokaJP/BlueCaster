@@ -43,6 +43,9 @@ pub struct State {
     /// a Realtek download, if any, was read back (the first read of an init
     /// comes before the download, from the ROM code)
     pub hci_version_settled: bool,
+    /// The controller's Bluetooth SIG company ID, once it has answered Read
+    /// Local Version
+    pub controller_company: Option<u16>,
     /// The headphones' battery level in percent (HFP), once they said
     pub battery: Option<u8>,
 

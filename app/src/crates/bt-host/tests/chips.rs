@@ -312,6 +312,13 @@ fn rom_dongles_and_wifi_loaded_combos() {
     assert_eq!(vendor_for_usb(0x33FA, 0x0002, None), ChipVendor::Unknown);
     assert!(!is_bluetooth_vendor_vid(0x33FA, 0x0002));
     assert_eq!(display_name(0x33FA, 0x0010, None, ChipVendor::Barrot), "Barrot (0x33FA:0x0010)");
+    // Any other Barrot chip by the company ID its controller reports; a
+    // known vendor keeps the one of its USB ID
+    assert_eq!(vendor_with_company(ChipVendor::Unknown, Some(0x08E7)), ChipVendor::Barrot);
+    assert!(chip_supported(ChipVendor::Barrot, 0x33FA, 0x0002));
+    assert_eq!(vendor_with_company(ChipVendor::Unknown, Some(0x000A)), ChipVendor::Unknown);
+    assert_eq!(vendor_with_company(ChipVendor::Unknown, None), ChipVendor::Unknown);
+    assert_eq!(vendor_with_company(ChipVendor::Realtek, Some(0x08E7)), ChipVendor::Realtek);
     // Marvell AVASTAR Bluetooth: the Wi-Fi driver loads the firmware
     for pid in [0x2044, 0x2046, 0x204B, 0x204C, 0x204E] {
         assert_eq!(vendor_for_usb(0x1286, pid, None), ChipVendor::Marvell);

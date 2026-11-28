@@ -20,7 +20,7 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Locate_DevNodeW, CR_SUCCESS, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT, SP_DEVICE_INTERFACE_DATA, SPDRP_DEVICEDESC,
     SPDRP_FRIENDLYNAME, SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW,
 };
-use windows::Win32::Devices::Properties::{DEVPROP_TYPE_BYTE, DEVPROP_TYPE_UINT64, DEVPROPTYPE};
+use windows::Win32::Devices::Properties::{DEVPROP_TYPE_BYTE, DEVPROP_TYPE_UINT16, DEVPROP_TYPE_UINT64, DEVPROPTYPE};
 use windows::Win32::Foundation::{DEVPROPKEY, ERROR_NO_MORE_ITEMS};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -44,6 +44,8 @@ pub struct WindowsRadio {
     pub hci_version: Option<u8>,
     /// LMP version (the same numbering)
     pub lmp_version: Option<u8>,
+    /// The chip maker's Bluetooth SIG company ID (0x08E7 = Barrot)
+    pub manufacturer: Option<u16>,
 }
 
 impl WindowsRadio {
@@ -60,11 +62,15 @@ pub struct RadioProperties {
     pub address: Option<u64>,
     pub hci_version: Option<u8>,
     pub lmp_version: Option<u8>,
+    pub manufacturer: Option<u16>,
 }
 
 impl RadioProperties {
     fn is_empty(&self) -> bool {
-        self.address.is_none() && self.hci_version.is_none() && self.lmp_version.is_none()
+        self.address.is_none()
+            && self.hci_version.is_none()
+            && self.lmp_version.is_none()
+            && self.manufacturer.is_none()
     }
 }
 
@@ -76,6 +82,7 @@ impl WindowsRadio {
         }
         self.hci_version = self.hci_version.or(p.hci_version);
         self.lmp_version = self.lmp_version.or(p.lmp_version);
+        self.manufacturer = self.manufacturer.or(p.manufacturer);
     }
 }
 
@@ -96,6 +103,7 @@ pub fn device_radio(instance_id: &str) -> Option<WindowsRadio> {
         address: None,
         hci_version: None,
         lmp_version: None,
+        manufacturer: None,
     };
     radio.fill_from(&props);
     tracing::debug!("bt_radios: from the device node of {instance_id}: {radio:?}");
@@ -133,9 +141,11 @@ fn subtree_properties(devinst: u32, depth: u32) -> Option<RadioProperties> {
 }
 
 /// DEVPKEY_BluetoothRadio_* (not in the SDK's headers; Device Manager's
-/// Details tab lists them): 1 address, 4 LMP version, 6 HCI version
+/// Details tab lists them): 1 address, 2 manufacturer, 4 LMP version, 6 HCI
+/// version
 const RADIO_PROPERTIES: GUID = GUID::from_u128(0xA92F26CA_EDA7_4B1D_9DB2_27B68AA5A2EB);
 const RADIO_ADDRESS: u32 = 1;
+const RADIO_MANUFACTURER: u32 = 2;
 const RADIO_LMP_VERSION: u32 = 4;
 const RADIO_HCI_VERSION: u32 = 6;
 
@@ -146,6 +156,7 @@ fn node_properties(devinst: u32) -> RadioProperties {
             .filter(|&a| a != 0),
         lmp_version: node_property::<1>(devinst, RADIO_LMP_VERSION, DEVPROP_TYPE_BYTE).map(|b| b[0]),
         hci_version: node_property::<1>(devinst, RADIO_HCI_VERSION, DEVPROP_TYPE_BYTE).map(|b| b[0]),
+        manufacturer: node_property::<2>(devinst, RADIO_MANUFACTURER, DEVPROP_TYPE_UINT16).map(u16::from_le_bytes),
     }
 }
 
@@ -332,6 +343,7 @@ pub fn radios() -> Vec<WindowsRadio> {
             address: info.as_ref().map(|i| format_address(i.local_info.address)),
             hci_version: info.as_ref().map(|i| i.hci_version),
             lmp_version: info.as_ref().map(|i| i.radio_info.lmp_version),
+            manufacturer: info.as_ref().map(|i| i.radio_info.mfg),
         };
         if radio.address.is_none() {
             radio.fill_from(&node_properties(data.DevInst));
@@ -536,10 +548,17 @@ mod tests {
             address: None,
             hci_version: None,
             lmp_version: Some(12),
+            manufacturer: None,
         };
-        r.fill_from(&RadioProperties { address: Some(0xC0E3_502E_0009), hci_version: Some(13), lmp_version: Some(13) });
+        r.fill_from(&RadioProperties {
+            address: Some(0xC0E3_502E_0009),
+            hci_version: Some(13),
+            lmp_version: Some(13),
+            manufacturer: Some(0x0046),
+        });
         assert_eq!(r.address.as_deref(), Some("C0:E3:50:2E:00:09"));
         assert_eq!(r.hci_version, Some(13));
+        assert_eq!(r.manufacturer, Some(0x0046));
         // What the IOCTL read stays
         assert_eq!(r.lmp_version, Some(12));
         assert!(RadioProperties::default().is_empty());
@@ -553,6 +572,7 @@ mod tests {
             address: None,
             hci_version: None,
             lmp_version: None,
+            manufacturer: None,
         };
         assert!(r.on_device(r"usb\vid_0e8d&pid_7925\000000000"));
         assert!(!r.on_device(r"USB\VID_0BDA&PID_A729\00E04C000001"));
