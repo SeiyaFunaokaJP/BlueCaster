@@ -213,19 +213,44 @@ fn told(result: Result<(), String>, cx: &mut App) {
     }
 }
 
+/// Runs a shell call on a thread of its own and shows its error as a
+/// notice. The shell can run a message loop inside the call
+/// (SHOpenFolderAndSelectItems does), which on the window's thread hands
+/// the window a message while a click handler still holds the app: a panic
+/// that aborts the process (discussion #584).
+fn on_shell_thread(call: impl FnOnce() -> Result<(), String> + Send + 'static, cx: &mut App) {
+    let (tx, rx) = oneshot::channel();
+    let spawned = std::thread::Builder::new().name("shell-open".into()).spawn(move || {
+        let _ = tx.send(call());
+    });
+    if let Err(e) = spawned {
+        app::notify(e.to_string(), NoticeKind::Error, cx);
+        return;
+    }
+    cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
+        if let Ok(Err(e)) = rx.await {
+            cx.update(|cx| app::notify(e, NoticeKind::Error, cx));
+        }
+    })
+    .detach();
+}
+
 /// Opens a web page in the user's browser (https only)
 pub fn open_url(url: &str, cx: &mut App) {
-    told(ui_host::shell::open_url(url), cx);
+    let url = url.to_owned();
+    on_shell_thread(move || ui_host::shell::open_url(&url), cx);
 }
 
 /// Opens a folder in Explorer, creating it first if it is not there yet
 pub fn open_folder(path: &str, cx: &mut App) {
-    told(ui_host::shell::open_folder(Path::new(path)), cx);
+    let path = path.to_owned();
+    on_shell_thread(move || ui_host::shell::open_folder(Path::new(&path)), cx);
 }
 
 /// Shows a file in Explorer, selected
 pub fn reveal_path(path: &str, cx: &mut App) {
-    told(ui_host::shell::reveal_path(Path::new(path)), cx);
+    let path = path.to_owned();
+    on_shell_thread(move || ui_host::shell::reveal_path(Path::new(&path)), cx);
 }
 
 /// Saves `text` to a .txt file picked in the Save As dialog, `name`
