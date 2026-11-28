@@ -482,6 +482,8 @@
   "ui.dev.match_source": "Igualar la frecuencia y la profundidad de bits a la salida del PC",
   "ui.dev.match_source_hint": "Si la frecuencia de muestreo o la profundidad de bits de un códec está en Automático, sigue el formato de salida del PC en la medida en que lo permitan los auriculares.",
   "ui.dev.ignore_sink_max": "Ignorar la tasa de bits máxima del dispositivo",
+  "ui.dev.abr_extended": "ABR más rápido y con tasas de bits más altas",
+  "ui.dev.abr_extended_hint": "LHDC V5 sube por encima de 400 kbps y LDAC aumenta la calidad cada segundo.\nCon una conexión débil, habrá más cortes.",
   "ui.dev.volume_mixer": "Usar el mezclador de volumen",
   "ui.dev.volume_mixer_hint": "No recomendado: puede entrar en conflicto con los controles de volumen de Windows. Use VB-CABLE en su lugar.",
   "ui.dev.all_audio_devices": "Mostrar todos los dispositivos de audio en las listas de fuentes",

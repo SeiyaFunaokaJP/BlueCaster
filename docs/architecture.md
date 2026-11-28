@@ -454,6 +454,15 @@ BlueCaster climbs one stage per 5 s of an empty queue. A stage where the
 queue backed up is retried after the same wait as SBC's (10 s, doubled for
 each new stall there, up to 2 minutes).
 
+**Extended ABR** (developer mode, `abr_extended`): LHDC V5 gets more stages
+above 400 kbps at the encoder's rates (480 / 500, 900, 1000 kbps), capped by
+the sink's maximum and the MTU. ABR still starts at 400 kbps. Above 400 kbps,
+a backed-up queue drops one stage, and the next drop waits 1 s; at 400 kbps
+and below, Android's drop to the lowest stage still applies. LDAC keeps
+libldac's ABR and adds its own climb: one step up the ladder (MQ, 396,
+492 kbps, SQ, HQ) for each second the queue stays drained, with the same
+stall memory as SBC.
+
 All encoders implement the `codec::Encoder` trait: they state the PCM
 format and the number of frames one call consumes, and return codec frames.
 

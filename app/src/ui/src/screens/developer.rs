@@ -407,6 +407,14 @@ impl Developer {
                         o.ignore_sink_max,
                         |s, v| s.dev_overrides.ignore_sink_max = v,
                         cx,
+                    ))
+                    .child(toggle(
+                        "dev-abr-extended",
+                        "ui.dev.abr_extended",
+                        Some("ui.dev.abr_extended_hint"),
+                        o.abr_extended,
+                        |s, v| s.dev_overrides.abr_extended = v,
+                        cx,
                     )),
             )
             .child(

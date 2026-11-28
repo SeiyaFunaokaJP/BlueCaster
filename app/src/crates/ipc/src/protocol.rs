@@ -1209,6 +1209,8 @@ pub struct DevOverrides {
     /// The microphone's Auto looks for recording apps on the session's
     /// tick, not with its own watcher
     pub auto_mic_tick_poll: bool,
+    /// ABR climbs faster and higher than Android's (LHDC V5, LDAC)
+    pub abr_extended: bool,
 }
 
 /// Developer mode's override of one vendor's protocol
