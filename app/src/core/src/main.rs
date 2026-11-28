@@ -170,12 +170,30 @@ fn firmware_text(adapters: &[ipc::AdapterInfo]) -> Option<String> {
                 (Some(true), _) => format!("present ({files})"),
                 (Some(false), Some(bad)) => format!("INVALID: {bad} is not a valid file ({files})"),
                 (Some(false), None) => format!("MISSING ({files})"),
-                (None, _) => "none needed".to_string(),
+                (None, _) => vendor_firmware_text(a.vendor_note.as_ref().map(|m| m.key.as_str())).to_string(),
             };
             format!("{}: {status}", a.display_name)
         })
         .collect();
     (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+/// Where an adapter without Realtek firmware files gets its firmware, by its
+/// vendor note (state::vendor_note)
+fn vendor_firmware_text(note: Option<&str>) -> &'static str {
+    match note {
+        Some("firmware.vendor_intel") => "loaded at start when needed (firmware folder or Intel's driver)",
+        Some(
+            "firmware.vendor_mediatek"
+            | "firmware.vendor_qualcomm"
+            | "firmware.vendor_realtek_driver"
+            | "firmware.vendor_realtek_driver_other",
+        ) => "loaded at start (vendor's driver or firmware folder)",
+        Some("firmware.vendor_broadcom") => "optional patch (firmware folder or Broadcom's driver)",
+        Some("firmware.vendor_marvell") => "loaded by the Wi-Fi driver",
+        Some("firmware.vendor_unsupported") => "not supported",
+        _ => "none needed",
+    }
 }
 
 /// The codec details back in the core's types (the same fields)
@@ -417,6 +435,12 @@ mod tests {
             windows_name: None,
         };
         let csr = ipc::AdapterInfo { display_name: "CSR8510".into(), firmware_present: None, ..a.clone() };
+        let intel = ipc::AdapterInfo {
+            display_name: "Intel".into(),
+            firmware_present: None,
+            vendor_note: Some(ipc::Msg::new("firmware.vendor_intel")),
+            ..a.clone()
+        };
         let page = ipc::AdapterInfo { firmware_invalid: Some("rtl8761bu_fw.bin".into()), ..a.clone() };
         assert_eq!(
             firmware_text(&[a, csr]).unwrap(),
@@ -425,6 +449,10 @@ mod tests {
         assert_eq!(
             firmware_text(&[page]).unwrap(),
             "RTL8761BU: INVALID: rtl8761bu_fw.bin is not a valid file (rtl8761bu_fw.bin, rtl8761bu_config.bin)"
+        );
+        assert_eq!(
+            firmware_text(&[intel]).unwrap(),
+            "Intel: loaded at start when needed (firmware folder or Intel's driver)"
         );
         assert_eq!(firmware_text(&[]), None);
     }

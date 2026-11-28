@@ -50,12 +50,22 @@
 //! offload use cases, and a reset to the bootloader to replace a running
 //! firmware of another version.
 //!
+//! Firmware the folder lacks may come from Intel's Windows driver, which
+//! carries the images and DDCs of the controllers it serves ([`driver`],
+//! [`Loader::with_driver`]).
+//!
 //! Plain data and std only: [`Loader`] is a [`ChipLoader`] (crate::bringup)
 //! fed with HCI events; the caller carries out its [`Action`]s.
 
 use std::time::Instant;
 
 pub use crate::bringup::{Action, ChipLoader, FileReader, LoadError, Outcome};
+
+pub mod driver;
+
+/// Reads firmware from Intel's Windows driver when the firmware folder
+/// lacks a file ([`driver::from_windows_driver`])
+pub type DriverReader = Box<dyn FnMut(&driver::Request) -> Option<Vec<u8>>>;
 
 const OP_RESET: u16 = 0xFC01;
 const OP_READ_VERSION: u16 = 0xFC05;
@@ -645,7 +655,7 @@ fn patch_event_matches(expected: &[u8], got: &[u8]) -> Option<bool> {
 /// (TLV: an intermediate loader or the operational firmware)
 #[derive(Debug, Clone)]
 enum AfterBoot {
-    Ddc(String),
+    Ddc(String, LegacyVersion),
     ReadVersion(TlvVersion),
 }
 
@@ -782,6 +792,7 @@ fn classify(event: &[u8]) -> Event<'_> {
 /// [`on_timeout`](Self::on_timeout), until [`Action::Done`]
 pub struct Loader {
     read_file: FileReader,
+    driver: Option<DriverReader>,
     state: State,
     /// Images booted this start
     downloads: u8,
@@ -796,12 +807,29 @@ impl Loader {
     pub fn new(read_file: FileReader) -> Loader {
         Loader {
             read_file,
+            driver: None,
             state: State::Idle,
             downloads: 0,
             last_firmware: None,
             bootloader: false,
             started: Instant::now(),
         }
+    }
+
+    /// Also look in Intel's Windows driver for files the folder lacks
+    pub fn with_driver(mut self, driver: DriverReader) -> Loader {
+        self.driver = Some(driver);
+        self
+    }
+
+    /// A file of the firmware folder, else the driver's data for `req`
+    fn read(&mut self, file: &str, req: driver::Request) -> Option<Vec<u8>> {
+        if let Some(data) = (self.read_file)(file) {
+            return Some(data);
+        }
+        let data = self.driver.as_mut().and_then(|d| d(&req))?;
+        tracing::info!("Intel {file} is not in the firmware folder: read from Intel's Windows driver");
+        Some(data)
     }
 
     pub fn done(&self) -> bool {
@@ -1076,7 +1104,8 @@ impl Loader {
         let Some(stem) = legacy_firmware_stem(&v, params.dev_revid) else {
             return self.finish(Err(LoadError::UnsupportedVariant(v.hw_variant)));
         };
-        self.download(&stem, v.hw_variant, 0, AfterBoot::Ddc(stem.clone()))
+        let req = driver::Request::legacy(driver::Kind::Firmware, &v);
+        self.download(&stem, v.hw_variant, 0, req, AfterBoot::Ddc(stem.clone(), v))
     }
 
     // ---- ROM ----
@@ -1188,7 +1217,8 @@ impl Loader {
             IMG_OPERATIONAL if self.downloads == 0 => self.finish(Ok(Outcome::AlreadyRunning)),
             IMG_OPERATIONAL => {
                 let mut actions = vec![self.bootloader(false)];
-                actions.extend(self.ddc(&v.firmware_stem()));
+                let req = driver::Request::tlv(driver::Kind::Ddc, &v);
+                actions.extend(self.ddc(&v.firmware_stem(), req));
                 actions
             }
             IMG_BOOTLOADER if v.limited_cce != 0 => {
@@ -1203,7 +1233,8 @@ impl Loader {
                 }
                 let stem = v.firmware_stem();
                 let (variant, sbe_type) = (v.hw_variant(), v.sbe_type);
-                self.download(&stem, variant, sbe_type, AfterBoot::ReadVersion(v))
+                let req = driver::Request::tlv(driver::Kind::Firmware, &v);
+                self.download(&stem, variant, sbe_type, req, AfterBoot::ReadVersion(v))
             }
             IMG_BOOTLOADER | IMG_IML => self.finish(Err(LoadError::Unsupported("the controller stays in its loader"))),
             _ => self.finish(Err(LoadError::Unsupported("unknown image type"))),
@@ -1212,9 +1243,16 @@ impl Loader {
 
     // ---- download and boot ----
 
-    fn download(&mut self, stem: &str, hw_variant: u8, sbe_type: u8, then: AfterBoot) -> Vec<Action> {
+    fn download(
+        &mut self,
+        stem: &str,
+        hw_variant: u8,
+        sbe_type: u8,
+        req: driver::Request,
+        then: AfterBoot,
+    ) -> Vec<Action> {
         let file = format!("{stem}.sfi");
-        let Some(data) = (self.read_file)(&file) else { return self.finish(Err(LoadError::MissingFile(file))) };
+        let Some(data) = self.read(&file, req) else { return self.finish(Err(LoadError::MissingFile(file))) };
         let image = match parse_sfi(&data, hw_variant, sbe_type) {
             Ok(image) => image,
             Err(why) => return self.finish(Err(LoadError::BadFile { file, why })),
@@ -1289,9 +1327,9 @@ impl Loader {
         tracing::info!("Intel firmware {} booted in {} ms", d.file, d.started.elapsed().as_millis());
         match d.then {
             // Legacy: the operational firmware runs
-            AfterBoot::Ddc(stem) => {
+            AfterBoot::Ddc(stem, v) => {
                 let mut actions = vec![self.bootloader(false)];
-                actions.extend(self.ddc(&stem));
+                actions.extend(self.ddc(&stem, driver::Request::legacy(driver::Kind::Ddc, &v)));
                 actions
             }
             // TLV: the intermediate loader or the operational firmware, as
@@ -1305,9 +1343,9 @@ impl Loader {
 
     // ---- configuration ----
 
-    fn ddc(&mut self, stem: &str) -> Vec<Action> {
+    fn ddc(&mut self, stem: &str, req: driver::Request) -> Vec<Action> {
         let file = format!("{stem}.ddc");
-        let commands = match (self.read_file)(&file).map(|d| parse_ddc(&d)) {
+        let commands = match self.read(&file, req).map(|d| parse_ddc(&d)) {
             Some(Ok(c)) if !c.is_empty() => c,
             Some(Ok(_)) => {
                 tracing::warn!("Intel DDC {file} is empty");
@@ -1370,7 +1408,9 @@ impl ChipLoader for Loader {
     fn missing_file_hint(&self, file: &str) -> String {
         let stem = file.strip_suffix(".sfi").unwrap_or(file);
         let files = if stem.ends_with("-iml") { format!("{stem}.sfi") } else { format!("{stem}.sfi and {stem}.ddc") };
-        format!("{files} from linux-firmware (intel/)")
+        format!(
+            "{files}, from Intel's Windows Bluetooth driver (read from it when installed) or linux-firmware (intel/)"
+        )
     }
 
     fn missing_files(&self, file: &str) -> Vec<String> {
