@@ -87,6 +87,7 @@
   "error.audio_capture_start": "オーディオキャプチャの開始に失敗しました",
   "error.reconnect_failed": "再接続に失敗しました",
   "error.btstack_init": "Bluetooth アダプターを起動できませんでした。WinUSB ドライバーを使っているか確認してください。",
+  "error.firmware_missing": "Bluetooth アダプターのファームウェアがありません。[アダプター] 画面で [ダウンロードページを開く] をクリックし、%s をダウンロードしてください。次に [ファームウェアフォルダーを開く] をクリックし、開いたフォルダーにファイルを移動して、もう一度接続してください。",
   "error.btstack_no_answer": "Bluetooth アダプターが応答しません。抜いて挿し直してから（内蔵アダプターの場合は Shift キーを押しながら「シャットダウン」を選択）、もう一度お試しください。",
   "error.btstack_crash_stream": "Bluetooth が突然停止しました。BlueCaster を再起動してください。",
   "status.connecting_retry": "接続に失敗したため再試行しています（%d/%d）...",

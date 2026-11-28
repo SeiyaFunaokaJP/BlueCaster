@@ -87,6 +87,7 @@
   "error.audio_capture_start": "无法启动音频捕获",
   "error.reconnect_failed": "重新连接失败",
   "error.btstack_init": "蓝牙适配器无法启动。请检查适配器是否使用 WinUSB 驱动程序。",
+  "error.firmware_missing": "找不到蓝牙适配器的固件。请在“适配器”页面点击“打开下载页面”，下载 %s。然后点击“打开固件文件夹”，将文件移到打开的文件夹中，再重新连接。",
   "error.btstack_no_answer": "蓝牙适配器无响应。请拔下后重新插入（内置适配器：按住 Shift 键并选择“关机”），然后重试。",
   "error.btstack_crash_stream": "蓝牙意外停止。请重启 BlueCaster。",
   "status.connecting_retry": "连接失败，正在重试（%d/%d）...",

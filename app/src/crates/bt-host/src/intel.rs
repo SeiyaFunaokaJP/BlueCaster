@@ -1372,6 +1372,15 @@ impl ChipLoader for Loader {
         let files = if stem.ends_with("-iml") { format!("{stem}.sfi") } else { format!("{stem}.sfi and {stem}.ddc") };
         format!("{files} from linux-firmware (intel/)")
     }
+
+    fn missing_files(&self, file: &str) -> Vec<String> {
+        let stem = file.strip_suffix(".sfi").unwrap_or(file);
+        if stem.ends_with("-iml") {
+            vec![format!("{stem}.sfi")]
+        } else {
+            vec![format!("{stem}.sfi"), format!("{stem}.ddc")]
+        }
+    }
 }
 
 fn log_tlv(v: &TlvVersion) {
