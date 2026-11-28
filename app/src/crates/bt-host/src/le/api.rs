@@ -77,6 +77,18 @@ impl BtHost {
         self.le_on && self.le_core_ready()
     }
 
+    /// Hearing aids usable: configured (HostConfig::asha), the LE core
+    /// initialized and HCI working; with or without LE Audio
+    pub fn asha_ready(&self) -> bool {
+        self.asha_on && self.le_core_ready()
+    }
+
+    /// LE devices may be scanned for, connected and disconnected with LE
+    /// Audio's connection code: LE Audio or hearing aids
+    fn le_links_ready(&self) -> bool {
+        (self.le_on || self.asha_on) && self.le_core_ready()
+    }
+
     /// The LE core runs and HCI works: LE Audio, or keyboards and mice
     /// without it (an LE scan for them works then)
     pub fn le_core_ready(&self) -> bool {
@@ -94,7 +106,7 @@ impl BtHost {
     /// LE scan (extended scanning when the controller has it, else legacy)
     /// for `duration`: all advertisers, `le_audio` marks LE Audio devices
     pub fn le_scan(&self, duration: Duration) -> Vec<LeScanResult> {
-        if !self.le_ready() {
+        if !self.le_links_ready() {
             return Vec::new();
         }
         self.le_fresh_operation();
@@ -155,7 +167,7 @@ impl BtHost {
     }
 
     fn find_any(&self, addrs: &[[u8; 6]], timeout: Duration, quiet: bool) -> Option<(usize, LeScanResult)> {
-        if !self.le_ready() || addrs.is_empty() {
+        if !self.le_links_ready() || addrs.is_empty() {
             return None;
         }
         self.le_fresh_operation();
@@ -233,8 +245,8 @@ impl BtHost {
         open: bool,
         bare: bool,
     ) -> Result<LeDeviceId, String> {
-        if !self.le_ready() {
-            return Err("LE Audio is not running".into());
+        if !self.le_links_ready() {
+            return Err("Bluetooth LE is not running".into());
         }
         tracing::info!("LE Audio: connecting to {addr} (address type {})", addr.addr_type);
         let result = Arc::new(Mutex::new(ConnectResult::default()));
@@ -288,7 +300,7 @@ impl BtHost {
 
     /// Disconnects one device (waits up to 3 s)
     pub fn le_disconnect(&self, device: LeDeviceId) {
-        if !self.le_on {
+        if !self.le_on && !self.asha_on {
             return;
         }
         let ok = self.le_wait(DISCONNECT_TIMEOUT, false, move |ctx, done| ctx.disconnect_device(device, done));

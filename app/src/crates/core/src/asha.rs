@@ -449,7 +449,7 @@ pub enum BesideState {
     Playing,
     /// Not found or gone; looked for again every few seconds
     Missing,
-    /// Bluetooth LE is not running (LE Audio is off)
+    /// Bluetooth LE is not running (hearing aids are off)
     LeOff,
 }
 
@@ -501,7 +501,7 @@ impl Beside {
     /// The pause before the hearing aid is looked for again
     const RETRY: Duration = Duration::from_secs(5);
 
-    /// `le_on`: the stack was started with Bluetooth LE; without it there
+    /// `le_on`: the stack was started with hearing aids on; without it there
     /// is nothing to do but say so
     pub fn start(host: Arc<BtHost>, aid: [u8; 6], delay_ms: u32, volume: i8, le_on: bool) -> Beside {
         set_beside_settings(volume, delay_ms);
@@ -540,10 +540,10 @@ impl Beside {
             }
         };
         let until = Instant::now() + Beside::READY_WAIT;
-        while !host.le_ready() && Instant::now() < until && !stopped() {
+        while !host.asha_ready() && Instant::now() < until && !stopped() {
             std::thread::sleep(Duration::from_millis(100));
         }
-        if !host.le_ready() {
+        if !host.asha_ready() {
             if !stopped() {
                 tracing::warn!("ASHA: Bluetooth LE is not running, the hearing aid beside this stream is not used");
             }

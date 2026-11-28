@@ -28,12 +28,12 @@ up to 7 kHz: good for speech, limited for music. ASHA has no microphone path.
 
 ## In the window
 
-Hearing aids need Bluetooth LE, and BlueCaster starts Bluetooth LE only when
-LE Audio is turned on:
+Hearing aids have a switch of their own. They need Bluetooth LE, but not LE
+Audio:
 
-1. Turn on **Developer mode** in Settings, then **Use LE Audio when
-   available (experimental)** on Adapters. The adapter does not need to
-   support LE Audio itself.
+1. Turn on **Developer mode** in Settings, then **Use hearing aids
+   (experimental)** on Adapters. LE Audio can stay off, and the adapter
+   does not need to support LE Audio.
 2. Turn off Bluetooth on the phone. A hearing aid advertises only while it
    is not connected to a phone.
 3. Scan on Audio Devices. A hearing aid is listed with the tag **Hearing
@@ -59,7 +59,8 @@ The status line shows what the hearing aid is doing:
 - **Connected. The hearing aid is playing too.**
 - **Connected. The hearing aid was not found.** BlueCaster keeps searching
   every 5 seconds.
-- **Connected. Turn on LE Audio to use the hearing aid.**
+- **Connected. To use the hearing aid, turn on "Use hearing aids
+  (experimental)" on Adapters.**
 
 ## From the command line
 
@@ -109,6 +110,7 @@ that is paired with a phone may need to be put in pairing mode.
 | Hearing aids in a scan (`hearing_aid_entries`) | `app/src/crates/core/src/service.rs` |
 | The hearing aid for the other ear on a device's card | `app/src/ui/src/ui/hearing_aid.rs` |
 | `--asha` options | `app/src/core/src/cli.rs` |
+| The hearing aid switch (`Settings::hearing_aids`, `HostConfig::asha`) | `app/src/crates/core/src/settings.rs`, `app/src/crates/bt-host/src/lib.rs` |
 
 The window and the command line start the same sessions. A saved hearing aid
 is an LE entry whose profile has `hearing_aid` set. A classic device's
@@ -167,8 +169,6 @@ each hearing aid received.
 - Telling one side when the other side disconnects (status 0). When a
   hearing aid disconnects, BlueCaster sets up the whole stream again instead
   (up to 3 times, with auto-reconnect on).
-- A separate setting for hearing aids. They share the LE Audio switch for
-  now.
 - Remembering the pair. BlueCaster searches for the other side at every
   connection.
 - Bimodal: the hearing aid's volume is a setting on the device's card. The

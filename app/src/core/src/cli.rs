@@ -1203,8 +1203,9 @@ pub fn run(args: &[String]) -> i32 {
             outln!("Connecting again (session {session} of {})", a.sessions);
         }
         if !a.asha.aids.is_empty() {
-            // The stack needs Bluetooth LE for hearing aids
-            service.set_le_audio_cli(bluecaster_core::LeCliOptions { mcp_dry_run: true, ..Default::default() });
+            // The stack starts with Bluetooth LE for hearing aids, without
+            // LE Audio
+            service.set_hearing_aids_cli(true);
         }
         service.start_streaming(request.clone());
         if a.restart_on_link && session == 1 {

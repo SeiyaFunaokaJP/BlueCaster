@@ -167,6 +167,8 @@ pub struct LeModuleSetup {
     pub battery: bool,
     /// LE Audio is on (its profile modules are created)
     pub audio: bool,
+    /// Hearing aids (the ASHA module is created)
+    pub asha: bool,
     /// Keyboards and mice (HID over GATT is created)
     pub hid: Option<crate::hid::SharedHid>,
 }

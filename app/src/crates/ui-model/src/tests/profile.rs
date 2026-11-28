@@ -390,16 +390,27 @@ mod le_audio_entries {
     #[test]
     fn are_listed_only_with_le_audio_on_as_v1() {
         let list = [dev("AC:80:0A:12:34:56", &[]), le("F4:4E:FD:00:11:22", false)];
-        assert_eq!(keys(&listed_devices(&list, false)), ["AC:80:0A:12:34:56"]);
-        assert_eq!(listed_devices(&list, true).len(), 2);
+        assert_eq!(keys(&listed_devices(&list, false, false)), ["AC:80:0A:12:34:56"]);
+        assert_eq!(listed_devices(&list, true, false).len(), 2);
+    }
+
+    #[test]
+    fn list_hearing_aids_with_their_own_setting_not_le_audio() {
+        let aid = Device { hearing_aid: true, ..le("00:A2:D0:00:00:22", false) };
+        let list = [dev("AC:80:0A:12:34:56", &[]), le("F4:4E:FD:00:11:22", false), aid];
+        let listed = |le_audio, aids| keys(&listed_devices(&list, le_audio, aids));
+        assert_eq!(listed(false, false), ["AC:80:0A:12:34:56"]);
+        assert_eq!(listed(false, true), ["AC:80:0A:12:34:56", "00:A2:D0:00:00:22/le"]);
+        assert_eq!(listed(true, false), ["AC:80:0A:12:34:56", "F4:4E:FD:00:11:22/le"]);
+        assert_eq!(listed(true, true).len(), 3);
     }
 
     #[test]
     fn list_a_dual_mode_device_once_its_le_audio_entry_saved_when_either_side_is() {
         let classic = Device { name: "Buds".into(), saved: true, ..dev("F4:4E:FD:00:11:22", &[]) };
         let list = [classic.clone(), Device { name: String::new(), ..le("f4:4e:fd:00:11:22", false) }];
-        assert_eq!(listed_devices(&list, false), [classic]);
-        let listed = listed_devices(&list, true);
+        assert_eq!(listed_devices(&list, false, false), [classic]);
+        let listed = listed_devices(&list, true, false);
         assert_eq!(listed.len(), 1);
         let one = &listed[0];
         assert_eq!(device_key(&one.address, one.le_audio), "F4:4E:FD:00:11:22/le");
