@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use audio_capture::{Capture, CaptureOptions, Format, Running, SampleFormat, Sink, Source};
-use bt_host::{BtHost, ConfigureError, ConnectFailure, HeadsetMic, MediaSink, ReconnectError};
+use bt_host::{BtHost, ConfigureError, ConnectFailure, HeadsetMic, MediaSink, ReconnectError, SdpRecord};
 use codec::caps::{self, ConfigError, Configuration, RemoteCaps, Unavailable};
 use codec::{CodecKind, Encoder, EncoderConfig, PeerParams, Quality};
 use pipeline::{BufferPreset, CaptureInput, InputFormat, Pipeline, PipelineConfig, SampleType};
@@ -469,6 +469,10 @@ pub struct KnownCodecs {
     /// record is cleared (issue #237)
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hi_res_asked: bool,
+    /// The vendor of its Device ID record ([`vendor::Vendor::id`]), when
+    /// one of [`vendor::VENDORS`]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor: Option<String>,
 }
 
 impl KnownCodecs {
@@ -479,7 +483,14 @@ impl KnownCodecs {
             sbc: remote.sbc_caps.as_ref().map(sbc_device_caps),
             caps: codec_device_caps(remote),
             hi_res_asked: false,
+            vendor: None,
         }
+    }
+
+    /// Huawei and Honor earbuds list LDAC only after it was asked for (the
+    /// stream does)
+    pub fn ldac_on_request(&self) -> bool {
+        self.vendor.as_deref() == Some(vendor::HUAWEI)
     }
 }
 
@@ -1175,9 +1186,64 @@ fn rom_or(host: &BtHost, msg: Msg) -> Msg {
     Msg::new("firmware.rom_running")
 }
 
-/// Earbuds of a vendor's protocol: by the name they give now, asked once a
-/// connection into `given`, unless developer mode says always or never
-fn vendor_named(host: &BtHost, req: &StreamRequest, given: &mut Option<Option<String>>, id: &str) -> bool {
+/// The SDP records of the device streamed to, asked once a session: for
+/// the vendor checks and the device's Services tag
+/// ([`Inner::learn_services`])
+enum Records {
+    NotAsked,
+    /// The services thread asks
+    Asking(std::sync::mpsc::Receiver<Option<Vec<SdpRecord>>>),
+    Known(Option<Vec<SdpRecord>>),
+}
+
+impl Records {
+    fn get(&mut self, host: &BtHost, device: [u8; 6]) -> Option<&[SdpRecord]> {
+        if let Records::Asking(rx) = self {
+            let got = rx.recv_timeout(bt_host::sdp_services::DEADLINE + Duration::from_secs(3)).ok().flatten();
+            // Its query failed (the link went down meanwhile): asked again
+            *self = if got.is_some() { Records::Known(got) } else { Records::NotAsked };
+        }
+        if let Records::NotAsked = self {
+            *self = Records::Known(ask_records(host, device));
+        }
+        match self {
+            Records::Known(r) => r.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The records known now, taken (for the services thread)
+    fn take_known(&mut self) -> Option<Vec<SdpRecord>> {
+        match std::mem::replace(self, Records::NotAsked) {
+            Records::Known(r) => r,
+            other => {
+                *self = other;
+                None
+            }
+        }
+    }
+}
+
+/// The device's SDP records; a moment's wait while the dialog's query runs
+fn ask_records(host: &BtHost, device: [u8; 6]) -> Option<Vec<SdpRecord>> {
+    for _ in 0..5 {
+        match host.device_services(device) {
+            Ok(r) => return Some(r),
+            Err(bt_host::ServicesError::Busy) => std::thread::sleep(Duration::from_millis(500)),
+            Err(e) => {
+                tracing::info!("SDP records not known ({e:?})");
+                return None;
+            }
+        }
+    }
+    tracing::info!("SDP records not known (another query runs)");
+    None
+}
+
+/// Earbuds of a vendor's protocol: by the maker's id in their Device ID
+/// record, never by their name (the user may choose that), unless developer
+/// mode says always or never
+fn vendor_made(host: &BtHost, req: &StreamRequest, records: &mut Records, id: &str) -> bool {
     let Some(v) = vendor::vendor(id) else { return false };
     match vendor::mode(id) {
         vendor::Mode::Never => {
@@ -1185,26 +1251,25 @@ fn vendor_named(host: &BtHost, req: &StreamRequest, given: &mut Option<Option<St
             return false;
         }
         vendor::Mode::Always => {
-            tracing::info!("{}: its protocol whatever the name (developer mode)", v.name);
+            tracing::info!("{}: its protocol whatever the Device ID (developer mode)", v.name);
             return true;
         }
         vendor::Mode::Auto => {}
     }
-    // The name the device gives: the saved one is the user's to change
-    // (issue #237: an old profile had none). That one only when it does
-    // not answer.
-    let name = match given.get_or_insert_with(|| host.remote_name(req.device)) {
-        Some(name) => name.as_str(),
-        None => {
-            tracing::info!(
-                "{}: no name from the device, the saved one {}",
-                v.name,
-                crate::diag::quoted(&req.device_name)
-            );
-            &req.device_name
-        }
+    let Some(d) = records.get(host, req.device).and_then(bt_host::device_id) else {
+        tracing::info!("{}: no Device ID from the device, left alone", v.name);
+        return false;
     };
-    (v.named)(name)
+    let made = v.made(d);
+    tracing::info!(
+        "{}: Device ID {}:{:04X}:{:04X} ({})",
+        v.name,
+        d.source,
+        d.vendor,
+        d.product,
+        if made { "theirs" } else { "not theirs" }
+    );
+    made
 }
 
 /// Whether the device lists a codec AirPods never offer (they list SBC and AAC)
@@ -1625,14 +1690,14 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     // Huawei earbuds that do not list LDAC: asked for, not for Auto, as the
     // mode stays set on them and trades connection stability for it. No LDAC
     // from it: earbuds that had it off get it back, and a connection after it.
-    let mut given_name = None;
+    let mut records = Records::NotAsked;
     // Earbuds another vendor's protocol took are not AirPods
     let mut other_vendor = false;
     if req.codec == Some(CodecKind::Ldac)
         && !remote.has(CodecKind::Ldac)
         && remote.audio_sinks_in_use == 0
         && !stopped()
-        && vendor_named(&host, &req, &mut given_name, vendor::HUAWEI)
+        && vendor_made(&host, &req, &mut records, vendor::HUAWEI)
     {
         other_vendor = true;
         inner.notify(StreamState::Connecting, Msg::new("status.huawei_ldac"));
@@ -1679,12 +1744,12 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     let oppo_candidate = remote.has(CodecKind::LhdcV5) && (ask_again || !inner.hi_res_asked(&addr)) && !stopped();
     if oppo_candidate
         && let Some(why) = oppo_blocked
-        && vendor_named(&host, &req, &mut given_name, vendor::OPPO)
+        && vendor_made(&host, &req, &mut records, vendor::OPPO)
     {
         other_vendor = true;
         tracing::info!("OPPO: Hi-Res not asked for: {why}");
     }
-    if oppo_candidate && oppo_blocked.is_none() && vendor_named(&host, &req, &mut given_name, vendor::OPPO) {
+    if oppo_candidate && oppo_blocked.is_none() && vendor_made(&host, &req, &mut records, vendor::OPPO) {
         other_vendor = true;
         inner.notify(StreamState::Connecting, Msg::new("status.oppo_hi_res"));
         // Whether they kept the link or not, a new connection follows
@@ -1718,7 +1783,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         }
     }
     inner.record_codecs(&addr, KnownCodecs::of(&remote));
-    inner.learn_services(host.clone(), req.device);
+    records = Records::Asking(inner.learn_services(host.clone(), req.device, records.take_known()));
     tracing::info!("device connected, choosing the codec");
     tracing::debug!(
         "codec: device offers [{}], best {:?}, audio sinks {} ({} in use), aptX Adaptive {}",
@@ -2109,16 +2174,15 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     // AirPods: each bud's battery and noise control over their own channel,
     // for as long as the session streams (after a reconnect anew). Developer
     // mode only until it was tried with real AirPods (issue #595).
-    // AirPods list only SBC and AAC. Other earbuds are not asked for their
-    // name for it, unless developer mode says always.
+    // AirPods list only SBC and AAC. Other earbuds are not checked for it,
+    // unless developer mode says always.
     let maybe_airpods = !other_vendor && !lists_codec_airpods_lack(&remote);
     let airpods = !stopped()
         && inner.developer()
         && (maybe_airpods || vendor::mode(vendor::APPLE) == vendor::Mode::Always)
-        && vendor_named(&host, &req, &mut given_name, vendor::APPLE);
-    let airpods_name = given_name.clone().flatten().unwrap_or_else(|| req.device_name.clone());
+        && vendor_made(&host, &req, &mut records, vendor::APPLE);
     let _airpods = airpods.then(|| {
-        inner.start_apple(host.clone(), req.device, &airpods_name);
+        inner.start_apple(host.clone(), req.device);
         AppleMark(inner)
     });
 
@@ -2732,7 +2796,7 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         beside_after = Instant::now() + BESIDE_STATUS_HOLD;
         // The control channel went with the connection
         if airpods {
-            inner.start_apple(host.clone(), req.device, &airpods_name);
+            inner.start_apple(host.clone(), req.device);
         }
     }
 

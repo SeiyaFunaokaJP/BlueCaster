@@ -1524,6 +1524,10 @@ impl Inner {
         let mut known = self.codecs.lock().unwrap_or_else(|e| e.into_inner());
         // Kept with what it offers until the record is cleared
         codecs.hi_res_asked |= known.get(&addr.to_uppercase()).is_some_and(|k| k.hi_res_asked);
+        // Learnt from its Device ID, not from the codecs
+        if codecs.vendor.is_none() {
+            codecs.vendor = known.get(&addr.to_uppercase()).and_then(|k| k.vendor.clone());
+        }
         if known.get(&addr.to_uppercase()) == Some(&codecs) {
             return;
         }
@@ -1537,25 +1541,59 @@ impl Inner {
     /// while it was connected (issue #86). On a thread of its own: the
     /// session does not wait for it. Given up when another services query
     /// runs (the dialog's, which keeps its answer too) or the link went
-    /// down meanwhile; an answer cut short is never kept.
-    pub fn learn_services(&self, host: Arc<BtHost>, device: [u8; 6]) {
-        let dir = self.opts.config_dir.clone();
-        let spawned =
-            std::thread::Builder::new().name("services".into()).spawn(move || match host.device_services(device) {
+    /// down meanwhile; an answer cut short is never kept. `known`: records
+    /// the session asked for already (not asked again). The vendor of its
+    /// Device ID is kept with its codecs. The records go to the receiver
+    /// (None when not known).
+    pub fn learn_services(
+        self: &Arc<Self>,
+        host: Arc<BtHost>,
+        device: [u8; 6],
+        known: Option<Vec<bt_host::SdpRecord>>,
+    ) -> std::sync::mpsc::Receiver<Option<Vec<bt_host::SdpRecord>>> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let inner = self.clone();
+        let spawned = std::thread::Builder::new().name("services".into()).spawn(move || {
+            let addr = bt_host::addr_str(&device);
+            match known.map(Ok).unwrap_or_else(|| host.device_services(device)) {
                 Ok(records) => {
-                    let services: Vec<ipc::DeviceService> =
-                        records.into_iter().map(|r| ipc::DeviceService { uuids: r.classes, name: r.name }).collect();
-                    let changed = crate::devices::keep_services(&dir, &bt_host::addr_str(&device), &services);
+                    let services: Vec<ipc::DeviceService> = records
+                        .iter()
+                        .map(|r| ipc::DeviceService { uuids: r.classes.clone(), name: r.name.clone() })
+                        .collect();
+                    let changed = crate::devices::keep_services(&inner.opts.config_dir, &addr, &services);
                     tracing::info!(
                         "services: {} listed after connecting (kept list changed: {changed})",
                         services.len()
                     );
+                    if let Some(d) = bt_host::device_id(&records) {
+                        inner.record_vendor(&addr, crate::vendor::of(d).map(|v| v.id));
+                    }
+                    let _ = tx.send(Some(records));
                 }
-                Err(e) => tracing::debug!("services: not asked after connecting ({e:?})"),
-            });
+                Err(e) => {
+                    tracing::debug!("services: not asked after connecting ({e:?})");
+                    let _ = tx.send(None);
+                }
+            }
+        });
         if let Err(e) = spawned {
             tracing::warn!("services: no thread to ask for them ({e})");
         }
+        rx
+    }
+
+    /// The vendor a device's Device ID record gives (None: not one of
+    /// [`crate::vendor::VENDORS`])
+    fn record_vendor(&self, addr: &str, vendor: Option<&str>) {
+        let mut known = self.codecs.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = known.entry(addr.to_uppercase()).or_default();
+        if entry.vendor.as_deref() == vendor {
+            return;
+        }
+        tracing::info!("vendor of {addr}: {}", vendor.unwrap_or("none of the known"));
+        entry.vendor = vendor.map(str::to_string);
+        self.save_codecs(&known);
     }
 
     fn save_codecs(&self, known: &BTreeMap<String, stream::KnownCodecs>) {
@@ -1584,8 +1622,8 @@ impl Inner {
 
     /// Opens the AirPods control channel of the stream to `device` (a
     /// running one ends first)
-    pub fn start_apple(&self, host: Arc<BtHost>, device: [u8; 6], name: &str) {
-        let session = crate::vendor::apple::Session::start(host, device, name, self.event_sender());
+    pub fn start_apple(&self, host: Arc<BtHost>, device: [u8; 6]) {
+        let session = crate::vendor::apple::Session::start(host, device, self.event_sender());
         *self.apple.lock().unwrap_or_else(|e| e.into_inner()) = session;
     }
 

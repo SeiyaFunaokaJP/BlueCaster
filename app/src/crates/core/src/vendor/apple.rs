@@ -71,11 +71,6 @@ const MAX_OPENS: u32 = 3;
 /// How long the earbuds have to confirm a listening mode
 const ECHO_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Earbuds of this protocol, by their name
-pub fn is_airpods(device_name: &str) -> bool {
-    device_name.to_lowercase().contains("airpods")
-}
-
 fn command(opcode: u16, payload: &[u8]) -> Vec<u8> {
     let mut p = vec![KIND_COMMAND, 0, SERVICE, 0];
     p.extend(opcode.to_le_bytes());
@@ -206,19 +201,8 @@ enum Modes {
 }
 
 impl Modes {
-    /// By the name the user sees, until the earbuds tell their model
-    fn by_name(name: &str) -> Modes {
-        let name = name.to_lowercase();
-        if name.contains("airpods pro") {
-            Modes::WithAdaptive
-        } else if name.contains("airpods max") {
-            Modes::Basic
-        } else {
-            Modes::Unknown
-        }
-    }
-
-    /// By the model number of the device info: only the ones known
+    /// By the model number of the device info: only the ones known. Never
+    /// by the name: the user chooses it.
     fn by_model(model: &str) -> Option<Modes> {
         match model {
             // AirPods Pro (1st generation)
@@ -263,8 +247,9 @@ struct Counts {
 }
 
 impl Buds {
-    fn new(name: &str) -> Buds {
-        let modes = Modes::by_name(name);
+    fn new() -> Buds {
+        // Until the device info tells the model, or they report a mode
+        let modes = Modes::Unknown;
         let mut b =
             Buds { status: BudsStatus::default(), modes, no_adaptive: false, asked: None, counts: Counts::default() };
         b.update_modes();
@@ -387,13 +372,12 @@ pub struct Session {
 }
 
 impl Session {
-    /// Starts the thread for `device`, the device being streamed to;
-    /// `name` is its name (for the listening modes, never logged). What it
-    /// learns goes to `events` as [`ServiceEvent::Buds`].
-    pub fn start(host: Arc<BtHost>, device: [u8; 6], name: &str, events: Sender<ServiceEvent>) -> Option<Session> {
+    /// Starts the thread for `device`, the device being streamed to. What
+    /// it learns goes to `events` as [`ServiceEvent::Buds`].
+    pub fn start(host: Arc<BtHost>, device: [u8; 6], events: Sender<ServiceEvent>) -> Option<Session> {
         let (tx, rx) = mpsc::channel();
         let status = Arc::new(std::sync::Mutex::new(None));
-        let buds = Buds::new(name);
+        let buds = Buds::new();
         let thread_tx = tx.clone();
         let thread_status = status.clone();
         let spawned = std::thread::Builder::new().name("airpods".into()).spawn(move || {
@@ -607,7 +591,7 @@ mod tests {
 
     #[test]
     fn battery_in_either_order() {
-        let mut b = Buds::new("AirPods Pro");
+        let mut b = Buds::new();
         b.on_packet(&hex("04 00 04 00 04 00 03 02 01 50 02 01 04 01 4B 01 01 08 01 1E 02 01"));
         assert_eq!(b.status.right, Some(BudBattery { percent: 80, charging: false }));
         assert_eq!(b.status.left, Some(BudBattery { percent: 75, charging: true }));
@@ -623,7 +607,7 @@ mod tests {
 
     #[test]
     fn battery_tolerates_odd_packets() {
-        let mut b = Buds::new("AirPods");
+        let mut b = Buds::new();
         // The count says 3, two entries came; a level above 100 is no level
         b.on_packet(&hex("04 00 04 00 04 00 03 02 01 C8 02 01 04 01 32 02 01 08 01"));
         assert_eq!(b.status.right, None);
@@ -637,7 +621,7 @@ mod tests {
 
     #[test]
     fn ear_states() {
-        let mut b = Buds::new("AirPods");
+        let mut b = Buds::new();
         b.on_packet(&hex("04 00 04 00 06 00 00 01"));
         assert_eq!(b.status.ear, vec![EarState::InEar, EarState::OutOfEar]);
         b.on_packet(&hex("04 00 04 00 06 00 02 03"));
@@ -645,23 +629,27 @@ mod tests {
     }
 
     #[test]
-    fn modes_by_name_and_model() {
-        assert_eq!(Buds::new("AirPods Pro").status.noise_modes.len(), 4);
-        assert_eq!(Buds::new("AirPods Max").status.noise_modes.len(), 3);
-        assert!(Buds::new("AirPods").status.noise_modes.is_empty());
-        // The model number corrects the name
-        let mut b = Buds::new("AirPods Pro");
-        let info = [&hex("04 00 04 00 1D 00 01 B2 00 08 00")[..], b"My buds\0A2084\0Apple Inc.\0"].concat();
-        assert_eq!(parse(&info), Some(Packet::DeviceInfo { model: Some("A2084".into()) }));
-        b.on_packet(&info);
-        assert!(!b.status.noise_modes.contains(&NoiseMode::Adaptive));
+    fn modes_by_model() {
+        let info = |model: &str| {
+            [&hex("04 00 04 00 1D 00 01 B2 00 08 00")[..], b"AirPods Pro\0", model.as_bytes(), b"\0Apple Inc.\0"]
+                .concat()
+        };
+        // Nothing known before the device info, whatever the name
+        assert!(Buds::new().status.noise_modes.is_empty());
+        assert_eq!(parse(&info("A2084")), Some(Packet::DeviceInfo { model: Some("A2084".into()) }));
+        let mut b = Buds::new();
+        b.on_packet(&info("A2084"));
+        assert_eq!(b.status.noise_modes.len(), 3);
+        let mut b = Buds::new();
+        b.on_packet(&info("A3048"));
+        assert_eq!(b.status.noise_modes.len(), 4);
         // No model in it
         assert_eq!(model_number(&hex("01 02")), None);
     }
 
     #[test]
     fn a_reported_mode_shows_noise_control() {
-        let mut b = Buds::new("AirPods");
+        let mut b = Buds::new();
         b.on_packet(&hex("04 00 04 00 09 00 0D 02 00 00 00"));
         assert_eq!(b.status.noise, Some(NoiseMode::NoiseCancellation));
         assert_eq!(b.status.noise_modes.len(), 3);
@@ -675,7 +663,9 @@ mod tests {
 
     #[test]
     fn adaptive_refused_is_not_offered_again() {
-        let mut b = Buds::new("AirPods Pro");
+        let mut b = Buds::new();
+        b.on_packet(&[&hex("04 00 04 00 1D 00 01 B2 00 08 00")[..], b"x\0A3048\0Apple Inc.\0"].concat());
+        assert!(b.status.noise_modes.contains(&NoiseMode::Adaptive));
         b.asked = Some((NoiseMode::Adaptive, Instant::now() + ECHO_TIMEOUT));
         b.on_packet(&hex("04 00 04 00 09 00 0D 02 00 00 00"));
         assert_eq!(b.status.noise, Some(NoiseMode::NoiseCancellation));
@@ -685,7 +675,7 @@ mod tests {
 
     #[test]
     fn junk_is_counted_not_fatal() {
-        let mut b = Buds::new("AirPods");
+        let mut b = Buds::new();
         for p in
             [hex(""), hex("04 00"), hex("04 00 05 00 04 00 01"), hex("09 00 04 00 01 00"), hex("04 00 04 00 09 00")]
         {
@@ -694,12 +684,5 @@ mod tests {
         assert_eq!(b.counts.unparsed, 5);
         b.on_packet(&hex("04 00 04 00 2B 00 01 02"));
         assert_eq!(b.counts.other, 1);
-    }
-
-    #[test]
-    fn airpods_names() {
-        assert!(is_airpods("AirPods Pro"));
-        assert!(is_airpods("Kim's AirPods Max"));
-        assert!(!is_airpods("WH-1000XM4"));
     }
 }

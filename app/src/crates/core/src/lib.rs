@@ -45,7 +45,6 @@ pub use stream::{
     AacDetails, AacDeviceCaps, CodecDetails, CodecDeviceCaps, KnownCodecs, SbcDetails, SbcDeviceCaps, SourceInfo,
     SourceRequest, StreamInfo, StreamRequest, StreamState, VolumeSync,
 };
-pub use vendor::huawei::is_huawei;
 pub use voice::{HeadsetMic, MicOutput, MicTarget, apply_mic_processing, mic_conflict, resolve_mic_output};
 pub use voice_link::{MicDsp, VoiceCodec};
 pub mod diag;

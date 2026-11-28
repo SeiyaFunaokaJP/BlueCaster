@@ -293,6 +293,8 @@ HUAWEI_NAME = ['--device-name', 'HUAWEI FreeBuds Pro 4']
 OPPO_SINK = ['--codecs', 'sbc', 'aac', 'lhdcv5', '--log-level', 'INFO', '--name', 'OPPO Enco Free4']
 # A device that gives another name, whatever it is saved as
 OTHER_NAME = ['--name', 'Other Buds']
+# Another maker's Device ID (Qualcomm's company id): the vendor's name alone never counts
+OTHER_VENDOR = ['--device-id', '1:000A:0001']
 OPPO_NAME = ['--device-name', 'OPPO Enco Free4']
 OPPO_TWICE = OPPO_NAME + ['--sessions', '2']
 # AirPods' control channel (issue #595; emu_sink.py AirPodsEarbuds): the
@@ -419,7 +421,8 @@ NEGOTIATION = {
     'huawei-ldac-drop': ('ldac', HUAWEI_SINK + ['--huawei', 'off', '--huawei-drop'], 'ldac', HUAWEI_NAME),
     'huawei-no-mode': ('ldac', HUAWEI_SINK + ['--huawei', 'off', '--huawei-silent'], 'aac',
                        HUAWEI_NAME + ['--fallback']),
-    'huawei-other-name': ('ldac', HUAWEI_SINK + ['--huawei', 'off'] + OTHER_NAME, 'aac', HUAWEI_NAME + ['--fallback']),
+    'huawei-other-vendor': ('ldac', HUAWEI_SINK + ['--huawei', 'off'] + OTHER_VENDOR, 'aac',
+                            HUAWEI_NAME + ['--fallback']),
     # The write taken and still no LDAC: AAC, the mode back off when it was off
     'huawei-no-ldac': ('ldac', HUAWEI_SINK + ['--huawei', 'off', '--huawei-no-ldac'], 'aac',
                        HUAWEI_NAME + ['--fallback']),
@@ -450,12 +453,14 @@ NEGOTIATION = {
     # Left alone: no feature write listed, spatial audio on, another name
     'oppo-no-write': ('lhdcv5', OPPO_SINK + ['--oppo', 'off', '--oppo-no-write'], 'lhdcv5', OPPO_NAME),
     'oppo-spatial': ('lhdcv5', OPPO_SINK + ['--oppo', 'off', '--oppo-spatial'], 'lhdcv5', OPPO_NAME),
-    'oppo-other-name': ('lhdcv5', OPPO_SINK + ['--oppo', 'off'] + OTHER_NAME, 'lhdcv5', OPPO_NAME),
+    'oppo-other-vendor': ('lhdcv5', OPPO_SINK + ['--oppo', 'off'] + OTHER_VENDOR, 'lhdcv5', OPPO_NAME),
     # Auto picks LHDC V5: asked the same way
     'oppo-auto': ('auto', OPPO_SINK + ['--oppo', 'off'], 'lhdcv5', OPPO_NAME),
-    # Saved under another name (issue #237): the name they give tells them
-    'oppo-renamed': ('lhdcv5', OPPO_SINK + ['--oppo', 'off'], 'lhdcv5', ['--device-name', 'test', '--sessions', '2']),
-    'huawei-renamed': ('ldac', HUAWEI_SINK + ['--huawei', 'off'], 'ldac', ['--device-name', 'test']),
+    # Renamed, by the user or in the earbuds: the Device ID tells them, never
+    # the name
+    'oppo-renamed': ('lhdcv5', OPPO_SINK + ['--oppo', 'off'] + OTHER_NAME, 'lhdcv5',
+                     ['--device-name', 'test', '--sessions', '2']),
+    'huawei-renamed': ('ldac', HUAWEI_SINK + ['--huawei', 'off'] + OTHER_NAME, 'ldac', ['--device-name', 'test']),
     # AirPods (issue #595): the control channel opened after the stream
     # starts, each bud's battery, a listening mode set and confirmed; Adaptive
     # taken or echoed as the mode in force; the earbuds opening the channel
@@ -473,12 +478,13 @@ NEGOTIATION = {
                                AIRPODS_NAME),
     'airpods-plain': ('aac', AIRPODS_SINK + ['--airpods', 'plain', '--name', 'AirPods'], 'aac',
                       ['--device-name', 'AirPods']),
-    'airpods-other-name': ('aac', AIRPODS_SINK + ['--airpods', 'pro2'] + OTHER_NAME, 'aac', AIRPODS_NAME),
+    'airpods-other-vendor': ('aac', AIRPODS_SINK + ['--airpods', 'pro2'] + OTHER_VENDOR, 'aac', AIRPODS_NAME),
+    'airpods-renamed': ('aac', AIRPODS_SINK + ['--airpods', 'pro2'] + OTHER_NAME, 'aac', ['--device-name', 'Other Buds']),
     # Developer mode only for now: off, the earbuds are left alone
     'airpods-developer-off': ('aac', AIRPODS_SINK + ['--airpods', 'pro2'], 'aac', AIRPODS_NAME),
     # Developer mode's vendor settings (DEV_SETTINGS): OPPO's protocol for
     # earbuds of any name, for none, and Hi-Res asked on every connection
-    'oppo-always': ('lhdcv5', OPPO_SINK + ['--oppo', 'off'] + OTHER_NAME, 'lhdcv5', []),
+    'oppo-always': ('lhdcv5', OPPO_SINK + ['--oppo', 'off', '--device-id', 'none'] + OTHER_NAME, 'lhdcv5', []),
     'oppo-never': ('lhdcv5', OPPO_SINK + ['--oppo', 'off'], 'lhdcv5', OPPO_NAME),
     # (earbuds that keep their limit: each stream asks, gains nothing, undoes it)
     'oppo-every-connection': ('lhdcv5', OPPO_SINK + ['--oppo', 'off', '--oppo-no-change'], 'lhdcv5', OPPO_TWICE),
@@ -540,7 +546,7 @@ DEV_SETTINGS = {
     # AirPods control is developer mode only (issue #595)
     **{case: {'debug_mode': True} for case in ('airpods', 'airpods-adaptive', 'airpods-no-adaptive', 'airpods-pro1',
                                                 'airpods-they-open', 'airpods-silent-connect', 'airpods-plain',
-                                                'airpods-other-name')},
+                                                'airpods-other-vendor', 'airpods-renamed')},
     'sbcxq-abr-hold': {'debug_mode': True, 'dev_overrides': {'encode_at_send': True}},
     'ldac-hold': {'debug_mode': True, 'dev_overrides': {'encode_at_send': True}},
     'oppo-always': {'debug_mode': True, 'dev_vendors': {'oppo': {'mode': 'always'}}},
@@ -574,7 +580,7 @@ LOG_CHECKS = {
     'huawei-ldac': [('sink.log', QUALITY_ON, True), ('sink.log', QUALITY_OFF, False),
                     ('bluecaster.log', 'Emulated phone', False)],
     'huawei-no-mode': [('sink.log', 'Huawei control: 2BA2', False)],
-    'huawei-other-name': [('sink.log', 'Huawei control', False)],
+    'huawei-other-vendor': [('sink.log', 'Huawei control', False)],
     'huawei-no-ldac': [('sink.log', QUALITY_ON, True), ('sink.log', QUALITY_OFF, True)],
     'huawei-no-ldac-drop': [('sink.log', QUALITY_ON, True), ('sink.log', QUALITY_OFF, True)],
     'huawei-no-ldac-mode-on': [('sink.log', QUALITY_ON, True), ('sink.log', QUALITY_OFF, False)],
@@ -593,10 +599,10 @@ LOG_CHECKS = {
                            ('bluecaster.log', ENCODED_1000, 2)],
     'oppo-no-write': [('sink.log', 'OPPO control: 0403', False), ('bluecaster.log', ENCODED_400, True)],
     'oppo-spatial': [('sink.log', 'OPPO control: 0403', False), ('bluecaster.log', ENCODED_400, True)],
-    'oppo-other-name': [('sink.log', 'OPPO control', False), ('bluecaster.log', ENCODED_400, True)],
+    'oppo-other-vendor': [('sink.log', 'OPPO control', False), ('bluecaster.log', ENCODED_400, True)],
     'oppo-auto': [('sink.log', HI_RES_ON, 1), ('bluecaster.log', ENCODED_1000, 1), ('bluecaster.log', ENCODED_400, False)],
     'oppo-renamed': [('sink.log', HI_RES_ON, 1), ('bluecaster.log', ENCODED_400, False), ('bluecaster.log', ENCODED_1000, 2),
-                     ('bluecaster.log', 'name=“OPPO Enco Free4”', 1)],
+                     ('bluecaster.log', 'OPPO: Device ID 1:079A:0001 (theirs)', 1)],
     'airpods': AIRPODS_UP + [('sink.log', 'AirPods: listening mode set to 3', 1),
                              ('bluecaster.log', 'noise control Transparency of Off/NoiseCancellation/Transparency/Adaptive',
                               True),
@@ -619,9 +625,10 @@ LOG_CHECKS = {
                                  ('bluecaster.log', 'AirPods: connected (status', False)],
     'airpods-plain': AIRPODS_UP + [('bluecaster.log', 'noise control', False),
                                    ('bluecaster.log', 'AirPods: model A0000 (not known', 1)],
-    'airpods-other-name': [('sink.log', 'AirPods:', False), ('bluecaster.log', 'Buds:', False)],
+    'airpods-other-vendor': [('sink.log', 'AirPods:', False), ('bluecaster.log', 'Buds:', False)],
+    'airpods-renamed': AIRPODS_UP,
     'airpods-developer-off': [('sink.log', 'AirPods:', False), ('bluecaster.log', 'Buds:', False)],
-    'huawei-renamed': [('sink.log', QUALITY_ON, True), ('bluecaster.log', 'name=“HUAWEI FreeBuds Pro 4”', True)],
+    'huawei-renamed': [('sink.log', QUALITY_ON, True), ('bluecaster.log', 'Huawei: Device ID 1:027D:0001 (theirs)', True)],
     'oppo-always': [('sink.log', HI_RES_ON, 1), ('bluecaster.log', ENCODED_1000, 1), ('bluecaster.log', 'remote name of', False)],
     'oppo-never': [('sink.log', 'OPPO control', False), ('bluecaster.log', ENCODED_400, True)],
     'oppo-every-connection': [('sink.log', HI_RES_ON, 2), ('sink.log', HI_RES_OFF, 2), ('bluecaster.log', ENCODED_400, 2),

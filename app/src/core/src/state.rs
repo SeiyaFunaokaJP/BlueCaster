@@ -1028,10 +1028,10 @@ fn saved_devices(
                     lhdcv5_low_latency: k.lhdcv5_low_latency,
                 })
                 .collect();
-        }
-        // These list LDAC only after it was asked for (the stream does)
-        if bluecaster_core::is_huawei(&d.name) {
-            d.codecs_on_request = vec!["ldac".to_string()];
+            // By the vendor of its Device ID, never by its name
+            if c.ldac_on_request() {
+                d.codecs_on_request = vec!["ldac".to_string()];
+            }
         }
     }
     let sets = le_sets::KnownSets::of(le_sets::load(config_dir));
@@ -6999,6 +6999,7 @@ mod tests {
                     ..Default::default()
                 }],
                 hi_res_asked: false,
+                vendor: None,
             },
         );
         let list = saved_devices(&dir, &scanned, &codecs);
@@ -7015,8 +7016,11 @@ mod tests {
         assert!(list[1].sbc.is_none());
         assert!(list[0].saved && !list[1].saved && list[1].codecs.is_empty());
         assert!(list[0].codecs_on_request.is_empty());
-        // Huawei earbuds list LDAC only once it is asked for (issue #30)
+        // A name never tells the vendor
         devices::save(&dir, "AA:BB:CC:DD:EE:FF", "HUAWEI FreeBuds Pro 4").unwrap();
+        assert!(saved_devices(&dir, &scanned, &codecs)[0].codecs_on_request.is_empty());
+        // Huawei earbuds list LDAC only once it is asked for (issue #30)
+        codecs.get_mut("AA:BB:CC:DD:EE:FF").unwrap().vendor = Some("huawei".into());
         let list = saved_devices(&dir, &scanned, &codecs);
         assert_eq!(list[0].codecs_on_request, ["ldac"]);
         let _ = std::fs::remove_dir_all(&dir);

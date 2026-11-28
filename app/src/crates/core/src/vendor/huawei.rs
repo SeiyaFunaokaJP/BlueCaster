@@ -37,12 +37,6 @@ const WRITE_SETTLE: Duration = Duration::from_millis(400);
 /// Longest packet accepted (more: not a packet start)
 const MAX_LENGTH: usize = 4096;
 
-/// Earbuds of this protocol, by their name
-pub fn is_huawei(device_name: &str) -> bool {
-    let name = device_name.to_lowercase();
-    ["huawei", "freebuds", "freeclip", "freelace", "freearc", "honor earbuds"].iter().any(|n| name.contains(n))
-}
-
 fn crc16(data: &[u8]) -> u16 {
     let mut crc = 0u16;
     for &b in data {
@@ -389,15 +383,5 @@ mod tests {
         let got = Packets::default().feed(&stray);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].byte(1), Some(1));
-    }
-
-    #[test]
-    fn huawei_names() {
-        for n in ["HUAWEI FreeBuds Pro 4", "Huawey FreeBuds Pro 4", "FreeClip", "HONOR Earbuds 2 Lite"] {
-            assert!(is_huawei(n), "{n}");
-        }
-        for n in ["WH-1000XM4", "Honor's speaker", ""] {
-            assert!(!is_huawei(n), "{n}");
-        }
     }
 }
