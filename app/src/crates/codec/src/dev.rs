@@ -50,6 +50,10 @@ pub struct DevOverrides {
     /// Headset mode's Auto looks for recording apps on the session's tick
     /// (200 ms), as before its watcher thread (50 ms, woken at once)
     pub auto_mic_tick_poll: bool,
+    /// ABR past Android's policy (#600): LHDC V5 climbs above 400 kbps, up
+    /// to the sink's and the MTU's maximum; LDAC climbs one quality step
+    /// per second of a drained queue instead of libldac's 2 to 6 s
+    pub abr_extended: bool,
 }
 
 /// Range of [`DevOverrides::queue_max_wait_ms`] (ms)
@@ -77,6 +81,7 @@ static CURRENT: RwLock<DevOverrides> = RwLock::new(DevOverrides {
     encode_at_send: false,
     keep_bitrate_on_slow_link: false,
     auto_mic_tick_poll: false,
+    abr_extended: false,
 });
 
 /// The overrides in force

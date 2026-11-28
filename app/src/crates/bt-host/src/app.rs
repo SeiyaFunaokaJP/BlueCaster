@@ -30,7 +30,7 @@ use crate::media::{MediaPacket, RTP_HEADER_SIZE};
 use crate::probe::ProbeReport;
 use crate::rfcomm::{Rfcomm, TIMER_RFCOMM};
 use crate::sdp_services::SdpServices;
-use crate::shared::Shared;
+use crate::shared::{CLOSING_AVRCP, CLOSING_HFP, Shared};
 use crate::stats::LinkStats;
 use crate::{AfhClassification, Button, ConnectFailure, Controls, DiscoveredDevice, HostEvent, InitFailure, MediaKey};
 use crate::{atheros, broadcom, intel, mediatek, qualcomm, realtek_btnic};
@@ -355,11 +355,13 @@ impl HostApp {
 
     /// The Intel firmware download (crate::intel), then HCI init. Intel
     /// controllers start in a bootloader after a cold boot; with the
-    /// firmware running the loader is done after one command.
+    /// firmware running the loader is done after one command. The firmware
+    /// folder first, then Intel's Windows driver.
     pub fn start_intel_loader(&mut self, stack: &Stack) {
         let dir = self.setup.firmware_dir.clone();
         tracing::info!("Intel adapter: checking bootloader firmware, folder {}", dir.display());
-        let loader = intel::Loader::new(Box::new(move |name| read_firmware_file(&dir, "intel", name)));
+        let loader = intel::Loader::new(Box::new(move |name| read_firmware_file(&dir, "intel", name)))
+            .with_driver(Box::new(intel::driver::from_windows_driver));
         self.start_loader(stack, Box::new(loader));
     }
 
@@ -451,6 +453,7 @@ impl HostApp {
     /// A chip bring-up (crate::bringup) on the transport installed already,
     /// then HCI init
     fn start_loader(&mut self, stack: &Stack, mut loader: Box<dyn ChipLoader>) {
+        crate::set_missing_firmware(None);
         if !stack.raw_begin() {
             tracing::error!("could not open the Bluetooth adapter");
             if let Some(tx) = self.setup.probe.take() {
@@ -584,11 +587,17 @@ impl HostApp {
                     e => e.to_string(),
                 };
                 self.show_loader_done(vendor, said, false);
-                // The adapter's start fails with the advice to replug it
-                let failure = if matches!(e, bringup::LoadError::Replug(_)) {
-                    InitFailure::NeedsReplug
-                } else {
-                    InitFailure::Failed
+                // The adapter's start fails with the advice to replug it, or
+                // with the files to get
+                let failure = match &e {
+                    bringup::LoadError::Replug(_) => InitFailure::NeedsReplug,
+                    // Intel's files go in the firmware folder (other loaders
+                    // read theirs from the vendor's driver, their own advice)
+                    bringup::LoadError::MissingFile(file) if vendor == "Intel" => {
+                        crate::set_missing_firmware(Some(loader.missing_files(file).join(", ")));
+                        InitFailure::FirmwareMissing
+                    }
+                    _ => InitFailure::Failed,
                 };
                 self.init_failed(failure);
             }
@@ -1710,6 +1719,11 @@ impl HostApp {
                 }
                 let lost = self.shared.update(|s| {
                     s.acl_down = true;
+                    // An ACL link (not a voice link) went down: nothing on
+                    // it can confirm a close any more
+                    if s.acl_links.iter().any(|&(h, _, _)| h == handle) {
+                        s.profiles_closing = 0;
+                    }
                     s.acl_links.retain(|&(h, _, _)| h != handle);
                     if s.target_acl_handle == Some(handle) {
                         s.target_acl_down_reason = reason;
@@ -1868,6 +1882,7 @@ impl HostApp {
             crate::chips::company_name(manufacturer).unwrap_or("unknown")
         );
         self.controller_company = Some(manufacturer);
+        self.shared.update(|s| s.controller_company = Some(manufacturer));
         if manufacturer == COMPANY_ID_REALTEK && self.setup.realtek_pid != 0 {
             // The first read of an init comes before the firmware download
             if !self.rtk_version_seen {
@@ -2244,16 +2259,25 @@ impl HostApp {
                     );
                     return;
                 }
+                // Closes the headphones still have to confirm: the link is
+                // dropped after them (drop_acl_link), as some firmware hangs
+                // when the link goes down with these closes open (issue #602)
+                let mut closing = 0;
                 if self.avrcp_cid != 0 {
-                    stack.avrcp_disconnect(self.avrcp_cid);
+                    if stack.avrcp_disconnect(self.avrcp_cid) == ERROR_CODE_SUCCESS {
+                        closing |= CLOSING_AVRCP;
+                    }
                     self.avrcp_cid = 0;
                 }
                 if let Some(acl) = self.hfp_acl.take() {
                     if let Some(e) = self.voice.stop(stack) {
                         let _ = self.events.send(e);
                     }
-                    stack.hfp_ag_release(acl);
+                    if stack.hfp_ag_release(acl) == ERROR_CODE_SUCCESS {
+                        closing |= CLOSING_HFP;
+                    }
                 }
+                self.shared.update(|s| s.profiles_closing |= closing);
                 if let Some(addr) = self.remote_addr {
                     self.rfcomm.close_device(stack, addr);
                     self.l2cap.close_device(stack, addr);
@@ -2371,6 +2395,7 @@ impl HostApp {
             Some(HFP_SUBEVENT_SERVICE_LEVEL_CONNECTION_RELEASED) => {
                 tracing::info!("HFP: service level connection released");
                 self.hfp_acl = None;
+                self.shared.update(|s| s.profiles_closing &= !CLOSING_HFP);
                 if let Some(e) = self.voice.on_released() {
                     let _ = self.events.send(e);
                 }
@@ -2481,6 +2506,7 @@ impl HostApp {
                 tracing::info!("AVRCP disconnected (cid 0x{:04x})", le16(p, 3).unwrap_or(0));
                 stack.timer_stop(TIMER_PLAYBACK);
                 self.avrcp_cid = 0;
+                self.shared.update(|s| s.profiles_closing &= !CLOSING_AVRCP);
                 // A reconnect restores the volume the headphones had last
                 let c = &self.controls;
                 let v = c.volume.load(Ordering::Acquire);

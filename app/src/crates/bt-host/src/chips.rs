@@ -784,9 +784,10 @@ pub fn vendor_for_usb(vid: u16, pid: u16, realtek_pid: Option<u16>) -> ChipVendo
         // OEM adapters with a Broadcom chip under their own VID (ASUS
         // BT400, laptop modules): the IDs of Broadcom's Windows driver
         _ if crate::broadcom::is_broadcom_usb(vid, pid) => ChipVendor::Broadcom,
-        // Barrot ROM dongles (Linux btusb's Barrot entries); not the whole
+        // Barrot ROM dongles (Linux btusb's Barrot entries, and 0x0001,
+        // whose probe report gave Barrot's company ID, #616); not the whole
         // VID: no list says which other devices use it
-        0x33FA if matches!(pid, 0x0010 | 0x0012) => ChipVendor::Barrot,
+        0x33FA if matches!(pid, 0x0001 | 0x0010 | 0x0012) => ChipVendor::Barrot,
         // Marvell AVASTAR Bluetooth of Wi-Fi combos (Linux btusb's Marvell
         // IDs, 0x204B/0x204C from Windows driver lists); the VID is also on
         // Marvell's Wi-Fi and other devices
@@ -794,6 +795,22 @@ pub fn vendor_for_usb(vid: u16, pid: u16, realtek_pid: Option<u16>) -> ChipVendo
         // Actions ATS2851 ("Actions general adapter"); exact ID only
         0x10D7 if pid == 0xB012 => ChipVendor::Actions,
         _ => ChipVendor::Unknown,
+    }
+}
+
+/// Barrot's Bluetooth SIG company ID
+const COMPANY_ID_BARROT: u16 = 0x08E7;
+
+/// The vendor of an adapter whose USB ID told none, from the company ID its
+/// controller reports (Read Local Version, also what Windows' Bluetooth
+/// stored): Barrot only, whose chips run from ROM and need nothing before
+/// HCI init (#616). A loader's vendor must be known from the USB ID before
+/// init; CSR's ID 0x000A is also on Qualcomm chips, and Actions' broken
+/// commands are hidden by its USB ID.
+pub fn vendor_with_company(vendor: ChipVendor, company: Option<u16>) -> ChipVendor {
+    match (vendor, company) {
+        (ChipVendor::Unknown, Some(COMPANY_ID_BARROT)) => ChipVendor::Barrot,
+        _ => vendor,
     }
 }
 

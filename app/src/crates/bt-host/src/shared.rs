@@ -10,6 +10,11 @@ use codec::caps::RemoteCaps;
 
 use crate::{ConnectFailure, DiscoveredDevice, InitFailure};
 
+/// [`State::profiles_closing`]: AVRCP's disconnect is out
+pub const CLOSING_AVRCP: u8 = 1;
+/// [`State::profiles_closing`]: HFP's service level connection is being released
+pub const CLOSING_HFP: u8 = 2;
+
 #[derive(Default)]
 pub struct State {
     // ---- init ----
@@ -38,6 +43,9 @@ pub struct State {
     /// a Realtek download, if any, was read back (the first read of an init
     /// comes before the download, from the ROM code)
     pub hci_version_settled: bool,
+    /// The controller's Bluetooth SIG company ID, once it has answered Read
+    /// Local Version
+    pub controller_company: Option<u16>,
     /// The headphones' battery level in percent (HFP), once they said
     pub battery: Option<u8>,
 
@@ -47,6 +55,9 @@ pub struct State {
     pub start_done: Option<bool>,
     pub released: bool,
     pub acl_down: bool,
+    /// Profiles whose close went out with the A2DP release and that the
+    /// headphones have not confirmed yet ([`CLOSING_AVRCP`], [`CLOSING_HFP`])
+    pub profiles_closing: u8,
     pub inquiry_done: bool,
     pub name_done: bool,
     /// The last remote name answered, and whose

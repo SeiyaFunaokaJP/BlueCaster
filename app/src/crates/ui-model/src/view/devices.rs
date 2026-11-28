@@ -15,8 +15,9 @@ use crate::format::js_trim;
 use crate::i18n::t;
 use crate::profile::{
     AudioEntry, DeviceFields, HeadsetMode, ProfilesView, audio_entries, capture_device, default_output_name,
-    device_fields, followed_name, format_mismatch, headset_mode, headset_modes, hifi_cable, is_hifi_cable, le_audio_on,
-    listed_devices, multichannel_cable, new_profile, normalize_profile, own_default_output, vb_cable,
+    device_fields, followed_name, format_mismatch, headset_mode, headset_modes, hearing_aids_on, hifi_cable,
+    is_hifi_cable, le_audio_on, listed_devices, multichannel_cable, new_profile, normalize_profile, own_default_output,
+    vb_cable,
 };
 use crate::t;
 
@@ -79,8 +80,9 @@ pub fn le_listed(snap: &Snapshot, classic_only: bool) -> bool {
 pub fn picker_devices(snap: &Snapshot, classic_only: bool, saved_only: bool, paired: bool) -> Vec<Device> {
     // A hearing aid needs Bluetooth LE, not an adapter that streams LE Audio
     let le = le_audio_on(&snap.settings) && !classic_only;
+    let aids = hearing_aids_on(&snap.settings) && !classic_only;
     let le_audio = le_listed(snap, classic_only);
-    let all: Vec<Device> = sort_devices(&listed_devices(&snap.devices, le))
+    let all: Vec<Device> = sort_devices(&listed_devices(&snap.devices, le, aids))
         .into_iter()
         .filter(|d| !d.le_audio || le_audio || d.hearing_aid)
         .collect();
@@ -93,13 +95,16 @@ pub fn picker_devices(snap: &Snapshot, classic_only: bool, saved_only: bool, pai
 /// The Audio Devices screen's saved devices: those Home and Codecs show (LE
 /// Audio entries on an adapter not known to stream it could not be removed
 /// here otherwise)
-pub fn managed_saved(devices: &[Device], le_audio_on: bool, classic_only: bool) -> Vec<Device> {
-    sort_devices(&listed_devices(devices, le_audio_on && !classic_only)).into_iter().filter(|d| d.saved).collect()
+pub fn managed_saved(devices: &[Device], le_audio_on: bool, aids_on: bool, classic_only: bool) -> Vec<Device> {
+    sort_devices(&listed_devices(devices, le_audio_on && !classic_only, aids_on && !classic_only))
+        .into_iter()
+        .filter(|d| d.saved)
+        .collect()
 }
 
 /// The setup's paired devices: the classic saved ones
 pub fn paired_list(devices: &[Device]) -> Vec<Device> {
-    sort_devices(&listed_devices(devices, false)).into_iter().filter(|d| d.saved).collect()
+    sort_devices(&listed_devices(devices, false, false)).into_iter().filter(|d| d.saved).collect()
 }
 
 /// A device in use: the scan asks to disconnect it first (issue #86)

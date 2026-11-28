@@ -1407,6 +1407,13 @@ LINK_CASES = {
     'disconnect': ([], ['--duration', '12', '--sessions', '2'], [
         ('bluecaster.log', r'Disconnecting \(session 1.*dropping the ACL link.*HCI disconnection.*Connecting again', True),
     ]),
+    # ...with AVRCP up: the link goes down after the sink confirmed AVRCP's
+    # close, and the next session connects (issue #602: headphones hung when
+    # the link went down with that close open)
+    'disconnect-avrcp': (['--avrcp-keys', '1'], ['--duration', '12', '--sessions', '2'], [
+        ('bluecaster.log', r'Disconnecting \(session 1.*AVRCP disconnected.*dropping the ACL link.*Connecting again', True),
+        ('bluecaster.log', r'profile closes 0x\w+ not confirmed', False),
+    ]),
     'device-link': (['--turn-off-after', '4'], ['--duration', '16', '--wait-off'], [
         ('bluecaster.log', r'the headphones connected again.*reconnected on attempt 1', True),
         ('sink.log', r'turned on', True),

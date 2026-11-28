@@ -99,6 +99,9 @@ const INIT_NO_ANSWER: Duration = Duration::from_secs(5);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const STREAM_TIMEOUT: Duration = Duration::from_secs(10);
 const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the AVRCP / HFP closes of an A2DP release may take before the
+/// link is dropped anyway (headphones answer them in about 30 ms)
+const PROFILE_CLOSE_WAIT: Duration = Duration::from_secs(1);
 /// The capability discovery on an A2DP connection the device opened
 const DEVICE_A2DP_TIMEOUT: Duration = Duration::from_secs(2);
 /// A job the run loop should take at once
@@ -224,6 +227,9 @@ pub struct HostConfig {
     /// mice on the list may connect, and their input goes to Windows. None:
     /// the stack has no HID at all.
     pub hid: Option<HidConfig>,
+    /// Hearing aids (ASHA, developer mode; discussion #584): the LE core
+    /// with the ASHA module, also without LE Audio. Off: no ASHA at all.
+    pub asha: bool,
     /// Headphone battery level: an HFP audio gateway that only makes the
     /// service level connection, where the headphones report it (and the LE
     /// Battery Service). Off: no HFP at all.
@@ -293,6 +299,7 @@ impl HostConfig {
             le_audio: None,
             le_keys: None,
             hid: None,
+            asha: false,
             battery: false,
             voice: false,
             on_loader: None,
@@ -316,6 +323,21 @@ pub enum InitFailure {
     /// A firmware loader left the controller in a state only a power cycle
     /// ends: the adapter must be unplugged and plugged back in
     NeedsReplug,
+    /// A firmware loader did not find its files ([`missing_firmware`] names
+    /// them), e.g. an Intel controller in its bootloader after a cold boot
+    FirmwareMissing,
+}
+
+static MISSING_FIRMWARE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// The firmware files the last loader did not find ("ibt-0040-2120.sfi,
+/// ibt-0040-2120.ddc"), after a [`InitFailure::FirmwareMissing`]
+pub fn missing_firmware() -> Option<String> {
+    MISSING_FIRMWARE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+pub(crate) fn set_missing_firmware(files: Option<String>) {
+    *MISSING_FIRMWARE.lock().unwrap_or_else(|e| e.into_inner()) = files;
 }
 
 /// How a connection attempt failed
@@ -507,6 +529,8 @@ pub struct BtHost {
     voice_on: bool,
     /// The HID host runs (HostConfig::hid was Some)
     hid_on: bool,
+    /// Hearing aids (HostConfig::asha)
+    asha_on: bool,
     hid_counters: Arc<HidCounters>,
     /// Where the HID host's input goes (with hid_on)
     hid_sink: Option<Arc<dyn hid_input::sink::InputSink>>,
@@ -631,6 +655,7 @@ impl BtHost {
         let le_on = config.le_audio.is_some();
         let voice_on = config.voice;
         let hid_on = config.hid.is_some();
+        let asha_on = config.asha;
         // The sink is chosen here, so that the core can ask it what reached
         // Windows (hid_sink) while the engine passes input to it
         let hid_sink = config.hid.as_mut().map(|h| {
@@ -638,8 +663,9 @@ impl BtHost {
             h.sink = Some(sink.clone());
             sink
         });
-        // Keyboards and mice over LE need the LE core, also without LE Audio
-        let le_core_on = le_on || hid_on;
+        // Keyboards and mice over LE and hearing aids need the LE core, also
+        // without LE Audio
+        let le_core_on = le_on || hid_on || asha_on;
         let hid_counters = Arc::new(HidCounters::default());
         let hid_counters_app = hid_counters.clone();
         let le_shared = Arc::new(le::core::LeShared::default());
@@ -687,6 +713,7 @@ impl BtHost {
                         le_audio,
                         le_keys,
                         hid,
+                        asha,
                         battery,
                         voice,
                         on_loader,
@@ -697,14 +724,15 @@ impl BtHost {
                         // LE Audio, keyboards and mice, or the LE keys of
                         // classic devices (SM): the controller's LE support
                         // visible to BTstack (before hci_init / the transport)
-                        if le_audio.is_some() || le_keys.is_some() || hid.is_some() {
+                        if le_audio.is_some() || le_keys.is_some() || hid.is_some() || asha {
                             stack.set_le_hidden(false);
                         }
                         // Keyboards and mice without LE Audio: the
                         // controller resolves the private addresses of the
-                        // bonded ones (LE Audio's connection code works with
-                        // those addresses: never with LE Audio)
-                        if hid.is_some() && le_audio.is_none() {
+                        // bonded ones (LE Audio's connection code, which the
+                        // hearing aids use too, works with those addresses:
+                        // never with LE Audio or hearing aids)
+                        if hid.is_some() && le_audio.is_none() && !asha {
                             stack.set_address_resolution_hidden(false);
                         }
                         let hid_engine = hid::HidEngine::new(hid.as_ref(), hid_counters_app, hid_events);
@@ -718,7 +746,7 @@ impl BtHost {
                         // and the bonds of le_keys
                         let audio = le_audio.is_some();
                         let le_config = le_audio.or_else(|| {
-                            hid.as_ref().map(|_| LeConfig {
+                            (hid.is_some() || asha).then(|| LeConfig {
                                 bonds_file: le_keys.as_ref().map(|k| k.bonds_file.clone()),
                                 imported_bonds_file: le_keys.as_ref().and_then(|k| k.imported_bonds_file.clone()),
                                 ..LeConfig::default()
@@ -735,6 +763,7 @@ impl BtHost {
                                 battery,
                                 local_name.clone(),
                                 audio,
+                                asha,
                                 hid.as_ref().map(|_| hid_engine.clone()),
                             )
                         });
@@ -853,6 +882,7 @@ impl BtHost {
             le_core_on,
             voice_on,
             hid_on,
+            asha_on,
             hid_counters,
             hid_sink,
             le: le_shared,
@@ -979,6 +1009,12 @@ impl BtHost {
     pub fn hci_version(&self) -> Option<u8> {
         let s = self.shared.lock();
         s.hci_version.filter(|_| s.hci_version_settled)
+    }
+
+    /// The controller's Bluetooth SIG company ID (its chip's maker), once it
+    /// has answered Read Local Version
+    pub fn controller_company(&self) -> Option<u16> {
+        self.shared.lock().controller_company
     }
 
     /// The controller has LE Audio's isochronous channels (its supported
@@ -1735,11 +1771,29 @@ impl BtHost {
     /// BTstack looks for an idle one only once, 10 s after it came up, so
     /// the link of a stream stays and keeps the headphones from going to
     /// another device (issue #270).
+    ///
+    /// AVRCP and HFP closes sent with the A2DP release are given
+    /// [`PROFILE_CLOSE_WAIT`] to be confirmed first: Airoha-based Sony
+    /// headphones stopped answering pages, also from phones, after the link
+    /// went down 20 ms after those closes (issue #602).
     pub fn drop_acl_link(&self, timeout: Duration) {
         if !self.hci_ready() {
             return;
         }
-        self.shared.update(|s| s.acl_down = false);
+        let closing = self.shared.lock().profiles_closing;
+        if closing != 0 {
+            let started = Instant::now();
+            let done = self.shared.wait(PROFILE_CLOSE_WAIT, false, |s| s.profiles_closing == 0);
+            tracing::debug!(
+                "drop ACL: profile closes 0x{closing:02X} {} after {} ms",
+                if done == Wait::Done { "confirmed" } else { "not confirmed" },
+                started.elapsed().as_millis()
+            );
+        }
+        self.shared.update(|s| {
+            s.acl_down = false;
+            s.profiles_closing = 0;
+        });
         if self.call(Duration::from_secs(2), |app, s| app.drop_acl(s)) != Some(true) {
             tracing::debug!("drop ACL: no link to drop");
             return;

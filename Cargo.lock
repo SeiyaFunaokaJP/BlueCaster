@@ -512,7 +512,7 @@ dependencies = [
 
 [[package]]
 name = "audio-capture"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "pcm-link",
  "serde",
@@ -733,7 +733,7 @@ dependencies = [
 
 [[package]]
 name = "bluecaster-core"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "audio-capture",
  "bt-host",
@@ -763,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "bluecaster-core-exe"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "audio-capture",
  "base64 0.22.1",
@@ -796,7 +796,7 @@ dependencies = [
 
 [[package]]
 name = "bluecaster-driver"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "embed-resource",
  "serde",
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "bluecaster-ui"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "embed-resource",
  "gpui-kit",
@@ -861,7 +861,7 @@ dependencies = [
 
 [[package]]
 name = "bt-host"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "btstack-sys",
  "codec",
@@ -875,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "btstack-sys"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "cc",
  "extern-version",
@@ -1180,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "codec"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "aptx-adaptive",
  "btstack-sys",
@@ -1776,7 +1776,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "dsp"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "nnnoiseless",
  "serde",
@@ -2013,7 +2013,7 @@ dependencies = [
 
 [[package]]
 name = "extern-version"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 
 [[package]]
 name = "fastrand"
@@ -2038,7 +2038,7 @@ dependencies = [
 
 [[package]]
 name = "fdkaac-sys"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "cc",
  "codec",
@@ -3801,7 +3801,7 @@ dependencies = [
 
 [[package]]
 name = "hci-transport"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "btstack-sys",
  "nusb",
@@ -3845,7 +3845,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hid-input"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "thiserror 2.0.21",
  "tracing",
@@ -4291,7 +4291,7 @@ dependencies = [
 
 [[package]]
 name = "input-helper"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "hid-input",
  "tokio",
@@ -4343,7 +4343,7 @@ dependencies = [
 
 [[package]]
 name = "ipc"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -4638,14 +4638,14 @@ checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "lc3-sys"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "ldac-sys"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "cc",
  "extern-version",
@@ -4653,7 +4653,7 @@ dependencies = [
 
 [[package]]
 name = "le-audio"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "tracing",
 ]
@@ -4666,7 +4666,7 @@ checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
 name = "lhdcv5-sys"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "cc",
  "extern-version",
@@ -5924,7 +5924,7 @@ dependencies = [
 
 [[package]]
 name = "openaptx-sys"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "cc",
  "extern-version",
@@ -5944,7 +5944,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "opus-sys"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "cc",
  "extern-version",
@@ -6076,7 +6076,7 @@ dependencies = [
 
 [[package]]
 name = "pcm-link"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -6239,7 +6239,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pipeline"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "bt-host",
  "codec",
@@ -7646,7 +7646,7 @@ dependencies = [
 
 [[package]]
 name = "session-host"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "audio-capture",
  "ipc",
@@ -7718,7 +7718,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sign-update"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "base64 0.22.1",
  "minisign",
@@ -8817,7 +8817,7 @@ dependencies = [
 
 [[package]]
 name = "ui-host"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "base64 0.22.1",
  "ipc",
@@ -8838,7 +8838,7 @@ dependencies = [
 
 [[package]]
 name = "ui-model"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "chrono",
  "ipc",
@@ -9087,7 +9087,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "voice-link"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "audio-capture",
  "btstack-sys",
@@ -9600,7 +9600,7 @@ dependencies = [
 
 [[package]]
 name = "win-sys"
-version = "3.0.5-beta.3"
+version = "3.0.5-beta.4"
 dependencies = [
  "nusb",
  "thiserror 2.0.21",

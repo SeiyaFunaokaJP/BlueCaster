@@ -5,7 +5,7 @@
 //! Same lifecycle as the LE Audio session ([`crate::le_stream`]), much
 //! shorter: refuse while Bluetooth LE is off for the stack
 //! (error.hearing_aid_needs_le); BTstack up with LE (wait for
-//! `BtHost::le_ready`, else error.hearing_aid_unavailable); connect the
+//! `BtHost::asha_ready`, else error.hearing_aid_unavailable); connect the
 //! hearing aid and, when it is one of a pair, look for the other side by
 //! what both advertise and connect it too (not found: the stream plays to
 //! the one, status.hearing_aid_one); start them ([`AshaStream::start`]);
@@ -137,9 +137,11 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
     tracing::info!("hearing aid stream ({})", crate::diag::quoted(&req.device_name));
     let stopped = || inner.stop_requested();
     let ready = || inner.notify(StreamState::Idle, Msg::new("status.ready"));
-    if !inner.le_wanted() || matches!(req.source, SourceRequest::Application { .. }) {
-        let key = if inner.le_wanted() { "error.le_audio_capture" } else { "error.hearing_aid_needs_le" };
-        return inner.notify(StreamState::Error, Msg::new(key));
+    if !inner.asha_wanted() {
+        return inner.notify(StreamState::Error, Msg::new("error.hearing_aid_needs_le"));
+    }
+    if matches!(req.source, SourceRequest::Application { .. }) {
+        return inner.notify(StreamState::Error, Msg::new("error.le_audio_capture"));
     }
     inner.notify(StreamState::Connecting, Msg::new("status.initializing_btstack"));
     let host = match inner.ensure_host() {
@@ -147,13 +149,13 @@ pub(crate) fn run(inner: &Arc<Inner>, req: StreamRequest) {
         Err(m) => return inner.notify(StreamState::Error, m),
     };
     let until = Instant::now() + READY_WAIT;
-    while !host.le_ready() && Instant::now() < until && !stopped() {
+    while !host.asha_ready() && Instant::now() < until && !stopped() {
         inner.wait_tick(Duration::from_millis(100));
     }
     if stopped() {
         return ready();
     }
-    if !host.le_ready() {
+    if !host.asha_ready() {
         return inner.notify(StreamState::Error, Msg::new("error.hearing_aid_unavailable"));
     }
 

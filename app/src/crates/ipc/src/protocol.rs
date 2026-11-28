@@ -1209,6 +1209,8 @@ pub struct DevOverrides {
     /// The microphone's Auto looks for recording apps on the session's
     /// tick, not with its own watcher
     pub auto_mic_tick_poll: bool,
+    /// ABR climbs faster and higher than Android's (LHDC V5, LDAC)
+    pub abr_extended: bool,
 }
 
 /// Developer mode's override of one vendor's protocol
@@ -1434,6 +1436,11 @@ pub struct Settings {
     /// connection (settings.le_audio_deferred).
     #[serde(default)]
     pub le_audio_experimental: bool,
+    /// Hearing aids (ASHA, a proof of concept; off by default): hearing aids
+    /// in the scan and their streams, with or without LE Audio. Applied like
+    /// le_audio_experimental (settings.le_audio_deferred).
+    #[serde(default)]
+    pub hearing_aids: bool,
     /// LE Audio: GMAP low latency for gaming headsets (read when the next
     /// LE Audio stream is set up); only with le_audio_experimental
     #[serde(default)]

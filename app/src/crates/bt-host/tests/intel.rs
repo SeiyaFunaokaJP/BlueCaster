@@ -311,6 +311,17 @@ struct Run {
 /// Runs the loader to its end; `images`: the Secure Send command count of
 /// each image in download order
 fn run(ctl: &mut Controller, files: HashMap<String, Vec<u8>>, images: &[(u8, u8, &str)]) -> Run {
+    run_with(ctl, files, images, None)
+}
+
+/// [`run`] with a reader of Intel's driver; `images` names the files to
+/// count in either
+fn run_with(
+    ctl: &mut Controller,
+    files: HashMap<String, Vec<u8>>,
+    images: &[(u8, u8, &str)],
+    driver: Option<(DriverReader, HashMap<String, Vec<u8>>)>,
+) -> Run {
     let read: Rc<RefCell<Vec<String>>> = Rc::default();
     let log = read.clone();
     let files_for_reader = files.clone();
@@ -318,9 +329,14 @@ fn run(ctl: &mut Controller, files: HashMap<String, Vec<u8>>, images: &[(u8, u8,
         log.borrow_mut().push(name.to_owned());
         files_for_reader.get(name).cloned()
     }));
+    let mut all = files.clone();
+    if let Some((reader, driver_files)) = driver {
+        loader = loader.with_driver(reader);
+        all.extend(driver_files);
+    }
     let mut images: VecDeque<usize> = images
         .iter()
-        .map(|&(variant, sbe, name)| parse_sfi(&files[name], variant, sbe).unwrap().commands.len())
+        .map(|&(variant, sbe, name)| parse_sfi(&all[name], variant, sbe).unwrap().commands.len())
         .collect();
     let mut actions: VecDeque<Action> = loader.start().into();
     let mut timer = false;
@@ -401,6 +417,69 @@ fn tlv_download_boot_and_ddc() {
 }
 
 #[test]
+fn firmware_and_ddc_from_intels_driver() {
+    // The folder has neither file: the driver's are sent
+    let mut ctl = Controller::new(vec![
+        tlv_version(0x18, IMG_BOOTLOADER, 1, None),
+        [vec![0x00], tlv(0x1C, &[IMG_OPERATIONAL])].concat(),
+    ]);
+    let asked: Rc<RefCell<Vec<driver::Request>>> = Rc::default();
+    let log = asked.clone();
+    let reader: DriverReader = Box::new(move |req| {
+        log.borrow_mut().push(req.clone());
+        Some(match req.kind {
+            driver::Kind::Firmware => sfi(true),
+            driver::Kind::Ddc => ddc(),
+        })
+    });
+    let counted = files(&[("ibt-0040-0041.sfi", sfi(true))]);
+    let run = run_with(&mut ctl, HashMap::new(), &[(0x18, 1, "ibt-0040-0041.sfi")], Some((reader, counted)));
+    assert_eq!(
+        run.result,
+        Some(Ok(Outcome::Loaded { firmware: "ibt-0040-0041.sfi".into(), detail: Some("DDC applied") }))
+    );
+    // The folder first
+    assert_eq!(run.files_read, ["ibt-0040-0041.sfi", "ibt-0040-0041.ddc"]);
+    let asked = asked.borrow();
+    let kinds: Vec<driver::Kind> = asked.iter().map(|r| r.kind).collect();
+    assert_eq!(kinds, [driver::Kind::Firmware, driver::Kind::Ddc]);
+    // CNVi 0040, CNVr 0041, bootloader; then the operational firmware
+    assert_eq!(asked[0].key[..5], [0x00, 0x40, 0x00, 0x41, IMG_BOOTLOADER]);
+    assert_eq!(asked[1].key[..5], [0x00, 0x40, 0x00, 0x41, IMG_OPERATIONAL]);
+    let ops: Vec<u16> = ctl.commands.iter().map(|c| opcode(c)).collect();
+    assert_eq!(ops, [0xFC05, 0xFC01, 0xFC05, 0xFC8B, 0xFC8B, 0xFC52]);
+}
+
+#[test]
+fn missing_from_the_folder_and_the_driver() {
+    let mut ctl = Controller::new(vec![tlv_version(0x18, IMG_BOOTLOADER, 1, None)]);
+    let reader: DriverReader = Box::new(|_| None);
+    let run = run_with(&mut ctl, HashMap::new(), &[], Some((reader, HashMap::new())));
+    assert_eq!(run.result, Some(Err(LoadError::MissingFile("ibt-0040-0041.sfi".into()))));
+}
+
+#[test]
+fn legacy_firmware_from_intels_driver() {
+    let mut ctl = Controller::new(vec![legacy_version(0x12, 0x10, 0x06, 0x01)]);
+    let asked: Rc<RefCell<Vec<driver::Request>>> = Rc::default();
+    let log = asked.clone();
+    let reader: DriverReader = Box::new(move |req| {
+        log.borrow_mut().push(req.clone());
+        (req.kind == driver::Kind::Firmware).then(|| sfi(false))
+    });
+    let counted = files(&[("ibt-18-16-1.sfi", sfi(false))]);
+    let run = run_with(&mut ctl, HashMap::new(), &[(0x12, 0, "ibt-18-16-1.sfi")], Some((reader, counted)));
+    assert_eq!(
+        run.result,
+        Some(Ok(Outcome::Loaded { firmware: "ibt-18-16-1.sfi".into(), detail: Some("DDC not applied") }))
+    );
+    let asked = asked.borrow();
+    // The bootloader's version, then the operational firmware variant
+    assert_eq!(asked[0].key, [0x37, 0x12, 0x10, 0x06, 0x01, 0x0A, 0x21, 0x15, 0x00]);
+    assert_eq!(asked[1].key[..5], [0x37, 0x12, 0x10, 0x23, 0x01]);
+}
+
+#[test]
 fn result_before_the_last_command_complete() {
     let mut ctl = Controller::new(vec![
         tlv_version(0x17, IMG_BOOTLOADER, 0, None),
@@ -434,6 +513,13 @@ fn missing_firmware_file() {
     let run = run(&mut ctl, HashMap::new(), &[]);
     assert_eq!(run.result, Some(Err(LoadError::MissingFile("ibt-0040-0041.sfi".into()))));
     assert!(ctl.bulk.is_empty());
+}
+
+#[test]
+fn missing_files_named_for_the_window() {
+    let loader = Loader::new(Box::new(|_| None));
+    assert_eq!(loader.missing_files("ibt-0040-2120.sfi"), ["ibt-0040-2120.sfi", "ibt-0040-2120.ddc"]);
+    assert_eq!(loader.missing_files("ibt-0040-0041-iml.sfi"), ["ibt-0040-0041-iml.sfi"]);
 }
 
 #[test]

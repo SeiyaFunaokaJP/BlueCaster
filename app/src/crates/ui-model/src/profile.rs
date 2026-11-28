@@ -219,10 +219,17 @@ pub fn le_audio_on(s: &Settings) -> bool {
     s.le_audio_experimental && s.developer_mode
 }
 
+/// Hearing aids in force: their own setting, only in developer mode, as
+/// the core has it (with or without LE Audio)
+pub fn hearing_aids_on(s: &Settings) -> bool {
+    s.hearing_aids && s.developer_mode
+}
+
 /// The saved devices with their profiles, in the saved list's order; LE
-/// Audio entries only with LE Audio on.
+/// Audio entries only with LE Audio on, hearing aids only with hearing aids
+/// on.
 pub fn audio_entries(snap: &Snapshot) -> Vec<AudioEntry> {
-    listed_devices(&snap.devices, le_audio_on(&snap.settings))
+    listed_devices(&snap.devices, le_audio_on(&snap.settings), hearing_aids_on(&snap.settings))
         .into_iter()
         .filter(|d| d.saved)
         .map(|d| AudioEntry {
@@ -277,10 +284,10 @@ pub fn device_base(device: &Device, profiles: &[Profile]) -> Profile {
     p
 }
 
-/// The saved hearing aids (ASHA, a proof of concept), listed while LE Audio
-/// is on: what a classic device can have beside it, for the other ear
+/// The saved hearing aids (ASHA, a proof of concept), listed while hearing
+/// aids are on: what a classic device can have beside it, for the other ear
 pub fn saved_hearing_aids(snap: &Snapshot) -> Vec<&Device> {
-    if !le_audio_on(&snap.settings) {
+    if !hearing_aids_on(&snap.settings) {
         return Vec::new();
     }
     snap.devices.iter().filter(|d| d.saved && d.le_audio && d.hearing_aid).collect()
@@ -649,10 +656,11 @@ pub fn multichannel_cable(d: &AudioDevice) -> bool {
 /// Audio" one). LE Audio off: the classic entries. On: a device with both
 /// is its LE Audio entry alone, saved when either is, under the classic
 /// name when it has none; "Use LE Audio when available" decides which of
-/// the two connects.
-pub fn listed_devices(devices: &[Device], le_audio: bool) -> Vec<Device> {
+/// the two connects. Hearing aids (LE entries of their own) only with
+/// `aids`, with or without LE Audio.
+pub fn listed_devices(devices: &[Device], le_audio: bool, aids: bool) -> Vec<Device> {
     if !le_audio {
-        return devices.iter().filter(|d| !d.le_audio).cloned().collect();
+        return devices.iter().filter(|d| !d.le_audio || (aids && d.hearing_aid)).cloned().collect();
     }
     let mut out = Vec::new();
     for d in devices {
@@ -668,6 +676,9 @@ pub fn listed_devices(devices: &[Device], le_audio: bool) -> Vec<Device> {
             }),
             None => out.push(d.clone()),
         }
+    }
+    if !aids {
+        out.retain(|d| !(d.le_audio && d.hearing_aid));
     }
     out
 }

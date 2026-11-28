@@ -184,6 +184,11 @@ pub trait ChipLoader {
     fn missing_file_hint(&self, file: &str) -> String {
         file.to_owned()
     }
+    /// The file names alone that go with a missing `file`, for the error
+    /// the window shows ("x.sfi, x.ddc")
+    fn missing_files(&self, file: &str) -> Vec<String> {
+        vec![file.to_owned()]
+    }
     /// The chip probe's record (crate::probe), also of a probe that stopped
     /// early; None for a loader
     fn take_report(&mut self) -> Option<crate::probe::ProbeReport> {

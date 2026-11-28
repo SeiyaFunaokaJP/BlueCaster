@@ -703,6 +703,11 @@ pub(crate) struct Inner {
     pub mic_dsp: voice_link::MicDsp,
     /// The running stack was started with LE Audio
     le_active: AtomicBool,
+    /// The running stack was started with hearing aids (ASHA)
+    asha_active: AtomicBool,
+    /// Hearing aids for every stack, whatever the setting says (the
+    /// command line's --asha)
+    asha_cli: AtomicBool,
     /// A broadcast session wants the stack (le_stream::run_broadcast): it
     /// opens the Auracast adapter (adapter::adapter_for)
     broadcast: AtomicBool,
@@ -916,6 +921,23 @@ impl Inner {
         self.le_active.load(Ordering::Acquire)
     }
 
+    /// The next stack should have hearing aids: the setting, or the command
+    /// line's --asha
+    pub fn asha_wanted(&self) -> bool {
+        self.asha_cli.load(Ordering::Acquire) || self.settings.lock().unwrap_or_else(|e| e.into_inner()).hearing_aids()
+    }
+
+    /// The running stack has hearing aids
+    pub fn asha_active(&self) -> bool {
+        self.asha_active.load(Ordering::Acquire)
+    }
+
+    /// The running stack was started with other LE settings than the next
+    /// one would be (LE Audio or hearing aids turned on or off)
+    fn le_mismatch(&self) -> bool {
+        self.le_active() != self.le_wanted() || self.asha_active() != self.asha_wanted()
+    }
+
     /// The adapter the next stack opens first: the Auracast adapter while a
     /// broadcast wants the stack, else the adapter to use
     fn wanted_adapter(&self) -> String {
@@ -990,7 +1012,7 @@ impl Inner {
         }
     }
 
-    fn host_config(&self, le_on: bool) -> HostConfig {
+    fn host_config(&self, le_on: bool, asha_on: bool) -> HostConfig {
         let mut s = self.settings.lock().unwrap_or_else(|e| e.into_inner()).clone();
         // The Auracast adapter for a broadcast: configure opens it first
         s.adapter_id = self.wanted_adapter();
@@ -1018,6 +1040,7 @@ impl Inner {
             bonds_file: crate::paths::le_bonds_file(&self.opts.config_dir),
             imported_bonds_file: Some(crate::paths::windows_le_keys_file(&self.opts.config_dir)),
         });
+        c.asha = asha_on;
         c.battery = true;
         // Keyboards and mice (experimental, developer mode; issue #413)
         c.hid = self.hid_config();
@@ -1059,15 +1082,19 @@ impl Inner {
         let attempts = 2;
         let mut last = InitFailure::Failed;
         let le_on = self.le_wanted();
+        let asha_on = self.asha_wanted();
         if le_on {
             tracing::info!("LE Audio is on: BTstack starts with LE");
+        }
+        if asha_on {
+            tracing::info!("hearing aids are on: BTstack starts with LE for them");
         }
         for attempt in 1..=attempts {
             if attempt > 1 {
                 tracing::warn!("the Bluetooth adapter did not answer, opening it again ({attempt}/{attempts})");
             }
             let t = Instant::now();
-            let started = BtHost::start(self.host_config(le_on), self.stats.clone());
+            let started = BtHost::start(self.host_config(le_on, asha_on), self.stats.clone());
             tracing::debug!(
                 "host start: attempt {attempt}/{attempts} {} after {} ms",
                 if started.is_ok() { "ok" } else { "failed" },
@@ -1080,6 +1107,7 @@ impl Inner {
                     h.set_media_keys(s.media_keys);
                     h.set_afh_policy(self.opts.afh.as_deref().unwrap_or(afh_policy(&s)));
                     self.le_active.store(le_on, Ordering::Release);
+                    self.asha_active.store(asha_on, Ordering::Release);
                     self.hid.stack_started();
                     self.streamed.store(false, Ordering::Release);
                     self.note_le_capable(&h);
@@ -1099,6 +1127,13 @@ impl Inner {
         // An adapter a firmware loader left needing a power cycle: the same
         // advice as for one that does not answer (unplug it, or shut down)
         let needs_replug = matches!(last, InitFailure::NoAnswer | InitFailure::NeedsReplug);
+        // An Intel controller in its bootloader (e.g. after a cold boot)
+        // without its files: name them, not the driver (issue #602)
+        if last == InitFailure::FirmwareMissing
+            && let Some(files) = bt_host::missing_firmware()
+        {
+            return Err(Msg::with("error.firmware_missing", &[&files]));
+        }
         Err(Msg::new(if needs_replug { "error.btstack_no_answer" } else { "error.btstack_init" }))
     }
 
@@ -1133,6 +1168,9 @@ impl Inner {
                     }
                     if address_saved && let Some(v) = host.hci_version() {
                         crate::adapter::save_hci_version(&dir, vid, pid, v);
+                        if let Some(c) = host.controller_company() {
+                            crate::adapter::save_company(&dir, vid, pid, c);
+                        }
                         return;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(250));
@@ -1249,6 +1287,8 @@ impl Inner {
                 // Turned on or off while streaming or scanning: applied now,
                 // before the next scan or connection (v1)
                 Some(if le_wanted { "LE Audio was turned on" } else { "LE Audio was turned off" })
+            } else if self.asha_active() != self.asha_wanted() {
+                Some(if self.asha_wanted() { "hearing aids were turned on" } else { "hearing aids were turned off" })
             } else if !self
                 .host_adapter
                 .lock()
@@ -1420,7 +1460,7 @@ impl Inner {
             h.shutdown();
             self.adapter_changed(false);
         }
-        let mut c = self.host_config(false);
+        let mut c = self.host_config(false, false);
         if let (TransportConfig::Usb(sel), Some(id)) = (&mut c.transport, instance_id) {
             sel.instance_id = Some(id);
             sel.vid_pid = None;
@@ -1720,6 +1760,8 @@ impl Service {
             hid: Default::default(),
             mic_dsp: voice_link::MicDsp::new(),
             le_active: AtomicBool::new(false),
+            asha_active: AtomicBool::new(false),
+            asha_cli: AtomicBool::new(false),
             broadcast: AtomicBool::new(false),
             host_adapter: Mutex::new(String::new()),
             broadcast_adapter: Mutex::new(String::new()),
@@ -1819,7 +1861,10 @@ impl Service {
         let media_keys = settings.media_keys;
         let afh = self.inner.opts.afh.clone().unwrap_or_else(|| afh_policy(&settings).to_owned());
         let old = std::mem::replace(&mut *self.inner.settings.lock().unwrap_or_else(|e| e.into_inner()), settings);
-        let new_le = self.inner.settings.lock().unwrap_or_else(|e| e.into_inner()).le_audio();
+        let (new_le, new_asha) = {
+            let s = self.inner.settings.lock().unwrap_or_else(|e| e.into_inner());
+            (s.le_audio(), s.hearing_aids())
+        };
         // A stack starting or stopping holds the slot, for up to tens of
         // seconds with an adapter that does not answer: the settings are not
         // kept waiting. A stack that starts reads them once it is up, and
@@ -1836,17 +1881,22 @@ impl Service {
             h.set_media_keys(media_keys);
             h.set_afh_policy(&afh);
         }
-        if old.le_audio() != new_le && host.is_some() && self.inner.le_active() != self.inner.le_wanted() {
+        let changed = if old.le_audio() != new_le {
+            Some(("LE Audio", new_le))
+        } else if old.hearing_aids() != new_asha {
+            Some(("hearing aids", new_asha))
+        } else {
+            None
+        };
+        if let Some((what, on)) = changed
+            && host.is_some()
+            && self.inner.le_mismatch()
+        {
+            let on = if on { "on" } else { "off" };
             if self.is_running() || self.is_scanning() {
-                tracing::info!(
-                    "LE Audio turned {}: BTstack restarts before the next scan or connection",
-                    if new_le { "on" } else { "off" }
-                );
+                tracing::info!("{what} turned {on}: BTstack restarts before the next scan or connection");
             } else {
-                tracing::info!(
-                    "LE Audio turned {}: stopping BTstack, the next scan or connection starts it anew",
-                    if new_le { "on" } else { "off" }
-                );
+                tracing::info!("{what} turned {on}: stopping BTstack, the next scan or connection starts it anew");
                 self.inner.shutdown_host();
             }
         }
@@ -1890,7 +1940,13 @@ impl Service {
     /// The LE Audio setting changed while the stack was in use: it is
     /// applied before the next scan or connection (settings.le_audio_deferred)
     pub fn le_audio_deferred(&self) -> bool {
-        self.host().is_some() && self.inner.le_active() != self.inner.le_wanted()
+        self.host().is_some() && self.inner.le_mismatch()
+    }
+
+    /// Hearing aids for every stack this service starts, whatever the
+    /// setting says (the command line's --asha)
+    pub fn set_hearing_aids_cli(&self, on: bool) {
+        self.inner.asha_cli.store(on, Ordering::Release);
     }
 
     /// What the LE Audio (experimental) stream was set up with, while one
@@ -2506,14 +2562,14 @@ impl Service {
         // Keyboards and mice (experimental): LE ones are listed too, also
         // without LE Audio (the stack runs LE for them)
         let hid_le = self.inner.hid_wanted() && host.hid_enabled();
-        if self.inner.le_active() {
+        if self.inner.le_active() || self.inner.asha_active() {
             let until = Instant::now() + LE_SCAN_READY_WAIT;
             while !host.le_ready() && Instant::now() < until {
                 std::thread::sleep(Duration::from_millis(100));
             }
             le_scan = host.le_scan_start();
             if !le_scan {
-                tracing::warn!("LE Audio not ready, LE scan skipped");
+                tracing::warn!("Bluetooth LE not ready, LE scan skipped");
             }
         } else if hid_le {
             let until = Instant::now() + LE_SCAN_READY_WAIT;
@@ -2525,14 +2581,18 @@ impl Service {
                 tracing::info!("keyboards and mice: no LE scan (the adapter has no LE, or it is not ready)");
             }
         }
-        // LE Audio's entries only with LE Audio on
+        // LE Audio's entries only with LE Audio on, hearing aids only with
+        // hearing aids on
         let audio_le = le_scan && self.inner.le_active();
+        let aids_le = le_scan && self.inner.asha_active();
         let le_started = Instant::now();
-        let (saved_le, own, sets) = if audio_le {
+        let saved_le =
+            if audio_le || aids_le { crate::devices::load_le(&self.inner.opts.config_dir) } else { Vec::new() };
+        let (own, sets) = if audio_le {
             let own: Vec<String> = win_sys::bt_radios::radios().into_iter().filter_map(|r| r.address).collect();
-            (crate::devices::load_le(&self.inner.opts.config_dir), own, self.inner.known_le_sets(Some(&host)))
+            (own, self.inner.known_le_sets(Some(&host)))
         } else {
-            (Vec::new(), Vec::new(), Default::default())
+            (Vec::new(), Default::default())
         };
         let saved = crate::devices::load(&self.inner.opts.config_dir);
         self.inner.notify(StreamState::Idle, Msg::new("status.scanning_devices"));
@@ -2552,8 +2612,10 @@ impl Service {
                     .chain(saved_le.iter().map(|d| (d.address.clone(), d.name.clone())))
                     .collect();
                 fill_le_names(&mut le, &known);
-                le.extend(hearing_aid_entries(&results, &saved_le));
                 list.extend(le);
+            }
+            if aids_le {
+                list.extend(hearing_aid_entries(&results, &saved_le));
             }
             if hid_le {
                 list.extend(hid_le_entries(&results));
@@ -2591,8 +2653,13 @@ impl Service {
             if hid_le {
                 tracing::info!("LE scan: {} keyboard(s) or mice", hid.len());
             }
+            let aids = if aids_le { hearing_aid_entries(&results, &saved_le) } else { Vec::new() };
+            if !aids.is_empty() {
+                tracing::info!("LE scan: {} hearing aid(s) or pair(s) listed", aids.len());
+            }
             if !audio_le {
-                le_found = hid.len();
+                le_found = hid.len() + aids.len();
+                list.extend(aids);
                 list.extend(hid);
                 self.inner.notify(StreamState::Idle, Msg::with("status.scan_complete", &[&(classic.len() + le_found)]));
                 return Ok(list);
@@ -2635,10 +2702,6 @@ impl Service {
                 .chain(saved_le.iter().map(|d| (d.address.clone(), d.name.clone())))
                 .collect();
             fill_le_names(&mut entries, &known);
-            let aids = hearing_aid_entries(&results, &saved_le);
-            if !aids.is_empty() {
-                tracing::info!("LE scan: {} hearing aid(s) or pair(s) listed", aids.len());
-            }
             entries.extend(aids);
             for r in classic_le_sides(&results, &known) {
                 tracing::info!(

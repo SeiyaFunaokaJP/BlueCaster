@@ -13,6 +13,7 @@
 
 use ldac_sys::{LdacAbr, LdacBt, SampleFormat, ffi};
 
+use crate::abr::StallMemory;
 use crate::{CodecKind, Encoded, Encoder, EncoderConfig, EncoderError, Pcm, PcmFormat, Quality};
 
 /// RTP header in front of the media payload (EncoderConfig::mtu excludes
@@ -38,12 +39,41 @@ const ABR_THRESHOLDS: (u32, u32, u32) = (12, 8, 4);
 /// going back up (#575).
 const ABR_DRAINED_DEPTH: u32 = 2;
 
+/// Developer mode's faster climb (`abr_extended`, #600): ABR steps
+/// ([`ABR_INTERVAL_MS`]) of a drained queue before one quality step up, 1 s.
+/// libldac waits 2 s (SQ to HQ) to 6 s (from MQ) per step; a step the queue
+/// backed up at waits like SBC's ([`StallMemory`]).
+const FAST_UP_TICKS: u32 = 10;
+
 const CODEC: CodecKind = CodecKind::Ldac;
+
+/// Rank of a quality mode on libldac's ladder, growing with the bit rate:
+/// MQ 0, Q1 (396 kbps) 1, Q0 (492 kbps) 2, SQ 3, HQ 4
+fn ladder_rank(eqmid: i32) -> u8 {
+    match eqmid {
+        ffi::LDACBT_EQMID_HQ => 4,
+        ffi::LDACBT_EQMID_SQ => 3,
+        ffi::LDACBT_EQMID_Q0 => 2,
+        ffi::LDACBT_EQMID_Q1 => 1,
+        _ => 0,
+    }
+}
+const LADDER_TOP: u8 = 4;
+
+/// State of the faster climb
+#[derive(Debug, Default)]
+struct FastClimb {
+    /// ABR steps in a row with a drained queue
+    calm: u32,
+    stalls: StallMemory,
+}
 
 pub struct LdacEncoder {
     bt: LdacBt,
     /// Some when EncoderConfig::abr is set and the ABR module started
     abr: Option<LdacAbr>,
+    /// Some with developer mode's extended ABR on (`abr_extended`)
+    fast: Option<FastClimb>,
     /// The quality mode asked for, where ABR starts again after a reset
     eqmid: i32,
     format: PcmFormat,
@@ -130,6 +160,11 @@ impl LdacEncoder {
             None
         };
 
+        let fast = (abr.is_some() && crate::dev::overrides().abr_extended).then(|| {
+            tracing::info!("LDAC: extended ABR (developer mode), one quality step up per second");
+            FastClimb::default()
+        });
+
         let bitrate_kbps = u32::try_from(bt.bitrate()).unwrap_or(0);
         tracing::info!(
             "LDAC: initialized (rate={}, ch={}, {}-bit, quality={:?}, transport mtu={}, bitrate={} kbps, abr={})",
@@ -144,6 +179,7 @@ impl LdacEncoder {
         Ok(LdacEncoder {
             bt,
             abr,
+            fast,
             eqmid,
             format,
             channels: config.channels as usize,
@@ -160,6 +196,34 @@ impl LdacEncoder {
     /// Quality mode libldac encodes at now (ABR moves it)
     pub fn eqmid(&self) -> i32 {
         self.bt.eqmid()
+    }
+
+    /// Developer mode's faster climb, after libldac's ABR step: one
+    /// quality step up per [`FAST_UP_TICKS`] of a drained queue (longer
+    /// back to a step the queue backed up at). libldac still steps down,
+    /// and may step up itself. `before` is the quality mode before
+    /// libldac's step.
+    fn fast_climb(&mut self, before: i32, drained: bool) {
+        let Some(fast) = self.fast.as_mut() else { return };
+        let (from, here) = (ladder_rank(before), ladder_rank(self.bt.eqmid()));
+        if here < from {
+            fast.stalls.stepped_down("LDAC", from);
+            fast.calm = 0;
+        } else if here > from || !drained {
+            fast.calm = 0;
+        } else {
+            fast.calm += 1;
+        }
+        fast.stalls.tick("LDAC", here, fast.calm, FAST_UP_TICKS);
+        if here >= LADDER_TOP || fast.calm < fast.stalls.wait(here, here + 1, FAST_UP_TICKS) {
+            return;
+        }
+        fast.calm = 0;
+        let eqmid = self.bt.eqmid();
+        match self.bt.alter_eqmid_priority(ffi::LDACBT_EQMID_INC_QUALITY) {
+            Ok(()) => tracing::debug!("LDAC: extended ABR quality mode {eqmid} -> {}", self.bt.eqmid()),
+            Err(e) => tracing::warn!("LDAC: extended ABR step up from {eqmid} failed: {e}"),
+        }
     }
 
     fn encode_error(e: ldac_sys::Error) -> EncoderError {
@@ -233,7 +297,8 @@ impl Encoder for LdacEncoder {
     fn abr_adjust(&mut self, queue_depth: u32) {
         let Some(abr) = self.abr.as_mut() else { return };
         let before = self.bt.eqmid();
-        let observed = if queue_depth <= ABR_DRAINED_DEPTH { 0 } else { queue_depth };
+        let drained = queue_depth <= ABR_DRAINED_DEPTH;
+        let observed = if drained { 0 } else { queue_depth };
         match abr.process(&mut self.bt, observed, true) {
             Ok(eqmid) if eqmid != before => {
                 tracing::debug!("LDAC: ABR quality mode {before} -> {eqmid} (queue {queue_depth})");
@@ -241,6 +306,7 @@ impl Encoder for LdacEncoder {
             Ok(_) => {}
             Err(e) => tracing::warn!("LDAC: ABR step failed: {e}"),
         }
+        self.fast_climb(before, drained);
     }
 
     fn abr_active(&self) -> bool {
@@ -279,6 +345,9 @@ impl Encoder for LdacEncoder {
         match new_abr() {
             Ok(abr) => self.abr = Some(abr),
             Err(e) => tracing::warn!("LDAC: ABR restart failed, keeping its state: {e}"),
+        }
+        if let Some(fast) = self.fast.as_mut() {
+            *fast = FastClimb::default();
         }
         if self.bt.eqmid() != self.eqmid {
             match self.bt.set_eqmid(self.eqmid) {

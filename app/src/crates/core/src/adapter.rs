@@ -538,6 +538,10 @@ struct AdapterCaps {
     /// Device Manager's name while Windows' Bluetooth ran it
     #[serde(default, skip_serializing_if = "Option::is_none")]
     windows_name: Option<String>,
+    /// The Bluetooth SIG company ID the controller reports (its chip's
+    /// maker), as Windows' Bluetooth or a stack of BlueCaster read it
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    company: Option<u16>,
     /// The app version Broadcom's patch failed with on it (bt-host's
     /// broadcom loader): while it is this app's, the ROM runs
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -631,6 +635,23 @@ pub fn save_hci_version(dir: &Path, vid: u16, pid: u16, version: u8) {
     }
     entry.hci_version = Some(version);
     tracing::debug!("adapter caps: {} HCI version {version}, saving adapter_caps.json", caps_key(vid, pid));
+    write_caps(dir, &caps);
+}
+
+/// The company ID the controller on this VID:PID reported (its chip's maker)
+pub fn company(dir: &Path, vid: u16, pid: u16) -> Option<u16> {
+    load_caps(dir).get(&caps_key(vid, pid)).and_then(|c| c.company)
+}
+
+/// Remembers the controller's company ID
+pub fn save_company(dir: &Path, vid: u16, pid: u16, company: u16) {
+    let mut caps = load_caps(dir);
+    let entry = caps.entry(caps_key(vid, pid)).or_default();
+    if entry.company == Some(company) {
+        return;
+    }
+    entry.company = Some(company);
+    tracing::debug!("adapter caps: {} company 0x{company:04X}, saving adapter_caps.json", caps_key(vid, pid));
     write_caps(dir, &caps);
 }
 

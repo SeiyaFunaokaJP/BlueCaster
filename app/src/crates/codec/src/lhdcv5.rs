@@ -50,6 +50,12 @@ const ABR_TABLE_44K: [u32; 6] = [160, 192, 240, 320, 400, 400];
 const ABR_TABLE_48K: [u32; 6] = [160, 192, 256, 320, 400, 400];
 const ABR_TABLE_96K: [u32; 6] = [256, 320, 400, 400, 400, 400];
 const ABR_TABLE_192K: [u32; 6] = [256, 320, 400, 400, 400, 400];
+/// Developer mode's extended ABR (`abr_extended`, #600) adds the encoder's
+/// rates above 400 kbps (480 / 500, 900, 1000) up to the sink's and the
+/// MTU's maximum. Above 400 kbps a backed-up queue steps down one stage,
+/// and the next step down waits this long, so the queue the higher rate
+/// left behind does not also drop 400 kbps to the lowest stage
+const ABR_EXT_DOWN_HOLD: Duration = Duration::from_secs(1);
 
 // The queue guard of low latency without ABR. With the
 // link at its limit the send queue fills and never drains (packets go out
@@ -143,11 +149,16 @@ impl Guard {
 /// Adaptive bit rate state: stages of Android's table (lhdcv5BT_enc.c)
 #[derive(Debug)]
 struct Abr {
-    table: &'static [u32; 6],
-    /// The first stage at the table's highest rate (the tables repeat
-    /// 400 kbps at the end)
+    table: Vec<u32>,
+    /// The highest stage
     top: usize,
+    /// The first stage at 400 kbps, Android's highest (the tables repeat
+    /// 400 kbps at the end): where ABR starts, and above which a stall
+    /// steps down one stage instead of to the lowest
+    android_top: usize,
     index: usize,
+    /// No step down before this (after a step down from above 400 kbps)
+    down_hold: Option<Instant>,
     /// The first packet since the encoder was made or ABR was reset
     started: Option<Instant>,
     down_count: u32,
@@ -161,13 +172,31 @@ struct Abr {
 }
 
 impl Abr {
-    fn new(table: &'static [u32; 6]) -> Abr {
+    /// Android's stages: up to the first stage at the table's highest rate
+    fn new(table: &[u32]) -> Abr {
         let max = table.iter().copied().max().unwrap_or(0);
         let top = table.iter().position(|&r| r == max).unwrap_or(table.len() - 1);
+        Abr::with_stages(table[..=top].to_vec(), top)
+    }
+
+    /// Android's stages, then the encoder's rates (`rates`, its bit rate
+    /// table) above them up to index `max_inx`
+    fn extended(android: &[u32], rates: &[u32], max_inx: u32) -> Abr {
+        let mut abr = Abr::new(android);
+        let last = abr.table[abr.top];
+        let above = rates.iter().take(max_inx as usize + 1).copied().filter(|&r| r > last);
+        abr.table.extend(above);
+        abr.top = abr.table.len() - 1;
+        abr
+    }
+
+    fn with_stages(table: Vec<u32>, android_top: usize) -> Abr {
         Abr {
+            top: table.len() - 1,
             table,
-            top,
-            index: top,
+            android_top,
+            index: android_top,
+            down_hold: None,
             started: None,
             down_count: 0,
             down_sum: 0,
@@ -200,12 +229,18 @@ impl Abr {
             self.down_sum = 0;
             let starting = now.saturating_duration_since(started) < ABR_START_GRACE;
             let backed_up = if starting { avg >= ABR_START_DOWN_AVG } else { avg > ABR_DOWN_QUEUE_LENGTH_THRESHOLD };
+            let held = self.down_hold.is_some_and(|until| now < until);
             if backed_up {
                 self.calm = 0;
-                if self.index > 0 {
+                if self.index > 0 && !held {
                     self.stalls.stepped_down("LHDC V5", self.index as u8);
-                    self.index = 0;
-                    return Some(0);
+                    if self.index > self.android_top {
+                        self.index -= 1;
+                        self.down_hold = Some(now + ABR_EXT_DOWN_HOLD);
+                    } else {
+                        self.index = 0;
+                    }
+                    return Some(self.index);
                 }
             }
         }
@@ -226,6 +261,16 @@ impl Abr {
             return Some(self.index);
         }
         None
+    }
+
+    /// Back to the start: the same stages, counters and stalls cleared
+    fn restart(&mut self) {
+        *self = Abr::with_stages(std::mem::take(&mut self.table), self.android_top);
+    }
+
+    /// The rate ABR starts at: Android's highest (400 kbps)
+    fn start_rate(&self) -> u32 {
+        self.table[self.android_top]
     }
 }
 
@@ -397,15 +442,21 @@ impl LhdcV5Encoder {
 
         let packed = vec![0u8; block_size * 2 * (encoder_bits as usize / 8)];
 
-        // ABR table for this sample rate; start at its top (400 kbps)
+        // ABR table for this sample rate; start at Android's top (400 kbps)
         let abr = config.abr.then(|| {
-            let table = match config.sample_rate {
+            let table: &[u32] = match config.sample_rate {
                 44100 => &ABR_TABLE_44K,
                 96000 => &ABR_TABLE_96K,
                 192000 => &ABR_TABLE_192K,
                 _ => &ABR_TABLE_48K,
             };
-            Abr::new(table)
+            if crate::dev::overrides().abr_extended {
+                let abr = Abr::extended(table, &bitrate_table(config.sample_rate), max_inx);
+                tracing::info!("LHDC V5: extended ABR (developer mode), up to {} kbps", abr.table[abr.top]);
+                abr
+            } else {
+                Abr::new(table)
+            }
         });
 
         let mut encoder = LhdcV5Encoder {
@@ -566,8 +617,8 @@ impl Encoder for LhdcV5Encoder {
     /// Android does (lhdcv5BT_adjust_bitrate) and v1 did. Every 4 calls an
     /// average depth above 0 drops the bit rate to the lowest stage of the
     /// table (160 kbps, 256 at 96 / 192 kHz); 5 s with the queue empty
-    /// throughout raise it one stage, up to 400 kbps. Does nothing when ABR
-    /// is off.
+    /// throughout raise it one stage, up to 400 kbps (higher with
+    /// developer mode's extended ABR). Does nothing when ABR is off.
     fn abr_adjust(&mut self, queue_depth: u32) {
         self.abr_adjust_at(Instant::now(), queue_depth);
     }
@@ -580,7 +631,7 @@ impl Encoder for LhdcV5Encoder {
         self.guard.is_some()
     }
 
-    /// Back to the top of the ABR table (400 kbps), counters cleared; the
+    /// Back to where ABR starts (400 kbps), counters cleared; the
     /// queue guard back to the quality mode's bit rate
     fn abr_reset(&mut self) {
         if let Some(guard) = self.guard.as_mut() {
@@ -594,8 +645,8 @@ impl Encoder for LhdcV5Encoder {
             return;
         }
         let Some(abr) = self.abr.as_mut() else { return };
-        *abr = Abr::new(abr.table);
-        let rate = abr.table[abr.top];
+        abr.restart();
+        let rate = abr.start_rate();
         match self.enc.bitrate_index(rate) {
             Ok(inx) if self.current_index() != Some(inx) => {
                 if let Err(e) = self.enc.set_bitrate_index(inx, false) {
@@ -626,7 +677,7 @@ mod abr_tests {
     }
 
     /// An ABR past its start grace
-    fn running(table: &'static [u32; 6]) -> (Abr, Instant) {
+    fn running(table: &[u32]) -> (Abr, Instant) {
         let mut abr = Abr::new(table);
         let (t, sw) = feed(&mut abr, Instant::now(), 4000, 0);
         assert!(sw.is_empty(), "{sw:?}");
@@ -699,6 +750,70 @@ mod abr_tests {
         assert_eq!(sw, vec![(80, 0)]);
     }
 
+    fn extended_48k() -> Abr {
+        Abr::extended(&ABR_TABLE_48K, &bitrate_table(48000), ffi::LHDC_QUALITY_HIGH1)
+    }
+
+    #[test]
+    fn extended_stages_go_up_to_the_maximum_and_start_at_400() {
+        let abr = extended_48k();
+        assert_eq!(abr.table, vec![160, 192, 256, 320, 400, 500, 900, 1000]);
+        assert_eq!((abr.android_top, abr.index, abr.top), (4, 4, 7));
+        let abr = Abr::extended(&ABR_TABLE_44K, &bitrate_table(44100), ffi::LHDC_QUALITY_HIGH);
+        assert_eq!(abr.table, vec![160, 192, 240, 320, 400, 480, 900]);
+        let abr = Abr::extended(&ABR_TABLE_96K, &bitrate_table(96000), ffi::LHDC_QUALITY_LOW);
+        assert_eq!(abr.table, vec![256, 320, 400], "a sink that lists 400 kbps at most");
+    }
+
+    #[test]
+    fn extended_climbs_past_400() {
+        let mut abr = extended_48k();
+        let (_, sw) = feed(&mut abr, Instant::now(), 30_000, 0);
+        assert_eq!(sw.iter().map(|s| s.1).collect::<Vec<_>>(), vec![5, 6, 7]);
+        let at: Vec<u64> = sw.iter().map(|s| s.0).collect();
+        for (got, want) in at.iter().zip([5000, 10_000, 15_000]) {
+            assert!(got.abs_diff(want) <= 200, "{at:?}");
+        }
+    }
+
+    #[test]
+    fn extended_steps_down_one_stage_at_a_time_above_400() {
+        let mut abr = extended_48k();
+        let (t, _) = feed(&mut abr, Instant::now(), 20_000, 0);
+        assert_eq!(abr.index, 7);
+        // A queue that stays: 1000 -> 900 -> 500 -> 400, 1 s apart, then
+        // Android's drop to the lowest stage
+        let (_, sw) = feed(&mut abr, t, 5000, 1);
+        assert_eq!(sw.iter().map(|s| s.1).collect::<Vec<_>>(), vec![6, 5, 4, 0]);
+        // The next check (every 4 packets) after the 1 s hold
+        let at: Vec<u64> = sw.iter().map(|s| s.0).collect();
+        assert_eq!(at[0], 80);
+        for gap in at.windows(2).map(|w| w[1] - w[0]) {
+            assert!((1000..=1080).contains(&gap), "{at:?}");
+        }
+    }
+
+    #[test]
+    fn extended_settles_below_a_stage_that_stalled() {
+        let mut abr = extended_48k();
+        let (t, _) = feed(&mut abr, Instant::now(), 20_000, 0);
+        // One short backlog at 1000 kbps: one stage down
+        let (t, sw) = feed(&mut abr, t, 80, 1);
+        assert_eq!(sw, vec![(80, 6)]);
+        // Back to 1000 only after the stall wait (10 s), not 5 s
+        let (_, sw) = feed(&mut abr, t, 12_000, 0);
+        assert_eq!(sw.len(), 1, "{sw:?}");
+        assert!(sw[0].0.abs_diff(10_000) <= 200, "{sw:?}");
+    }
+
+    #[test]
+    fn extended_restart_keeps_the_stages() {
+        let mut abr = extended_48k();
+        let (_, _) = feed(&mut abr, Instant::now(), 20_000, 0);
+        abr.restart();
+        assert_eq!((abr.index, abr.top, abr.start_rate()), (4, 7, 400));
+    }
+
     #[test]
     fn the_encoder_follows_the_climb() {
         let cfg = EncoderConfig {
@@ -724,6 +839,52 @@ mod abr_tests {
             }
         }
         assert_eq!(seen, vec![160, 192, 256, 320, 400]);
+    }
+}
+
+#[cfg(test)]
+mod abr_extended_tests {
+    use super::*;
+
+    /// The encoder runs and encodes at the extended stages (the override is
+    /// global, so the ABR is swapped in by hand)
+    #[test]
+    fn the_encoder_climbs_to_1000_kbps_and_encodes_there() {
+        let cfg = EncoderConfig {
+            sample_rate: 48000,
+            channels: 2,
+            quality: Quality::High,
+            mtu: 1011,
+            bits_per_sample: 16,
+            abr: true,
+            peer: Default::default(),
+        };
+        let mut enc = LhdcV5Encoder::new(&cfg).unwrap();
+        enc.abr = Some(Abr::extended(&ABR_TABLE_48K, &bitrate_table(48000), ffi::LHDC_QUALITY_HIGH1));
+        let t = Instant::now();
+        let mut seen = vec![enc.bitrate_kbps()];
+        for i in 1..=1000 {
+            enc.abr_adjust_at(t + Duration::from_millis(i * 20), 0);
+            if seen.last() != Some(&enc.bitrate_kbps()) {
+                seen.push(enc.bitrate_kbps());
+            }
+        }
+        assert_eq!(seen, vec![400, 500, 900, 1000]);
+
+        // 1000 kbps frames: 5 ms of 1000 kbps is 625 bytes each
+        let pcm = vec![0i16; enc.pcm_frames_per_encode() * 2];
+        let mut out = vec![0u8; enc.max_output_bytes()];
+        let mut sizes = Vec::new();
+        for _ in 0..16 {
+            let r = enc.encode(Pcm::I16(&pcm), &mut out).unwrap();
+            if r.frames > 0 {
+                sizes.push(r.bytes / r.frames as usize);
+            }
+        }
+        assert!(!sizes.is_empty() && sizes.iter().all(|&b| b >= 600), "{sizes:?}");
+
+        enc.abr_reset();
+        assert_eq!(enc.bitrate_kbps(), 400);
     }
 }
 
