@@ -70,6 +70,9 @@ const RETRY_GAP: Duration = Duration::from_secs(5);
 const MAX_OPENS: u32 = 3;
 /// How long the earbuds have to confirm a listening mode
 const ECHO_TIMEOUT: Duration = Duration::from_secs(3);
+/// From asking for notifications to offering every listening mode, when no
+/// device info tells the model
+const INFO_WAIT: Duration = Duration::from_secs(3);
 
 /// Earbuds of this protocol, by their name
 pub fn is_airpods(device_name: &str) -> bool {
@@ -197,8 +200,15 @@ fn model_number(payload: &[u8]) -> Option<String> {
 /// The listening modes a model offers, as far as it is known
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Modes {
-    /// None known (yet): no noise control unless the earbuds report a mode
-    Unknown,
+    /// The device info not come yet: none offered, so that a model without
+    /// noise control never shows it for a moment
+    Waiting,
+    /// No noise control (a model without it, or no answer to a mode asked
+    /// for): none offered unless the earbuds report a mode
+    None,
+    /// A model not in the table: every mode offered, and the earbuds'
+    /// answers take out what they refuse
+    Probe,
     /// Off, noise cancellation, transparency
     Basic,
     /// And Adaptive
@@ -206,34 +216,29 @@ enum Modes {
 }
 
 impl Modes {
-    /// By the name the user sees, until the earbuds tell their model
-    fn by_name(name: &str) -> Modes {
-        let name = name.to_lowercase();
-        if name.contains("airpods pro") {
-            Modes::WithAdaptive
-        } else if name.contains("airpods max") {
-            Modes::Basic
-        } else {
-            Modes::Unknown
-        }
-    }
-
-    /// By the model number of the device info: only the ones known
+    /// By the model number of the device info (Apple's "Identify your
+    /// AirPods" page). Never by the name: the user chooses it.
     fn by_model(model: &str) -> Option<Modes> {
         match model {
-            // AirPods Pro (1st generation)
-            "A2084" => Some(Modes::Basic),
-            // AirPods Pro 2 (USB-C)
-            "A3048" => Some(Modes::WithAdaptive),
+            // AirPods 1, 2, 3 and 4 without noise cancellation
+            "A1523" | "A1722" | "A2031" | "A2032" | "A2564" | "A2565" | "A3050" | "A3053" | "A3054" => {
+                Some(Modes::None)
+            }
+            // AirPods Pro (1st generation), AirPods Max (Lightning, USB-C)
+            "A2083" | "A2084" | "A2096" | "A3184" => Some(Modes::Basic),
+            // AirPods Pro 2 (Lightning, USB-C), AirPods Pro 3, AirPods 4
+            // with noise cancellation, AirPods 5, AirPods Max 2
+            "A2698" | "A2699" | "A2931" | "A3047" | "A3048" | "A3049" | "A3063" | "A3064" | "A3065" | "A3055"
+            | "A3056" | "A3057" | "A3531" | "A3532" | "A3533" | "A3454" => Some(Modes::WithAdaptive),
             _ => None,
         }
     }
 
     fn list(self) -> Vec<NoiseMode> {
         match self {
-            Modes::Unknown => Vec::new(),
+            Modes::Waiting | Modes::None => Vec::new(),
             Modes::Basic => vec![NoiseMode::Off, NoiseMode::NoiseCancellation, NoiseMode::Transparency],
-            Modes::WithAdaptive => {
+            Modes::WithAdaptive | Modes::Probe => {
                 vec![NoiseMode::Off, NoiseMode::NoiseCancellation, NoiseMode::Transparency, NoiseMode::Adaptive]
             }
         }
@@ -244,10 +249,14 @@ impl Modes {
 struct Buds {
     status: BudsStatus,
     modes: Modes,
-    /// Adaptive was asked for and another mode came back: not offered again
-    no_adaptive: bool,
+    /// Asked for, and another mode came back: not offered again until the
+    /// earbuds report it
+    refused: Vec<NoiseMode>,
     /// A listening mode asked for, until the earbuds confirm one
     asked: Option<(NoiseMode, Instant)>,
+    /// Until when the device info is waited for; then a model not told is
+    /// probed
+    info_until: Option<Instant>,
     /// For the log, which counts what came
     counts: Counts,
 }
@@ -263,19 +272,20 @@ struct Counts {
 }
 
 impl Buds {
-    fn new(name: &str) -> Buds {
-        let modes = Modes::by_name(name);
-        let mut b =
-            Buds { status: BudsStatus::default(), modes, no_adaptive: false, asked: None, counts: Counts::default() };
-        b.update_modes();
-        b
+    fn new() -> Buds {
+        Buds {
+            status: BudsStatus::default(),
+            modes: Modes::Waiting,
+            refused: Vec::new(),
+            asked: None,
+            info_until: None,
+            counts: Counts::default(),
+        }
     }
 
     fn update_modes(&mut self) {
         let mut list = self.modes.list();
-        if self.no_adaptive {
-            list.retain(|m| *m != NoiseMode::Adaptive);
-        }
+        list.retain(|m| !self.refused.contains(m));
         self.status.noise_modes = list;
     }
 
@@ -310,12 +320,16 @@ impl Buds {
                 tracing::info!(
                     "AirPods: model {} ({})",
                     model.as_deref().unwrap_or("not given"),
-                    if known.is_some() { "known" } else { "not known, its modes as reported" }
+                    if known.is_some() { "known" } else { "not known, its modes as they answer" }
                 );
-                if let Some(m) = known {
-                    self.modes = m;
-                    self.update_modes();
+                // A mode already reported outweighs a table that says none
+                match known {
+                    Some(m) if !(m == Modes::None && self.status.noise.is_some()) => self.modes = m,
+                    Some(_) => {}
+                    None if self.modes == Modes::Waiting => self.modes = Modes::Probe,
+                    None => {}
                 }
+                self.update_modes();
             }
             Packet::Other(_) => self.counts.other += 1,
         }
@@ -346,30 +360,59 @@ impl Buds {
             && asked != mode
         {
             tracing::info!("AirPods: asked for {asked:?}, they keep {mode:?}");
-            if asked == NoiseMode::Adaptive {
-                self.no_adaptive = true;
-            }
+            self.refused.push(asked);
         }
-        // A mode reported: they have noise control, whatever the name said
-        if self.modes == Modes::Unknown {
-            self.modes = Modes::Basic;
+        // A mode reported: they have noise control, whatever the model said
+        match self.modes {
+            Modes::None => self.modes = Modes::Basic,
+            Modes::Waiting => self.modes = Modes::Probe,
+            _ => {}
         }
-        if mode == NoiseMode::Adaptive {
+        if mode == NoiseMode::Adaptive && self.modes == Modes::Basic {
             self.modes = Modes::WithAdaptive;
-            self.no_adaptive = false;
         }
+        self.refused.retain(|m| *m != mode);
         self.update_modes();
         self.status.noise = Some(mode);
     }
 
-    /// The deadline of a mode asked for passed
-    fn check_asked(&mut self, now: Instant) {
-        if let Some((mode, until)) = self.asked
+    /// The next deadline: of the device info or of a mode asked for
+    fn deadline(&self) -> Option<Instant> {
+        let info = self.info_until.filter(|_| self.modes == Modes::Waiting);
+        [info, self.asked.map(|(_, t)| t)].into_iter().flatten().min()
+    }
+
+    /// Deadlines passed: no device info, so every mode is offered; no answer
+    /// to a mode asked for from earbuds of a model not in the table that
+    /// never reported one, so they have no noise control and the choice
+    /// goes. True when what the app shows changed.
+    fn check_deadlines(&mut self, now: Instant) -> bool {
+        let mut changed = false;
+        if self.modes == Modes::Waiting
+            && let Some(until) = self.info_until
             && now >= until
         {
-            tracing::info!("AirPods: no answer to {mode:?}");
-            self.asked = None;
+            tracing::info!("AirPods: no device info, every listening mode offered");
+            self.modes = Modes::Probe;
+            self.update_modes();
+            changed = true;
         }
+        changed | self.check_asked(now)
+    }
+
+    fn check_asked(&mut self, now: Instant) -> bool {
+        let Some((mode, until)) = self.asked else { return false };
+        if now < until {
+            return false;
+        }
+        tracing::info!("AirPods: no answer to {mode:?}");
+        self.asked = None;
+        if self.modes == Modes::Probe && self.status.noise.is_none() {
+            self.modes = Modes::None;
+            self.update_modes();
+            return true;
+        }
+        false
     }
 }
 
@@ -387,13 +430,12 @@ pub struct Session {
 }
 
 impl Session {
-    /// Starts the thread for `device`, the device being streamed to;
-    /// `name` is its name (for the listening modes, never logged). What it
-    /// learns goes to `events` as [`ServiceEvent::Buds`].
-    pub fn start(host: Arc<BtHost>, device: [u8; 6], name: &str, events: Sender<ServiceEvent>) -> Option<Session> {
+    /// Starts the thread for `device`, the device being streamed to. What
+    /// it learns goes to `events` as [`ServiceEvent::Buds`].
+    pub fn start(host: Arc<BtHost>, device: [u8; 6], events: Sender<ServiceEvent>) -> Option<Session> {
         let (tx, rx) = mpsc::channel();
         let status = Arc::new(std::sync::Mutex::new(None));
-        let buds = Buds::new(name);
+        let buds = Buds::new();
         let thread_tx = tx.clone();
         let thread_status = status.clone();
         let spawned = std::thread::Builder::new().name("airpods".into()).spawn(move || {
@@ -463,7 +505,9 @@ fn run(
 
     loop {
         let now = Instant::now();
-        buds.check_asked(now);
+        if buds.check_deadlines(now) && channel.is_some() {
+            publish(&buds, &mut sent, true);
+        }
         if channel.is_none()
             && let Some(at) = next_open
             && now >= at
@@ -494,11 +538,9 @@ fn run(
         {
             connecting = None;
             register(host, id);
+            buds.info_until = Some(Instant::now() + INFO_WAIT);
         }
-        let wake = [connecting, next_open.filter(|_| channel.is_none()), buds.asked.map(|(_, t)| t)]
-            .into_iter()
-            .flatten()
-            .min();
+        let wake = [connecting, next_open.filter(|_| channel.is_none()), buds.deadline()].into_iter().flatten().min();
         let wait = wake.map_or(Duration::from_secs(3600), |t| t.saturating_duration_since(Instant::now()));
         let msg = match rx.recv_timeout(wait) {
             Ok(m) => m,
@@ -530,6 +572,7 @@ fn run(
                 if was_connecting && matches!(parse(&data), Some(Packet::Connected { .. })) {
                     connecting = None;
                     register(host, id);
+                    buds.info_until = Some(Instant::now() + INFO_WAIT);
                 }
                 publish(&buds, &mut sent, true);
             }
@@ -607,7 +650,7 @@ mod tests {
 
     #[test]
     fn battery_in_either_order() {
-        let mut b = Buds::new("AirPods Pro");
+        let mut b = Buds::new();
         b.on_packet(&hex("04 00 04 00 04 00 03 02 01 50 02 01 04 01 4B 01 01 08 01 1E 02 01"));
         assert_eq!(b.status.right, Some(BudBattery { percent: 80, charging: false }));
         assert_eq!(b.status.left, Some(BudBattery { percent: 75, charging: true }));
@@ -623,7 +666,7 @@ mod tests {
 
     #[test]
     fn battery_tolerates_odd_packets() {
-        let mut b = Buds::new("AirPods");
+        let mut b = Buds::new();
         // The count says 3, two entries came; a level above 100 is no level
         b.on_packet(&hex("04 00 04 00 04 00 03 02 01 C8 02 01 04 01 32 02 01 08 01"));
         assert_eq!(b.status.right, None);
@@ -637,33 +680,81 @@ mod tests {
 
     #[test]
     fn ear_states() {
-        let mut b = Buds::new("AirPods");
+        let mut b = Buds::new();
         b.on_packet(&hex("04 00 04 00 06 00 00 01"));
         assert_eq!(b.status.ear, vec![EarState::InEar, EarState::OutOfEar]);
         b.on_packet(&hex("04 00 04 00 06 00 02 03"));
         assert_eq!(b.status.ear, vec![EarState::InCase, EarState::InCase]);
     }
 
+    fn info(model: &str) -> Vec<u8> {
+        [&hex("04 00 04 00 1D 00 01 B2 00 08 00")[..], b"My buds\0", model.as_bytes(), b"\0Apple Inc.\0"].concat()
+    }
+
     #[test]
-    fn modes_by_name_and_model() {
-        assert_eq!(Buds::new("AirPods Pro").status.noise_modes.len(), 4);
-        assert_eq!(Buds::new("AirPods Max").status.noise_modes.len(), 3);
-        assert!(Buds::new("AirPods").status.noise_modes.is_empty());
-        // The model number corrects the name
-        let mut b = Buds::new("AirPods Pro");
-        let info = [&hex("04 00 04 00 1D 00 01 B2 00 08 00")[..], b"My buds\0A2084\0Apple Inc.\0"].concat();
-        assert_eq!(parse(&info), Some(Packet::DeviceInfo { model: Some("A2084".into()) }));
-        b.on_packet(&info);
-        assert!(!b.status.noise_modes.contains(&NoiseMode::Adaptive));
+    fn modes_by_model() {
+        assert_eq!(parse(&info("A2084")), Some(Packet::DeviceInfo { model: Some("A2084".into()) }));
+        let mut b = Buds::new();
+        b.on_packet(&info("A2084"));
+        assert_eq!(b.status.noise_modes.len(), 3);
+        // AirPods 4 with noise cancellation (#595)
+        let mut b = Buds::new();
+        b.on_packet(&info("A3056"));
+        assert_eq!(b.status.noise_modes.len(), 4);
+        // AirPods 4 without it
+        let mut b = Buds::new();
+        b.on_packet(&info("A3050"));
+        assert!(b.status.noise_modes.is_empty());
+        // A model without noise control does not hide a mode already reported
+        let mut b = Buds::new();
+        b.on_packet(&hex("04 00 04 00 09 00 0D 02 00 00 00"));
+        b.on_packet(&info("A3050"));
+        assert_eq!(b.status.noise, Some(NoiseMode::NoiseCancellation));
+        assert!(!b.status.noise_modes.is_empty());
         // No model in it
         assert_eq!(model_number(&hex("01 02")), None);
     }
 
     #[test]
-    fn a_reported_mode_shows_noise_control() {
-        let mut b = Buds::new("AirPods");
+    fn a_model_not_known_is_probed() {
+        // Every mode offered until the earbuds answer
+        let mut b = Buds::new();
+        b.on_packet(&info("A9999"));
+        assert_eq!(b.status.noise_modes.len(), 4);
+        // Off refused (another mode came back): not offered again
+        b.asked = Some((NoiseMode::Off, Instant::now() + ECHO_TIMEOUT));
+        b.on_packet(&hex("04 00 04 00 09 00 0D 03 00 00 00"));
+        assert_eq!(b.status.noise, Some(NoiseMode::Transparency));
+        assert!(!b.status.noise_modes.contains(&NoiseMode::Off));
+        assert_eq!(b.status.noise_modes.len(), 3);
+        // Reported later (a stem press): offered again
+        b.on_packet(&hex("04 00 04 00 09 00 0D 01 00 00 00"));
+        assert!(b.status.noise_modes.contains(&NoiseMode::Off));
+        // A timeout does not hide the modes of earbuds that reported one
+        b.asked = Some((NoiseMode::Adaptive, Instant::now()));
+        assert!(!b.check_asked(Instant::now()));
+        assert_eq!(b.status.noise_modes.len(), 4);
+    }
+
+    #[test]
+    fn no_answer_hides_noise_control() {
+        // Nothing offered while the device info may come
+        let mut b = Buds::new();
+        assert!(b.status.noise_modes.is_empty());
+        let now = Instant::now();
+        b.info_until = Some(now + INFO_WAIT);
+        assert_eq!(b.deadline(), Some(now + INFO_WAIT));
+        assert!(!b.check_deadlines(now));
+        // It never came: every mode offered
+        assert!(b.check_deadlines(now + INFO_WAIT));
+        assert_eq!(b.status.noise_modes.len(), 4);
+        assert_eq!(b.deadline(), None);
+        b.asked = Some((NoiseMode::NoiseCancellation, now + ECHO_TIMEOUT));
+        assert!(!b.check_asked(now));
+        assert!(b.check_asked(now + ECHO_TIMEOUT));
+        assert!(b.status.noise_modes.is_empty());
+        // A mode reported after all: shown again
         b.on_packet(&hex("04 00 04 00 09 00 0D 02 00 00 00"));
-        assert_eq!(b.status.noise, Some(NoiseMode::NoiseCancellation));
         assert_eq!(b.status.noise_modes.len(), 3);
         b.on_packet(&hex("04 00 04 00 09 00 0D 04 00 00 00"));
         assert_eq!(b.status.noise, Some(NoiseMode::Adaptive));
@@ -675,7 +766,9 @@ mod tests {
 
     #[test]
     fn adaptive_refused_is_not_offered_again() {
-        let mut b = Buds::new("AirPods Pro");
+        let mut b = Buds::new();
+        b.on_packet(&info("A3048"));
+        assert!(b.status.noise_modes.contains(&NoiseMode::Adaptive));
         b.asked = Some((NoiseMode::Adaptive, Instant::now() + ECHO_TIMEOUT));
         b.on_packet(&hex("04 00 04 00 09 00 0D 02 00 00 00"));
         assert_eq!(b.status.noise, Some(NoiseMode::NoiseCancellation));
@@ -685,7 +778,7 @@ mod tests {
 
     #[test]
     fn junk_is_counted_not_fatal() {
-        let mut b = Buds::new("AirPods");
+        let mut b = Buds::new();
         for p in
             [hex(""), hex("04 00"), hex("04 00 05 00 04 00 01"), hex("09 00 04 00 01 00"), hex("04 00 04 00 09 00")]
         {

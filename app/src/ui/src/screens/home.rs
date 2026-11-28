@@ -443,11 +443,15 @@ impl Render for DeviceCard {
             .gap(theme::S2)
             .min_w_0()
             .when(card.battery, |d| {
-                // Each bud and the case when the earbuds report them
-                let battery = bud_batteries(&key, stream, cx).unwrap_or_else(|| {
-                    battery_level(SharedString::from(format!("battery-{key}")), stream.battery, false, cx)
-                });
-                d.child(battery).child(div().text_color(p.text_2).child("|"))
+                // Each bud and the case when the earbuds report them; no
+                // separator after them, since they wrap and it was left on a
+                // line of its own (#595)
+                match bud_batteries(&key, stream, cx) {
+                    Some(buds) => d.child(buds),
+                    None => d
+                        .child(battery_level(SharedString::from(format!("battery-{key}")), stream.battery, false, cx))
+                        .child(div().text_color(p.text_2).child("|")),
+                }
             })
             .child(
                 div()

@@ -1584,8 +1584,8 @@ impl Inner {
 
     /// Opens the AirPods control channel of the stream to `device` (a
     /// running one ends first)
-    pub fn start_apple(&self, host: Arc<BtHost>, device: [u8; 6], name: &str) {
-        let session = crate::vendor::apple::Session::start(host, device, name, self.event_sender());
+    pub fn start_apple(&self, host: Arc<BtHost>, device: [u8; 6]) {
+        let session = crate::vendor::apple::Session::start(host, device, self.event_sender());
         *self.apple.lock().unwrap_or_else(|e| e.into_inner()) = session;
     }
 
