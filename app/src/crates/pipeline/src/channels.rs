@@ -92,7 +92,9 @@ impl Channels {
             ChannelSource::Right => ChannelSource::Left,
             ChannelSource::RearLeft => ChannelSource::RearRight,
             ChannelSource::RearRight => ChannelSource::RearLeft,
-            ChannelSource::Mono => ChannelSource::Mono,
+            ChannelSource::SubLeft => ChannelSource::SubRight,
+            ChannelSource::SubRight => ChannelSource::SubLeft,
+            other @ (ChannelSource::Mono | ChannelSource::SubMono | ChannelSource::Center) => other,
         }
     }
 

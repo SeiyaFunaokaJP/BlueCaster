@@ -13,12 +13,17 @@
 //! GAP_SUBEVENT_BIG_TERMINATED for every one -> advertising removed
 //! ("Auracast: stopped"). A BIG the controller ends by itself counts as a
 //! lost stream and ends the others.
+//!
+//! Slow sending (the controller takes only some of the rounds for a while,
+//! seen on a Realtek RTL8761 at half the rate): the BIGs are terminated and
+//! created again with the same parameters while the advertising stays, at
+//! most [`MAX_RECREATES`] times per broadcast.
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use btstack_sys::BigParams;
-use btstack_sys::consts::ERROR_CODE_SUCCESS;
+use btstack_sys::consts::{ERROR_CODE_COMMAND_DISALLOWED, ERROR_CODE_SUCCESS};
 use btstack_sys::events;
 use le_audio::broadcast::{
     ADV_INTERVAL, BroadcastConfig, BroadcastGroup, PA_INTERVAL, describe, group_adv_data, group_base_ad, group_plan,
@@ -33,11 +38,24 @@ use super::iso_send::queue_depth;
 /// A stop that gets no LE Terminate BIG Complete ends after this anyway
 const TERMINATE_TIMEOUT_MS: u32 = 3000;
 
+/// Times a broadcast's BIGs are set up again after slow sending at most
+pub(crate) const MAX_RECREATES: u32 = 3;
+
+/// A BIG created again is refused (Command Disallowed) while BTstack still
+/// holds the one just terminated: asked again this often, this many times
+const CREATE_RETRY_MS: u32 = 20;
+const CREATE_TRIES: u32 = 50;
+/// BIGs created again that are not all up after this long: the stream is
+/// lost (nothing waits for them as a start does)
+const RECREATE_TIMEOUT_MS: u32 = 5000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     /// LE Create BIG sent
     Creating,
     Streaming,
+    /// Slow sending: LE Terminate BIG sent, created again once all ended
+    Recreating,
     /// LE Terminate BIG sent (or waiting for a BIG still being created)
     Terminating,
 }
@@ -49,6 +67,8 @@ enum Big {
     Pending,
     /// Created: its BIS handles
     Up(Vec<u16>),
+    /// LE Terminate BIG sent, no answer yet
+    Ending,
     /// Not created, failed or terminated
     Gone,
 }
@@ -60,11 +80,18 @@ pub(crate) struct Broadcast {
     groups: Vec<BroadcastGroup>,
     /// Per group
     bigs: Vec<Big>,
+    /// Per group: its LE Create BIG
+    params: Vec<BigParams>,
+    /// Times the BIGs were set up again after slow sending
+    recreates: u32,
     /// The start waiting for the BIGs
     started: Option<(LeDone, Arc<Mutex<String>>)>,
     /// Stops waiting for the BIGs to end
     stopped: Vec<LeDone>,
     terminate_timer: Option<LeTimerId>,
+    /// BIGs set up again: LE Create BIG asked again after a refusal, then
+    /// the wait for them to come up
+    retry_timer: Option<LeTimerId>,
 }
 
 impl Broadcast {
@@ -85,6 +112,11 @@ impl Broadcast {
 
     fn group_of(&self, big_handle: u8) -> Option<usize> {
         self.groups.iter().position(|g| g.big_handle == big_handle)
+    }
+
+    /// Streaming, or its BIGs being set up again (the receivers keep it)
+    fn on_air(&self) -> bool {
+        self.state == State::Streaming || (self.recreates > 0 && self.state != State::Terminating)
     }
 }
 
@@ -137,15 +169,12 @@ impl LeCtx<'_> {
             }
         }
         let mut bigs = Vec::with_capacity(groups.len());
+        let mut all_params = Vec::with_capacity(groups.len());
         let mut failed = None;
         // The test knobs below only for more than one BIG: a single
         // broadcast keeps its preset
         let many = groups.len() > 1;
         for g in &groups {
-            if failed.is_some() {
-                bigs.push(Big::Gone);
-                continue;
-            }
             // Each BIG at its broadcast's own configuration (a matrix
             // layout's rear may run at another rate)
             let gp = group_plan(&plan, g);
@@ -161,6 +190,11 @@ impl LeCtx<'_> {
                 framing: p.framing,
                 code: config.code,
             };
+            if failed.is_some() {
+                bigs.push(Big::Gone);
+                all_params.push(params);
+                continue;
+            }
             let status_code = self.stack.big_create(&params);
             if status_code == ERROR_CODE_SUCCESS {
                 bigs.push(Big::Pending);
@@ -169,6 +203,7 @@ impl LeCtx<'_> {
                 failed = Some(format!("LE Create BIG failed (0x{status_code:02X})"));
                 bigs.push(Big::Gone);
             }
+            all_params.push(params);
         }
         let names: Vec<&str> = groups.iter().map(|g| g.name.as_str()).collect();
         tracing::debug!("Auracast: advertising {names:?}, creating {} BIG(s): {}", groups.len(), describe(&plan));
@@ -179,9 +214,12 @@ impl LeCtx<'_> {
             plan,
             groups,
             bigs,
+            params: all_params,
+            recreates: 0,
             started: Some((done, why)),
             stopped: Vec::new(),
             terminate_timer: None,
+            retry_timer: None,
         });
         if let Some(reason) = failed {
             self.fail_start(&reason);
@@ -196,6 +234,9 @@ impl LeCtx<'_> {
         if let Some((start, w)) = b.started.take() {
             set_why(&w, reason);
             start(false);
+        } else if b.state != State::Terminating && !self.core.shared.stream_lost.swap(true, Ordering::AcqRel) {
+            // Started already (BIGs set up again): the stream ends
+            tracing::warn!("LE Audio: stream lost: {reason}");
         }
         self.terminate_bigs();
     }
@@ -240,6 +281,10 @@ impl LeCtx<'_> {
         self.core.iso.stop(self.stack);
         let Some(b) = self.core.broadcast.as_mut() else { return };
         b.state = State::Terminating;
+        if let Some(t) = b.retry_timer.take() {
+            self.cancel_timer(t);
+        }
+        let Some(b) = self.core.broadcast.as_mut() else { return };
         for (g, big) in b.groups.iter().zip(b.bigs.iter_mut()) {
             if matches!(big, Big::Up(_)) {
                 let status = self.stack.big_terminate(g.big_handle);
@@ -253,23 +298,136 @@ impl LeCtx<'_> {
             self.finish_broadcast();
             return;
         }
-        if b.terminate_timer.is_some() {
+        self.arm_terminate_timer();
+    }
+
+    /// The broadcast goes if LE Terminate BIG gets no answer in time
+    fn arm_terminate_timer(&mut self) {
+        if self.core.broadcast.as_ref().is_none_or(|b| b.terminate_timer.is_some()) {
             return;
         }
         let timer = self.run_after(
             TERMINATE_TIMEOUT_MS,
             Box::new(|ctx| {
-                if let Some(b) = ctx.core.broadcast.as_mut() {
-                    b.terminate_timer = None;
-                }
-                if ctx.core.broadcast.as_ref().is_some_and(|b| b.state == State::Terminating) {
-                    tracing::warn!("Auracast: no answer to LE Terminate BIG, removing the broadcast");
-                    ctx.finish_broadcast();
+                let Some(b) = ctx.core.broadcast.as_mut() else { return };
+                b.terminate_timer = None;
+                match b.state {
+                    State::Terminating => {
+                        tracing::warn!("Auracast: no answer to LE Terminate BIG, removing the broadcast");
+                        ctx.finish_broadcast();
+                    }
+                    State::Recreating => {
+                        if !ctx.core.shared.stream_lost.swap(true, Ordering::AcqRel) {
+                            tracing::warn!("LE Audio: stream lost: no answer to LE Terminate BIG");
+                        }
+                        ctx.finish_broadcast();
+                    }
+                    State::Creating | State::Streaming => {}
                 }
             }),
         );
         if let Some(b) = self.core.broadcast.as_mut() {
             b.terminate_timer = Some(timer);
+        }
+    }
+
+    /// The ISO sender's slow sending: the BIGs are terminated and created
+    /// again (the advertising stays), [`MAX_RECREATES`] times at most
+    pub(crate) fn on_slow_broadcast(&mut self, why: &str) {
+        let Some(b) = self.core.broadcast.as_mut() else { return };
+        if b.state != State::Streaming {
+            return;
+        }
+        if b.recreates >= MAX_RECREATES || recreate_off() {
+            tracing::warn!("Auracast: {why}; the BIG(s) stay ({} set up again so far)", b.recreates);
+            return;
+        }
+        b.recreates += 1;
+        tracing::warn!("Auracast: {why}: setting the BIG(s) up again ({} of {MAX_RECREATES})", b.recreates);
+        self.core.iso.stop(self.stack);
+        let Some(b) = self.core.broadcast.as_mut() else { return };
+        b.state = State::Recreating;
+        for (g, big) in b.groups.iter().zip(b.bigs.iter_mut()) {
+            if matches!(big, Big::Up(_)) {
+                let status = self.stack.big_terminate(g.big_handle);
+                tracing::debug!("Auracast: terminating BIG {} to create it again: 0x{status:02X}", g.big_handle);
+                *big = if status == ERROR_CODE_SUCCESS { Big::Ending } else { Big::Gone };
+            }
+        }
+        if b.all_gone() {
+            self.create_bigs_again(0);
+        } else {
+            self.arm_terminate_timer();
+        }
+    }
+
+    /// Every BIG ended after slow sending: LE Create BIG again for each not
+    /// asked yet (on_big_created starts sending once all are up). BTstack
+    /// refuses it while it still holds the BIG just terminated (it frees it
+    /// after the event): asked again after [`CREATE_RETRY_MS`]. `tries`:
+    /// the refusals so far.
+    fn create_bigs_again(&mut self, tries: u32) {
+        let Some(b) = self.core.broadcast.as_mut() else { return };
+        let timer = b.terminate_timer.take();
+        b.state = State::Creating;
+        let mut failed = None;
+        let mut refused = false;
+        for (big, params) in b.bigs.iter_mut().zip(&b.params) {
+            if *big != Big::Gone {
+                continue;
+            }
+            let status = self.stack.big_create(params);
+            if status == ERROR_CODE_SUCCESS {
+                *big = Big::Pending;
+            } else if status == ERROR_CODE_COMMAND_DISALLOWED && tries < CREATE_TRIES {
+                refused = true;
+            } else {
+                tracing::warn!("Auracast: LE Create BIG {} refused again (0x{status:02X})", params.big_handle);
+                failed = Some(format!("LE Create BIG failed (0x{status:02X})"));
+                break;
+            }
+        }
+        if let Some(t) = timer {
+            self.cancel_timer(t);
+        }
+        if let Some(reason) = failed {
+            self.fail_start(&reason);
+            return;
+        }
+        if !refused {
+            if tries > 0 {
+                tracing::debug!("Auracast: LE Create BIG taken after {tries} refusal(s)");
+            }
+            // All asked: up within RECREATE_TIMEOUT_MS, or the stream is lost
+            let Some(n) = self.core.broadcast.as_ref().map(|b| b.recreates) else { return };
+            let timer = self.run_after(
+                RECREATE_TIMEOUT_MS,
+                Box::new(move |ctx| {
+                    let Some(b) = ctx.core.broadcast.as_mut() else { return };
+                    if b.recreates != n || b.state != State::Creating {
+                        return;
+                    }
+                    b.retry_timer = None;
+                    ctx.fail_start("no answer to LE Create BIG");
+                }),
+            );
+            if let Some(b) = self.core.broadcast.as_mut() {
+                b.retry_timer = Some(timer);
+            }
+            return;
+        }
+        let timer = self.run_after(
+            CREATE_RETRY_MS,
+            Box::new(move |ctx| {
+                let Some(b) = ctx.core.broadcast.as_mut() else { return };
+                b.retry_timer = None;
+                if b.state == State::Creating {
+                    ctx.create_bigs_again(tries + 1);
+                }
+            }),
+        );
+        if let Some(b) = self.core.broadcast.as_mut() {
+            b.retry_timer = Some(timer);
         }
     }
 
@@ -286,6 +444,11 @@ impl LeCtx<'_> {
                 State::Terminating => {
                     if b.all_gone() {
                         self.finish_broadcast();
+                    }
+                }
+                State::Recreating => {
+                    if b.all_gone() {
+                        self.create_bigs_again(0);
                     }
                 }
                 State::Creating | State::Streaming => {
@@ -326,7 +489,7 @@ impl LeCtx<'_> {
                     self.finish_broadcast();
                 }
             }
-            State::Streaming => {}
+            State::Streaming | State::Recreating => {}
             State::Creating => {
                 if !ok {
                     b.bigs[i] = if c.status == ERROR_CODE_SUCCESS { Big::Up(c.bis_handles) } else { Big::Gone };
@@ -357,6 +520,9 @@ impl LeCtx<'_> {
                     all.push((g.big_handle, handles.clone()));
                 }
                 b.state = State::Streaming;
+                if b.recreates > 0 {
+                    tracing::info!("Auracast: BIG(s) set up again ({} of {MAX_RECREATES})", b.recreates);
+                }
                 let frame_us = b.plan.preset.sdu_interval_us();
                 let plan = b.plan.clone();
                 let start = b.started.take();
@@ -381,7 +547,7 @@ impl LeCtx<'_> {
         for g in &b.groups {
             self.stack.broadcast_advertise_stop(g.big_handle);
         }
-        if let Some(t) = b.terminate_timer.take() {
+        for t in [b.terminate_timer.take(), b.retry_timer.take()].into_iter().flatten() {
             self.cancel_timer(t);
         }
         if let Some((start, why)) = b.started.take() {
@@ -404,12 +570,7 @@ impl LeCtx<'_> {
     /// The broadcasts of the running one, streaming (none before its BIGs
     /// are up or while it stops)
     pub(crate) fn broadcast_groups(&self) -> Vec<BroadcastGroup> {
-        self.core
-            .broadcast
-            .as_ref()
-            .filter(|b| b.state == State::Streaming)
-            .map(|b| b.groups.clone())
-            .unwrap_or_default()
+        self.core.broadcast.as_ref().filter(|b| b.on_air()).map(|b| b.groups.clone()).unwrap_or_default()
     }
 }
 
@@ -422,6 +583,12 @@ fn latency_override() -> Option<u16> {
         tracing::info!("Auracast: max transport latency {ms} ms (BLUECASTER_AURACAST_LATENCY_MS)");
         ms
     })
+}
+
+/// `BLUECASTER_AURACAST_NO_RECREATE=1` (a test knob): BIGs that send slowly
+/// are left as they are
+fn recreate_off() -> bool {
+    std::env::var("BLUECASTER_AURACAST_NO_RECREATE").is_ok_and(|v| v.trim() == "1")
 }
 
 /// Retransmissions for every BIG from `BLUECASTER_AURACAST_RTN` (a test

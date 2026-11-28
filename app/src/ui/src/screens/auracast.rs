@@ -12,8 +12,8 @@ use gpui_kit::component::Disableable as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, AppContext as _, AsyncApp, Context, Entity, EntityId, Global, IntoElement, ParentElement as _,
-    Render, SharedString, Styled as _, Subscription, Task, WeakEntity, Window, div, px,
+    AnyElement, App, AppContext as _, AsyncApp, AsyncWindowContext, Context, Entity, EntityId, Global, IntoElement,
+    ParentElement as _, Render, SharedString, Styled as _, Subscription, Task, WeakEntity, Window, div, px,
 };
 use ipc::{AudioDevice, AuracastReceiverCandidate, AuracastReceiverStatus, AuracastReceivers, Method, StreamStatus};
 use ui_model::i18n::t;
@@ -38,6 +38,8 @@ pub struct AuracastSession {
     s: Session,
     /// The names of the devices listed so far, for a chosen one that is gone
     names: DeviceNames,
+    /// The last broadcast started was asked for (auracast.last_start)
+    restored: bool,
     _follow: Subscription,
 }
 
@@ -69,6 +71,7 @@ fn session(core: &Entity<Core>, cx: &mut App) -> Entity<AuracastSession> {
             choices: Choices::default(),
             s: Session::default(),
             names: DeviceNames::new(),
+            restored: false,
             _follow: follow,
         }
     });
@@ -179,7 +182,50 @@ impl Auracast {
         this.sync_mixer(window, cx);
         this.read_devices(cx);
         this.read_follow(cx);
+        this.restore(window, cx);
         this
+    }
+
+    /// The form as the last broadcast started had it (kept by the core
+    /// across restarts), once per core connection and unless changed here
+    /// already; "follow" stays as the core keeps it
+    fn restore(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.session.read(cx).restored {
+            return;
+        }
+        self.session.update(cx, |s, _| s.restored = true);
+        let task = app::request::<Option<Method>>(Method::AuracastLastStart, cx);
+        cx.spawn_in(window, async move |this: WeakEntity<Self>, cx: &mut AsyncWindowContext| {
+            let Ok(Some(last)) = task.await else { return };
+            let Some(mut c) = Choices::from_start(&last) else { return };
+            let name = match &last {
+                Method::StreamStartBroadcast { source_id: Some(id), source_name: Some(n), .. } => {
+                    Some((id.clone(), n.clone()))
+                }
+                _ => None,
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                let untouched = {
+                    let now = &this.session.read(cx).choices;
+                    *now == Choices { follow: now.follow, ..Choices::default() }
+                };
+                if !untouched {
+                    return;
+                }
+                this.session.update(cx, |s, cx| {
+                    c.follow = s.choices.follow;
+                    if let Some((id, n)) = name {
+                        s.names.entry(id).or_insert(n);
+                    }
+                    s.choices = c.clone();
+                    cx.notify();
+                });
+                this.name.update(cx, |i, cx| i.set_value(c.name.clone(), window, cx));
+                this.code.update(cx, |i, cx| i.set_value(c.code.clone(), window, cx));
+                this.sync_mixer(window, cx);
+            });
+        })
+        .detach();
     }
 
     fn stream(&self, cx: &App) -> StreamStatus {
@@ -242,7 +288,7 @@ impl Auracast {
         let s = self.session.read(cx);
         let live = s.s.live(&st);
         let rear = !s.choices.matrix() || s.choices.rear != PairMode::Off;
-        let props = s.choices.mixed().then_some((rear, live && !s.s.asking));
+        let props = s.choices.mixed().then_some((rear, s.choices.sub(), live && !s.s.asking));
         self.mixer.update(cx, |m, cx| m.set_props(props, window, cx));
         self.volume.update(cx, |v, cx| v.set_off(!live, cx));
         cx.notify();
@@ -665,7 +711,7 @@ impl Auracast {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let p = *cx.palette();
-        let offered = arrangements(c.channels);
+        let offered = arrangements(c.channels, c.single);
         let mut section = ui::section(t("ui.dev.auracast_receivers"), None, cx)
             .child(ui::hint(t("ui.dev.auracast_receivers_hint"), cx));
         if offered.len() > 1 {
@@ -719,6 +765,19 @@ impl Auracast {
         if let Some(e) = c.receiver_error() {
             section = section.child(ui::hint(e, cx).text_color(p.bad_text));
         }
+        let set_l = set.clone();
+        section = section.child(ui::toggle(
+            "auracast-leave-receivers",
+            t("ui.dev.auracast_leave_receivers"),
+            Some(t("ui.dev.auracast_leave_receivers_hint").into()),
+            c.leave_receivers,
+            locked,
+            move |v: &bool, _, cx| {
+                let v = *v;
+                set_l(Box::new(move |c| c.leave_receivers = v), cx);
+            },
+            cx,
+        ));
         if !self.live_receivers.is_empty() {
             let lines = self.live_receivers.iter().map(|r| {
                 let bad = matches!(r.phase.as_str(), "failed" | "not_found" | "no_bass");

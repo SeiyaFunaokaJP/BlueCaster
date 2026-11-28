@@ -21,4 +21,8 @@ bis: Array<number>,
 /**
  * Why it failed, or what else it reports
  */
-detail: string, };
+detail: string, 
+/**
+ * Its battery level (%), when it has a Battery Service
+ */
+battery: number | null, };

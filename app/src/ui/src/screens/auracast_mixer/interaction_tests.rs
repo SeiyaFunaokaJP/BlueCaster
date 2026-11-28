@@ -44,7 +44,7 @@ fn open(cx: &mut TestAppContext) -> (Harness, AnyWindowHandle, Entity<AuracastMi
         cx.new(|_| Host { mixer })
     });
     let mixer = cx.read(|cx| host.read(cx).mixer.clone());
-    h.on(cx, w, |window, cx| mixer.update(cx, |m, cx| m.set_props(Some((true, false)), window, cx)));
+    h.on(cx, w, |window, cx| mixer.update(cx, |m, cx| m.set_props(Some((true, AuracastSub::None, false)), window, cx)));
     (h, w, mixer)
 }
 
@@ -108,7 +108,9 @@ fn a_field_being_typed_into_keeps_its_text_when_the_state_comes_again(cx: &mut T
     type_into(&mut h, cx, w, &center, "-1");
     // The mixer is read again (the broadcast's rear changed)
     h.answer("auracast.mix", Answer::Ok(mix_state(true, -9.0)));
-    h.on(cx, w, |window, cx| mixer.update(cx, |m, cx| m.set_props(Some((false, false)), window, cx)));
+    h.on(cx, w, |window, cx| {
+        mixer.update(cx, |m, cx| m.set_props(Some((false, AuracastSub::None, false)), window, cx))
+    });
     assert_eq!(shown(&mixer, cx, MixField::Center), "-1");
     // The other fields show the new state
     assert_eq!(shown(&mixer, cx, MixField::Surround), "0");
@@ -132,7 +134,9 @@ fn open_tws(cx: &mut TestAppContext) -> (Harness, AnyWindowHandle, Entity<Auraca
         cx.new(|_| Host { mixer })
     });
     let mixer = cx.read(|cx| host.read(cx).mixer.clone());
-    h.on(cx, w, |window, cx| mixer.update(cx, |m, cx| m.set_props(Some((false, false)), window, cx)));
+    h.on(cx, w, |window, cx| {
+        mixer.update(cx, |m, cx| m.set_props(Some((false, AuracastSub::None, false)), window, cx))
+    });
     (h, w, mixer)
 }
 
@@ -141,7 +145,7 @@ fn the_earbuds_mixer_reads_and_saves_through_tws_and_turns_on_from_its_switch(cx
     let (mut h, w, mixer) = open_tws(cx);
     assert!(h.methods().iter().any(|m| m == "tws.mix"));
     assert!(!h.methods().iter().any(|m| m.starts_with("auracast.")));
-    assert_eq!(cx.read(|cx| mixer.read(cx).outputs().len()), 2);
+    assert_eq!(cx.read(|cx| mixer.read(cx).output_names(AuracastSub::None).len()), 2);
     h.on(cx, w, |window, cx| mixer.update(cx, |m, cx| m.set_enabled(true, window, cx)));
     h.settle(cx);
     let calls = h.calls("tws.mix_set");
@@ -157,4 +161,60 @@ fn the_earbuds_mixer_reads_and_saves_through_tws_and_turns_on_from_its_switch(cx
     assert_eq!(last["mix"]["center_db"], json!(-6.0));
     assert_eq!(last["enabled"], Value::Null);
     assert!(h.calls("auracast.mix_set").is_empty());
+}
+
+/// The mixer on a page, as the Developer screen shows it
+struct PageHost {
+    mixer: Entity<AuracastMixer>,
+}
+
+impl Render for PageHost {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let section = self.mixer.update(cx, |m, cx| m.section(Vec::new(), cx));
+        crate::ui::page("page", "Page").child(div().flex().flex_col().gap(theme::S4).children(section))
+    }
+}
+
+/// The mixer on a page `width` wide (the window without its sidebar) and the
+/// card's inner right edge (the save button ends its row)
+fn on_page(cx: &mut TestAppContext, width: f32) -> (Harness, AnyWindowHandle, gpui_kit::Pixels) {
+    use gpui_kit::test::TestWindowExt as _;
+    let mut h = Harness::start(cx, snapshot());
+    h.answer("auracast.mix", Answer::Ok(mix_state(false, -3.0)));
+    let (w, host) = h.open_sized(cx, (width, 900.), |window, cx| {
+        let mixer = cx.new(|cx| AuracastMixer::new(window, cx));
+        cx.new(|_| PageHost { mixer })
+    });
+    let mixer = cx.read(|cx| host.read(cx).mixer.clone());
+    h.on(cx, w, |window, cx| mixer.update(cx, |m, cx| m.set_props(Some((true, AuracastSub::None, false)), window, cx)));
+    h.settle(cx);
+    let edge = h.on(cx, w, |window, _| window.find("mix-save").bounds()).right();
+    (h, w, edge)
+}
+
+/// The rightmost control of the grid: the last output's mute button
+fn last_column(h: &mut Harness, cx: &mut TestAppContext, w: AnyWindowHandle) -> gpui_kit::Bounds<gpui_kit::Pixels> {
+    use gpui_kit::test::TestWindowExt as _;
+    h.on(cx, w, |window, _| window.find_all(("mix-mute-out", 3usize)).remove(0).bounds())
+}
+
+#[gpui_kit::test]
+fn the_grid_fits_the_window_at_its_default_size(cx: &mut TestAppContext) {
+    // The default window (960) without the sidebar (240)
+    let (mut h, w, edge) = on_page(cx, 960. - 240.);
+    let last = last_column(&mut h, cx, w);
+    assert!(last.right() <= edge, "{last:?} past the card's edge {edge:?}");
+}
+
+#[gpui_kit::test]
+fn a_grid_wider_than_the_card_scrolls_sideways(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    let (mut h, w, edge) = on_page(cx, 560.);
+    let before = last_column(&mut h, cx, w);
+    assert!(before.left() > edge, "the last column starts out of view: {before:?}, edge {edge:?}");
+    // A plain mouse wheel over the grid scrolls it sideways
+    let over = h.on(cx, w, |window, _| window.find(("mix-solo-in", 0usize)).bounds()).center();
+    h.on(cx, w, |window, cx| crate::testing::wheel_at(window, over, -20., cx));
+    let after = last_column(&mut h, cx, w);
+    assert!(after.right() <= edge, "scrolled into view: {after:?}, edge {edge:?}");
 }

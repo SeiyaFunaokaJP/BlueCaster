@@ -9,6 +9,7 @@ pub mod adapter;
 pub mod asha;
 mod asha_stream;
 pub mod auracast_assist;
+pub mod auracast_last;
 pub mod broadcast_volume;
 pub mod compat;
 pub mod default_input;

@@ -124,6 +124,8 @@ LE Audio (experimental, LC3 over LE isochronous channels):
                         which broadcast of the layout (1, 2, ...; default 1)
   --assist-bis <list>   only these BIS of it, e.g. 1 (left) or 1,2; default:
                         the receiver picks
+  --assist-leave        close the link to each receiver once it plays (it
+                        keeps the broadcast; nothing takes it off at the end)
   --auracast-layout <layout>
                         stereo (default); split: left and right as two
                         broadcasts of their own (<name> L / <name> R, a mono
@@ -132,7 +134,13 @@ LE Audio (experimental, LC3 over LE isochronous channels):
                         rear BIS without a location, for --assist
                         <address>=<bis>); single-located: FL FR BL BR;
                         single-pairs: two subgroups of FL FR; single-per-bis:
-                        a subgroup per mono BIS; matrix-<front>-<rear>: the matrix
+                        a subgroup per mono BIS; single-2-1: 2.1, the
+                        subwoofer's FL FR subgroup (low passed, for a
+                        receiver left to itself) then the main pair's;
+                        single-2-1-mono: the same with one mono subwoofer
+                        BIS (three BIS); single-3-1: a mono subwoofer BIS,
+                        then FL FR and the centre;
+                        matrix-<front>-<rear>: the matrix
                         mixer's outputs, front (FL FR) and rear (RL RR) each
                         stereo (one broadcast), separate (a mono broadcast
                         each), subgroups (one broadcast of two subgroups) or
@@ -177,8 +185,8 @@ Keyboards and mice (experimental):
                         aid then plays its own side)
   --asha-delay <ms>     with --asha: delay the hearing aids by 0 to 500 ms,
                         to sync them with the A2DP device
-  --asha-volume <n>     with --asha and without -d: the hearing aids' volume,
-                        -128 (muted) to 0 (default -20)
+  --asha-volume <n>     with --asha: the hearing aids' volume, -128 (muted)
+                        to 0 (default -20)
   --hid-test <seconds>  start Bluetooth with keyboards and mice on and nothing
                         streamed, print their counts once a second for this
                         time and exit
@@ -402,6 +410,8 @@ struct LeArgs {
     assist_broadcast: Option<u8>,
     /// --assist-bis: BIS indexes (1-based)
     assist_bis: Vec<u8>,
+    /// --assist-leave
+    assist_leave: bool,
 }
 
 /// --le-scan without a time (v1 scan_seconds)
@@ -691,6 +701,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
                     Some(v.parse().ok().filter(|&n| n > 0).ok_or("--assist-broadcast takes 1, 2, ...")?);
             }
             "--assist-bis" => a.le.assist_bis = parse_bis_list(&value(&mut it, "--assist-bis")?)?,
+            "--assist-leave" => a.le.assist_leave = true,
             "--auracast-mono" => a.le.broadcast_mono = true,
             "--auracast-volume" => {
                 let v = value(&mut it, "--auracast-volume")?;
@@ -725,7 +736,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
                 let v = value(&mut it, "--auracast-layout")?;
                 if bt_host::BroadcastLayout::parse(&v).is_none() {
                     return Err(
-                        "--auracast-layout takes stereo, mono, split, single, single-located, single-pairs, single-per-bis, matrix-<front>-<rear> (each stereo, separate, subgroups or off), quad, front-rear, pairs, rear-subgroups or subgroups"
+                        "--auracast-layout takes stereo, mono, split, single, single-located, single-pairs, single-per-bis, single-2-1, single-2-1-mono, single-3-1, matrix-<front>-<rear> (each stereo, separate, subgroups or off), quad, front-rear, pairs, rear-subgroups or subgroups"
                             .into(),
                     );
                 }
@@ -764,9 +775,6 @@ fn parse(args: &[String]) -> Result<Args, String> {
     }
     if a.asha.aids.is_empty() && (a.asha.delay_ms != 0 || a.asha.volume.is_some()) {
         return Err("--asha-delay and --asha-volume need --asha".into());
-    }
-    if a.asha.volume.is_some() && a.device.is_some() {
-        return Err("--asha-volume is for hearing aids alone (without -d)".into());
     }
     if a.asha.aids.len() > 2 {
         return Err("--asha takes one hearing aid or both of a pair".into());
@@ -1148,7 +1156,11 @@ pub fn run(args: &[String]) -> i32 {
         le: None,
         asha: match a.asha.aids.first().and_then(|aid| parse_device_address(aid)) {
             Some(_) if aids_alone => Some(bluecaster_core::stream::AshaRequest::Device),
-            Some(aid) => Some(bluecaster_core::stream::AshaRequest::Beside { aid, delay_ms: a.asha.delay_ms }),
+            Some(aid) => Some(bluecaster_core::stream::AshaRequest::Beside {
+                aid,
+                delay_ms: a.asha.delay_ms,
+                volume: a.asha.volume.unwrap_or(bluecaster_core::asha::DEFAULT_VOLUME),
+            }),
             None => None,
         },
         headset_mic: if a.headset_mic_toggle.is_none() { a.headset_mic } else { HeadsetMic::Off },
@@ -1281,7 +1293,9 @@ fn stream_session(
                         streaming_since = Some(Instant::now());
                         // --asha-volume: the hearing aids' volume, as the
                         // slider sets it
-                        if let (Some(v), Some(host)) = (a.asha.volume, service.host()) {
+                        if a.device.is_none()
+                            && let (Some(v), Some(host)) = (a.asha.volume, service.host())
+                        {
                             let set = host.le_request_volume(bt_host::asha_level_of_volume(v));
                             outln!("Hearing aid volume {v}{}", if set { "" } else { " (not taken)" });
                         }
@@ -2048,6 +2062,7 @@ fn le_broadcast(a: &Args, service: &Service, rx: &mpsc::Receiver<ServiceEvent>, 
                         broadcast: usize::from(spec.broadcast.or(le.assist_broadcast).unwrap_or(1) - 1),
                         bis: spec.bis.clone().unwrap_or_else(|| le.assist_bis.clone()),
                         code: le.broadcast_code.clone(),
+                        leave: le.assist_leave,
                     })
                     .collect();
                 let out: bluecaster_core::auracast_assist::Out = Arc::new(|line: &str| outln!("{line}"));
@@ -2445,8 +2460,9 @@ mod tests {
         assert_eq!(a.asha.aids, ["00:A2:D0:00:00:22", "00:A2:D0:00:00:23"]);
         assert_eq!((a.asha.delay_ms, a.asha.volume, a.le.on), (0, None, false));
         assert!(a.device.is_none());
-        let a = parse(&args("--cli -d 00:A2:D0:00:00:02 --asha 00:A2:D0:00:00:23 --asha-delay 40")).unwrap();
-        assert_eq!((a.asha.aids.len(), a.asha.delay_ms, a.asha.volume), (1, 40, None));
+        let a = parse(&args("--cli -d 00:A2:D0:00:00:02 --asha 00:A2:D0:00:00:23 --asha-delay 40 --asha-volume -128"))
+            .unwrap();
+        assert_eq!((a.asha.aids.len(), a.asha.delay_ms, a.asha.volume), (1, 40, Some(-128)));
         assert!(a.device.is_some());
         // Repeated: the two of a pair
         let a = parse(&args("--cli --asha 00:A2:D0:00:00:22 --asha 00:A2:D0:00:00:23")).unwrap();
@@ -2454,7 +2470,6 @@ mod tests {
         for bad in [
             "--cli --asha-delay 40",
             "--cli --asha-volume -10",
-            "--cli -d 00:A2:D0:00:00:02 --asha 00:A2:D0:00:00:23 --asha-volume -10",
             "--cli --asha 00:A2:D0:00:00:22 --asha-delay 501",
             "--cli --asha 00:A2:D0:00:00:22 --asha-volume 1",
             "--cli --asha nonsense",

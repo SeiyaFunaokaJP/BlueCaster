@@ -10,8 +10,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
-use ipc::{AuracastMix, AuracastMixPreset, AuracastMixState};
-use pipeline::mix::{INPUTS, MixHandle, MixSettings, auto_matrix, effective_matrix, present_columns};
+use ipc::{AuracastMix, AuracastMixPreset, AuracastMixState, AuracastSub};
+use pipeline::mix::{
+    CROSSOVER_DEFAULT_HZ, FULL_RANGE_DEFAULT, INPUTS, MixHandle, MixSettings, Outputs, auto_matrix, effective_matrix,
+    present_columns,
+};
 use serde::{Deserialize, Serialize};
 
 const OUTPUTS: usize = 4;
@@ -58,6 +61,30 @@ pub struct Live {
     pub channels: usize,
     pub mask: u32,
     pub rear: bool,
+    /// A subwoofer layout: what the third and fourth outputs are
+    pub sub: AuracastSub,
+}
+
+/// The mixer's outputs for a stream with or without rear outputs, and its
+/// subwoofer
+pub fn outputs(rear: bool, sub: AuracastSub) -> Outputs {
+    match (rear, sub) {
+        (false, _) => Outputs::Front,
+        (true, AuracastSub::None) => Outputs::Rear,
+        (true, AuracastSub::Stereo) => Outputs::Sub,
+        (true, AuracastSub::Mono) => Outputs::SubMono,
+        (true, AuracastSub::Center) => Outputs::Center,
+    }
+}
+
+/// The subwoofer of the mixer's outputs, as the API names it
+pub fn sub_of(outputs: Outputs) -> AuracastSub {
+    match outputs {
+        Outputs::Front | Outputs::Rear => AuracastSub::None,
+        Outputs::Sub => AuracastSub::Stereo,
+        Outputs::SubMono => AuracastSub::Mono,
+        Outputs::Center => AuracastSub::Center,
+    }
 }
 
 fn initial(target: Target) -> MixHandle {
@@ -93,9 +120,17 @@ fn live_slot(target: Target) -> &'static Mutex<Option<Live>> {
     }
 }
 
-/// The stream running with the mixer (None: it ended)
+/// The stream running with the mixer (None: it ended, and solo and mute
+/// with it: a listening test does not silence the next stream)
 pub fn set_live(target: Target, live: Option<Live>) {
     *live_slot(target).lock().unwrap_or_else(|e| e.into_inner()) = live;
+    if live.is_none() {
+        let h = handle(target);
+        let s = h.get();
+        if s.monitoring() {
+            h.set(s.unmonitored());
+        }
+    }
 }
 
 fn live(target: Target) -> Option<Live> {
@@ -145,10 +180,8 @@ pub fn settings(m: &AuracastMix) -> MixSettings {
     for (d, x) in delay_ms.iter_mut().zip(&m.delay_ms) {
         *d = *x;
     }
-    let mut invert = [false; OUTPUTS];
-    for (i, x) in invert.iter_mut().zip(&m.invert) {
-        *i = *x;
-    }
+    let flags = |v: &[bool]| -> [bool; OUTPUTS] { std::array::from_fn(|i| v.get(i).copied().unwrap_or(false)) };
+    let inputs = |v: &[bool]| -> [bool; INPUTS] { std::array::from_fn(|i| v.get(i).copied().unwrap_or(false)) };
     MixSettings {
         auto: m.auto,
         center_db: m.center_db,
@@ -157,7 +190,14 @@ pub fn settings(m: &AuracastMix) -> MixSettings {
         normalize: m.normalize,
         matrix,
         delay_ms,
-        invert,
+        invert: flags(&m.invert),
+        crossover_hz: if m.crossover_hz > 0.0 { m.crossover_hz } else { CROSSOVER_DEFAULT_HZ },
+        mains_full_range: m.mains_full_range,
+        full_range: if m.full_range.is_empty() { FULL_RANGE_DEFAULT } else { flags(&m.full_range) },
+        solo_in: inputs(&m.solo_in),
+        mute_in: inputs(&m.mute_in),
+        solo_out: flags(&m.solo_out),
+        mute_out: flags(&m.mute_out),
     }
     .held()
 }
@@ -173,6 +213,13 @@ pub fn to_ipc(s: &MixSettings) -> AuracastMix {
         matrix: rows(&s.matrix),
         delay_ms: s.delay_ms.to_vec(),
         invert: s.invert.to_vec(),
+        crossover_hz: s.crossover_hz,
+        mains_full_range: s.mains_full_range,
+        full_range: s.full_range.to_vec(),
+        solo_in: s.solo_in.to_vec(),
+        mute_in: s.mute_in.to_vec(),
+        solo_out: s.solo_out.to_vec(),
+        mute_out: s.mute_out.to_vec(),
     }
 }
 
@@ -185,8 +232,8 @@ pub fn builtin_presets(target: Target) -> Vec<AuracastMixPreset> {
     let all = [true; INPUTS];
     let standard = MixSettings::default();
     let manual = |matrix| MixSettings { auto: false, matrix, ..standard };
-    let rear = auto_matrix(&all, false, true, &standard);
-    let fold = auto_matrix(&all, false, false, &standard);
+    let rear = auto_matrix(&all, false, Outputs::Rear, &standard);
+    let fold = auto_matrix(&all, false, Outputs::Front, &standard);
     let zero = [0.0f32; INPUTS];
     let list = match target {
         Target::Auracast => vec![
@@ -215,15 +262,26 @@ pub fn builtin_presets(target: Target) -> Vec<AuracastMixPreset> {
 
 /// The state for the stream running, else for a source of `channels`
 /// (default 8, the usual speakers) with or without rear outputs (TWS:
-/// without unless asked)
-pub fn state(target: Target, dir: &Path, channels: Option<u32>, rear: Option<bool>) -> AuracastMixState {
+/// without unless asked), with a subwoofer layout or not
+pub fn state(
+    target: Target,
+    dir: &Path,
+    channels: Option<u32>,
+    rear: Option<bool>,
+    sub: Option<AuracastSub>,
+) -> AuracastMixState {
     let file = load(target, dir);
     let s = handle(target).get();
     let live = live(target);
-    let (channels, mask, rear) = match live {
-        Some(l) => (l.channels, l.mask, l.rear),
-        None => (channels.map_or(8, |c| c.clamp(1, 8) as usize), 0, rear.unwrap_or(target == Target::Auracast)),
+    let (channels, mask, rear, sub) = match live {
+        Some(l) => (l.channels, l.mask, l.rear, l.sub),
+        None => {
+            let sub = sub.unwrap_or_default();
+            let rear = rear.unwrap_or(target == Target::Auracast) || sub != AuracastSub::None;
+            (channels.map_or(8, |c| c.clamp(1, 8) as usize), 0, rear, sub)
+        }
     };
+    let sub = if rear { sub } else { AuracastSub::None };
     let mut presets = builtin_presets(target);
     presets.extend(file.presets.into_iter().map(|p| AuracastMixPreset { builtin: false, ..p }));
     AuracastMixState {
@@ -233,18 +291,19 @@ pub fn state(target: Target, dir: &Path, channels: Option<u32>, rear: Option<boo
         channels: channels as u32,
         present: present_columns(channels, mask).to_vec(),
         rear,
-        effective: rows(&effective_matrix(channels, mask, rear, &s)),
+        sub,
+        effective: rows(&effective_matrix(channels, mask, outputs(rear, sub), &s)),
         enabled: target == Target::Auracast || file.enabled,
     }
 }
 
 /// New settings: heard at once while the stream runs with the mixer, and
-/// saved
+/// saved (but for solo and mute, which last until the stream ends)
 pub fn set(target: Target, dir: &Path, m: &AuracastMix) -> std::io::Result<()> {
     let s = settings(m);
     handle(target).set(s);
     let mut file = load(target, dir);
-    file.current = Some(to_ipc(&s));
+    file.current = Some(to_ipc(&s.unmonitored()));
     save(target, dir, &file)
 }
 
@@ -270,7 +329,7 @@ pub fn save_preset(target: Target, dir: &Path, name: &str, m: &AuracastMix) -> s
         return Err(std::io::Error::other("the name of a built-in preset"));
     }
     let mut file = load(target, dir);
-    let mix = to_ipc(&settings(m));
+    let mix = to_ipc(&settings(m).unmonitored());
     match file.presets.iter_mut().find(|p| p.name == name) {
         Some(p) => p.mix = mix,
         None => file.presets.push(AuracastMixPreset { name: name.into(), mix, builtin: false }),
@@ -317,17 +376,29 @@ mod tests {
         let mut m2 = m.clone();
         m2.delay_ms[0] = 3.0;
         save_preset(A, &dir, "Room", &m2).unwrap();
-        let st = state(A, &dir, Some(6), Some(false));
+        let st = state(A, &dir, Some(6), Some(false), None);
         let user: Vec<_> = st.presets.iter().filter(|p| !p.builtin).collect();
         assert_eq!(user.len(), 1);
         assert_eq!(user[0].mix.delay_ms[0], 3.0);
         assert_eq!(st.present, [true, true, true, true, true, true, false, false]);
         assert!(!st.rear);
+        // 2.1: four outputs, the rear two the subwoofer's, fed as the fronts
+        // but for the LFE, which is the subwoofer's alone
+        let st = state(A, &dir, Some(6), Some(false), Some(AuracastSub::Stereo));
+        assert!(st.rear && st.sub == AuracastSub::Stereo);
+        for (sub, front) in [(2, 0), (3, 1)] {
+            let (sub, front) = (&st.effective[sub], &st.effective[front]);
+            assert_eq!((&sub[..3], &sub[4..]), (&front[..3], &front[4..]));
+            assert_eq!((sub[3], front[3]), (1.0, 0.0));
+        }
+        // 3.1: the centre on the third output
+        let st = state(A, &dir, Some(6), Some(false), Some(AuracastSub::Center));
+        assert_eq!((st.effective[2][2], st.effective[0][2]), (1.0, 0.0));
         delete_preset(A, &dir, "Room").unwrap();
-        assert!(state(A, &dir, None, None).presets.iter().all(|p| p.builtin));
+        assert!(state(A, &dir, None, None, None).presets.iter().all(|p| p.builtin));
         // Not under a built-in preset's name
         assert!(save_preset(A, &dir, "standard", &m).is_err());
-        assert!(state(A, &dir, None, None).presets.iter().all(|p| p.builtin));
+        assert!(state(A, &dir, None, None, None).presets.iter().all(|p| p.builtin));
         // A file that cannot be read is kept aside, not written over
         save_preset(A, &dir, "Room", &m).unwrap();
         let path = crate::paths::auracast_mix_file(&dir);
@@ -337,7 +408,7 @@ mod tests {
         let aside = std::fs::read_to_string(path.with_extension("json.bad")).unwrap();
         assert_eq!(aside, saved[..saved.len() / 2]);
         let names: Vec<_> =
-            state(A, &dir, None, None).presets.into_iter().filter(|p| !p.builtin).map(|p| p.name).collect();
+            state(A, &dir, None, None, None).presets.into_iter().filter(|p| !p.builtin).map(|p| p.name).collect();
         assert_eq!(names, ["Other"]);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -365,22 +436,22 @@ mod tests {
     fn the_tws_mixer_is_its_own_and_off_until_turned_on() {
         let dir = std::env::temp_dir().join(format!("bc-tws-mix-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let st = state(Target::Tws, &dir, Some(2), None);
+        let st = state(Target::Tws, &dir, Some(2), None, None);
         assert!(!st.enabled && !st.rear);
         assert!(st.presets.iter().any(|p| p.name == "mono"));
         assert!(tws_for_stream(&dir).is_none());
         set_tws_enabled(&dir, true).unwrap();
-        assert!(state(Target::Tws, &dir, None, None).enabled);
+        assert!(state(Target::Tws, &dir, None, None, None).enabled);
         assert!(tws_for_stream(&dir).is_some());
         save_preset(Target::Tws, &dir, "Mine", &to_ipc(&MixSettings::default())).unwrap();
         // In its own file: the Auracast mixer keeps its own
         assert!(crate::paths::tws_mix_file(&dir).exists());
         assert!(!crate::paths::auracast_mix_file(&dir).exists());
-        assert!(state(A, &dir, None, None).enabled);
-        assert!(state(A, &dir, None, None).presets.iter().all(|p| p.builtin));
+        assert!(state(A, &dir, None, None, None).enabled);
+        assert!(state(A, &dir, None, None, None).presets.iter().all(|p| p.builtin));
         set_tws_enabled(&dir, false).unwrap();
         assert!(tws_for_stream(&dir).is_none());
-        assert_eq!(state(Target::Tws, &dir, None, None).presets.iter().filter(|p| !p.builtin).count(), 1);
+        assert_eq!(state(Target::Tws, &dir, None, None, None).presets.iter().filter(|p| !p.builtin).count(), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -72,6 +72,12 @@ fn is_zero(n: &u8) -> bool {
 fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
+fn default_aid_volume() -> i8 {
+    crate::asha::DEFAULT_VOLUME
+}
+fn is_default_aid_volume(v: &i8) -> bool {
+    *v == crate::asha::DEFAULT_VOLUME
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -178,6 +184,10 @@ pub struct Profile {
     /// milliseconds later (0 to 500)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub hearing_aid_delay_ms: u32,
+    /// With `hearing_aid_beside`: the hearing aid's volume, -128 (muted) to
+    /// 0 (written only when it is not the default)
+    #[serde(default = "default_aid_volume", skip_serializing_if = "is_default_aid_volume")]
+    pub hearing_aid_volume: i8,
     /// LE Audio: GMAP low-latency presets with a gaming headset (the LC3 LL
     /// card); other headsets get the media configuration either way. Off by
     /// default since issue #86 (LC3), written only when on: before, on was
@@ -288,6 +298,7 @@ impl Default for Profile {
             hearing_aid: false,
             hearing_aid_beside: String::new(),
             hearing_aid_delay_ms: 0,
+            hearing_aid_volume: crate::asha::DEFAULT_VOLUME,
             le_low_latency: false,
             le_swap_channels: false,
             le_alone_channel: String::new(),
@@ -594,7 +605,8 @@ impl Profile {
     }
 
     /// `new` differs only in what a running stream takes in place: the
-    /// playback EQ, the microphone processing, the LE Audio channels
+    /// playback EQ, the microphone processing, the LE Audio channels, the
+    /// delay and volume of the hearing aid beside it
     pub fn only_live_processing_differs(&self, new: &Profile) -> bool {
         *self != *new
             && Profile {
@@ -602,6 +614,8 @@ impl Profile {
                 mic_processing: new.mic_processing,
                 le_swap_channels: new.le_swap_channels,
                 le_alone_channel: new.le_alone_channel.clone(),
+                hearing_aid_delay_ms: new.hearing_aid_delay_ms,
+                hearing_aid_volume: new.hearing_aid_volume,
                 ..self.clone()
             } == *new
     }
@@ -675,6 +689,7 @@ impl Profile {
         Some(crate::stream::AshaRequest::Beside {
             aid,
             delay_ms: self.hearing_aid_delay_ms.min(crate::asha::MAX_DELAY_MS),
+            volume: self.hearing_aid_volume.min(0),
         })
     }
 
@@ -1749,7 +1764,7 @@ mod tests {
         };
         assert_eq!(
             classic.to_request(1023).unwrap().asha,
-            Some(AshaRequest::Beside { aid: [0x00, 0xA2, 0xD0, 0x00, 0x00, 0x23], delay_ms: 500 })
+            Some(AshaRequest::Beside { aid: [0x00, 0xA2, 0xD0, 0x00, 0x00, 0x23], delay_ms: 500, volume: -20 })
         );
         // None beside an LE Audio device, none for what is no address
         let le = Profile { le_audio: true, ..classic.clone() };
@@ -1757,6 +1772,18 @@ mod tests {
         assert!(le.to_request(1023).unwrap().le.is_some());
         let none = Profile { hearing_aid_beside: "none".into(), ..classic.clone() };
         assert_eq!(none.to_request(1023).unwrap().asha, None);
+        // Its volume, never above the loudest; another volume or delay is
+        // taken while the stream plays, another hearing aid is not
+        let quiet = Profile { hearing_aid_volume: -64, ..classic.clone() };
+        assert!(matches!(quiet.to_request(1023).unwrap().asha, Some(AshaRequest::Beside { volume: -64, .. })));
+        let loud = Profile { hearing_aid_volume: 5, ..classic.clone() };
+        assert!(matches!(loud.to_request(1023).unwrap().asha, Some(AshaRequest::Beside { volume: 0, .. })));
+        assert!(classic.only_live_processing_differs(&quiet));
+        assert!(classic.only_live_processing_differs(&Profile { hearing_aid_delay_ms: 40, ..classic.clone() }));
+        assert!(
+            !classic.only_live_processing_differs(&Profile { hearing_aid_beside: String::new(), ..classic.clone() })
+        );
+        assert!(serde_json::to_string(&quiet).unwrap().contains("\"hearing_aid_volume\":-64"));
         // Written only when set
         let text = serde_json::to_string(&Profile { device_address: "00:A2:D0:00:00:02".into(), ..Profile::default() })
             .unwrap();

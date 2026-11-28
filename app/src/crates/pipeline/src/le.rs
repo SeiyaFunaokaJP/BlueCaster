@@ -511,6 +511,14 @@ impl FrameEncoder {
                 ChannelSource::Right => r,
                 ChannelSource::RearLeft => rl,
                 ChannelSource::RearRight => rr,
+                // The 2.1 broadcast's subwoofer: the mixer's third and
+                // fourth outputs
+                ChannelSource::SubLeft => rl,
+                ChannelSource::SubRight => rr,
+                // 3.1: the centre on the third output; a mono subwoofer
+                // (2.1 or 3.1) on the fourth
+                ChannelSource::Center => rl,
+                ChannelSource::SubMono => rr,
                 ChannelSource::Mono => {
                     for (m, (&l, &r)) in mono.iter_mut().zip(l.iter().zip(r)) {
                         *m = 0.5 * (l + r);
@@ -628,7 +636,7 @@ impl LeEncoder {
         }
         // The speakers one by one when the plan has rear channels; the
         // source's mask comes with [`LeEncoder::with_channel_mask`]
-        let mix = if layout.channels.iter().any(|c| c.source.is_rear()) {
+        let mix = if layout.channels.iter().any(|c| c.source.is_third_lane_on()) {
             Mix::Speakers(speaker_matrix(usize::from(input.channels), 0).0)
         } else {
             Mix::Stereo
@@ -683,14 +691,22 @@ impl LeEncoder {
     /// polarity, followed while the stream runs. After
     /// [`LeEncoder::with_channel_mask`].
     pub fn with_mixer(mut self, handle: crate::mix::MixHandle) -> LeEncoder {
-        let rear_out = matches!(self.mix, Mix::Speakers(_));
+        use crate::mix::Outputs;
+        let speakers = matches!(self.mix, Mix::Speakers(_));
+        let outputs = crate::mix::outputs_for(self.frame.layout.channels.iter().map(|c| c.source), speakers);
         let channels = usize::from(self.input.channels);
         tracing::info!(
-            "LE Audio: matrix mixer: {channels} ch (mask 0x{:x}), {} outputs",
+            "LE Audio: matrix mixer: {channels} ch (mask 0x{:x}), {}",
             self.mask,
-            if rear_out { 4 } else { 2 }
+            match outputs {
+                Outputs::Front => "2 outputs",
+                Outputs::Rear => "4 outputs",
+                Outputs::Sub => "2.1 (the subwoofer's left and right on outputs 3 and 4)",
+                Outputs::SubMono => "2.1 (a mono subwoofer on output 4)",
+                Outputs::Center => "3.1 (the centre on output 3, a mono subwoofer on output 4)",
+            }
         );
-        self.mixer = Some(crate::mix::Mixer::new(handle, channels, self.mask, rear_out, self.input.sample_rate));
+        self.mixer = Some(crate::mix::Mixer::new(handle, channels, self.mask, outputs, self.input.sample_rate));
         self
     }
 

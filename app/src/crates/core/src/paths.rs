@@ -300,6 +300,13 @@ pub fn auracast_mix_file(config: &Path) -> PathBuf {
     config.join("auracast_mix.json")
 }
 
+/// The last broadcast started (stream.start_broadcast's parameters, but
+/// for the Broadcast_Code: [`auracast_code_file`]): the Auracast form
+/// shows it again
+pub fn auracast_last_file(config: &Path) -> PathBuf {
+    config.join("auracast_last.json")
+}
+
 /// The TWS matrix mixer (LE Audio to a device), whether it is on, and its
 /// presets (developer mode)
 pub fn tws_mix_file(config: &Path) -> PathBuf {
@@ -356,6 +363,12 @@ pub fn link_keys_file(config: &Path) -> PathBuf {
 
 pub fn le_bonds_file(config: &Path) -> PathBuf {
     pairing_dir(config).join("le_audio_bonds.tlv")
+}
+
+/// The Broadcast_Code of the last broadcast started, encrypted for the
+/// Windows user (the rest of it is in [`auracast_last_file`])
+pub fn auracast_code_file(config: &Path) -> PathBuf {
+    pairing_dir(config).join("auracast_code.bin")
 }
 
 /// LE keys taken from Windows until a stack with LE adds them (issue #86)
