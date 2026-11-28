@@ -143,6 +143,7 @@ pub fn new_profile() -> Profile {
         hearing_aid: false,
         hearing_aid_beside: String::new(),
         hearing_aid_delay_ms: 0,
+        hearing_aid_volume: -20,
         // LE Audio: LC3 unless LC3 LL is chosen (issue #86)
         le_low_latency: false,
         // LE Audio: the channels as planned; an earbud alone plays mono

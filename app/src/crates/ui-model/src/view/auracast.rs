@@ -6,8 +6,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use ipc::{
-    AdapterInfo, AudioDevice, AuracastReceiverCandidate, AuracastReceiverStatus, BroadcastReceiver, DriverKind, Method,
-    SourceInfo, StreamState, StreamStatus,
+    AdapterInfo, AudioDevice, AuracastReceiverCandidate, AuracastReceiverStatus, AuracastSub, BroadcastReceiver,
+    DriverKind, Method, SourceInfo, StreamState, StreamStatus,
 };
 
 use super::adapter::adapter_name;
@@ -182,6 +182,11 @@ pub enum Quality {
 }
 
 impl Quality {
+    /// From [`Quality::as_str`]; None for another
+    pub fn parse(s: &str) -> Option<Quality> {
+        [Quality::Hq, Quality::Mq, Quality::Sq].into_iter().find(|q| q.as_str() == s)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Quality::Hq => "hq",
@@ -212,11 +217,25 @@ pub enum SingleLayout {
     Pairs,
     /// A subgroup per BIS, none located
     PerBis,
+    /// 2.1: the subwoofer's FL FR subgroup first (for receivers left to
+    /// themselves), then the main pair's
+    Sub,
+    /// 2.1 with one mono subwoofer BIS first, then FL FR (three BIS)
+    SubMono,
+    /// 3.1: a mono subwoofer BIS first, then FL FR and the centre
+    Center,
 }
 
 impl SingleLayout {
-    pub const ALL: [SingleLayout; 4] =
-        [SingleLayout::RearMono, SingleLayout::Located, SingleLayout::Pairs, SingleLayout::PerBis];
+    pub const ALL: [SingleLayout; 7] = [
+        SingleLayout::RearMono,
+        SingleLayout::Located,
+        SingleLayout::Pairs,
+        SingleLayout::PerBis,
+        SingleLayout::Sub,
+        SingleLayout::SubMono,
+        SingleLayout::Center,
+    ];
 
     /// The layout's name as stream.start_broadcast takes it
     pub fn layout(self) -> &'static str {
@@ -225,6 +244,9 @@ impl SingleLayout {
             SingleLayout::Located => "single_located",
             SingleLayout::Pairs => "single_pairs",
             SingleLayout::PerBis => "single_per_bis",
+            SingleLayout::Sub => "single_2_1",
+            SingleLayout::SubMono => "single_2_1_mono",
+            SingleLayout::Center => "single_3_1",
         }
     }
 
@@ -234,6 +256,9 @@ impl SingleLayout {
             SingleLayout::Located => "ui.dev.auracast_single_located",
             SingleLayout::Pairs => "ui.dev.auracast_single_pairs",
             SingleLayout::PerBis => "ui.dev.auracast_single_per_bis",
+            SingleLayout::Sub => "ui.dev.auracast_single_sub",
+            SingleLayout::SubMono => "ui.dev.auracast_single_sub_mono",
+            SingleLayout::Center => "ui.dev.auracast_single_3_1",
         }
     }
 }
@@ -252,6 +277,10 @@ pub enum Arrangement {
     StereoTwoMono,
     /// A stereo front and a stereo rear
     TwoStereo,
+    /// 3.1: a left, a right and a centre receiver
+    ThreeMono,
+    /// 3.1: a stereo front and a centre receiver
+    StereoCenter,
 }
 
 impl Arrangement {
@@ -262,16 +291,24 @@ impl Arrangement {
             Arrangement::FourMono => "ui.dev.auracast_rx_four_mono",
             Arrangement::StereoTwoMono => "ui.dev.auracast_rx_stereo_two_mono",
             Arrangement::TwoStereo => "ui.dev.auracast_rx_two_stereo",
+            Arrangement::ThreeMono => "ui.dev.auracast_rx_three_mono",
+            Arrangement::StereoCenter => "ui.dev.auracast_rx_stereo_center",
         }
     }
 }
 
-/// The arrangements a layout offers, the first its default
-pub fn arrangements(channels: Channels) -> &'static [Arrangement] {
+/// The arrangements a layout offers, the first its default. A 2.1
+/// broadcast's are for the main pair: the subwoofer is a receiver left to
+/// itself (it takes the first subgroup).
+pub fn arrangements(channels: Channels, single: SingleLayout) -> &'static [Arrangement] {
     match channels {
         Channels::Stereo => &[Arrangement::One, Arrangement::LeftRight],
         Channels::Mono => &[Arrangement::One],
         Channels::Split => &[Arrangement::LeftRight],
+        Channels::Single if matches!(single, SingleLayout::Sub | SingleLayout::SubMono) => {
+            &[Arrangement::LeftRight, Arrangement::One]
+        }
+        Channels::Single if single == SingleLayout::Center => &[Arrangement::ThreeMono, Arrangement::StereoCenter],
         Channels::Matrix | Channels::Single => {
             &[Arrangement::FourMono, Arrangement::StereoTwoMono, Arrangement::TwoStereo]
         }
@@ -298,6 +335,7 @@ const FL: Slot = Slot { key: "FL", channels: &["FL"], label_key: "ui.dev.auracas
 const FR: Slot = Slot { key: "FR", channels: &["FR"], label_key: "ui.dev.auracast_slot_fr" };
 const RL: Slot = Slot { key: "RL", channels: &["RL"], label_key: "ui.dev.auracast_slot_rl" };
 const RR: Slot = Slot { key: "RR", channels: &["RR"], label_key: "ui.dev.auracast_slot_rr" };
+const CENTER: Slot = Slot { key: "C", channels: &["C"], label_key: "ui.dev.auracast_slot_c" };
 
 /// A receiver chosen for a slot
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -330,7 +368,8 @@ pub fn receiver_status_text(r: &AuracastReceiverStatus) -> String {
     };
     let asked = if r.asked.is_empty() { String::new() } else { t!("ui.dev.auracast_rx_asked", bis(&r.asked)) };
     let detail = if r.detail.is_empty() { String::new() } else { format!(" ({})", r.detail) };
-    format!("{who}: {phase}{detail}{asked}")
+    let battery = r.battery.map_or(String::new(), |b| t!("ui.dev.auracast_rx_battery", b));
+    format!("{who}: {phase}{detail}{asked}{battery}")
 }
 
 /// How a pair of matrix outputs is sent (le_audio::broadcast::PairMode)
@@ -343,6 +382,11 @@ pub enum PairMode {
 }
 
 impl PairMode {
+    /// From [`PairMode::as_str`]; None for another
+    pub fn parse(s: &str) -> Option<PairMode> {
+        [PairMode::Stereo, PairMode::Separate, PairMode::Subgroups, PairMode::Off].into_iter().find(|m| m.as_str() == s)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             PairMode::Stereo => "stereo",
@@ -393,6 +437,8 @@ pub struct Choices {
     pub source: Source,
     /// The broadcast's volume follows the Windows volume
     pub follow: bool,
+    /// The assistant closes its link to each receiver once it plays
+    pub leave_receivers: bool,
 }
 
 impl Default for Choices {
@@ -411,6 +457,7 @@ impl Default for Choices {
             receivers: BTreeMap::new(),
             source: Source::Tone,
             follow: false,
+            leave_receivers: false,
         }
     }
 }
@@ -466,8 +513,22 @@ impl Choices {
     /// The arrangement in force: the one chosen if the channels offer it,
     /// else their first
     pub fn arrangement(&self) -> Arrangement {
-        let offered = arrangements(self.channels);
+        let offered = arrangements(self.channels, self.single);
         if offered.contains(&self.arrangement) { self.arrangement } else { offered[0] }
+    }
+
+    /// The subwoofer of the layout: what the mixer's third and fourth
+    /// outputs are
+    pub fn sub(&self) -> AuracastSub {
+        if self.channels != Channels::Single {
+            return AuracastSub::None;
+        }
+        match self.single {
+            SingleLayout::Sub => AuracastSub::Stereo,
+            SingleLayout::SubMono => AuracastSub::Mono,
+            SingleLayout::Center => AuracastSub::Center,
+            _ => AuracastSub::None,
+        }
     }
 
     /// The slots for receivers: of the arrangement, those whose outputs
@@ -482,6 +543,8 @@ impl Choices {
             Arrangement::FourMono => &[FL, FR, RL, RR],
             Arrangement::StereoTwoMono => &[FRONT, RL, RR],
             Arrangement::TwoStereo => &[FRONT, REAR],
+            Arrangement::ThreeMono => &[FL, FR, CENTER],
+            Arrangement::StereoCenter => &[FRONT, CENTER],
         };
         let sent = |s: &Slot| {
             !self.matrix()
@@ -562,6 +625,74 @@ impl Choices {
                 || (self.matrix() && self.bigs() == 0))
     }
 
+    /// The choices a stream.start_broadcast was made from (auracast.last_start:
+    /// a window opened while it runs shows them); None for another method.
+    /// Who plays what is the first arrangement with a slot for each receiver.
+    pub fn from_start(m: &Method) -> Option<Choices> {
+        let Method::StreamStartBroadcast {
+            name,
+            code,
+            quality,
+            rear_quality,
+            mono,
+            split,
+            layout,
+            source,
+            source_id,
+            follow_volume,
+            receivers,
+            leave_receivers,
+            ..
+        } = m
+        else {
+            return None;
+        };
+        let mut c = Choices { name: name.clone(), code: code.clone().unwrap_or_default(), ..Choices::default() };
+        let quality = Quality::parse(quality).unwrap_or(Quality::Hq);
+        c.quality = quality;
+        let layout = layout.as_deref().unwrap_or(if *split == Some(true) { "split" } else { "stereo" });
+        if *mono == Some(true) {
+            c.channels = Channels::Mono;
+        } else if layout == "split" {
+            c.channels = Channels::Split;
+        } else if let Some(pairs) = layout.strip_prefix("matrix_") {
+            let mut it = pairs.splitn(2, '_');
+            c.channels = Channels::Matrix;
+            c.front = it.next().and_then(PairMode::parse).unwrap_or(PairMode::Stereo);
+            c.rear = it.next().and_then(PairMode::parse).unwrap_or(PairMode::Stereo);
+            c.front_quality = quality;
+            c.rear_quality = rear_quality.as_deref().and_then(Quality::parse).unwrap_or(quality);
+        } else if let Some(single) = SingleLayout::ALL.into_iter().find(|s| s.layout() == layout) {
+            c.channels = Channels::Single;
+            c.single = single;
+        }
+        c.source = match (source.as_str(), source_id) {
+            ("tone", _) => Source::Tone,
+            ("output" | "virtual", Some(id)) => Source::Output(id.clone()),
+            ("input", Some(id)) => Source::Input(id.clone()),
+            _ => Source::Loopback,
+        };
+        c.follow = follow_volume.unwrap_or(false);
+        c.leave_receivers = leave_receivers.unwrap_or(false);
+        let receivers = receivers.as_deref().unwrap_or_default();
+        let key = |r: &BroadcastReceiver| r.channels.join("+");
+        for &a in arrangements(c.channels, c.single) {
+            c.arrangement = a;
+            let keys: Vec<&str> = c.slots().iter().map(|s| s.key).collect();
+            if receivers.iter().all(|r| keys.contains(&key(r).as_str())) {
+                break;
+            }
+        }
+        if receivers.is_empty() {
+            c.arrangement = arrangements(c.channels, c.single)[0];
+        }
+        for r in receivers {
+            let pick = ReceiverPick { address: r.address.clone(), name: r.name.clone() };
+            c.receivers.entry(key(r)).or_default().push(pick);
+        }
+        Some(c)
+    }
+
     /// stream.start_broadcast with the source as `source` names it (see
     /// [`source_params`]); a matrix's rates come from its front and rear
     /// rows, not Quality. The volume is left to the core (the last one).
@@ -581,6 +712,7 @@ impl Choices {
             volume: None,
             follow_volume: Some(self.follow),
             receivers: Some(self.receivers_request()).filter(|v| !v.is_empty()),
+            leave_receivers: self.leave_receivers.then_some(true),
         }
     }
 }
@@ -707,6 +839,30 @@ pub fn show_adapter(list: &[AdapterInfo], chosen: &str) -> bool {
 
 pub const INPUT_NAMES: [&str; 8] = ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"];
 pub const OUTPUT_NAMES: [&str; 4] = ["FL", "FR", "RL", "RR"];
+/// The outputs' names for a broadcast's subwoofer
+pub fn output_names(sub: AuracastSub) -> [&'static str; 4] {
+    match sub {
+        AuracastSub::None => OUTPUT_NAMES,
+        AuracastSub::Stereo => ["FL", "FR", "Sub L", "Sub R"],
+        AuracastSub::Mono => ["FL", "FR", "—", "Sub"],
+        AuracastSub::Center => ["FL", "FR", "C", "Sub"],
+    }
+}
+/// The crossover of a 2.1 broadcast (Hz): the choices, the default
+pub const CROSSOVER_CHOICES: [u32; 11] = [40, 60, 80, 100, 120, 150, 200, 250, 300, 400, 500];
+pub const CROSSOVER_DEFAULT: u32 = 80;
+
+/// The crossover a mixer setting holds, as one of [`CROSSOVER_CHOICES`]
+/// (the nearest; 0 or missing: the default)
+pub fn crossover_choice(hz: f32) -> u32 {
+    if hz.is_nan() || hz <= 0.0 {
+        return CROSSOVER_DEFAULT;
+    }
+    CROSSOVER_CHOICES
+        .into_iter()
+        .min_by(|a, b| (*a as f32 - hz).abs().total_cmp(&(*b as f32 - hz).abs()))
+        .unwrap_or(CROSSOVER_DEFAULT)
+}
 /// Sound in air at about 20 °C: metres per millisecond
 pub const M_PER_MS: f64 = 0.343;
 pub const MAX_DELAY_MS: f64 = 500.;
@@ -779,8 +935,112 @@ pub fn can_save_preset(name: &str, builtin_names: &[&str]) -> bool {
     !name.is_empty() && !builtin_names.contains(&name)
 }
 
+/// The outputs the automatic matrix sends the LFE to unless set
+pub const FULL_RANGE_DEFAULT: [bool; 4] = [true, true, false, false];
+
+/// Whether output `i` gets the LFE (missing: [`FULL_RANGE_DEFAULT`])
+pub fn full_range(flags: &[bool], i: usize) -> bool {
+    if flags.is_empty() { FULL_RANGE_DEFAULT.get(i).copied().unwrap_or(false) } else { flag(flags, i) }
+}
+
+/// A per-output or per-input flag (missing: off)
+pub fn flag(flags: &[bool], i: usize) -> bool {
+    flags.get(i).copied().unwrap_or(false)
+}
+
+/// Sets flag `i` of `len`, filling the missing ones with `fill`
+pub fn set_flag(flags: &mut Vec<bool>, len: usize, fill: &[bool], i: usize, on: bool) {
+    while flags.len() < len {
+        flags.push(fill.get(flags.len()).copied().unwrap_or(false));
+    }
+    if let Some(f) = flags.get_mut(i) {
+        *f = on;
+    }
+}
+
+/// Row or column `i` is heard: not muted, and soloed when any is
+pub fn heard(solo: &[bool], mute: &[bool], i: usize) -> bool {
+    (!solo.contains(&true) || flag(solo, i)) && !flag(mute, i)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_choices_come_back_from_their_start_request() {
+        use super::*;
+        let pick = |a: &str| ReceiverPick { address: a.into(), name: format!("R {a}") };
+        let mut cases = Vec::new();
+        let mut c =
+            Choices { name: "Room".into(), code: "secret12".into(), quality: Quality::Mq, ..Choices::default() };
+        c.source = Source::Output("{0.0.0.0}.{abc}".into());
+        cases.push(c.clone());
+        c.set_channels(Channels::Mono);
+        c.source = Source::Tone;
+        cases.push(c.clone());
+        c.set_channels(Channels::Split);
+        c.arrangement = Arrangement::LeftRight;
+        c.set_receiver("FL", Some(pick("A")));
+        cases.push(c.clone());
+        let mut m = Choices { channels: Channels::Matrix, front: PairMode::Subgroups, rear: PairMode::Separate, ..c };
+        m.receivers.clear();
+        m.front_quality = Quality::Hq;
+        m.rear_quality = Quality::Sq;
+        m.arrangement = Arrangement::TwoStereo;
+        m.set_receiver("FL+FR", Some(pick("B")));
+        m.set_receiver("RR", Some(pick("C")));
+        m.follow = true;
+        cases.push(m);
+        for single in SingleLayout::ALL {
+            let mut s = Choices { channels: Channels::Single, single, quality: Quality::Mq, ..Choices::default() };
+            s.source = Source::Input("mic".into());
+            s.arrangement = arrangements(Channels::Single, single)[0];
+            s.leave_receivers = true;
+            for (i, slot) in s.slots().into_iter().enumerate() {
+                s.set_receiver(slot.key, Some(pick(&i.to_string())));
+            }
+            cases.push(s);
+        }
+        for c in cases {
+            let sent = source_params(&c.source, &[], &[], &DeviceNames::new());
+            let back = Choices::from_start(&c.start_request(sent.clone())).unwrap();
+            // The request each makes is the same
+            assert_eq!(back.start_request(sent.clone()), c.start_request(sent), "{c:?}");
+            assert_eq!((back.channels, back.single, back.source.clone()), (c.channels, c.single, c.source.clone()));
+            assert_eq!(back.slots(), c.slots(), "{c:?}");
+        }
+        assert!(Choices::from_start(&Method::StreamStop).is_none());
+    }
+
+    #[test]
+    fn solo_and_mute_choose_what_is_heard() {
+        use super::{heard, set_flag};
+        let (mut solo, mut mute) = (Vec::new(), Vec::new());
+        assert!((0..8).all(|i| heard(&solo, &mute, i)));
+        set_flag(&mut solo, 8, &[], 2, true);
+        assert_eq!(solo.len(), 8);
+        assert!(heard(&solo, &mute, 2) && !heard(&solo, &mute, 0));
+        set_flag(&mut solo, 8, &[], 3, true);
+        assert!(heard(&solo, &mute, 3));
+        // A muted one stays silent, soloed or not
+        set_flag(&mut mute, 8, &[], 3, true);
+        assert!(!heard(&solo, &mute, 3) && heard(&solo, &mute, 2));
+        set_flag(&mut solo, 8, &[], 2, false);
+        set_flag(&mut solo, 8, &[], 3, false);
+        assert!(heard(&solo, &mute, 0) && !heard(&solo, &mute, 3));
+    }
+
+    #[test]
+    fn full_range_defaults_to_the_fronts() {
+        use super::{FULL_RANGE_DEFAULT, full_range, set_flag};
+        assert!(full_range(&[], 0) && full_range(&[], 1) && !full_range(&[], 2));
+        // Set on a missing list: the others keep their defaults
+        let mut v = Vec::new();
+        set_flag(&mut v, 4, &FULL_RANGE_DEFAULT, 2, true);
+        assert_eq!(v, [true, true, true, false]);
+        set_flag(&mut v, 4, &FULL_RANGE_DEFAULT, 0, false);
+        assert!(!full_range(&v, 0) && full_range(&v, 2));
+    }
+
     use ipc::Msg;
 
     use super::*;
@@ -885,6 +1145,7 @@ mod tests {
                 volume: None,
                 follow_volume: Some(false),
                 receivers: None,
+                leave_receivers: None,
             }
         );
         // A matrix with both pairs off sends nothing

@@ -27,7 +27,8 @@ class Broadcast:
     hz: int
     octets: int
     bis: tuple                # per BIS: (allocation, 'L' / 'R' / 'M': the side of the tone it carries)
-    labels: tuple = ()        # a subgroup per BIS, each with this Program_Info; (): one subgroup
+    labels: tuple = ()        # subgroups in BIS order, each with this Program_Info; (): one subgroup
+    sizes: tuple = ()         # BIS of each subgroup; (): all of equal size
 
 
 @dataclasses.dataclass
@@ -85,6 +86,25 @@ CASES = [
                  [stereo(' Front'),
                   Broadcast(' Rear', 48000, 120, ((0, 'L'), (0, 'R')), labels=('Rear left', 'Rear right'))],
                  rtn=2, bluecaster_args=layout('rear-subgroups')),
+    # 2.1: one BIG of two FL FR subgroups, the subwoofer's first (low
+    # passed: the 1 kHz / 1.5 kHz tone is nearly gone, so its sides are
+    # told apart from the main pair's), then the main pair's
+    AuracastCase('matrix-single-2-1',
+                 [Broadcast(None, 48000, 120, ((FL, 'SL'), (FR, 'SR'), (FL, 'L'), (FR, 'R')),
+                            labels=('Subwoofer', 'Front'))],
+                 rtn=2, bluecaster_args=layout('single-2-1')),
+    # 2.1 with a mono subwoofer: a subgroup of one BIS without a location,
+    # then FL FR (three BIS)
+    AuracastCase('matrix-single-2-1-mono',
+                 [Broadcast(None, 48000, 120, ((0, 'S'), (FL, 'L'), (FR, 'R')),
+                            labels=('Subwoofer', 'Front'), sizes=(1, 2))],
+                 rtn=2, bluecaster_args=layout('single-2-1-mono')),
+    # 3.1: the mono subwoofer, then FL FR and the centre without a location
+    # (half of each side of the stereo test tone)
+    AuracastCase('matrix-single-3-1',
+                 [Broadcast(None, 48000, 120, ((0, 'S'), (FL, 'L'), (FR, 'R'), (0, 'C')),
+                            labels=('Subwoofer', 'Front'), sizes=(1, 3))],
+                 rtn=2, bluecaster_args=layout('single-3-1')),
     # The rear only, each output a broadcast (two BIS: the preset's RTN)
     AuracastCase('matrix-rear-only', [one(' RL', 'L'), one(' RR', 'R')], rtn=4,
                  bluecaster_args=layout('matrix-off-separate')),
@@ -141,11 +161,12 @@ def check_broadcast(case, b, sink_log, duration):
     want = len(b.labels) or 1
     if int(m.group(2)) != want or len(subgroups) != want:
         say(f'BASE with {m.group(2)} subgroup(s), expected {want}')
+    sizes = b.sizes or (len(b.bis) // want,) * want
     for k, (_, codec, hz, frame_us, octets, metadata, n) in enumerate(subgroups):
         if (codec, int(hz), int(frame_us), int(octets)) != ('LC3', b.hz, 10000, b.octets):
             say(f'BASE subgroup {k + 1}: {codec} {hz} Hz {frame_us} us {octets} octets, '
                 f'expected LC3 {b.hz} Hz 10000 us {b.octets} octets')
-        if int(n) != (1 if b.labels else len(b.bis)):
+        if k < len(sizes) and int(n) != sizes[k]:
             say(f'BASE subgroup {k + 1}: {n} BIS')
         if b.labels and k < len(b.labels) and b.labels[k] not in metadata:
             say(f'BASE subgroup {k + 1}: metadata "{metadata}" without the label "{b.labels[k]}"')
@@ -211,6 +232,12 @@ def check(case, sink_log, bluecaster_log, duration):
         other = digests.get((hz, octets, 'R')) if side == 'L' else None
         if other and seen & other:
             fail.append(f'{hz} Hz: a left and a right BIS carry the same audio')
+        # A subwoofer or centre BIS is not a copy of a front one: the
+        # crossover and the centre mix change the audio
+        if side in ('SL', 'SR', 'S', 'C'):
+            for front in ('L', 'R'):
+                if seen & digests.get((hz, octets, front), set()):
+                    fail.append(f'{hz} Hz: the {side} BIS carries the same audio as a front ({front}) BIS')
 
     # In BIG handle order: the order of the layout's broadcasts
     bigs = sorted(CREATE_BIG.findall(sink_log), key=lambda big: int(big[0]))

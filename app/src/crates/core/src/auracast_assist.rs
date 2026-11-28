@@ -49,16 +49,66 @@ pub struct Job {
     /// BIS indexes (1-based) in that broadcast's BIG; empty: the receiver picks
     pub bis: Vec<u8>,
     pub code: Option<String>,
+    /// Close the link once the receiver plays (it keeps the broadcast; the
+    /// source is not taken off at the stop): no LE connection beside the
+    /// BIG while it runs
+    pub leave: bool,
+}
+
+/// With [`Job::leave`]: how long a receiver plays all the BIS it was asked
+/// before its link closes
+const LEAVE_AFTER: Duration = Duration::from_secs(3);
+/// With [`Job::leave`]: how long a receiver that reports other BIS than
+/// those asked (some report BIS 1, 2 whatever is asked) plays before its
+/// link closes
+const LEAVE_AFTER_OTHER_BIS: Duration = Duration::from_secs(10);
+
+/// A receiver that played and lost its BIS (the BIG set up again after slow
+/// sending: some sync to the new one by themselves, some never do) while it
+/// keeps the periodic advertising: told again after this long without BIS,
+/// and again as long after each try
+const RESYNC_AFTER: Duration = Duration::from_secs(3);
+/// Tries per loss (see [`Resync`]); then it is left as it is
+const RESYNC_TRIES: u32 = 3;
+
+/// How a receiver that lost its BIS is told to play them again
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Resync {
+    /// Modify Source with the BIS asked
+    Modify,
+    /// Modify Source with no BIS, then with the BIS asked
+    Toggle,
+    /// Remove Source and Add Source again
+    ReAdd,
+}
+
+/// The try due for a receiver without BIS for `lost_for`, `tries` made for
+/// this loss, the last `since_try` ago; None: nothing (yet)
+fn resync_due(lost_for: Duration, tries: u32, since_try: Option<Duration>) -> Option<Resync> {
+    if lost_for < RESYNC_AFTER || tries >= RESYNC_TRIES || since_try.is_some_and(|t| t < RESYNC_AFTER) {
+        return None;
+    }
+    Some(match tries {
+        0 => Resync::Modify,
+        1 => Resync::Toggle,
+        _ => Resync::ReAdd,
+    })
 }
 
 /// An output of a layout by the name the API gives it: "FL" (also "L"),
-/// "FR" ("R"), "RL", "RR", "M"
+/// "FR" ("R"), "RL", "RR", "SUBL" / "SUBR" (a 2.1 broadcast's subwoofer),
+/// "SUB" (a mono subwoofer), "C" (a 3.1 broadcast's centre),
+/// "M"
 pub fn channel_source(name: &str) -> Option<ChannelSource> {
     Some(match name.trim().to_ascii_uppercase().as_str() {
         "FL" | "L" => ChannelSource::Left,
         "FR" | "R" => ChannelSource::Right,
         "RL" | "BL" => ChannelSource::RearLeft,
         "RR" | "BR" => ChannelSource::RearRight,
+        "SUBL" => ChannelSource::SubLeft,
+        "SUBR" => ChannelSource::SubRight,
+        "SUB" | "LFE" => ChannelSource::SubMono,
+        "C" | "FC" => ChannelSource::Center,
         "M" | "MONO" => ChannelSource::Mono,
         _ => return None,
     })
@@ -96,7 +146,7 @@ pub fn job_for(
     }
     let Some(broadcast) = broadcast else { return Err("no channel".into()) };
     bis.sort_unstable();
-    Ok(Job { address: address.trim().to_ascii_uppercase(), name: name.to_string(), broadcast, bis, code })
+    Ok(Job { address: address.trim().to_ascii_uppercase(), name: name.to_string(), broadcast, bis, code, leave: false })
 }
 
 /// What a receiver does now
@@ -152,6 +202,9 @@ pub struct Receiver {
     pub bis: Vec<u8>,
     /// Why it failed, or what it reports besides (an error, a code asked for)
     pub detail: String,
+    /// Its battery level (%), read once connected when it has a Battery
+    /// Service
+    pub battery: Option<u8>,
 }
 
 /// The receivers of the last [`Assistants::start`], and its number: the
@@ -228,6 +281,7 @@ impl Assistants {
                     phase: Phase::Waiting,
                     bis: Vec::new(),
                     detail: String::new(),
+                    battery: None,
                 })
                 .collect();
             list.0
@@ -340,6 +394,9 @@ fn connect(
     out: &dyn Fn(&str),
 ) -> Option<Link> {
     use le_audio::defs::{UUID_CHR_BASS_CONTROL_POINT, UUID_CHR_BROADCAST_RECEIVE_STATE, UUID_SERVICE_BASS};
+    // Battery Service, Battery Level
+    const UUID_SERVICE_BATTERY: u16 = 0x180F;
+    const UUID_CHR_BATTERY_LEVEL: u16 = 0x2A19;
 
     let Some(parsed) = bt_host::parse_addr(who) else {
         out(&format!("Assistant {who}: invalid address"));
@@ -367,6 +424,19 @@ fn connect(
         }
     };
     let services = host.le_services(id);
+    // Its battery level, when it tells it (shown with its state)
+    if let Some(level) = services
+        .iter()
+        .filter(|s| s.uuid16 == UUID_SERVICE_BATTERY)
+        .flat_map(|s| &s.chars)
+        .find(|c| c.uuid16 == UUID_CHR_BATTERY_LEVEL)
+        .and_then(|c| host.le_read(id, c.value_handle).ok())
+        .and_then(|v| v.first().copied())
+        .filter(|l| *l <= 100)
+    {
+        out(&format!("Assistant {who}: battery {level}%"));
+        update(i, |r| r.battery = Some(level));
+    }
     let Some(svc) = services.iter().find(|s| s.uuid16 == UUID_SERVICE_BASS) else {
         out(&format!("Assistant {who}: no BASS"));
         set_phase(i, Phase::NoBass, "");
@@ -514,6 +584,12 @@ fn synced_bis(s: &bass::ReceiveState) -> Vec<u8> {
     v
 }
 
+/// The receiver reports every BIS it was asked (`asked` empty: it picks,
+/// so any)
+fn plays_all_asked(asked: &[u8], synced: &[u8]) -> bool {
+    !synced.is_empty() && asked.iter().all(|b| synced.contains(b))
+}
+
 /// One receiver from connection to stop (see the module's description)
 fn assist(
     host: &BtHost,
@@ -561,6 +637,16 @@ fn assist(
     let mut source_id = None;
     let mut code_sent = false;
     let mut seen_groups = false;
+    let mut playing_since: Option<Instant> = None;
+    // Playing every BIS asked (not only the first of a stereo pair)
+    let mut all_asked = false;
+    // [`Job::leave`]: the link is closed, the receiver plays on
+    let mut left = false;
+    // It played: losing the BIS later (PA kept) is told again ([`Resync`])
+    let mut played = false;
+    let mut lost_since: Option<Instant> = None;
+    let mut resyncs = 0u32;
+    let mut last_resync: Option<Instant> = None;
     while !stopped() {
         let mut idle = true;
         for (h, rx) in &link.watches {
@@ -583,6 +669,23 @@ fn assist(
                 } else {
                     (Phase::Added, "")
                 };
+                if phase != Phase::Playing {
+                    playing_since = None;
+                } else if playing_since.is_none() {
+                    playing_since = Some(Instant::now());
+                }
+                if phase == Phase::Playing {
+                    if resyncs > 0 {
+                        out(&format!("Assistant {who}: it plays again"));
+                    }
+                    played = true;
+                    (lost_since, resyncs, last_resync) = (None, 0, None);
+                } else if played && phase == Phase::Synced {
+                    lost_since.get_or_insert_with(Instant::now);
+                } else {
+                    lost_since = None;
+                }
+                all_asked = plays_all_asked(&job.bis, &bis);
                 set_bis(i, bis);
                 set_phase(i, phase, detail);
                 if s.big_encryption == 1 && !code_sent {
@@ -601,6 +704,49 @@ fn assist(
                 }
             }
         }
+        let wait = if all_asked { LEAVE_AFTER } else { LEAVE_AFTER_OTHER_BIS };
+        if job.leave && !left && playing_since.is_some_and(|t| t.elapsed() >= wait) {
+            out(&format!("Assistant {who}: it plays; closing the link (the receiver keeps the broadcast)"));
+            set_phase(i, Phase::Playing, "link closed");
+            host.le_disconnect(id);
+            left = true;
+        }
+        if !left
+            && let (Some(lost), Some(sid)) = (lost_since, source_id)
+            && let Some(how) = resync_due(lost.elapsed(), resyncs, last_resync.map(|t| t.elapsed()))
+        {
+            resyncs += 1;
+            last_resync = Some(Instant::now());
+            out(&format!(
+                "Assistant {who}: no BIS for {} ms (PA kept): {how:?} ({resyncs} of {RESYNC_TRIES})",
+                lost.elapsed().as_millis()
+            ));
+            let modify = |bis: &[u32]| {
+                let m = bass::modify_source(sid, source.pa_sync, source.pa_interval, bis);
+                if let Err(e) = host.le_write(id, cp, m) {
+                    out(&format!("Assistant {who}: Modify Source refused (0x{e:02X})"));
+                }
+            };
+            match how {
+                Resync::Modify => modify(&source.bis_sync),
+                Resync::Toggle => {
+                    modify(&vec![0; source.bis_sync.len()]);
+                    std::thread::sleep(Duration::from_millis(500));
+                    modify(&source.bis_sync);
+                }
+                Resync::ReAdd => {
+                    if let Err(e) = host.le_write(id, cp, bass::remove_source(sid)) {
+                        out(&format!("Assistant {who}: Remove Source refused (0x{e:02X})"));
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                    if let Err(e) = host.le_write(id, cp, bass::add_source(&source)) {
+                        out(&format!("Assistant {who}: Add Source refused (0x{e:02X})"));
+                    }
+                    // A new source: it asks for the Broadcast_Code again
+                    code_sent = false;
+                }
+            }
+        }
         // The broadcast gone (stopped elsewhere): nothing left to play
         let up = !host.le_broadcast_groups().is_empty();
         if up {
@@ -611,6 +757,13 @@ fn assist(
         if idle {
             std::thread::sleep(Duration::from_millis(100));
         }
+    }
+    if left {
+        // No link to take the source off through: the receiver drops the
+        // broadcast by itself once it is gone
+        set_bis(i, Vec::new());
+        set_phase(i, Phase::Done, "link closed");
+        return;
     }
     if let Some(sid) = source_id {
         out(&format!("Assistant {who}: taking the source off the receiver"));
@@ -649,6 +802,32 @@ mod tests {
         assert!(job_for(BroadcastLayout::Stereo, "A", "", &ch(&["RL"]), None).is_err());
         assert!(job_for(BroadcastLayout::Stereo, "A", "", &ch(&["X"]), None).is_err());
         assert_eq!(job_for(BroadcastLayout::Mono, "A", "", &ch(&["M"]), None).unwrap().bis, [1]);
+    }
+
+    #[test]
+    fn a_receiver_plays_all_it_was_asked_once_each_bis_is_reported() {
+        // A stereo receiver that has only its first BIS yet
+        assert!(!plays_all_asked(&[3, 4], &[3]));
+        assert!(plays_all_asked(&[3, 4], &[3, 4]));
+        // One that reports BIS 1, 2 whatever is asked
+        assert!(!plays_all_asked(&[3, 4], &[1, 2]));
+        // Left to pick: any BIS, but one
+        assert!(plays_all_asked(&[], &[1]));
+        assert!(!plays_all_asked(&[], &[]));
+    }
+
+    #[test]
+    fn a_receiver_that_lost_its_bis_is_told_again_three_ways() {
+        let s = Duration::from_secs;
+        // Not before RESYNC_AFTER without BIS
+        assert_eq!(resync_due(s(2), 0, None), None);
+        assert_eq!(resync_due(s(3), 0, None), Some(Resync::Modify));
+        // Each try waits as long after the last
+        assert_eq!(resync_due(s(4), 1, Some(s(1))), None);
+        assert_eq!(resync_due(s(6), 1, Some(s(3))), Some(Resync::Toggle));
+        assert_eq!(resync_due(s(9), 2, Some(s(3))), Some(Resync::ReAdd));
+        // Then it is left as it is
+        assert_eq!(resync_due(s(60), 3, Some(s(30))), None);
     }
 
     #[test]

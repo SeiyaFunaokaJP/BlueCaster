@@ -89,6 +89,7 @@ pub fn access(m: &Method) -> Access {
         | Method::AuracastSetSource { .. }
         | Method::AuracastSetFollowVolume { .. }
         | Method::AuracastFollowVolume
+        | Method::AuracastLastStart
         | Method::AuracastReceivers => Open,
         // Developer mode and what it sets, the chip and firmware settings
         Method::SettingsSet { .. } => Depends,

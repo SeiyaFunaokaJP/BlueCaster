@@ -135,10 +135,13 @@ fn pick_connect_address(
 }
 
 /// A device's identity address (upper case) and type, once SM learned it
-/// (bonded): what its kept services are filed under
+/// (bonded) or a public one: what its kept services are filed under
 fn d_identity(ctx: &LeCtx<'_>, id: LeDeviceId) -> Option<(String, u8)> {
     let d = ctx.device(id)?;
-    d.identity_known.then(|| (crate::events::addr_str(&d.addr.addr).to_uppercase(), d.addr.addr_type))
+    // A public address is the identity itself: a device connected without
+    // pairing (an Auracast assistant's receiver) has its services kept too
+    (d.identity_known || d.addr.addr_type == 0)
+        .then(|| (crate::events::addr_str(&d.addr.addr).to_uppercase(), d.addr.addr_type))
 }
 
 /// One LE Audio peer (e.g. a headset, or one earbud of a pair), owned by
@@ -1622,10 +1625,15 @@ impl<'a> LeCtx<'a> {
         // still its services (crate::le::gatt_cache); not of a keyboard or
         // mouse, whose address would be in that file
         let cache_file = self.core.gatt_cache_file.clone().filter(|_| !hid);
+        // Service Changed alone tells a bonded device of changes made
+        // while it was away; one filed under its public address only (SM
+        // learned no identity) may not be bonded, so its kept services
+        // count only with a Database Hash to check them against
+        let bonded = self.device(id).is_some_and(|d| d.identity_known);
         let cached = cache_file.clone().zip(d_identity(self, id)).and_then(|(file, (addr, kind))| {
             let db = super::gatt_cache::load(&file, &addr)?;
             (db.address_type == kind
-                && (db.hash.is_some() || super::gatt_cache::service_changed(&db.services).is_some()))
+                && (db.hash.is_some() || (bonded && super::gatt_cache::service_changed(&db.services).is_some())))
             .then_some((file, db))
         });
         let hash_handle = cached.as_ref().and_then(|(_, db)| super::gatt_cache::hash_handle(&db.services));
@@ -2880,6 +2888,11 @@ impl LeCore {
         if packet_type == HCI_EVENT_PACKET {
             self.iso.on_bis_can_send_now(stack, packet);
             self.after_last_round(stack);
+            // The controller takes only some of the rounds: the BIGs are
+            // set up again
+            if let Some(why) = self.iso.take_slow() {
+                self.run(stack, |ctx| ctx.on_slow_broadcast(&why));
+            }
         }
     }
 

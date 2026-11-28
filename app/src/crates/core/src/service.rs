@@ -836,6 +836,11 @@ impl Inner {
         self.waiting.store(false, Ordering::Release);
     }
 
+    /// The state told last
+    pub fn state(&self) -> StreamState {
+        *self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn notify(&self, state: StreamState, msg: Msg) {
         tracing::info!("state {state:?}: {}", msg.english());
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = state;

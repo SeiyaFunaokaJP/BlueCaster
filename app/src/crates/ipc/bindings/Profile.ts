@@ -70,6 +70,11 @@ hearing_aid_beside: string,
  */
 hearing_aid_delay_ms: number, 
 /**
+ * With hearing_aid_beside: the hearing aid's volume, -128 (muted) to 0
+ * in steps of 0.375 dB (absent: -20)
+ */
+hearing_aid_volume: number, 
+/**
  * LE Audio: GMAP low-latency presets with a gaming headset (LC3 LL; off
  * by default: LC3); other headsets get the media configuration either way
  */

@@ -437,32 +437,102 @@ pub fn clear_tap() {
 /// The A2DP stream never waits for it.
 pub struct Beside {
     stop: Arc<std::sync::atomic::AtomicBool>,
+    state: Arc<std::sync::atomic::AtomicU8>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
+/// What the hearing aid beside a stream is doing, for the status line
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BesideState {
+    /// Being found and connected for the first time
+    Connecting,
+    Playing,
+    /// Not found or gone; looked for again every few seconds
+    Missing,
+    /// Bluetooth LE is not running (LE Audio is off)
+    LeOff,
+}
+
+impl BesideState {
+    /// The stream's status while it plays with this
+    pub fn status_key(self) -> &'static str {
+        match self {
+            BesideState::Connecting => "status.hearing_aid_connecting",
+            BesideState::Playing => "status.hearing_aid_playing",
+            BesideState::Missing => "status.hearing_aid_missing",
+            BesideState::LeOff => "status.hearing_aid_le_off",
+        }
+    }
+
+    fn of(raw: u8) -> BesideState {
+        match raw {
+            1 => BesideState::Playing,
+            2 => BesideState::Missing,
+            3 => BesideState::LeOff,
+            _ => BesideState::Connecting,
+        }
+    }
+}
+
+/// The volume (-128 muted to 0) and delay (ms) of the hearing aid beside
+/// the running stream, as saved last: the worker takes a change in place
+static BESIDE_VOLUME: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(DEFAULT_VOLUME as i32);
+static BESIDE_DELAY_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The volume a hearing aid plays at until another one is chosen
+pub const DEFAULT_VOLUME: i8 = -20;
+
+/// A hearing aid beside the running stream plays at `volume` (-128 muted
+/// to 0), `delay_ms` later, from now on (the profile was saved)
+pub fn set_beside_settings(volume: i8, delay_ms: u32) {
+    use std::sync::atomic::Ordering;
+    BESIDE_VOLUME.store(i32::from(volume.min(0)), Ordering::Release);
+    BESIDE_DELAY_MS.store(delay_ms.min(MAX_DELAY_MS), Ordering::Release);
+}
+
+fn beside_settings() -> (i8, u32) {
+    use std::sync::atomic::Ordering;
+    (BESIDE_VOLUME.load(Ordering::Acquire).clamp(-128, 0) as i8, BESIDE_DELAY_MS.load(Ordering::Acquire))
+}
+
 impl Beside {
-    /// The volume the hearing aid plays at (-128 muted to 0)
-    const VOLUME: i8 = -20;
     /// Waits for the LE core after the A2DP stream started
     const READY_WAIT: Duration = Duration::from_secs(5);
     /// The pause before the hearing aid is looked for again
     const RETRY: Duration = Duration::from_secs(5);
 
-    pub fn start(host: Arc<BtHost>, aid: [u8; 6], delay_ms: u32) -> Beside {
+    /// `le_on`: the stack was started with Bluetooth LE; without it there
+    /// is nothing to do but say so
+    pub fn start(host: Arc<BtHost>, aid: [u8; 6], delay_ms: u32, volume: i8, le_on: bool) -> Beside {
+        set_beside_settings(volume, delay_ms);
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let state = Arc::new(std::sync::atomic::AtomicU8::new(if le_on { 0 } else { 3 }));
+        if !le_on {
+            tracing::warn!("ASHA: Bluetooth LE is off, the hearing aid beside this stream is not used");
+            return Beside { stop, state, thread: None };
+        }
+        let set = {
+            let state = state.clone();
+            move |s: BesideState| state.store(s as u8, std::sync::atomic::Ordering::Release)
+        };
         let stopped = {
             let stop = stop.clone();
             move || stop.load(std::sync::atomic::Ordering::Acquire)
         };
         let thread = std::thread::Builder::new()
             .name("asha-beside".into())
-            .spawn(move || Beside::run(&host, aid, delay_ms, &stopped))
+            .spawn(move || Beside::run(&host, aid, &stopped, &set))
             .map_err(|e| tracing::error!("ASHA: the hearing aid's thread did not start: {e}"))
             .ok();
-        Beside { stop, thread }
+        Beside { stop, state, thread }
     }
 
-    fn run(host: &BtHost, aid: [u8; 6], delay_ms: u32, stopped: &dyn Fn() -> bool) {
+    /// What the hearing aid is doing now
+    pub fn state(&self) -> BesideState {
+        BesideState::of(self.state.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    fn run(host: &BtHost, aid: [u8; 6], stopped: &dyn Fn() -> bool, set: &dyn Fn(BesideState)) {
         let pause = |d: Duration| {
             let until = Instant::now() + d;
             while Instant::now() < until && !stopped() {
@@ -477,13 +547,14 @@ impl Beside {
             if !stopped() {
                 tracing::warn!("ASHA: Bluetooth LE is not running, the hearing aid beside this stream is not used");
             }
+            set(BesideState::LeOff);
             return;
         }
         let mut failures = 0u32;
         while !stopped() {
-            let started =
-                connect(host, aid).and_then(|aid| AshaStream::start(host, vec![aid], Beside::VOLUME, true, delay_ms));
-            let stream = match started {
+            let (mut volume, mut delay_ms) = beside_settings();
+            let started = connect(host, aid).and_then(|aid| AshaStream::start(host, vec![aid], volume, true, delay_ms));
+            let mut stream = match started {
                 Ok(s) => s,
                 Err(e) => {
                     // Said once: the hearing aid may be off for the whole stream
@@ -491,6 +562,7 @@ impl Beside {
                         tracing::warn!("ASHA: the hearing aid beside this stream is not playing: {e}");
                     }
                     failures += 1;
+                    set(BesideState::Missing);
                     pause(Beside::RETRY);
                     continue;
                 }
@@ -498,8 +570,23 @@ impl Beside {
             failures = 0;
             tracing::info!("ASHA: a hearing aid plays beside this stream, {delay_ms} ms later");
             set_tap(&stream);
+            set(BesideState::Playing);
             while !stopped() && !stream.lost() {
                 std::thread::sleep(Duration::from_millis(100));
+                // Another volume or delay saved while it plays
+                let (v, d) = beside_settings();
+                if v != volume {
+                    volume = v;
+                    stream.set_volume(host, v);
+                    tracing::info!("ASHA: the hearing aid's volume is {v} now");
+                }
+                if d != delay_ms {
+                    delay_ms = d;
+                    clear_tap();
+                    stream.delay_ms = d;
+                    set_tap(&stream);
+                    tracing::info!("ASHA: the hearing aid plays {d} ms later now");
+                }
             }
             clear_tap();
             tracing::info!("ASHA: {}", stream.stats_line());
@@ -510,6 +597,7 @@ impl Beside {
             }
             if !stopped() {
                 tracing::info!("ASHA: the hearing aid went away, looking for it again");
+                set(BesideState::Missing);
                 pause(Beside::RETRY);
             }
         }

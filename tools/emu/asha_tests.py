@@ -22,7 +22,9 @@ g722.py):
     of another size, and BlueCaster dropped none
   - the tone of its side: 1 kHz left, 1.5 kHz right, both for one hearing
     aid alone
-  - bimodal: the A2DP stream ran for the whole duration beside it
+  - bimodal: the A2DP stream ran for the whole duration beside it, the
+    hearing aid started with its own volume, and the status told when it
+    was being connected and when it played
 Outputs go to tools/emu/out/<case>/.
 """
 
@@ -45,7 +47,7 @@ CASES = {
     'asha-left': ('emu_asha.py', ['--layout', 'left'], ['--asha', LEFT, '--asha-volume', str(VOLUME)],
                   {'left': ([1000, 1500], [])}),
     'asha-bimodal': ('emu_sink.py', ['--asha', 'right'],
-                     ['-d', SINK, '-c', 'sbc', '--asha', RIGHT, '--asha-delay', '40'],
+                     ['-d', SINK, '-c', 'sbc', '--asha', RIGHT, '--asha-delay', '40', '--asha-volume', str(VOLUME)],
                      {'right': ([1500], [1000])}),
 }
 
@@ -84,9 +86,10 @@ def run_case(rt, args, case, port):
     failures = []
     if rc != 0:
         failures.append(f'BlueCaster exited with {rc} (see bluecaster.log)')
-    # The session starts them at -20; --asha-volume sets theirs afterwards,
-    # as the volume slider does
-    volume = -20
+    # Hearing aids alone start at -20, and --asha-volume sets theirs
+    # afterwards, as the volume slider does; the one beside an A2DP stream
+    # starts with its own volume
+    volume = VOLUME if bimodal and '--asha-volume' in cli_args else -20
     details = []
     for index, (side, (heard, silent)) in enumerate(sides.items()):
         # The side started second is told that the other one streams
@@ -99,7 +102,7 @@ def run_case(rt, args, case, port):
         if got != (1, 0, volume, other):
             failures.append(f'{side}: started with codec, type, volume, other = {got}, '
                             f'expected {(1, 0, volume, other)}')
-        if '--asha-volume' in cli_args and f'asha: {side} volume {VOLUME}' not in emu_text:
+        if '--asha-volume' in cli_args and not bimodal and f'asha: {side} volume {VOLUME}' not in emu_text:
             failures.append(f'{side}: the volume {VOLUME} was not set')
         told = f'asha: {side} status 1' in emu_text
         if len(sides) == 2 and told != (index == 0):
@@ -156,6 +159,10 @@ def run_case(rt, args, case, port):
             details.append(f'A2DP {packets} packets')
         if 'plays beside this stream, 40 ms later' not in text:
             failures.append('the delay was not taken')
+        # The status line tells what the hearing aid does
+        for status in ('Connected. Connecting to the hearing aid...', 'Connected. The hearing aid is playing too.'):
+            if f'[Streaming] {status}' not in text:
+                failures.append(f'the status never said "{status}"')
     return failures, ', '.join(details) or 'nothing received'
 
 

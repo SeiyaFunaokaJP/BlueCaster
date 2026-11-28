@@ -134,15 +134,53 @@ struct LayoutBroadcast {
     /// BIS per subgroup of its BASE (each labelled by Program_Info); 0:
     /// one subgroup for all
     subgroup_size: usize,
+    /// BIS of the first subgroup when it differs from `subgroup_size` (0:
+    /// the same)
+    lead: usize,
 }
 
 /// A broadcast of `bis` BIS, a subgroup per BIS (`per_bis`) or one for all
 const fn broadcast(suffix: Option<&'static str>, bis: usize, per_bis: bool) -> LayoutBroadcast {
-    LayoutBroadcast { suffix, bis, subgroup_size: if per_bis { 1 } else { 0 } }
+    LayoutBroadcast { suffix, bis, subgroup_size: if per_bis { 1 } else { 0 }, lead: 0 }
+}
+
+/// The BIS count of each subgroup of `n` BIS: one subgroup for all
+/// (`size` 0), else `lead` first (when not 0), then `size` each
+fn subgroup_sizes(n: usize, size: usize, lead: usize) -> Vec<usize> {
+    if size == 0 || n == 0 {
+        return vec![n];
+    }
+    let mut v = Vec::new();
+    let mut left = n;
+    if lead > 0 {
+        v.push(lead.min(left));
+        left -= lead.min(left);
+    }
+    while left > 0 {
+        v.push(size.min(left));
+        left -= size.min(left);
+    }
+    v
 }
 
 /// How the four outputs of [`BroadcastLayout::Single`] are laid out in its
 /// one BIG (for trying receivers: which they take, and how)
+///
+/// How receivers seen so far choose (they differ):
+/// - A receiver told by an assistant (BASS) plays the BIS it is told, but
+///   only if their location is one of its sink locations or none: a
+///   speaker of FL|FR refuses a Back Left/Right or Front Center BIS (PA
+///   synchronized, no BIS). Hence the rear and the centre go without a
+///   location.
+/// - A receiver left to itself (no BASS, or not told) takes the first
+///   subgroup, and of a stereo subgroup a single speaker plays its own
+///   location (Front Left) without mixing the other in: a subwoofer of
+///   that kind wants a mono BIS ([`SingleMode::SubMono`],
+///   [`SingleMode::Center`]).
+/// - Receivers with a subgroup picker of their own show each subgroup by
+///   its Program_Info ("Front", "Rear", "Subwoofer"); a simple phone
+///   assistant shows only the broadcast's name and plays the first.
+/// - Some take only some rates (no 32 kHz on some speakers: 24 or 48 kHz).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SingleMode {
     /// One subgroup: FL FR, the rear without a location (mono, which a
@@ -157,10 +195,37 @@ pub enum SingleMode {
     Pairs,
     /// Four subgroups of one BIS, each labelled, without a location
     PerBis,
+    /// 2.1: two subgroups of FL FR, the subwoofer's ("Subwoofer", the low
+    /// end of left and right, for a receiver left to itself: it takes the
+    /// first subgroup and may mix it to mono) then the main pair's
+    /// ("Front", for receivers an assistant tells their BIS)
+    Sub,
+    /// 2.1 with a mono subwoofer: three BIS, a subgroup of one mono BIS
+    /// ("Subwoofer", the low end of left and right together) then FL FR
+    /// ("Front")
+    SubMono,
+    /// 3.1: four BIS, a subgroup of one mono subwoofer BIS ("Subwoofer")
+    /// then FL FR and the centre ("Front"), the centre without a location
+    /// (a receiver whose sink locations are FL FR takes no Front Center
+    /// BIS)
+    Center,
 }
 
 impl SingleMode {
-    pub const ALL: [SingleMode; 4] = [SingleMode::RearMono, SingleMode::Located, SingleMode::Pairs, SingleMode::PerBis];
+    pub const ALL: [SingleMode; 7] = [
+        SingleMode::RearMono,
+        SingleMode::Located,
+        SingleMode::Pairs,
+        SingleMode::PerBis,
+        SingleMode::Sub,
+        SingleMode::SubMono,
+        SingleMode::Center,
+    ];
+
+    /// A subwoofer layout (2.1, 3.1): fed through the crossover
+    pub fn has_sub(self) -> bool {
+        matches!(self, SingleMode::Sub | SingleMode::SubMono | SingleMode::Center)
+    }
 
     /// The layout's name: "single" + this
     fn suffix(self) -> &'static str {
@@ -169,6 +234,9 @@ impl SingleMode {
             SingleMode::Located => "_located",
             SingleMode::Pairs => "_pairs",
             SingleMode::PerBis => "_per_bis",
+            SingleMode::Sub => "_2_1",
+            SingleMode::SubMono => "_2_1_mono",
+            SingleMode::Center => "_3_1",
         }
     }
 }
@@ -302,7 +370,7 @@ impl BroadcastLayout {
     ];
 
     /// The forms [`BroadcastLayout::parse`] takes, for an error message
-    pub const NAMES: &'static str = "stereo, mono, split, single, single_located, single_pairs, single_per_bis, \
+    pub const NAMES: &'static str = "stereo, mono, split, single, single_located, single_pairs, single_per_bis, single_2_1, single_2_1_mono, single_3_1, \
                                       matrix_<front>_<rear> (each stereo, separate, subgroups or off), quad, \
                                       front_rear, pairs, rear_subgroups, subgroups";
 
@@ -362,16 +430,29 @@ impl BroadcastLayout {
                 vec![(MONO, Left), (MONO, Right)],
                 vec![broadcast(Some("L"), 1, false), broadcast(Some("R"), 1, false)],
             ),
+            BroadcastLayout::Single(SingleMode::Sub) => (
+                vec![(FL, SubLeft), (FR, SubRight), (FL, Left), (FR, Right)],
+                vec![LayoutBroadcast { suffix: None, bis: 4, subgroup_size: 2, lead: 0 }],
+            ),
+            BroadcastLayout::Single(SingleMode::SubMono) => (
+                vec![(MONO, SubMono), (FL, Left), (FR, Right)],
+                vec![LayoutBroadcast { suffix: None, bis: 3, subgroup_size: 2, lead: 1 }],
+            ),
+            BroadcastLayout::Single(SingleMode::Center) => (
+                vec![(MONO, SubMono), (FL, Left), (FR, Right), (MONO, Center)],
+                vec![LayoutBroadcast { suffix: None, bis: 4, subgroup_size: 3, lead: 1 }],
+            ),
             BroadcastLayout::Single(m) => {
                 let (fl, fr, bl, br, size) = match m {
                     SingleMode::RearMono => (FL, FR, MONO, MONO, 0),
                     SingleMode::Located => (FL, FR, LOCATION_BACK_LEFT, LOCATION_BACK_RIGHT, 0),
                     SingleMode::Pairs => (FL, FR, FL, FR, 2),
                     SingleMode::PerBis => (MONO, MONO, MONO, MONO, 1),
+                    SingleMode::Sub | SingleMode::SubMono | SingleMode::Center => unreachable!(),
                 };
                 (
                     vec![(fl, Left), (fr, Right), (bl, RearLeft), (br, RearRight)],
-                    vec![LayoutBroadcast { suffix: None, bis: 4, subgroup_size: size }],
+                    vec![LayoutBroadcast { suffix: None, bis: 4, subgroup_size: size, lead: 0 }],
                 )
             }
             BroadcastLayout::Matrix { front, rear } => {
@@ -429,6 +510,8 @@ pub struct BroadcastGroup {
     /// BIS per subgroup of its BASE (each labelled by Program_Info); 0:
     /// one subgroup for all
     pub subgroup_size: usize,
+    /// BIS of the first subgroup when it differs (0: `subgroup_size`)
+    pub lead: usize,
 }
 
 /// The broadcasts of a configuration, in order: BIG 0, 1, ..., SID 1, 2,
@@ -441,7 +524,7 @@ pub fn groups(config: &BroadcastConfig) -> Vec<BroadcastGroup> {
         .1
         .iter()
         .enumerate()
-        .map(|(i, &LayoutBroadcast { suffix, bis: n, subgroup_size })| {
+        .map(|(i, &LayoutBroadcast { suffix, bis: n, subgroup_size, lead })| {
             let g = BroadcastGroup {
                 big_handle: BIG_HANDLE + i as u8,
                 sid: ADV_SID + i as u8,
@@ -451,6 +534,7 @@ pub fn groups(config: &BroadcastConfig) -> Vec<BroadcastGroup> {
                 broadcast_id: config.broadcast_id.wrapping_add(i as u32).wrapping_sub(1) % 0x00FF_FFFE + 1,
                 bis: first..first + n,
                 subgroup_size,
+                lead,
             };
             first += n;
             g
@@ -479,8 +563,15 @@ impl BroadcastGroup {
     /// [`BroadcastGroup::subgroup_size`] BIS
     pub fn subgroup_bis(&self) -> Vec<u32> {
         let n = self.bis.len().min(31);
-        let size = if self.subgroup_size == 0 { n.max(1) } else { self.subgroup_size };
-        (0..n).step_by(size).map(|first| (first..(first + size).min(n)).fold(0, |m, i| m | 1 << i)).collect()
+        let mut first = 0;
+        subgroup_sizes(n, self.subgroup_size, self.lead)
+            .into_iter()
+            .map(|size| {
+                let m = (first..first + size).fold(0, |m, i| m | 1 << i);
+                first += size;
+                m
+            })
+            .collect()
     }
 }
 
@@ -710,6 +801,7 @@ fn program_info(source: ChannelSource, pair: bool) -> &'static str {
     if pair {
         return match source {
             ChannelSource::RearLeft | ChannelSource::RearRight => "Rear",
+            ChannelSource::SubLeft | ChannelSource::SubRight | ChannelSource::SubMono => "Subwoofer",
             _ => "Front",
         };
     }
@@ -718,6 +810,10 @@ fn program_info(source: ChannelSource, pair: bool) -> &'static str {
         ChannelSource::Right => "Front right",
         ChannelSource::RearLeft => "Rear left",
         ChannelSource::RearRight => "Rear right",
+        ChannelSource::SubLeft => "Subwoofer left",
+        ChannelSource::SubRight => "Subwoofer right",
+        ChannelSource::SubMono => "Subwoofer",
+        ChannelSource::Center => "Center",
         ChannelSource::Mono => "Mono",
     }
 }
@@ -725,6 +821,11 @@ fn program_info(source: ChannelSource, pair: bool) -> &'static str {
 /// The BASE, with all BIS in one subgroup (`subgroup_size` 0) or in
 /// subgroups of `subgroup_size` BIS, each labelled by Program_Info
 pub fn base_with(plan: &StreamPlan, subgroup_size: usize) -> Vec<u8> {
+    base_with_lead(plan, subgroup_size, 0)
+}
+
+/// [`base_with`], the first subgroup of `lead` BIS (0: `subgroup_size`)
+pub fn base_with_lead(plan: &StreamPlan, subgroup_size: usize, lead: usize) -> Vec<u8> {
     let p = &plan.preset;
     let mut out = Vec::new();
     out.extend_from_slice(&plan.presentation_delay_us.to_le_bytes()[..3]);
@@ -732,8 +833,15 @@ pub fn base_with(plan: &StreamPlan, subgroup_size: usize) -> Vec<u8> {
     ltv::put(&mut config, CFG_SAMPLING_FREQUENCY, &[sf_hz_to_code(p.sampling_hz)]);
     ltv::put(&mut config, CFG_FRAME_DURATION, &[if p.frame_us == 7500 { 0x00 } else { 0x01 }]);
     ltv::put(&mut config, CFG_OCTETS_PER_FRAME, &p.octets.to_le_bytes());
-    let subgroups: Vec<&[CisPlan]> =
-        if subgroup_size > 0 { plan.cis.chunks(subgroup_size).collect() } else { vec![&plan.cis[..]] };
+    let mut rest = &plan.cis[..];
+    let subgroups: Vec<&[CisPlan]> = subgroup_sizes(rest.len(), subgroup_size, lead)
+        .into_iter()
+        .map(|n| {
+            let (this, after) = rest.split_at(n);
+            rest = after;
+            this
+        })
+        .collect();
     out.push(subgroups.len() as u8);
     for bises in subgroups {
         out.push(bises.len() as u8);
@@ -744,7 +852,7 @@ pub fn base_with(plan: &StreamPlan, subgroup_size: usize) -> Vec<u8> {
         ltv::put(&mut metadata, META_STREAMING_CONTEXTS, &plan.contexts.to_le_bytes());
         if subgroup_size > 0 {
             let source = bises[0].channels.first().map_or(ChannelSource::Mono, |c| c.source);
-            ltv::put(&mut metadata, META_PROGRAM_INFO, program_info(source, subgroup_size > 1).as_bytes());
+            ltv::put(&mut metadata, META_PROGRAM_INFO, program_info(source, bises.len() > 1).as_bytes());
         }
         out.push(metadata.len() as u8);
         out.extend_from_slice(&metadata);
@@ -765,7 +873,7 @@ pub fn base_with(plan: &StreamPlan, subgroup_size: usize) -> Vec<u8> {
 /// The periodic advertising data of one broadcast of `plan`: its BASE
 pub fn group_base_ad(plan: &StreamPlan, group: &BroadcastGroup) -> Vec<u8> {
     let mut v = UUID_BASIC_AUDIO_ANNOUNCEMENT.to_le_bytes().to_vec();
-    v.extend_from_slice(&base_with(&group_plan(plan, group), group.subgroup_size));
+    v.extend_from_slice(&base_with_lead(&group_plan(plan, group), group.subgroup_size, group.lead));
     let mut out = Vec::new();
     put_ad(&mut out, AD_SERVICE_DATA_UUID16, &v);
     out
@@ -927,13 +1035,47 @@ mod tests {
         assert_eq!(BroadcastLayout::Split.bis_map(), [(0, 1, Left), (1, 1, Right)]);
         assert_eq!(BroadcastLayout::Mono.bis_map(), [(0, 1, Mono)]);
         let four = [(0, 1, Left), (0, 2, Right), (0, 3, RearLeft), (0, 4, RearRight)];
-        for m in SingleMode::ALL {
+        for m in SingleMode::ALL.into_iter().filter(|m| !m.has_sub()) {
             assert_eq!(BroadcastLayout::Single(m).bis_map(), four, "{m:?}");
         }
+        assert_eq!(
+            BroadcastLayout::Single(SingleMode::Sub).bis_map(),
+            [(0, 1, SubLeft), (0, 2, SubRight), (0, 3, Left), (0, 4, Right)]
+        );
+        assert_eq!(
+            BroadcastLayout::Single(SingleMode::SubMono).bis_map(),
+            [(0, 1, SubMono), (0, 2, Left), (0, 3, Right)]
+        );
+        assert_eq!(
+            BroadcastLayout::Single(SingleMode::Center).bis_map(),
+            [(0, 1, SubMono), (0, 2, Left), (0, 3, Right), (0, 4, Center)]
+        );
         assert_eq!(
             BroadcastLayout::FRONT_REAR.bis_map(),
             [(0, 1, Left), (0, 2, Right), (1, 1, RearLeft), (2, 1, RearRight)]
         );
+    }
+
+    #[test]
+    fn a_mono_subwoofer_is_a_subgroup_of_its_own_before_the_front() {
+        for (mode, n, masks, labels) in [
+            (SingleMode::SubMono, 3, vec![0b001, 0b110], ("Subwoofer", "Front")),
+            (SingleMode::Center, 4, vec![0b0001, 0b1110], ("Subwoofer", "Front")),
+        ] {
+            let mut c = config(true, "32_2_2", None);
+            c.layout = BroadcastLayout::Single(mode);
+            let p = plan(&c);
+            assert_eq!(p.cis.len(), n);
+            let g = groups(&c);
+            assert_eq!(g[0].subgroup_bis(), masks, "{mode:?}");
+            let base = base_with_lead(&group_plan(&p, &g[0]), g[0].subgroup_size, g[0].lead);
+            assert_eq!(base[3], 2);
+            let found = |s: &str| base.windows(s.len()).any(|w| w == s.as_bytes());
+            assert!(found(labels.0) && found(labels.1), "{mode:?}");
+            let locations: Vec<_> = p.cis.iter().map(|b| b.allocation()).collect();
+            assert_eq!(locations[..3], [LOCATION_MONO, LOCATION_FRONT_LEFT, LOCATION_FRONT_RIGHT]);
+            assert!(locations[3..].iter().all(|l| *l == LOCATION_MONO));
+        }
     }
 
     #[test]
@@ -1215,6 +1357,7 @@ mod tests {
             broadcast_id: 1,
             bis: 0..n,
             subgroup_size,
+            lead: 0,
         };
         let public = [0x00, 0x1A, 0x7D, 0xDA, 0x71, 0x13];
         assert_eq!(g(0, 2, 0).advertiser_address(public), (public, false));
