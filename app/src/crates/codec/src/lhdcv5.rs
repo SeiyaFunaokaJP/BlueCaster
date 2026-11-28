@@ -56,6 +56,15 @@ const ABR_TABLE_192K: [u32; 6] = [256, 320, 400, 400, 400, 400];
 /// and the next step down waits this long, so the queue the higher rate
 /// left behind does not also drop 400 kbps to the lowest stage
 const ABR_EXT_DOWN_HOLD: Duration = Duration::from_secs(1);
+/// Above 400 kbps the radio runs closer to its limit, and a packet or two
+/// queued for a moment is normal (#600: 900 kbps fell back to 500 kbps
+/// within a second, while a fixed 1000 kbps played clean). There the
+/// queue's average over this long decides a step down ...
+const ABR_EXT_WINDOW: Duration = Duration::from_secs(1);
+/// ... at this average depth (packets) or more
+const ABR_EXT_DOWN_AVG: u32 = 4;
+/// ... and a climb step is calm with at most this many queued
+const ABR_EXT_CALM_DEPTH: u32 = 1;
 
 // The queue guard of low latency without ABR. With the
 // link at its limit the send queue fills and never drains (packets go out
@@ -159,6 +168,10 @@ struct Abr {
     index: usize,
     /// No step down before this (after a step down from above 400 kbps)
     down_hold: Option<Instant>,
+    /// The queue's sum and packet count since `ext_start`, above 400 kbps
+    ext_sum: u32,
+    ext_count: u32,
+    ext_start: Instant,
     /// The first packet since the encoder was made or ABR was reset
     started: Option<Instant>,
     down_count: u32,
@@ -197,6 +210,9 @@ impl Abr {
             android_top,
             index: android_top,
             down_hold: None,
+            ext_sum: 0,
+            ext_count: 0,
+            ext_start: Instant::now(),
             started: None,
             down_count: 0,
             down_sum: 0,
@@ -218,10 +234,20 @@ impl Abr {
                 now
             }
         };
-        self.down_sum = self.down_sum.saturating_add(depth);
-        self.down_count += 1;
-        if depth > 0 {
+        let above = self.index > self.android_top;
+        if depth > if above { ABR_EXT_CALM_DEPTH } else { 0 } {
             self.tick_busy = true;
+        }
+        if above {
+            if let Some(stage) = self.step_above(now, depth) {
+                return Some(stage);
+            }
+        } else {
+            self.ext_count = 0;
+            self.ext_sum = 0;
+            self.ext_start = now;
+            self.down_sum = self.down_sum.saturating_add(depth);
+            self.down_count += 1;
         }
         if self.down_count >= ABR_DOWN_RATE_TIME_CNT {
             let avg = self.down_sum / self.down_count;
@@ -234,12 +260,7 @@ impl Abr {
                 self.calm = 0;
                 if self.index > 0 && !held {
                     self.stalls.stepped_down("LHDC V5", self.index as u8);
-                    if self.index > self.android_top {
-                        self.index -= 1;
-                        self.down_hold = Some(now + ABR_EXT_DOWN_HOLD);
-                    } else {
-                        self.index = 0;
-                    }
+                    self.index = 0;
                     return Some(self.index);
                 }
             }
@@ -261,6 +282,33 @@ impl Abr {
             return Some(self.index);
         }
         None
+    }
+
+    /// The step-down check above 400 kbps: one stage down when the queue's
+    /// average over [`ABR_EXT_WINDOW`] reaches [`ABR_EXT_DOWN_AVG`]
+    fn step_above(&mut self, now: Instant, depth: u32) -> Option<usize> {
+        self.down_count = 0;
+        self.down_sum = 0;
+        self.ext_sum = self.ext_sum.saturating_add(depth);
+        self.ext_count += 1;
+        if now.saturating_duration_since(self.ext_start) < ABR_EXT_WINDOW {
+            return None;
+        }
+        let backed_up = self.ext_sum >= ABR_EXT_DOWN_AVG * self.ext_count;
+        self.ext_sum = 0;
+        self.ext_count = 0;
+        self.ext_start = now;
+        if !backed_up {
+            return None;
+        }
+        self.calm = 0;
+        if self.down_hold.is_some_and(|until| now < until) {
+            return None;
+        }
+        self.stalls.stepped_down("LHDC V5", self.index as u8);
+        self.index -= 1;
+        self.down_hold = Some(now + ABR_EXT_DOWN_HOLD);
+        Some(self.index)
     }
 
     /// Back to the start: the same stages, counters and stalls cleared
@@ -783,11 +831,11 @@ mod abr_tests {
         assert_eq!(abr.index, 7);
         // A queue that stays: 1000 -> 900 -> 500 -> 400, 1 s apart, then
         // Android's drop to the lowest stage
-        let (_, sw) = feed(&mut abr, t, 5000, 1);
+        let (_, sw) = feed(&mut abr, t, 5000, 4);
         assert_eq!(sw.iter().map(|s| s.1).collect::<Vec<_>>(), vec![6, 5, 4, 0]);
-        // The next check (every 4 packets) after the 1 s hold
+        // Within a second (the queue's average), then after each 1 s hold
         let at: Vec<u64> = sw.iter().map(|s| s.0).collect();
-        assert_eq!(at[0], 80);
+        assert!(at[0] <= 1020, "{at:?}");
         for gap in at.windows(2).map(|w| w[1] - w[0]) {
             assert!((1000..=1080).contains(&gap), "{at:?}");
         }
@@ -797,13 +845,43 @@ mod abr_tests {
     fn extended_settles_below_a_stage_that_stalled() {
         let mut abr = extended_48k();
         let (t, _) = feed(&mut abr, Instant::now(), 20_000, 0);
-        // One short backlog at 1000 kbps: one stage down
-        let (t, sw) = feed(&mut abr, t, 80, 1);
-        assert_eq!(sw, vec![(80, 6)]);
+        // One backlog at 1000 kbps: one stage down
+        let mut t = t;
+        while abr.index == 7 {
+            t += Duration::from_millis(20);
+            abr.step(t, 5);
+        }
+        assert_eq!(abr.index, 6);
         // Back to 1000 only after the stall wait (10 s), not 5 s
         let (_, sw) = feed(&mut abr, t, 12_000, 0);
         assert_eq!(sw.len(), 1, "{sw:?}");
         assert!(sw[0].0.abs_diff(10_000) <= 200, "{sw:?}");
+    }
+
+    #[test]
+    fn extended_holds_1000_with_a_packet_or_two_queued() {
+        let mut abr = extended_48k();
+        let (t, _) = feed(&mut abr, Instant::now(), 12_000, 0);
+        assert_eq!(abr.index, 6, "900 kbps");
+        // A packet queued now and then still climbs to 1000 ...
+        let (t, sw) = feed(&mut abr, t, 6000, 1);
+        assert_eq!(sw.iter().map(|s| s.1).collect::<Vec<_>>(), vec![7]);
+        // ... and holds it, also through a short burst
+        let (t, sw) = feed(&mut abr, t, 10_000, 2);
+        assert!(sw.is_empty(), "{sw:?}");
+        let (t, sw) = feed(&mut abr, t, 60, 6);
+        assert!(sw.is_empty(), "{sw:?}");
+        let (_, sw) = feed(&mut abr, t, 5000, 1);
+        assert!(sw.is_empty(), "{sw:?}");
+    }
+
+    #[test]
+    fn extended_keeps_android_s_drop_at_400() {
+        let mut abr = extended_48k();
+        let (t, _) = feed(&mut abr, Instant::now(), 4000, 0);
+        assert_eq!(abr.index, 4);
+        let (_, sw) = feed(&mut abr, t, 80, 1);
+        assert_eq!(sw, vec![(80, 0)]);
     }
 
     #[test]
