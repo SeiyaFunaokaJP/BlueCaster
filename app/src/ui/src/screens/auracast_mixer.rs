@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -548,15 +549,19 @@ impl AuracastMixer {
         // The columns share the card's width: the gains and the delay grow and
         // shrink together between a least and a most, the names keep theirs.
         // The header's cells take the same widths as the rows', so they line
-        // up; below the least width the grid scrolls sideways.
+        // up; below the least width the grid scrolls sideways, with a scrollbar.
+        // The least widths are also the flex bases: in the scroll area the grid
+        // is as wide as its content, which would otherwise be the fields'
+        // natural width. At the window's default size the grid fits (without
+        // the full range column).
         fn name_col<E: Styled>(d: E) -> E {
             d.w(px(40.)).flex_none()
         }
         fn gain_col<E: Styled>(d: E) -> E {
-            d.flex_1().min_w(px(48.)).max_w(px(72.))
+            d.flex_grow(1.).flex_shrink(1.).flex_basis(px(48.)).min_w(px(48.)).max_w(px(72.))
         }
         fn delay_col<E: Styled>(d: E) -> E {
-            d.flex_1().min_w(px(64.)).max_w(px(88.))
+            d.flex_grow(1.).flex_shrink(1.).flex_basis(px(64.)).min_w(px(64.)).max_w(px(88.))
         }
         fn invert_col<E: Styled>(d: E) -> E {
             d.w(px(64.)).flex_none()
@@ -565,7 +570,7 @@ impl AuracastMixer {
             d.w(px(80.)).flex_none()
         }
         fn sm_col<E: Styled>(d: E) -> E {
-            d.w(px(48.)).flex_none()
+            d.w(px(40.)).flex_none()
         }
         let in_heard = |c: usize| heard(&mix.solo_in, &mix.mute_in, c);
         let out_heard = |r: usize| heard(&mix.solo_out, &mix.mute_out, r);
@@ -586,7 +591,7 @@ impl AuracastMixer {
         let grid = div()
             .flex()
             .flex_col()
-            .min_w(px(40. + 8. * 48. + 64. + 64. + 48. + if show_full { 84. } else { 0. } + 11. * 4.))
+            .min_w(px(40. + 8. * 48. + 64. + 64. + 40. + if show_full { 84. } else { 0. } + 11. * 4.))
             .gap(px(2.))
             .text_size(theme::FS_SMALL)
             .child(
@@ -806,7 +811,7 @@ impl AuracastMixer {
                         )),
                 )
             })
-            .child(div().id("mix-scroll").overflow_x_scroll().py(theme::S2).child(grid))
+            .child(div().id("mix-scroll").py(theme::S2).child(grid).overflow_x_scrollbar())
             .child(ui::hint(t("ui.dev.auracast_mix_solo_hint"), cx))
             .when(show_full, |d| d.child(ui::hint(t("ui.dev.auracast_mix_full_range_hint"), cx)))
             .when(st.sub != AuracastSub::None, |d| d.child(self.crossover_rows(mix, cx)))
